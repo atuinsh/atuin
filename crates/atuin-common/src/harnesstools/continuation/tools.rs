@@ -276,7 +276,7 @@ const fn path_key(target: AnyHarness) -> &'static str {
     match target {
         AnyHarness::ClaudeCode(_) => "file_path",
         AnyHarness::Opencode(_) => "filePath",
-        AnyHarness::Codex(_) | AnyHarness::Pi(_) => "path",
+        AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => "path",
     }
 }
 
@@ -387,6 +387,25 @@ fn native(target: AnyHarness, name: &str) -> bool {
             "patch",
         ],
         AnyHarness::Pi(_) => &["bash", "read", "write", "edit", "grep", "find", "ls"],
+        AnyHarness::Copilot(_) => &[
+            "bash",
+            "read_bash",
+            "write_bash",
+            "stop_bash",
+            "list_bash",
+            "view",
+            "edit",
+            "create",
+            "apply_patch",
+            "glob",
+            "rg",
+            "task",
+            "web_fetch",
+            "ask_user",
+            "skill",
+            "sql",
+            "store_memory",
+        ],
     };
     names.contains(&name.to_ascii_lowercase().as_str())
 }

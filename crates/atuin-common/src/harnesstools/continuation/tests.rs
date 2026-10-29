@@ -84,6 +84,7 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 /// A real session recorded by `source`, as its harness wrote it.
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
+        AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
         AnyHarness::ClaudeCode(_) => {
             let text = std::fs::read_to_string(fixture("ccode/session1.jsonl")).unwrap();
             let lines: Vec<CcodeMessage> =
@@ -157,6 +158,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let id = &session.id;
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
+        AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
         AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
         AnyHarness::Pi(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
@@ -172,6 +174,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
+            AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
             AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
@@ -283,6 +286,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             continue;
         }
         let answered: Vec<String> = match target {
+            AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
@@ -367,6 +371,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let root = dir.path();
     let id = SessionId::from(session.id.clone());
     match target {
+        AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(ccode::session::locate(root, &session.id), Some(path.clone()));

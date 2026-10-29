@@ -32,6 +32,7 @@ impl From<&AnyHarness> for HarnessKind {
         match value {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
+            AnyHarness::Copilot(_) => Self::Copilot,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -42,18 +43,19 @@ impl From<&AnyHarness> for HarnessKind {
 }
 
 impl HarnessKind {
-    /// The harness tools for this kind. `None` for a kind atuin has none for (Copilot, and
-    /// sessions of no known harness), whose sessions can be viewed but not resumed.
+    /// The harness tools for this kind. `None` for a kind atuin has none for (sessions of no
+    /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{ccode, codex, opencode, pi};
+        use atuin_common::harnesstools::{ccode, codex, copilot, opencode, pi};
         match self {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
+            Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
-            Self::Copilot | Self::Unknown => None,
+            Self::Unknown => None,
         }
     }
 }
@@ -588,7 +590,7 @@ mod tests {
     #[case::codex(HarnessKind::Codex, true)]
     #[case::opencode(HarnessKind::Opencode, true)]
     #[case::pi(HarnessKind::Pi, true)]
-    #[case::copilot(HarnessKind::Copilot, false)]
+    #[case::copilot(HarnessKind::Copilot, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,

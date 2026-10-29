@@ -1116,8 +1116,9 @@ async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
         state.plans.remove(&row.handle);
     }
 
-    // A harness atuin can't continue from (Copilot) has only its own line, saying why.
-    let mut copilot = fake::row(HarnessKind::Copilot, "cp1", "t");
+    // A harness atuin can't continue from (one it doesn't know) has only its own line, saying
+    // why.
+    let mut copilot = fake::row(HarnessKind::Unknown, "cp1", "t");
     copilot.host_id = fake::THIS_HOST_ID.to_owned();
     state.results = vec![copilot.clone()];
     state.list.selected = 0;
@@ -1129,7 +1130,7 @@ async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
         Pending::Resume,
     );
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("> 1 Copilot  resume: atuin can't resume"), "{out}");
+    assert!(out.contains("> 1 unknown  resume: atuin can't resume"), "{out}");
     assert!(!out.contains("fork:"), "atuin can't fork it either: {out}");
 }
 

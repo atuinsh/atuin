@@ -57,6 +57,7 @@ async fn written(
 ) -> (Vec<RehydrateMessage>, Vec<(String, ParentKind)>) {
     let id = SessionId::from(session.id.clone());
     match harness {
+        AnyHarness::Copilot(_) => panic!("Copilot transcripts are never written"),
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =

@@ -13,8 +13,8 @@ isn't already, and offers to import the sessions your agents already have.
 `atuin config disable threads` turns it off again.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
-sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as
-threads into the encrypted record store, and syncs them like your history.
+sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and
+Pi) as threads into the encrypted record store, and syncs them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record
@@ -42,7 +42,7 @@ in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker
 that the model reasoned.
 
 When an agent edits a file, capture also keeps the diff the agent recorded for
-the edit (Claude Code, Codex, opencode and pi each keep one), so a resumed
+the edit (Claude Code, Codex, Copilot, opencode and pi each keep one), so a resumed
 session shows its edits as the agent showed them, and `atuin threads show`
 prints them. A diff names its file and the lines changed, with a few lines
 around them, not the whole file. Search covers the names of the files a session
@@ -262,8 +262,10 @@ back.
   original's title. Pi names the original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
   the original when the original can't resume here, or its agent has it open
-  on this machine. Copilot sessions, and sessions with no messages, can't be
-  forked.
+  on this machine. Sessions with no messages can't be forked, and neither can
+  Copilot sessions: Atuin reads Copilot's transcripts but never writes them
+  (its format is undocumented), so a Copilot session resumes only on a machine
+  that has it, in Copilot itself or continued in another agent.
 - Every other agent installed on this machine follows. Picking one continues
   the session there as a new session: the conversation carries over, and so do
   the tool calls captured with their input and output (`capture_tools`), with
@@ -278,10 +280,10 @@ back.
   see it too). Agents that aren't installed aren't listed, and with nothing
   else to offer (no other agent installed, and a session that can't be
   forked) ++enter++ resumes straight away.
-- If the session's own agent can't resume it here (a Copilot session, an
-  agent that isn't installed, or a session whose transcript is here but whose
-  directory is gone, for an agent that needs it), its line is dimmed with the
-  reason, and the next one is selected instead.
+- If the session's own agent can't resume it here (an agent that isn't
+  installed, a Copilot session recorded on another machine, or a session whose
+  transcript is here but whose directory is gone, for an agent that needs it),
+  its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent
 and its transcript is on this machine, Atuin first catches it up with the
@@ -320,7 +322,8 @@ synced messages:
   no switch line: a Codex session that was reverted, so its history spans
   several files, or that Codex wrote in its older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
-  live in a database.
+  live in a database. Copilot sessions are neither caught up nor switched,
+  since Atuin never writes them.
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, and Codex where it keeps session locks, say which session they
@@ -405,7 +408,7 @@ mouse = true
 
 To resume an agent's sessions with a command of your own in place of the
 built-in one, give a template per agent under `[threads.resume]` (`claude`,
-`codex`, `opencode` or `pi`). It runs after `cd -- <cwd> &&`, with these
+`codex`, `copilot`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these
 substituted:
 
 - `{id}`: the agent's own id for the session;

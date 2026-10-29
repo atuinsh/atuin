@@ -65,7 +65,7 @@ fn last_word(text: &str) -> &str {
 #[rstest]
 fn capture_keeps_the_conversation_and_tool_calls(
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Opencode, Agent::Pi)] agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
     let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
@@ -150,7 +150,7 @@ fn capture_applies_the_history_and_output_filters_to_agent_commands(project: Tem
 fn capture_follows_a_transcript_exactly_once_across_restarts(
     mut machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Opencode, Agent::Pi)] agent: Agent,
 ) {
     let turns: Vec<Turn> = (0..3).map(|_| Turn::new()).collect();
 
@@ -224,9 +224,11 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
 /// `cwd`.
 fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
     let id = transcript.id.as_str();
+    let resume_arg = format!("--resume={id}");
     let args = match transcript.agent {
         Agent::Claude => vec!["--resume", id],
         Agent::Codex => vec!["resume", id],
+        Agent::Copilot => vec![resume_arg.as_str()],
         Agent::Opencode => vec!["--session", id],
         Agent::Pi => vec!["--session", transcript.path.to_str().unwrap()],
     };
@@ -300,6 +302,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 #[rstest]
 #[case::claude(Agent::Claude, "agent id")]
 #[case::codex(Agent::Codex, "agent id")]
+#[case::copilot(Agent::Copilot, "agent id")]
 #[case::opencode(Agent::Opencode, "agent id")]
 #[case::pi(Agent::Pi, "agent id")]
 #[case::by_atuin_id(Agent::Opencode, "atuin id")]
@@ -700,7 +703,7 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
     succeeded(&machine.resume(&[&ids[0], "--in", "codex", "--print"], machine.home()));
     let continued = machine.wait_for_child(Agent::Codex, &ids[0]);
     ids.push(continued["session_id"].as_str().unwrap().to_owned());
-    machine.wait_until_holds(&ids[4], &said(&turns));
+    machine.wait_until_holds(&ids[Agent::ALL.len()], &said(&turns));
 
     let index = |machine: &Machine| -> Vec<serde_json::Value> {
         ids.iter().map(|id| machine.show(id)).collect()

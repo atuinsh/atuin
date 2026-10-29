@@ -286,6 +286,44 @@ async fn a_session_on_disk_resumes_directly(dirs: Dirs) {
     assert_eq!(resume.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
 }
 
+/// A Copilot copy here resumes as it is: atuin never writes Copilot's transcripts, so there is
+/// no catching it up, whatever the copy reads as (here, not at all) and whatever sync holds.
+#[rstest]
+#[tokio::test]
+async fn a_copilot_copy_resumes_as_it_is_without_catching_up(dirs: Dirs) {
+    let machine = FakeMachine {
+        found: HashMap::from([("cp-1".to_owned(), PathBuf::from("/t/cp-1/events.jsonl"))]),
+        tip_error: Some("Copilot sessions can't be written here"),
+        ..FakeMachine::default()
+    };
+    let session = row(HarnessKind::Copilot, "cp-1", &dirs.elsewhere, false);
+    let resumer = resumer(&dirs, &machine);
+    let resume = resumer.plan(&session).await.unwrap();
+    assert!(!resume.catch_up, "{resume:?}");
+    assert_eq!(resume.plan.args, ["--resume=cp-1"]);
+
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(true));
+    let caught = resumer.catch_up(&source, &session, None).await.unwrap();
+    assert!(
+        matches!(&caught, CatchUp::Ready { plan, status: None } if plan.args == ["--resume=cp-1"]),
+        "{caught:?}"
+    );
+    assert!(machine.appended.lock().is_empty());
+}
+
+/// A Copilot session that isn't here can't be restored (atuin never writes Copilot's
+/// transcripts): planned as not resumable, not as a restore that would fail once accepted.
+#[rstest]
+#[tokio::test]
+async fn a_copilot_session_not_here_is_not_resumable(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let remote = row(HarnessKind::Copilot, "cp-2", &dirs.elsewhere, true);
+    let err = resumer(&dirs, &machine).plan(&remote).await.unwrap_err();
+    assert_eq!(err, NotResumable::Unwritable("copilot"));
+    assert!(machine.written.lock().is_empty());
+}
+
 /// Reading a copy can move it (a rollout Codex compressed, made plain again): a `{path}` template
 /// names where it is now.
 #[rstest]
@@ -447,8 +485,8 @@ async fn a_harness_not_installed_here_says_so(dirs: Dirs) {
 async fn unsupported_sessions_and_subagents_are_not_resumable(dirs: Dirs) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert_eq!(resumer.plan(&copilot).await.unwrap_err(), NotResumable::Unsupported("Copilot"));
+    let unknown = row(HarnessKind::Unknown, "u-1", &dirs.here, false);
+    assert_eq!(resumer.plan(&unknown).await.unwrap_err(), NotResumable::Unsupported("unknown"));
 
     // A Claude Code subagent is refused by the harness before anything is looked up.
     let subagent = row(HarnessKind::ClaudeCode, "agent-a1b2", &dirs.here, true);
@@ -707,8 +745,15 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
 
+    // A Copilot session is continued like any other, but never into Copilot, whose sessions
+    // atuin doesn't write.
     let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert!(resumer.continue_targets(&copilot).is_empty());
+    assert_eq!(resumer.continue_targets(&copilot), [
+        HarnessKind::ClaudeCode,
+        HarnessKind::Codex,
+        HarnessKind::Pi,
+        HarnessKind::Omp
+    ]);
 }
 
 #[rstest]
