@@ -348,7 +348,7 @@ fn extend(
         after: tip,
         kept_from: kept_from.as_deref(),
     };
-    Ok(rehydrate::lines(&session, &continuing, false))
+    Ok(rehydrate::lines(&session, &continuing, false, None))
 }
 
 /// [`SessionSync::replace`] of the file `base` read, once the session is known to be idle.

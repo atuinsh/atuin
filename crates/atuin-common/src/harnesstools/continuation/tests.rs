@@ -412,6 +412,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
                 root,
                 &root.join("sessions"),
                 session,
+                None,
             )
             .unwrap();
             assert_eq!(pi::session::locate(root, &session.id), Some(path.clone()));

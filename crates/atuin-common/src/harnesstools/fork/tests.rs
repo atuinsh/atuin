@@ -82,6 +82,7 @@ async fn written(
                 root,
                 &root.join("sessions"),
                 session,
+                None,
             )
             .unwrap();
             let lines: Vec<_> =
