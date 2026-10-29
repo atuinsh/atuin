@@ -236,6 +236,7 @@ arg-history-dedup-before = Only delete results added before this date, read in t
 arg-history-dedup-dupkeep = How many recent duplicates to keep
 cmd-hook-install = Install hooks for an AI agent to capture commands in atuin history
 arg-hook-install-agent = Agent to install hooks for (e.g., "claude-code")
+arg-hook-install-executable = Path to the atuin executable the hooks should invoke (defaults to the running binary)
 arg-hook-agent = Which agent's hook format to parse (e.g., "claude-code")
 cmd-import-auto = Import history for the current shell
 cmd-import-shell = Import history from the { $shell } history file

@@ -49,7 +49,7 @@ impl Harness for Opencode {
     }
 
     /// Install the hooks on the current active user's machine
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, _executable: &Path) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";
         let plugin = plugin_for(rehydrate::major_version(Path::new("opencode")).await.ok());
 
@@ -108,9 +108,10 @@ mod tests {
         let exports = |plugin: &str| -> Vec<String> {
             plugin.lines().filter(|l| l.starts_with("export ")).map(str::to_owned).collect()
         };
-        assert_eq!(exports(PLUGIN_1), [
-            "export const AtuinPlugin: Plugin = async ({ directory }) => {"
-        ]);
+        assert_eq!(
+            exports(PLUGIN_1),
+            ["export const AtuinPlugin: Plugin = async ({ directory }) => {"]
+        );
         assert_eq!(exports(PLUGIN_2), ["export default { id: \"atuin\", setup };"]);
     }
 
@@ -201,13 +202,16 @@ await fire("tool.execute.after", { tool: "read", id: "c6", status: "completed", 
             )
         };
         let end = |exit: i32| format!("history end h_1 --exit {exit} --duration _");
-        assert_eq!(calls, [
-            start("c1", "true"),
-            end(0),
-            start("c2", "false"),
-            end(1),
-            start("c3", "sleep 999"),
-            end(124),
-        ]);
+        assert_eq!(
+            calls,
+            [
+                start("c1", "true"),
+                end(0),
+                start("c2", "false"),
+                end(1),
+                start("c3", "sleep 999"),
+                end(124),
+            ]
+        );
     }
 }
