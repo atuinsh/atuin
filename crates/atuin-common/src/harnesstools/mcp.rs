@@ -7,7 +7,7 @@ use std::process::Stdio;
 use serde_json::{Value, json};
 
 use super::pi::Flavour;
-use super::{AnyHarness, codex, opencode};
+use super::{AnyHarness, codex, grok, opencode};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::{AbsPathBuf, PathBufExt as _};
@@ -60,6 +60,7 @@ fn config_path(harness: AnyHarness) -> PathBuf {
             |dir| PathBuf::from(dir).joined(".claude.json"),
         ),
         AnyHarness::Codex(_) => codex::home().joined("config.toml"),
+        AnyHarness::Grok(_) => grok::home().joined("config.toml"),
         AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
         AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
     }
@@ -84,6 +85,7 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
             run("claude", &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
         }
         AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+        AnyHarness::Grok(_) => run("grok", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
         // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
         // doesn't load. Both load `mcp.<name>`.
         AnyHarness::Opencode(_) => install_opencode(&config_path(harness), atuin).await,
@@ -217,6 +219,7 @@ mod tests {
     #[rstest]
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
+    #[case("grok", ".grok/config.toml")]
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
     #[case("omp", ".omp/agent/mcp.json")]
@@ -240,6 +243,7 @@ mod tests {
     #[rstest]
     #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
     #[case("codex", "CODEX_HOME", "config.toml")]
+    #[case("grok", "GROK_HOME", "config.toml")]
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]
     #[case("omp", "PI_CODING_AGENT_DIR", "mcp.json")]

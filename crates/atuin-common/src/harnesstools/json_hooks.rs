@@ -124,6 +124,37 @@ fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookE
     Ok(command)
 }
 
+/// Whether `config_path` already registers `atuin hook <harness>` across every hook lifecycle
+/// stage, so an inherited hook from another harness can defer to it without losing events when
+/// the native hook has not been installed.
+#[must_use]
+pub fn has_installed(config_path: &Path, harness: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&content) else {
+        return false;
+    };
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object) else {
+        return false;
+    };
+    let self_cmd = std::env::current_exe().ok().and_then(|exe| hook_command(&exe, harness).ok());
+    HOOK_EVENT_TYPES.iter().all(|stage| {
+        hooks.get(*stage).and_then(Value::as_array).is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry.get("hooks").and_then(Value::as_array).is_some_and(|cmds| {
+                    cmds.iter().any(|cmd| {
+                        cmd.get("command").and_then(Value::as_str).is_some_and(|command| {
+                            invokes_atuin_hook(command, harness)
+                                || self_cmd.as_deref() == Some(command)
+                        })
+                    })
+                })
+            })
+        })
+    })
+}
+
 /// Whether `command` runs `atuin hook <harness>`, through any path to the atuin executable.
 pub fn invokes_atuin_hook(command: &str, harness: &str) -> bool {
     let Some(parts) = shlex::split(command) else {

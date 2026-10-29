@@ -13,6 +13,9 @@ atuin hook install claude-code
 # Codex
 atuin hook install codex
 
+# Grok Build
+atuin hook install grok
+
 # opencode
 atuin hook install opencode
 
@@ -34,6 +37,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 |-------|-------------------------|
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
+| Grok Build | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`) |
 | opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
@@ -78,7 +82,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -101,6 +105,16 @@ atuin hook install codex
 This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
 
 Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
+
+### Grok Build
+
+```shell
+atuin hook install grok
+```
+
+This writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
+
+Grok Build also runs hooks from `~/.claude/settings.json` when Claude compatibility is enabled. Inside a Grok Build session, Atuin attributes inherited `atuin hook claude-code` events to `grok`, and skips them when native `grok` hooks are installed too so commands are not recorded twice.
 
 ### opencode
 

@@ -111,6 +111,7 @@ async fn written(
                 .collect();
             (rows, links)
         }
+        AnyHarness::Grok(_) => unreachable!("Grok sessions are not enabled here"),
     }
 }
 

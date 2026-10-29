@@ -9,6 +9,7 @@ pub mod ccode;
 pub mod codex;
 pub mod continuation;
 pub mod fork;
+pub mod grok;
 mod json_hooks;
 pub mod mcp;
 pub mod note;
@@ -21,6 +22,7 @@ pub mod sync;
 
 use ccode::Ccode;
 use codex::Codex;
+use grok::Grok;
 use opencode::Opencode;
 use pi::Pi;
 use rehydrate::{RehydrateError, RehydrateSession};
@@ -85,6 +87,7 @@ pub trait Harness: std::fmt::Debug {
 pub enum AnyHarness {
     ClaudeCode(Ccode),
     Codex(Codex),
+    Grok(Grok),
     Opencode(Opencode),
     Pi(Pi),
 }
@@ -151,6 +154,7 @@ impl AnyHarness {
         &[
             Self::ClaudeCode(Ccode),
             Self::Codex(Codex),
+            Self::Grok(Grok),
             Self::Opencode(Opencode),
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
@@ -163,6 +167,7 @@ impl AnyHarness {
         match self {
             Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Grok(_) => None,
             Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
         }
