@@ -40,6 +40,7 @@ eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 glob-match = { workspace = true }
+i18n-embed = { workspace = true }
 imara-diff = { workspace = true }
 interim = { workspace = true }
 parking_lot = { workspace = true }
@@ -49,6 +50,7 @@ ratatui-core = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { workspace = true }
+rust-embed = { workspace = true }
 schemars = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }

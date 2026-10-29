@@ -19,6 +19,7 @@ use std::num::NonZeroU64;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::range::{Chunks, RangeExt};
 use atuin_common::sync::MutEagerFutureCell;
+use atuin_common::userio;
 use atuin_domain::caps::{PackfileCap, PageSizeCap};
 use atuin_domain::record::{
     Diff, EncryptedData, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
@@ -355,11 +356,11 @@ impl Keyed<'_> {
             .progress_chars("#>-"),
         );
 
-        println!(
-            "Uploading {} records to {}/{}",
-            expected,
-            series.host_id.0.as_simple(),
-            series.tag
+        userio::log::info!(
+            "sync-upload-start",
+            count = expected,
+            host = series.host_id.0.as_simple().to_string(),
+            tag = series.tag.to_string()
         );
 
         while progress < expected {
@@ -480,11 +481,11 @@ impl Keyed<'_> {
 
         let expected = (remote + 1).saturating_sub(start);
 
-        println!(
-            "Downloading {} records from {}/{}",
-            expected,
-            series.host_id.0.as_simple(),
-            series.tag
+        userio::log::info!(
+            "sync-download-start",
+            count = expected,
+            host = series.host_id.0.as_simple().to_string(),
+            tag = series.tag.to_string()
         );
 
         let pb = ProgressBar::new(expected);
@@ -636,11 +637,12 @@ impl Keyed<'_> {
         while let Some((i, result)) = downloads.next().await {
             match result {
                 Ok(expanded) => ids.extend(expanded),
-                Err(e) if e.is_permanent() => error!(
-                    manifest_id = %page[i].id,
-                    host = %page[i].host.id,
+                Err(e) if e.is_permanent() => userio::log::error!(
+                    "sync-packfile-unexpandable",
+                    manifest = page[i].id.to_string(),
+                    host = page[i].host.id.to_string(),
                     idx = page[i].idx,
-                    "skipping unexpandable packfile manifest: {e}. you have lost data."
+                    error = e.to_string()
                 ),
                 Err(e) => {
                     error!("failed to download packfile: {e:?}");

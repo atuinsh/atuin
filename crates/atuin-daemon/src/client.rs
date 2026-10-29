@@ -6,11 +6,14 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
+use atuin_common::userio::log::{Message, SINK};
 use easy_cast::Conv;
 use eyre::Result;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use time::OffsetDateTime;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::Code;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
@@ -32,7 +35,10 @@ use crate::grpc::history::pb::{
     StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
     TailHistoryRequest,
 };
-use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
+use crate::grpc::request::ClientInterceptor;
+use crate::grpc::userio::pb::ListenLogsRequest;
+use crate::grpc::userio::pb::user_io_client::UserIoClient;
+use crate::grpc::versioning::{VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
@@ -52,7 +58,7 @@ pub enum FromSettingsError {
 
 /// A connection to the daemon that stamps every request with this client's
 /// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
-type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+type DaemonChannel = InterceptedService<Channel, ClientInterceptor>;
 
 #[derive(Clone)]
 pub struct HistoryClient {
@@ -103,7 +109,7 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 impl From<Channel> for HistoryClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: HistoryServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -301,7 +307,7 @@ pub struct SearchClient {
 impl From<Channel> for SearchClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: SearchServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -418,7 +424,7 @@ impl AiClient {
     /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
     /// The daemon is local and trusted (the server encodes any size by default).
     fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
-        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+        AiSessionServiceClient::with_interceptor(channel, ClientInterceptor)
             .max_decoding_message_size(usize::MAX)
     }
 
@@ -559,6 +565,64 @@ impl AiClient {
             harness: harness.map(|h| h as i32),
         };
         Ok(self.client.import_sessions(request).await?.into_inner())
+    }
+}
+
+/// Shows on [`SINK`] what the daemon logs for the user while serving a request, from
+/// [`listen`](Self::listen) until [`finish`](Self::finish).
+pub(crate) struct LogListener {
+    /// Dropped to close this side of the stream, which has the daemon send the messages it has
+    /// left and end it.
+    close: Option<oneshot::Sender<()>>,
+    shown: JoinHandle<()>,
+}
+
+impl LogListener {
+    /// Listens to the daemon over `channel` for the request of the current
+    /// [`scope`](crate::grpc::request::scope),
+    /// showing every message it logs for it from when this returns on.
+    pub(crate) async fn listen(channel: Channel) -> Result<Self, tonic::Status> {
+        let (close, closed) = oneshot::channel::<()>();
+        let requests = futures::stream::once(closed)
+            .filter_map(|_| std::future::ready(None::<ListenLogsRequest>));
+        let mut replies = UserIoClient::with_interceptor(channel, ClientInterceptor)
+            .listen_logs(requests)
+            .await?
+            .into_inner();
+
+        // Runs until the daemon ends the stream, which dropping `close` asks for.
+        let shown = tokio::spawn(async move {
+            while let Ok(Some(reply)) = replies.message().await {
+                let Some(message) = reply.message else {
+                    continue;
+                };
+                match Message::try_from(message) {
+                    Ok(message) => SINK.show(message),
+                    Err(err) => warn!(?err, "dropped a message from the daemon"),
+                }
+            }
+        });
+
+        Ok(Self {
+            close: Some(close),
+            shown,
+        })
+    }
+
+    /// Shows the messages the daemon has logged until now, then stops listening.
+    pub(crate) async fn finish(mut self) {
+        /// How long the daemon has to send what it queued for the request.
+        const FINISH_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+        drop(self.close.take());
+        // One that panicked has shown what it could, and one still running is aborted on drop.
+        let _ = tokio::time::timeout(FINISH_WAIT, &mut self.shown).await;
+    }
+}
+
+impl Drop for LogListener {
+    fn drop(&mut self) {
+        self.shown.abort();
     }
 }
 

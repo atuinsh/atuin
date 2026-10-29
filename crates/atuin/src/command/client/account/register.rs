@@ -4,6 +4,7 @@ use atuin_client::auth::{self, AuthClient, AuthResponse};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{Settings, SyncAuth};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::userio;
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::ExposeSecret;
@@ -29,18 +30,18 @@ impl Cmd {
     pub async fn run(&self, settings: &Arc<Settings>, store: &SqliteStore) -> Result<()> {
         match settings.resolve_sync_auth().await {
             SyncAuth::Hub { .. } => {
-                println!("{}", fl!("account-hub-authenticated"));
-                println!("{}", fl!("account-run-logout"));
+                userio::log::info!("account-hub-authenticated");
+                userio::log::info!("account-run-logout");
                 return Ok(());
             }
             SyncAuth::Legacy { .. } => {
-                println!("{}", fl!("register-legacy-already"));
-                println!("{}", fl!("account-run-logout"));
+                userio::log::info!("register-legacy-already");
+                userio::log::info!("account-run-logout");
                 return Ok(());
             }
             SyncAuth::HubViaCli { .. } => {
-                println!("{}", fl!("register-has-legacy-session"));
-                println!("{}", fl!("register-logout-first"));
+                userio::log::info!("register-has-legacy-session");
+                userio::log::info!("register-logout-first");
                 return Ok(());
             }
             SyncAuth::NotLoggedIn { .. } => {}
@@ -78,8 +79,8 @@ impl Cmd {
                             meta.save_hub_session(&session).await?;
                         } else {
                             meta.save_session(&session).await?;
-                            println!("\n{}", fl!("account-not-migrated-note"));
-                            println!("{}", fl!("account-not-migrated-hint"));
+                            userio::log::info!("account-not-migrated-note");
+                            userio::log::info!("account-not-migrated-hint");
                         }
                     }
                     AuthResponse::TwoFactorRequired => {
@@ -89,10 +90,10 @@ impl Cmd {
 
                 let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-                println!("{}", fl!("register-success-key"));
-                println!("{}", fl!("register-key-warning"));
+                userio::log::info!("register-success-key");
+                userio::log::info!("register-key-warning");
             } else {
-                println!("{}\n", fl!("register-headless-incomplete"));
+                userio::log::info!("register-headless-incomplete");
 
                 // Interactive registration: delegate to the browser OAuth flow.
                 // Registration on Hub happens on the website; the CLI just needs
@@ -109,7 +110,7 @@ impl Cmd {
             }
         } else {
             // Legacy registration flow
-            println!("{}", fl!("register-legacy-start"));
+            userio::log::info!("register-legacy-start");
 
             let username = or_user_input(self.username.clone(), &fl!("prompt-username"));
             let email = or_user_input(self.email.clone(), &fl!("prompt-email"));
@@ -134,8 +135,8 @@ impl Cmd {
 
             let _key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
 
-            println!("{}", fl!("register-success-key"));
-            println!("{}", fl!("register-key-warning"));
+            userio::log::info!("register-success-key");
+            userio::log::info!("register-key-warning");
         }
 
         Ok(())

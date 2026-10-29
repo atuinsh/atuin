@@ -6,6 +6,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::userio;
 use atuin_scripts::execution::{
     build_executable_script, execute_script_interactive, template_script, template_variables,
 };
@@ -187,12 +188,18 @@ impl Cmd {
                                 // Convert the bytes to a string and forward to script
                                 let input = String::from_utf8_lossy(&buffer[0..n]).to_string();
                                 if let Err(e) = sender.send(input).await {
-                                    eprintln!("Error sending input to script: {e}");
+                                    userio::log::warn!(
+                                        "scripts-stdin-send-failed",
+                                        error = e.to_string()
+                                    );
                                     break;
                                 }
                             },
                             Err(e) => {
-                                eprintln!("Error reading from stdin: {e}");
+                                userio::log::warn!(
+                                    "scripts-stdin-read-failed",
+                                    error = e.to_string()
+                                );
                                 break;
                             }
                         }
@@ -210,7 +217,7 @@ impl Cmd {
 
         let code = exit_code.unwrap_or(-1);
         if code != 0 {
-            eprintln!("Script exited with code {code}");
+            userio::log::warn!("scripts-exit-code", code = code);
         }
 
         Ok(code)
@@ -308,8 +315,8 @@ impl Cmd {
                         .insert(key.to_string(), serde_json::Value::String(value.to_string()));
                     debug!("Using CLI variable: {}={}", key, value);
                 } else {
-                    eprintln!("Warning: Ignoring malformed variable specification: {var_str}");
-                    eprintln!("Variables should be specified as KEY=VALUE");
+                    userio::log::warn!("scripts-var-malformed", spec = var_str);
+                    userio::log::info!("scripts-var-format-hint");
                 }
             }
 
@@ -319,7 +326,7 @@ impl Cmd {
 
             // If there are variables in the template that weren't specified on the command line, prompt for them
             if !remaining_vars.is_empty() {
-                println!("This script contains template variables that need values:");
+                userio::log::info!("scripts-var-prompt");
 
                 let stdin = std::io::stdin();
                 let mut input = String::new();
@@ -327,10 +334,10 @@ impl Cmd {
                 for var in remaining_vars {
                     input.clear();
 
-                    println!("Enter value for '{var}': ");
+                    userio::log::info!("scripts-var-enter", variable = &var);
 
                     if stdin.read_line(&mut input).is_err() {
-                        eprintln!("Failed to read input for variable '{var}'");
+                        userio::log::warn!("scripts-var-read-failed", variable = &var);
                         // Provide an empty string as fallback
                         variable_values.insert(var, serde_json::Value::String(String::new()));
                         continue;
@@ -366,7 +373,7 @@ impl Cmd {
         let scripts = script_db.list().await?;
 
         if scripts.is_empty() {
-            println!("No scripts found");
+            userio::log::info!("scripts-none-found");
         } else {
             println!("Available scripts:");
             for script in scripts {
@@ -505,7 +512,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(&script_db).await?;
 
-            println!("Script '{}' updated successfully!", edit.name);
+            userio::log::info!("scripts-updated", name = &edit.name);
 
             Ok(())
         } else {
@@ -531,7 +538,7 @@ impl Cmd {
 
                 let input = input.trim().to_lowercase();
                 if input != "y" && input != "yes" {
-                    println!("Deletion cancelled");
+                    userio::log::info!("scripts-delete-cancelled");
                     return Ok(());
                 }
             }
@@ -542,7 +549,7 @@ impl Cmd {
             // Rebuild the database to apply changes
             script_store.build(&script_db).await?;
 
-            println!("Script '{}' deleted successfully", delete.name);
+            userio::log::info!("scripts-deleted", name = &delete.name);
             Ok(())
         } else {
             bail!("script '{}' not found", delete.name);

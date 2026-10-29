@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
+use atuin_common::userio;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::termios::SpecialCodeIndex;
@@ -135,12 +136,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
             let path = atuin_common::fs::RemoveOnDropPath(socket_path);
             Ok::<_, InitError>((server, path))
         })
-        .map_err(|e| {
-            // If we're unable to initialize the PTY server (e.g., failed to create the socket),
-            // print the error and continue rather than returning it, so the user still gets a
-            // shell.
-            eprintln!("atuin pty-proxy: failed to initialize server: {e}");
-        })
+        .inspect_err(|e| userio::log::error!("pty-proxy-server-init-failed", error = e.to_string()))
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);

@@ -121,7 +121,6 @@ eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }
 i18n-embed = { workspace = true }
-i18n-embed-fl = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }

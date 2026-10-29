@@ -195,7 +195,7 @@ async fn add_to_config(
             crate::fs::write_new(path, text.as_bytes())?;
         }
     }
-    println!("Added MCP server atuin to {}", path.display());
+    crate::userio::log::info!("mcp-server-added", path = path.display().to_string());
     Ok(())
 }
 

@@ -6,6 +6,7 @@ use tonic::Code;
 use tonic::transport::Channel;
 
 use crate::HistoryClient;
+use crate::client::LogListener;
 use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::backend::{BackendError, SpawnError};
@@ -103,6 +104,11 @@ impl Connection {
     /// A client of the service's history API, over this connection.
     pub fn history_client(&self) -> HistoryClient {
         HistoryClient::from(self.channel.clone())
+    }
+
+    /// Starts showing what the service logs for the user, over this connection.
+    pub(crate) async fn listen_logs(&self) -> Result<LogListener, tonic::Status> {
+        LogListener::listen(self.channel.clone()).await
     }
 
     /// Ask the service to shut down, without waiting for it to.

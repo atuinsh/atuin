@@ -422,7 +422,7 @@ fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
 
     let downloaded = Regex::new(r"\d+/(\d+) up/down").unwrap();
     ai::wait_for("a sync to download the session", || {
-        let synced = here.run(&["sync"]);
+        let (_, synced) = succeeded(&common::Process::spawn(here.atuin(&["sync"])).wait());
         match downloaded.captures(&synced) {
             Some(counts) if &counts[1] != "0" => Ok(()),
             _ => Err(synced),
@@ -706,8 +706,8 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
         ids.iter().map(|id| machine.show(id)).collect()
     };
     let before = index(&machine);
-    let out = machine.run(&["store", "rebuild", "threads"]);
-    assert!(out.contains("rebuilding"), "{out}");
+    let shown = common::messages(machine.atuin(&["store", "rebuild", "threads"]));
+    assert!(shown.contains("rebuilding"), "{shown}");
     // `threads` commands wait for the rebuild.
     assert_eq!(index(&machine), before);
 }

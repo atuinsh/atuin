@@ -7,6 +7,7 @@ use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
 use tracing::instrument;
@@ -59,14 +60,14 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
-/// How the user makes an agent pick up a freshly installed extension. Only the
+/// Tells the user how to make an agent pick up a freshly installed extension. Only the
 /// extension-based agents need a nudge; command-hook agents load on next run.
-fn reload_hint(harness_name: &str) -> Option<&'static str> {
+fn show_reload_hint(harness_name: &str) {
     match harness_name {
-        "pi" => Some("Reload pi with `/reload` or restart pi."),
-        "omp" => Some("Reload omp with `/reload` or restart omp."),
-        "opencode" => Some("Restart opencode to load the plugin."),
-        _ => None,
+        "pi" => userio::log::info!("hook-reload-hint-pi"),
+        "omp" => userio::log::info!("hook-reload-hint-omp"),
+        "opencode" => userio::log::info!("hook-reload-hint-opencode"),
+        _ => {}
     }
 }
 
@@ -75,25 +76,26 @@ async fn install(agent_name: &str) -> Result<()> {
 
     match harness.install_hooks().await {
         Ok(path) => {
-            eprintln!("Atuin hooks installed for {}. Path: {}", harness.name(), path.display());
+            userio::log::info!(
+                "hook-installed",
+                harness = harness.name(),
+                path = path.display().to_string()
+            );
             if harness.name() == "codex" {
                 // Codex runs only the hooks the user trusted (see `codex::hook_trust`).
                 let config = path.with_file_name("config.toml");
-                eprintln!("Trusted them in Codex's config: {}", config.display());
+                userio::log::info!("hook-codex-trusted", config = config.display().to_string());
             }
-            if let Some(hint) = reload_hint(harness.name()) {
-                eprintln!("{hint}");
-            }
+            show_reload_hint(harness.name());
         }
         Err(InstallHookError::AlreadyInstalled) => {
-            eprintln!("{}: hooks already installed, skipping", harness.name());
+            userio::log::info!("hook-already-installed", harness = harness.name());
         }
         Err(err) => return Err(err.into()),
     }
 
     if cfg!(feature = "ai") {
-        let name = harness.name();
-        eprintln!("To let {name} search your history too, run `atuin mcp install {name}`.");
+        userio::log::info!("hook-mcp-hint", name = harness.name());
     }
 
     Ok(())

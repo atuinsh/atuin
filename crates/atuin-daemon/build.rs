@@ -34,6 +34,7 @@ fn main() -> std::io::Result<()> {
         "proto/search.proto",
         "proto/ai/agent.proto",
         "proto/ai/session.proto",
+        "proto/userio.proto",
     ];
     let proto_include_dirs = ["proto"];
 

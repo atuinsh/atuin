@@ -31,7 +31,7 @@ proto = ["dep:prost"]
 # Enables `atuin_common::db::sqlite`.
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 # Enables `atuin_common::test_utils` and `atuin_common::env::MockEnv`, for use in tests.
-test-utils = ["dep:tracing-subscriber"]
+test-utils = []
 # Enables various items in `atuin_common::string` that require Unicode data.
 unicode = ["dep:unicode-width", "dep:unicode-segmentation"]
 
@@ -42,6 +42,7 @@ async-stream = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
+colored = { workspace = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
@@ -53,6 +54,8 @@ fs-err = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 humantime = { workspace = true }
+i18n-embed = { workspace = true }
+i18n-embed-fl = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true }
@@ -64,6 +67,7 @@ prost = { workspace = true, optional = true }
 ref-cast = { workspace = true }
 regex = { workspace = true }
 rmp = { workspace = true }
+rust-embed = { workspace = true }
 schemars = { workspace = true }
 rusty_paserk = { workspace = true }
 rusty_paseto = { workspace = true }
@@ -88,7 +92,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
 toml_edit = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true }
 typed-builder = { workspace = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
