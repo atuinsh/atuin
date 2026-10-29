@@ -190,6 +190,14 @@ Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFIL
 
 Note that the `$PROFILE` path may depend on your PowerShell version.
 
+Installing for every user
+
+By default, WinGet installs Atuin for your user only, which doesn't need administrator rights. To install it for every user on the machine, add `--scope machine`:
+
+```
+winget install -e Atuinsh.Atuin --scope machine
+```
+
 You may also want to try the `default-powershell` [theme](https://docs.atuin.sh/guide/theming/index.md), which uses the default PowerShell syntax colors.
 
 [**Set up sync** - Move on to the next step.](https://docs.atuin.sh/guide/sync/index.md)
@@ -3373,6 +3381,7 @@ Conditions let a single key do different things depending on the current state. 
 | `no-results`           | The search returned zero results                                        |
 | `has-results`          | The search returned at least one result                                 |
 | `has-context`          | The context comes from a previously selected command (`switch-context`) |
+| `shell-up-key-binding` | Atuin was invoked from the shell's up-key binding rather than ctrl-r    |
 
 ### Boolean expressions
 
@@ -3447,6 +3456,20 @@ The default keymaps already encode the standard `[keys]` behaviors. Here is what
   { action = "delete-char-before" },
 ]
 ```
+
+### Different enter behavior for up and ctrl-r
+
+The `shell-up-key-binding` condition is true when the shell invoked Atuin from its up-key binding. This makes enter run the command when pressing up, but return it to the prompt for editing when pressing ctrl-r:
+
+```
+[keymap.emacs]
+"enter" = [
+  { when = "shell-up-key-binding", action = "accept" },
+  { action = "return-selection" },
+]
+```
+
+Overriding `enter` replaces the default binding for that key only, so add the same rules for `ctrl-m` and for `enter` under `[keymap.vim-normal]` and `[keymap.vim-insert]` if you use them.
 
 ### Disabling scroll-exit
 
@@ -4061,6 +4084,10 @@ With this set, your existing `atuin init` line starts the proxy automatically.
 Startup performance
 
 When enabled this way, the proxy starts wherever your `atuin init` line sits, and everything sourced *before* that line runs a second time inside the proxy. This is harmless, but for the fastest startup keep your `atuin init` line as high in your shell config as possible.
+
+Linux virtual consoles
+
+A PTY proxy will not be automatically spawned directly inside a Linux virtual console (`/dev/tty1`, `/dev/tty2`, etc.) because this would interfere with programs that need direct console access, like `chvt`, `setfont`, and `startx`. However, you can still run `atuin pty-proxy` to start a proxy manually.
 
 Alternatively, you can initialize pty-proxy explicitly in your shell config. Place the init line shown below as high in the document as possible, *before* your normal `atuin init` call. Both methods can coexist safely — the proxy only starts once.
 
@@ -4739,6 +4766,25 @@ ATUIN_DB_PASSWORD_FILE="/run/secrets/atuin_db_password"
 ```
 
 Trailing newlines in the file are ignored, and the rest is used as-is, so unlike a password in `db_uri` it doesn't need escaping. `db_uri` must name the host, and must not contain a password as well. This works with PostgreSQL and MySQL; SQLite has no password.
+
+## Administration
+
+`atuin-server` supports some administration tools.
+
+### User Management
+
+While `open_registration` is `true`, anyone who can reach the server can register. To keep a server private, leave it `false` and create accounts on the server instead:
+
+```
+atuin-server admin user create --email alice@example.com alice
+```
+
+You can also delete users as well as change their passwords.
+
+```
+atuin-server admin user set-password alice
+atuin-server admin user delete alice
+```
 
 ## TLS
 
@@ -6054,7 +6100,7 @@ Atuin never merges branches, and never writes to a session its agent has open. C
 
 A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
 
-In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes (or, without `enter_accept`, puts the command on your command line), and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
+In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes, and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
 
 `Ctrl`+`X` in the list or Inspect opens the chooser with the fork selected (`Shift`+`F` in vim's normal mode, `F` in Inspect).
 
@@ -6073,7 +6119,7 @@ The id can be the agent's own, or the thread's Atuin id, which Inspect and the M
 
 ## Settings
 
-The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own go under `[threads]`:
+The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `keymap_mode` and theme settings. `Enter` always resumes, whatever `enter_accept` says. Its own go under `[threads]`:
 
 ```
 [threads]
@@ -6128,13 +6174,15 @@ The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/
 
 ## Quick start
 
-One command connects an agent:
+Connect all your configured agents with one command:
 
 ```
-atuin mcp install claude-code   # or: codex, opencode, pi
+atuin mcp install
 ```
 
-Then restart the agent. That's it: it can now search your shell history.
+Atuin checks for existing user config files for Claude Code, Codex, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
+
+Then restart the agents you connected. They can now search your shell history.
 
 To let it read and search what your commands printed, and your past [threads](https://docs.atuin.sh/ai/threads/index.md) with other agents, turn those on too (each also sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) they need):
 

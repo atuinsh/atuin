@@ -157,7 +157,7 @@ Atuin never merges branches, and never writes to a session its agent has open. C
 
 A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
 
-In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes (or, without `enter_accept`, puts the command on your command line), and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
+In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes, and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
 
 `Ctrl`+`X` in the list or Inspect opens the chooser with the fork selected (`Shift`+`F` in vim's normal mode, `F` in Inspect).
 
@@ -176,7 +176,7 @@ The id can be the agent's own, or the thread's Atuin id, which Inspect and the M
 
 ## Settings
 
-The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `enter_accept`, `keymap_mode` and theme settings. Its own go under `[threads]`:
+The picker follows the history search's `style`, `invert`, `show_preview`, `max_preview_height`, `keymap_mode` and theme settings. `Enter` always resumes, whatever `enter_accept` says. Its own go under `[threads]`:
 
 ```
 [threads]
