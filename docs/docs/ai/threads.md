@@ -359,8 +359,9 @@ The chooser still opens for a session its own agent can't resume.
 From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
-another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork`
-forks it. It catches the session up with sync as the picker does, and fails
+another (`claude-code`, `codex`, `copilot`, `opencode`, `pi` or `omp`; `claude`
+is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume
+<id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest
 branch. `--branch` picks the branch to catch up to, to switch to, to fork from,

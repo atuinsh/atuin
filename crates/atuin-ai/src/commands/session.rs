@@ -89,8 +89,8 @@ pub enum Cmd {
     /// alone: the ones nobody has gone on with since it was turned on.
     Import {
         /// Only import threads from this harness.
-        #[arg(long, value_parser = parse_harness)]
-        harness: Option<HarnessKind>,
+        #[arg(long, value_enum)]
+        harness: Option<HarnessArg>,
 
         #[command(flatten)]
         output: Output,
@@ -103,12 +103,19 @@ pub enum Cmd {
     Enable,
 }
 
-// Only harnesses a capture path can actually produce are offered as filters (see AnyHarness):
-// advertising one without a capture source would return empty for every query.
-// Also the MCP tools' harness filter, so the CLI and the tools accept the same names.
-#[derive(Copy, Clone, Debug, ValueEnum, serde::Deserialize, schemars::JsonSchema)]
+/// A harness named on the command line (`--harness`, `--in`) or in an MCP tool call, so every
+/// place that takes one accepts the same names: the ones [`harness_name`] shows, with `claude`
+/// as a hidden synonym of `claude-code`.
+///
+/// Only harnesses a capture path can actually produce are offered (see `AnyHarness`): advertising
+/// one without a capture source would return empty for every query.
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessArg {
+    #[value(alias = "claude")]
+    #[serde(alias = "claude")]
     ClaudeCode,
     Codex,
     Copilot,
@@ -211,7 +218,9 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
             search(&mut client, query, harness.map(HarnessKind::from), limit, style).await
         }
         Cmd::Tail { .. } => tail(&mut client, style).await,
-        Cmd::Import { harness, .. } => import(&mut client, harness, style, &mut io::stdout()).await,
+        Cmd::Import { harness, .. } => {
+            import(&mut client, harness.map(HarnessKind::from), style, &mut io::stdout()).await
+        }
         Cmd::Resume(_) | Cmd::Enable => unreachable!("returned above"),
     };
 
@@ -1043,21 +1052,6 @@ fn rfc3339(ts: OffsetDateTime) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
-fn parse_harness(value: &str) -> Result<HarnessKind, String> {
-    match value {
-        "claude-code" => Ok(HarnessKind::ClaudeCode),
-        "codex" => Ok(HarnessKind::Codex),
-        "copilot" => Ok(HarnessKind::Copilot),
-        "opencode" => Ok(HarnessKind::Opencode),
-        "pi" => Ok(HarnessKind::Pi),
-        "omp" => Ok(HarnessKind::Omp),
-        other => Err(format!(
-            "unknown harness `{other}` (expected claude-code, codex, copilot, opencode, pi, or \
-             omp)"
-        )),
-    }
-}
-
 /// The kebab display label for a harness. Kept exhaustive over every `HarnessKind` (including ones
 /// no capture path yet produces) so a stored value always renders. Shared with the MCP
 /// session-search renderer.
@@ -1406,20 +1400,24 @@ mod tests {
             .build()
     }
 
+    /// The name a listing shows for a harness is the name the command line takes for it.
     #[rstest]
-    #[case("claude-code", HarnessKind::ClaudeCode)]
-    #[case("codex", HarnessKind::Codex)]
-    #[case("opencode", HarnessKind::Opencode)]
-    #[case("pi", HarnessKind::Pi)]
-    #[case("omp", HarnessKind::Omp)]
-    #[case("copilot", HarnessKind::Copilot)]
-    fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
-        assert_eq!(parse_harness(input).unwrap(), want);
+    #[case(HarnessKind::ClaudeCode)]
+    #[case(HarnessKind::Codex)]
+    #[case(HarnessKind::Copilot)]
+    #[case(HarnessKind::Opencode)]
+    #[case(HarnessKind::Pi)]
+    #[case(HarnessKind::Omp)]
+    fn a_harness_is_named_as_listed(#[case] kind: HarnessKind) {
+        use clap::ValueEnum;
+        let parsed = HarnessArg::from_str(harness_name(kind), false).unwrap();
+        assert_eq!(HarnessKind::from(parsed), kind);
     }
 
     #[rstest]
-    fn parse_harness_rejects_unknown_harnesses() {
-        assert!(parse_harness("cursor").is_err());
+    fn an_unknown_harness_name_is_rejected() {
+        use clap::ValueEnum;
+        assert!(HarnessArg::from_str("cursor", false).is_err());
     }
 
     #[rstest]
@@ -1517,6 +1515,41 @@ mod tests {
             panic!("not a search");
         };
         assert_eq!(query, expected);
+    }
+
+    /// Claude Code goes by `claude-code`, the name the listings show, and by `claude`, on the
+    /// command line and in an MCP tool call alike; only the former is advertised.
+    #[rstest]
+    #[case::listed("claude-code")]
+    #[case::synonym("claude")]
+    fn claude_code_goes_by_both_names(#[case] name: &str) {
+        use clap::ValueEnum;
+
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: Cmd,
+        }
+
+        let cli = <Cli as clap::Parser>::try_parse_from(["threads", "import", "--harness", name])
+            .unwrap();
+        assert!(matches!(cli.cmd, Cmd::Import {
+            harness: Some(HarnessArg::ClaudeCode),
+            ..
+        }));
+        let cli =
+            <Cli as clap::Parser>::try_parse_from(["threads", "search", "--harness", name, "q"])
+                .unwrap();
+        assert!(matches!(cli.cmd, Cmd::Search {
+            harness: Some(HarnessArg::ClaudeCode),
+            ..
+        }));
+        let from_tool: HarnessArg = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(from_tool, HarnessArg::ClaudeCode);
+
+        let shown = HarnessArg::ClaudeCode.to_possible_value().unwrap();
+        assert_eq!(shown.get_name(), harness_name(HarnessKind::ClaudeCode));
+        assert!(shown.matches(name, false));
     }
 
     #[rstest]
