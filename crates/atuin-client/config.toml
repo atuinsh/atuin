@@ -337,6 +337,11 @@ enter_accept = true
 ## files read and written), with secrets redacted. Off keeps only each tool's name.
 # capture_tools = true
 
+## Conversation size limit when continuing in another agent, in bytes of source JSON content.
+## Defaults to 400 KiB (about 100k tokens); 0 removes the size limit.
+## Always keeps the last user turn, plus up to 80 KiB of earlier prompts after a cut.
+# continue_max_bytes = 409600
+
 ## The rest are settings for `atuin threads resume`, the picker over captured threads.
 ## It follows the history search's style, invert, show_preview, max_preview_height,
 ## enter_accept, keymap_mode and theme settings.
