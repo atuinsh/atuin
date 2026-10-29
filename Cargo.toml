@@ -82,6 +82,7 @@ i18n-embed-fl = "0.10"
 imara-diff = "0.2"
 indicatif = "0.18"
 interim = { version = "0.2", features = ["time_0_3"] }
+ipnet = { version = "2.12", features = ["serde"] }
 itertools = "0.15"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 libc = "0.2"
