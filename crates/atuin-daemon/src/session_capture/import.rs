@@ -226,6 +226,7 @@ mod tests {
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::copilot::session::CopilotSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
+    use atuin_common::harnesstools::session::ParentKind;
     use atuin_domain::record::HostId;
     use futures::StreamExt;
     use futures::future::BoxFuture;
@@ -472,8 +473,8 @@ mod tests {
             .await;
         assert_eq!(
             sum_new(&progress),
-            13 + 1,
-            "the parent's rows and its title, not the subagent's"
+            13 + 1 + 4,
+            "the parent's rows and its title, and its subagent's rows"
         );
 
         let handle = HarnessSession {
@@ -484,6 +485,16 @@ mod tests {
         assert_eq!(session.title.as_deref(), Some("atuin-sample-edit"));
         assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/copilot-play")));
         assert_eq!(session.git_branch.as_deref(), Some("main"));
+
+        // The subagent is a session of its own, a child of the parent named for its agent.
+        let child = HarnessSession {
+            harness: HarnessKind::Copilot,
+            session: NativeSessionId::from("agent-toolu_01Cz14Gbx74QYDbB2WUL3D5T".to_owned()),
+        };
+        let subagent = sink.sidecar.get_session(&child).await.unwrap().unwrap();
+        assert_eq!(subagent.title.as_deref(), Some("count-lines"));
+        assert_eq!(subagent.parent.as_ref(), Some(&handle));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
     }
 
     #[cfg(unix)]

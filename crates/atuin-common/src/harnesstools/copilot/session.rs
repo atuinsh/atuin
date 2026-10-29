@@ -24,12 +24,15 @@
 //! instead; `session.usage_checkpoint` and `session.shutdown` are totals; `permission.*`,
 //! `assistant.turn_*`, `subagent.*` and `session.model_change` are lifecycle.
 //!
-//! **Subagents.** Copilot writes a subagent's conversation into its parent's log, under an
-//! interaction of its own (`interactionId`), opened by a `user.message` whose `source` is
-//! `agent-<parent>`; the subagent's replies also name the `task` call that spawned it
-//! (`parentToolCallId`). The reader keeps the parent's rows only: the `task` call and its result
-//! carry the prompt and the answer. ponytail: capture them as child sessions, as Claude Code's
-//! are.
+//! **Subagents.** Copilot writes a subagent's conversation into its parent's log: a
+//! `subagent.started` naming the `task` call that spawned it, then its rows under an interaction
+//! of its own (`interactionId`), opened by a `user.message` whose `source` is `agent-<parent>`
+//! (the prompt the parent wrote), its replies naming the call too (`parentToolCallId`), and a
+//! `subagent.completed`. Each subagent is read as a session of its own, `agent-<call>`, a child
+//! of the parent ([`ParentKind::Subagent`]) titled with the agent's name, over the same log
+//! filtered to its rows; the parent's own rows leave them out, and keep the `task` call and its
+//! result. A log's listener reports a child when the parent's reader comes across its start (so
+//! only logs the daemon reads are scanned), and a one-shot scan reads each log for them.
 //!
 //! **Titles.** No event names the session. Copilot generates a name at the first prompt and
 //! writes it to `workspace.yaml` (`name`, with `user_named` when `--name` or `/rename` set it,
@@ -46,7 +49,7 @@
 //! **Ids.** Every event has a `parentId`, the event before it, bookkeeping included: a chain
 //! through rows the reader skips. The rows are read in file order, so none names a parent.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
@@ -58,15 +61,15 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::copilot::{Copilot, copilot_home};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult,
-    ToolUse, Usage,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch,
@@ -151,7 +154,25 @@ impl Sessions for CopilotSessions {
             match scan {
                 Ok(items) => {
                     for item in items {
+                        let Ok(parent) = &item else {
+                            yield item;
+                            continue;
+                        };
+                        // The subagents the log holds, each a session of its own.
+                        let (path, parent) = (parent.path.clone(), parent.clone());
+                        let lanes = match pool.run(move || lanes_in(&path)).await {
+                            Ok(Ok(lanes)) => lanes,
+                            // Reading the log for the parent's rows reports what is wrong with it.
+                            Ok(Err(_)) => Vec::new(),
+                            Err(cancelled) => {
+                                yield Err(RuntimeError::Io(io::Error::other(cancelled)));
+                                return;
+                            }
+                        };
                         yield item;
+                        for lane in lanes {
+                            yield Ok(parent.child(&lane));
+                        }
                     }
                 }
                 Err(cancelled) => yield Err(RuntimeError::Io(io::Error::other(cancelled))),
@@ -213,6 +234,10 @@ impl CopilotListener {
 impl Listener for CopilotListener {
     type Session = CopilotSession;
 
+    /// Every log as the watcher reports it, and every subagent a log's reader comes across: a
+    /// parent session carries a sender its reader announces children on, and the children are
+    /// reported here as they are announced (each once, however many times a re-read announces
+    /// it).
     fn watch(self) -> impl Stream<Item = Result<CopilotSession, WatchError>> + Send + 'static {
         let root = self.root;
         let pool = self.pool;
@@ -229,15 +254,47 @@ impl Listener for CopilotListener {
                     return;
                 }
             };
-            for await file in files {
-                let (path, stat) = file.into_parts();
-                let Some(id) = Self::session_id(&path) else { continue };
-                yield Ok(CopilotSession {
-                    id,
-                    path: path.to_path_buf(),
-                    changes: Some(stat),
-                    pool: pool.clone(),
-                });
+            let (announce, mut announced) = mpsc::unbounded_channel::<CopilotSession>();
+            // The children reported for each parent's current watch. A log removed and made
+            // again is reported again with a fresh watch, and so are its children then, each
+            // once more: their old watches ended with the old log.
+            let mut reported: HashMap<SessionId, HashSet<SessionId>> = HashMap::new();
+            futures::pin_mut!(files);
+            let mut files_done = false;
+            loop {
+                tokio::select! {
+                    biased;
+                    file = files.next(), if !files_done => match file {
+                        Some(file) => {
+                            let (path, stat) = file.into_parts();
+                            let Some(id) = Self::session_id(&path) else { continue };
+                            reported.remove(&id);
+                            yield Ok(CopilotSession {
+                                id,
+                                path: path.to_path_buf(),
+                                changes: Some(stat),
+                                pool: pool.clone(),
+                                lane: None,
+                                announce: Some(announce.clone()),
+                            });
+                        }
+                        None => files_done = true,
+                    },
+                    child = announced.recv() => match child {
+                        Some(child) => {
+                            let Some(parent) = child.parent_id() else { continue };
+                            if reported.entry(parent).or_default().insert(child.id.clone()) {
+                                yield Ok(child);
+                            }
+                        }
+                        // Every sender is this stream's own, or a session's it yielded: none
+                        // left means neither will announce again.
+                        None => break,
+                    },
+                }
+                if files_done && announced.is_closed() {
+                    break;
+                }
             }
         }
     }
@@ -250,6 +307,20 @@ pub struct CopilotSession {
     /// Wakes [`messages`](Session::messages) on each change to the log; `None` reads it once.
     changes: Option<watch::Receiver<FileStat>>,
     pool: BlockingPool,
+    /// For a subagent's session, the `task` call that spawned it: the rows read are the
+    /// subagent's. `None` reads the parent's rows.
+    lane: Option<Lane>,
+    /// Where a parent's reader announces the subagents it comes across, to the listener that
+    /// yielded it (see [`CopilotListener::watch`]).
+    announce: Option<mpsc::UnboundedSender<Self>>,
+}
+
+/// The id a subagent's session takes: `agent-<call>`, after the `task` call that spawned it.
+const SUBAGENT_PREFIX: &str = "agent-";
+
+/// Whether `id` names a subagent's session.
+pub(crate) fn is_subagent_id(id: &str) -> bool {
+    id.starts_with(SUBAGENT_PREFIX)
 }
 
 impl CopilotSession {
@@ -261,7 +332,27 @@ impl CopilotSession {
             path,
             changes: None,
             pool,
+            lane: None,
+            announce: None,
         }
+    }
+
+    /// The session of the subagent `lane` spawned in this (parent) session: over the same log,
+    /// woken by the same changes.
+    fn child(&self, lane: &Lane) -> Self {
+        Self {
+            id: SessionId::from(format!("{SUBAGENT_PREFIX}{}", lane.call)),
+            path: self.path.clone(),
+            changes: self.changes.clone(),
+            pool: self.pool.clone(),
+            lane: Some(lane.clone()),
+            announce: None,
+        }
+    }
+
+    /// The parent of a subagent's session, from the log's directory.
+    fn parent_id(&self) -> Option<SessionId> {
+        self.lane.as_ref().and_then(|_| CopilotListener::session_id(&self.path))
     }
 
     /// The messages of the log from byte `start`, each with the checkpoint just past its line,
@@ -286,17 +377,21 @@ impl CopilotSession {
                     Reading::default()
                 }
             };
+            // A parent announces the subagents the events before the checkpoint started too:
+            // each is a session the listener may not have reported yet.
+            self.announce_lanes(&reading.lanes);
             let sidecar = Arc::new(Mutex::new(SidecarWatch::new(self.path.with_file_name(SIDECAR_FILE))));
             let lines = FollowLines::new(PooledReadLines::new(
                 PathLineReader::at(&self.path, start),
                 self.pool.clone(),
             ));
-            let events = match self.changes {
+            let events = match self.changes.clone() {
                 Some(changes) => lines.follow(changes).left_stream(),
                 None => lines.read_to_end().right_stream(),
             }
             .json_with(Envelope::decode);
             let mut generation = None;
+            let mut titled = false;
             for await item in events {
                 let (line, event) = match item {
                     Ok(item) => item,
@@ -308,19 +403,49 @@ impl CopilotSession {
                 // Started over from the log's first byte: nothing read before counts.
                 if generation.replace(line.generation).is_some_and(|seen| seen != line.generation) {
                     reading = Reading::default();
+                    titled = false;
                 }
                 let checkpoint = Checkpoint::after(&line).started_over(over);
-                if let Some(message) = reading.absorb(event) {
+                let lanes = reading.lanes.len();
+                let row = reading.absorb(event);
+                if reading.lanes.len() > lanes {
+                    self.announce_lanes(&reading.lanes[lanes..]);
+                }
+                let mine = self.lane.as_ref().map(|lane| lane.call.as_str());
+                if let Some((owner, mut message)) = row.filter(|(owner, _)| owner.as_deref() == mine) {
+                    let _ = owner;
+                    if let Some(lane) = &self.lane {
+                        message.parent = self.parent_id();
+                        // The agent's name rides on the subagent's first row, a stable one.
+                        if !titled {
+                            message.title = lane.title();
+                            titled = true;
+                        }
+                    }
                     yield Ok((checkpoint, message));
                 }
-                // After the line's own row: a crash between the two loses only the title row,
-                // which the next read names again.
-                let watch = Arc::clone(&sidecar);
-                let renamed = self.pool.run(move || watch.lock().refresh()).await.ok().flatten();
-                if let Some((title, at)) = renamed {
-                    yield Ok((checkpoint, Reading::title_row(title, at)));
+                // The sidecar names the parent: after the line's own row, so a crash between the
+                // two loses only the title row, which the next read names again.
+                if self.lane.is_none() {
+                    let watch = Arc::clone(&sidecar);
+                    let renamed = self.pool.run(move || watch.lock().refresh()).await.ok().flatten();
+                    if let Some((title, at)) = renamed {
+                        yield Ok((checkpoint, Reading::title_row(title, at)));
+                    }
                 }
             }
+        }
+    }
+
+    /// Announce the subagents `lanes` to the listener, as children of this (parent) session.
+    /// A child announces none: its subagents are the parent's to announce. Nothing listening
+    /// (a one-shot read) is fine.
+    fn announce_lanes(&self, lanes: &[Lane]) {
+        let Some(announce) = self.announce.as_ref().filter(|_| self.lane.is_none()) else {
+            return;
+        };
+        for lane in lanes {
+            let _ = announce.send(self.child(lane));
         }
     }
 }
@@ -351,9 +476,13 @@ impl Session for CopilotSession {
     }
 
     fn read(&self) -> impl Stream<Item = Result<CopilotMessage, MessageError>> + Send + 'static {
-        Self::open(self.id.clone(), self.path.clone(), self.pool.clone())
-            .messages_at(0, false)
-            .map(|item| item.map(|(_, message)| message))
+        Self {
+            changes: None,
+            announce: None,
+            ..self.clone()
+        }
+        .messages_at(0, false)
+        .map(|item| item.map(|(_, message)| message))
     }
 
     async fn changed_after(mut self, since: SystemTime) -> Option<Self> {
@@ -390,14 +519,37 @@ impl Envelope {
     }
 }
 
+/// A subagent a log holds (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Lane {
+    /// The `task` call that spawned it.
+    call: String,
+    /// The agent's name, as Copilot shows it (`agentDisplayName`, else `agentName`).
+    name: Option<String>,
+    /// Its interaction, once its first row (its prompt) said.
+    interaction: Option<String>,
+}
+
+impl Lane {
+    /// The subagent's name as its session's title.
+    fn title(&self) -> Option<TitleChange> {
+        self.name.as_deref().map(|name| TitleChange::new(TitleSource::Agent, name))
+    }
+}
+
+/// The subagents the log at `path` holds, in the order they started. Blocking.
+fn lanes_in(path: &Path) -> io::Result<Vec<Lane>> {
+    Ok(Reading::before(path, u64::MAX)?.lanes)
+}
+
 /// What the reader carries from one event to the ones after it.
 #[derive(Debug, Default)]
 struct Reading {
     /// Where the session works, from the last `session.start` or `session.resume`.
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
-    /// The interactions that are subagents' (see the module docs), whose rows are skipped.
-    subagents: HashSet<String>,
+    /// The subagents started so far, in order.
+    lanes: Vec<Lane>,
     /// The last `session.usage_record`: the model call it is for and its usage, claimed by the
     /// `assistant.message` of that call, which Copilot writes right after it.
     usage: Option<(String, Usage)>,
@@ -420,13 +572,23 @@ impl Reading {
         Ok(reading)
     }
 
-    /// Whether `event` is a row of a subagent's interaction.
-    fn in_subagent(&self, event: &Envelope) -> bool {
-        event.interaction().is_some_and(|id| self.subagents.contains(id))
+    /// The subagent `event` is a row of, by its interaction, or for a reply by the call it
+    /// names (which also tells the reader the interaction, when the reply comes first).
+    fn lane_of(&mut self, event: &Envelope) -> Option<usize> {
+        if let Some(call) = event.str("parentToolCallId") {
+            let found = self.lanes.iter().position(|lane| lane.call == call)?;
+            if self.lanes[found].interaction.is_none() {
+                self.lanes[found].interaction = event.interaction().map(str::to_owned);
+            }
+            return Some(found);
+        }
+        let interaction = event.interaction()?;
+        self.lanes.iter().position(|lane| lane.interaction.as_deref() == Some(interaction))
     }
 
-    /// Take `event` in: the message it is, or `None` for one the reader skips.
-    fn absorb(&mut self, event: Envelope) -> Option<CopilotMessage> {
+    /// Take `event` in: the message it is, with the subagent (the `task` call) whose row it is
+    /// (`None` for the parent's); or `None` for an event the reader skips.
+    fn absorb(&mut self, event: Envelope) -> Option<(Option<String>, CopilotMessage)> {
         match event.kind.as_str() {
             "session.start" | "session.resume" => {
                 let context = &event.data["context"];
@@ -445,39 +607,59 @@ impl Reading {
                 }
                 None
             }
+            "subagent.started" => {
+                if let Some(call) = event.str("toolCallId") {
+                    let name = event.str("agentDisplayName").or_else(|| event.str("agentName"));
+                    self.lanes.push(Lane {
+                        call: call.to_owned(),
+                        name: name.map(str::to_owned),
+                        interaction: None,
+                    });
+                }
+                None
+            }
             "user.message" => match event.str("source") {
-                Some(source) if source.starts_with("agent-") => {
-                    if let Some(interaction) = event.interaction() {
-                        self.subagents.insert(interaction.to_owned());
-                    }
-                    None
+                // A subagent's prompt opens its interaction: the first started that has none
+                // yet, as Copilot starts them in order.
+                Some(source) if source.starts_with(SUBAGENT_PREFIX) => {
+                    let interaction = event.interaction()?.to_owned();
+                    let lane = self.lanes.iter_mut().find(|lane| lane.interaction.is_none())?;
+                    lane.interaction = Some(interaction);
+                    let call = lane.call.clone();
+                    Some((Some(call), self.message(event, None)))
                 }
                 Some(_) => None,
-                None if self.in_subagent(&event) => None,
                 None if event.str("content").is_none_or(str::is_empty) => None,
-                None => Some(self.message(event, None)),
+                None => {
+                    let owner = self.owner_of(&event);
+                    Some((owner, self.message(event, None)))
+                }
             },
             "assistant.message" => {
-                if event.data["parentToolCallId"].is_string() || self.in_subagent(&event) {
-                    return None;
-                }
+                let owner = self.owner_of(&event);
                 let usage = match (event.str("apiCallId"), &self.usage) {
                     (Some(call), Some((of, _))) if call == of => self.usage.take().map(|(_, u)| u),
                     _ => None,
                 };
-                Some(self.message(event, usage))
+                Some((owner, self.message(event, usage)))
             }
-            "tool.execution_complete" if !self.in_subagent(&event) => {
-                Some(self.message(event, None))
+            "tool.execution_complete" => {
+                let owner = self.owner_of(&event);
+                Some((owner, self.message(event, None)))
             }
             // A compaction that failed, or was abandoned, changed nothing.
             "session.compaction_complete"
                 if event.data["success"] == true && event.str("outcome") == Some("applied") =>
             {
-                Some(self.message(event, None))
+                Some((None, self.message(event, None)))
             }
             _ => None,
         }
+    }
+
+    /// The subagent whose row `event` is, by its `task` call; `None` for the parent's.
+    fn owner_of(&mut self, event: &Envelope) -> Option<String> {
+        self.lane_of(event).map(|at| self.lanes[at].call.clone())
     }
 
     fn message(&self, event: Envelope, usage: Option<Usage>) -> CopilotMessage {
@@ -488,6 +670,7 @@ impl Reading {
             usage,
             title: None,
             at: None,
+            parent: None,
         }
     }
 
@@ -512,6 +695,7 @@ impl Reading {
             usage: None,
             title: Some(title),
             at,
+            parent: None,
         }
     }
 }
@@ -623,10 +807,13 @@ pub struct CopilotMessage {
     /// The model call's usage, on an `assistant.message`, from the `session.usage_record`
     /// before it.
     usage: Option<Usage>,
-    /// On a title row ([`TITLE_ROW`]), the session's name from the sidecar.
+    /// On a title row ([`TITLE_ROW`]), the session's name from the sidecar; on a subagent's
+    /// first row, the agent's name.
     title: Option<TitleChange>,
     /// When a title row's sidecar was written: the row's time.
     at: Option<OffsetDateTime>,
+    /// On a subagent's rows, the session that spawned it.
+    parent: Option<SessionId>,
 }
 
 impl CopilotMessage {
@@ -802,6 +989,14 @@ impl Message for CopilotMessage {
             .flatten()
     }
 
+    fn parent_session(&self) -> Option<SessionId> {
+        self.parent.clone()
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent.as_ref().map(|_| ParentKind::Subagent)
+    }
+
     fn title(&self) -> Option<TitleChange> {
         self.title.clone()
     }
@@ -851,12 +1046,20 @@ mod tests {
             .unwrap()
     }
 
-    /// The messages of a log read without a sidecar, as `(role, content)`.
+    /// The parent's messages of a log, read without a sidecar.
     fn parse(events: &str) -> Vec<CopilotMessage> {
+        parse_lane(events, None)
+    }
+
+    /// The messages of `lane`'s subagent (`None`: the parent's) in a log, read without a
+    /// sidecar.
+    fn parse_lane(events: &str, lane: Option<&str>) -> Vec<CopilotMessage> {
         let mut reading = Reading::default();
         events
             .lines()
             .filter_map(|line| reading.absorb(Envelope::decode(line.as_bytes()).unwrap()))
+            .filter(|(owner, _)| owner.as_deref() == lane)
+            .map(|(_, message)| message)
             .collect()
     }
 
@@ -1090,6 +1293,142 @@ mod tests {
         assert!(Reading::default().absorb(event).is_none());
     }
 
+    const TASK_CALL: &str = "toolu_01Cz14Gbx74QYDbB2WUL3D5T";
+
+    /// The subagent's own conversation: the prompt its parent wrote, its reply calling `bash`,
+    /// the result, and its answer, each row naming the parent session, with the agent's name
+    /// as its title.
+    #[rstest]
+    #[tokio::test]
+    async fn a_subagent_is_a_child_session_over_the_same_log() {
+        let root = root_with("s", TASK_AND_EDIT, Some(TASK_AND_EDIT_SIDECAR));
+        let path = root.path().join("s").joined(EVENTS_FILE);
+        let parent = CopilotSession::open(SessionId::from("s".to_owned()), path, pool());
+        let lane = Lane {
+            call: TASK_CALL.to_owned(),
+            name: Some("count-lines".to_owned()),
+            interaction: None,
+        };
+        let child = parent.child(&lane);
+        assert_eq!(child.id().as_ref(), format!("agent-{TASK_CALL}"));
+        let messages: Vec<CopilotMessage> = child.messages().try_collect().await.unwrap();
+        let roles: Vec<_> = messages.iter().map(Message::role).collect();
+        assert_eq!(roles, [Role::User, Role::Assistant, Role::Tool, Role::Assistant]);
+        let user = texts(&messages, &Role::User);
+        assert!(user[0].starts_with("Count the lines in hello.py"), "{user:?}");
+        assert_eq!(texts(&messages, &Role::Assistant), ["2"]);
+        assert!(
+            messages.iter().all(|m| m.parent_session().as_ref().map(AsRef::as_ref) == Some("s"))
+        );
+        assert!(messages.iter().all(|m| m.parent_kind() == Some(ParentKind::Subagent)));
+        assert!(
+            messages.iter().all(|m| m.cwd().as_deref() == Some(Path::new("/tmp/copilot-play")))
+        );
+        assert_eq!(messages.iter().filter_map(Message::title).collect::<Vec<_>>(), [
+            TitleChange::new(TitleSource::Agent, "count-lines")
+        ]);
+        assert!(
+            messages.iter().filter(|m| m.role() == Role::Assistant).all(|m| m.usage().is_some())
+        );
+        let parent_rows: Vec<CopilotMessage> = parent.messages().try_collect().await.unwrap();
+        assert!(parent_rows.iter().all(|m| m.parent_session().is_none()));
+        // The parent's rows and its title row, and the subagent's four.
+        assert_eq!(
+            parent_rows.len() + messages.len(),
+            parse_lane(TASK_AND_EDIT, None).len() + 1 + 4
+        );
+    }
+
+    /// A subagent's rows are told from the parent's by the call its replies name, or the
+    /// interaction its prompt opened, so a reply whose prompt was not seen still finds its lane.
+    #[rstest]
+    fn lanes_are_found_by_call_or_interaction() {
+        let mut reading = Reading::default();
+        let event =
+            |value: serde_json::Value| Envelope::decode(value.to_string().as_bytes()).unwrap();
+        assert!(reading.absorb(event(json!({"type": "subagent.started", "id": "e1", "timestamp": "2026-10-27T00:00:00Z",
+            "data": {"toolCallId": "call_1", "agentName": "task", "agentDisplayName": "worker"}}))).is_none());
+        let (owner, _) = reading.absorb(event(json!({"type": "assistant.message", "id": "e2", "timestamp": "2026-10-27T00:00:01Z",
+            "data": {"messageId": "m1", "content": "hi", "toolRequests": [], "interactionId": "i-sub", "parentToolCallId": "call_1"}}))).unwrap();
+        assert_eq!(owner.as_deref(), Some("call_1"));
+        let (owner, _) = reading.absorb(event(json!({"type": "tool.execution_complete", "id": "e3", "timestamp": "2026-10-27T00:00:02Z",
+            "data": {"toolCallId": "c", "success": true, "result": {"content": "x"}, "interactionId": "i-sub"}}))).unwrap();
+        assert_eq!(owner.as_deref(), Some("call_1"), "the interaction the reply named");
+        let (owner, _) = reading.absorb(event(json!({"type": "tool.execution_complete", "id": "e4", "timestamp": "2026-10-27T00:00:03Z",
+            "data": {"toolCallId": "d", "success": true, "result": {"content": "y"}, "interactionId": "i-main"}}))).unwrap();
+        assert_eq!(owner, None, "the parent's");
+        assert!(lanes_in(Path::new("/no/such")).is_err());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn existing_lists_subagents_after_their_parent() {
+        let root = root_with("s", TASK_AND_EDIT, None);
+        let sessions =
+            CopilotSessions::builder().root(root.path().to_path_buf()).pool(pool()).build();
+        let ids: Vec<String> = sessions
+            .existing()
+            .unwrap()
+            .map_ok(|s| s.id().to_string())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(ids, ["s", &format!("agent-{TASK_CALL}")]);
+    }
+
+    /// A parent's reader announces the subagents it comes across, the ones before its
+    /// checkpoint included, and the listener reports each once.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_listener_reports_a_subagent_its_parent_comes_across() {
+        let root = root_with("s", TASK_AND_EDIT, None);
+        let sessions =
+            CopilotSessions::builder().root(root.path().to_path_buf()).pool(pool()).build();
+        let listener = sessions.listener().unwrap();
+        let mut watched = Box::pin(listener.watch());
+        let parent = watched.next().await.unwrap().unwrap();
+        assert_eq!(parent.id().as_ref(), "s");
+        // Reading the parent past the subagent's start announces it (the third row the parent
+        // yields, the `view` result, comes after it).
+        let _: Vec<_> = parent.clone().messages_from(None).take(3).try_collect().await.unwrap();
+        let child = tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
+            .await
+            .expect("the child is reported")
+            .unwrap()
+            .unwrap();
+        assert_eq!(child.id().as_ref(), format!("agent-{TASK_CALL}"));
+        assert_eq!(child.parent_id().unwrap().as_ref(), "s");
+        // Read again, the parent announces it again; the listener does not report it twice.
+        let _: Vec<_> = parent.clone().messages_from(None).take(3).try_collect().await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), watched.next())
+                .await
+                .is_err(),
+            "reported once"
+        );
+
+        // The log removed and made again is a fresh watch: the parent is reported again, and
+        // once its reader announces the child, so is the child, whose old watch ended.
+        let path = root.path().join("s").joined(EVENTS_FILE);
+        let mut ended = parent.changes.clone().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        while ended.changed().await.is_ok() {}
+        std::fs::write(&path, TASK_AND_EDIT).unwrap();
+        let again = tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
+            .await
+            .expect("the recreated log is reported")
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.id().as_ref(), "s");
+        let _: Vec<_> = again.messages_from(None).take(3).try_collect().await.unwrap();
+        let child = tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
+            .await
+            .expect("the child is reported again")
+            .unwrap()
+            .unwrap();
+        assert_eq!(child.id().as_ref(), format!("agent-{TASK_CALL}"));
+    }
+
     #[rstest]
     fn a_failed_command_is_an_ok_result_with_its_exit_in_the_output() {
         let messages = parse(PROBE);
@@ -1186,6 +1525,22 @@ mod tests {
         let rest: Vec<(Checkpoint, CopilotMessage)> =
             session().messages_from(Some(*at)).try_collect().await.unwrap();
         assert_eq!(rest.len(), all.len() - 3);
+        // The subagent's session resumes past its own checkpoint the same way.
+        let child = session().child(&Lane {
+            call: TASK_CALL.to_owned(),
+            name: None,
+            interaction: None,
+        });
+        let child_all: Vec<(Checkpoint, CopilotMessage)> =
+            child.clone().messages_from(None).try_collect().await.unwrap();
+        assert_eq!(child_all.len(), 4);
+        let (child_at, _) = &child_all[1];
+        let child_rest: Vec<(Checkpoint, CopilotMessage)> =
+            child.messages_from(Some(*child_at)).try_collect().await.unwrap();
+        assert_eq!(
+            child_rest.iter().map(|(_, m)| m.id()).collect::<Vec<_>>(),
+            child_all[2..].iter().map(|(_, m)| m.id()).collect::<Vec<_>>()
+        );
         assert!(
             rest.iter().all(|(_, m)| m.cwd().as_deref() == Some(Path::new("/tmp/copilot-play")))
         );

@@ -51,6 +51,13 @@ impl Harness for Copilot {
     /// `copilot --resume=<id>`. Copilot finds the session from anywhere and reopens it in the
     /// directory its log records, wherever it is run from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        // A subagent is captured as a session of its own, but Copilot only resumes the session
+        // that spawned it.
+        if session::is_subagent_id(&target.id) {
+            return Err(ResumeError::NotResumable(
+                "a Copilot subagent cannot be resumed on its own; resume its parent session",
+            ));
+        }
         let args = [format!("--resume={}", target.id)];
         Ok(resume::plan(target, CwdRequirement::None, "copilot", args))
     }
@@ -77,6 +84,12 @@ mod tests {
         let plan = Copilot.resume_plan(&target).unwrap();
         assert_eq!(plan.program, "copilot");
         assert_eq!(plan.args, ["--resume=8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db"]);
+    }
+
+    #[rstest]
+    fn a_subagent_is_not_resumable_on_its_own() {
+        let target = ResumeTarget::new("agent-toolu_01Cz14Gbx74QYDbB2WUL3D5T");
+        assert!(matches!(Copilot.resume_plan(&target), Err(ResumeError::NotResumable(_))));
     }
 
     #[rstest]

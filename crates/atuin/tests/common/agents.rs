@@ -483,6 +483,44 @@ impl Transcript {
     /// Copilot's events (Copilot CLI 1.0.104): each turn a prompt, the model call's usage and
     /// its reply calling `bash`, the call's result, then the usage and reply that end the turn.
     fn append_copilot(&self, turns: &[Turn]) {
+        let lines = self.copilot_turns(turns, None);
+        write_lines(&self.path, &lines);
+    }
+
+    /// A Copilot subagent `parent` spawned with a `task` call, working through `turns`: its rows
+    /// go into the parent's log, between the subagent's start and end, its prompt written by
+    /// the parent (`source: agent-<parent>`) and its replies naming the call.
+    pub fn copilot_subagent(parent: &Self, turns: &[Turn]) -> Self {
+        assert_eq!(parent.agent, Agent::Copilot);
+        let call = format!("toolu_{}", short());
+        let mut lines = vec![copilot_event(
+            "subagent.started",
+            parent.last("id").as_deref(),
+            &json!({
+                "toolCallId": call,
+                "agentName": "task",
+                "agentDisplayName": format!("worker-{}", word()),
+                "model": "gpt-5.6-terra",
+                "executionMode": "sync",
+            }),
+        )];
+        let mut rows = parent.copilot_turns(turns, Some(&call));
+        lines.append(&mut rows);
+        lines.push(copilot_event(
+            "subagent.completed",
+            lines.last().unwrap()["id"].as_str(),
+            &json!({"toolCallId": call, "agentName": "task", "totalToolCalls": turns.len()}),
+        ));
+        write_lines(&parent.path, &lines);
+        Self {
+            agent: Agent::Copilot,
+            id: format!("agent-{call}"),
+            path: parent.path.clone(),
+        }
+    }
+
+    /// The events of `turns` in this log: the parent's, or a subagent's spawned by `call`.
+    fn copilot_turns(&self, turns: &[Turn], subagent: Option<&str>) -> Vec<Value> {
         let mut parent = self.last("id");
         let mut lines = Vec::new();
         let mut event = |kind: &str, data: Value| {
@@ -504,36 +542,38 @@ impl Transcript {
                     "apiCallId": api_call,
                 }})
             };
-            event(
-                "user.message",
-                json!({
-                    "content": turn.prompt,
-                    "messageId": uuid::Uuid::new_v4().to_string(),
-                    "interactionId": interaction,
-                    "turnId": "0",
-                }),
-            );
+            let mut prompt = json!({
+                "content": turn.prompt,
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "interactionId": interaction,
+                "turnId": "0",
+            });
+            if subagent.is_some() {
+                prompt["source"] = json!(format!("agent-{}", self.id));
+            }
+            event("user.message", prompt);
             let calling = format!("msg_{}", short());
             event("session.usage_record", usage(&calling, 7));
-            event(
-                "assistant.message",
-                json!({
-                    "messageId": uuid::Uuid::new_v4().to_string(),
-                    "model": "gpt-5.6-terra",
-                    "providerId": "copilot",
-                    "content": "",
-                    "reasoningText": turn.thinking,
-                    "toolRequests": [{
-                        "toolCallId": call,
-                        "name": self.agent.tool(),
-                        "arguments": {"command": turn.command},
-                        "type": "function",
-                    }],
-                    "interactionId": interaction,
-                    "turnId": "0",
-                    "apiCallId": calling,
-                }),
-            );
+            let mut reply = json!({
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "model": "gpt-5.6-terra",
+                "providerId": "copilot",
+                "content": "",
+                "reasoningText": turn.thinking,
+                "toolRequests": [{
+                    "toolCallId": call,
+                    "name": self.agent.tool(),
+                    "arguments": {"command": turn.command},
+                    "type": "function",
+                }],
+                "interactionId": interaction,
+                "turnId": "0",
+                "apiCallId": calling,
+            });
+            if let Some(call) = subagent {
+                reply["parentToolCallId"] = json!(call);
+            }
+            event("assistant.message", reply);
             event(
                 "tool.execution_complete",
                 json!({
@@ -548,22 +588,23 @@ impl Transcript {
             );
             let replying = format!("msg_{}", short());
             event("session.usage_record", usage(&replying, 0));
-            event(
-                "assistant.message",
-                json!({
-                    "messageId": uuid::Uuid::new_v4().to_string(),
-                    "model": "gpt-5.6-terra",
-                    "providerId": "copilot",
-                    "content": turn.reply,
-                    "toolRequests": [],
-                    "interactionId": interaction,
-                    "turnId": "1",
-                    "phase": "final_answer",
-                    "apiCallId": replying,
-                }),
-            );
+            let mut reply = json!({
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "model": "gpt-5.6-terra",
+                "providerId": "copilot",
+                "content": turn.reply,
+                "toolRequests": [],
+                "interactionId": interaction,
+                "turnId": "1",
+                "phase": "final_answer",
+                "apiCallId": replying,
+            });
+            if let Some(call) = subagent {
+                reply["parentToolCallId"] = json!(call);
+            }
+            event("assistant.message", reply);
         }
-        write_lines(&self.path, &lines);
+        lines
     }
 
     fn append_codex(&self, turns: &[Turn]) {
