@@ -23,7 +23,7 @@
 //!   Claude Code web search), whose result only that provider reads.
 //! - Summaries (compactions, abandoned branches), as text of the user's turn. A compaction
 //!   whose summary couldn't be read is where the conversation carried over starts, and so is
-//!   the prompt the last ~100k tokens of a longer conversation start at: with a note, and the
+//!   the prompt the configured byte limit fits from (about 100k tokens by default): with a note, and the
 //!   prompts before it, as Codex goes on after a compaction.
 //! - Failed model calls, as a short note of the error in the assistant's turn.
 //!
@@ -267,7 +267,7 @@ pub fn opens_with_marker(content: &[Content]) -> bool {
 /// That `messages` hold something of the conversation, so a continuation or fork of them isn't
 /// empty.
 pub fn conversational(messages: &[RehydrateMessage]) -> Result<(), NothingToContinue> {
-    if turns(messages).0.is_empty() {
+    if turns(messages, DEFAULT_MAX_BYTES).0.is_empty() {
         return Err(NothingToContinue);
     }
     Ok(())
@@ -275,8 +275,11 @@ pub fn conversational(messages: &[RehydrateMessage]) -> Result<(), NothingToCont
 
 /// What continuing `original` in another harness would flatten or drop, whichever harness, or
 /// that there's nothing to continue.
-pub fn flattened(original: &RehydrateSession) -> Result<Flattened, NothingToContinue> {
-    let (turns, flattened) = turns(&original.messages);
+pub fn flattened(
+    original: &RehydrateSession,
+    max_bytes: usize,
+) -> Result<Flattened, NothingToContinue> {
+    let (turns, flattened) = turns(&original.messages, max_bytes);
     if turns.is_empty() {
         return Err(NothingToContinue);
     }
@@ -286,13 +289,15 @@ pub fn flattened(original: &RehydrateSession) -> Result<Flattened, NothingToCont
 /// `original`, recorded by `source`, as a new session of `target` resuming in `original.cwd`.
 /// Its marker names `original`'s atuin id too, when given. Refused, whatever the target, when
 /// `original` has no conversation to carry over.
+/// `max_bytes` limits the source rows' JSON content; zero means no size limit.
 pub fn continue_in(
     source: AnyHarness,
     original: &RehydrateSession,
     atuin_id: Option<&str>,
     target: AnyHarness,
+    max_bytes: usize,
 ) -> Result<Continuation, NothingToContinue> {
-    continue_at(source, original, atuin_id, target, OffsetDateTime::now_utc())
+    continue_at(source, original, atuin_id, target, max_bytes, OffsetDateTime::now_utc())
 }
 
 /// [`continue_in`], its new session minted at `now`.
@@ -301,9 +306,10 @@ fn continue_at(
     original: &RehydrateSession,
     atuin_id: Option<&str>,
     target: AnyHarness,
+    max_bytes: usize,
     now: OffsetDateTime,
 ) -> Result<Continuation, NothingToContinue> {
-    let (turns, flattened) = turns(&original.messages);
+    let (turns, flattened) = turns(&original.messages, max_bytes);
     let Some(start) = turns.first().map(|t| t.at) else {
         return Err(NothingToContinue);
     };
@@ -568,9 +574,8 @@ impl<'m> Turn<'m> {
     }
 }
 
-/// How much of a conversation's rows (their content, as JSON) a continuation carries, about
-/// 100k tokens: more is past what a model takes, with room to go on.
-const CARRIED: usize = 400 * 1024;
+/// Default limit on a continuation's source rows (their content, as JSON), about 100k tokens.
+pub const DEFAULT_MAX_BYTES: usize = 400 * 1024;
 
 /// How much of the prompts before where a continuation starts it carries, as Codex does after a
 /// compaction (codex-rs `compact.rs`, 20k tokens of them).
@@ -578,9 +583,9 @@ const PROMPTS: usize = 80 * 1024;
 
 /// Where a continuation of `messages` starts, and why there, when not at the start: after the
 /// last compaction whose summary couldn't be read ([`UNREADABLE_SUMMARY`]), the model saw only
-/// what came after it; and a conversation longer than [`CARRIED`] (one captured before such
-/// compactions were) starts at the prompt it fits from.
-fn start(messages: &[RehydrateMessage]) -> (usize, Option<&'static str>) {
+/// what came after it; and a conversation longer than `max_bytes` starts at the prompt it fits
+/// from. Zero means no size limit.
+fn start(messages: &[RehydrateMessage], max_bytes: usize) -> (usize, Option<&'static str>) {
     let compacted = messages.iter().rposition(|m| {
         m.content.iter().any(|c| matches!(c, Content::Summary(s) if s == UNREADABLE_SUMMARY))
     });
@@ -588,20 +593,23 @@ fn start(messages: &[RehydrateMessage]) -> (usize, Option<&'static str>) {
         Some(at) => (at, Some(COMPACTED)),
         None => (0, None),
     };
+    if max_bytes == 0 {
+        return (from, why);
+    }
     let mut size = 0;
     let mut fits = None;
     for (at, m) in messages.iter().enumerate().skip(from).rev() {
         size += serde_json::to_string(&m.content).map_or(0, |json| json.len());
         // The last prompt, at least, whatever its turn holds.
-        if m.role == Role::User && said(m) && (size <= CARRIED || fits.is_none()) {
+        if m.role == Role::User && said(m) && (size <= max_bytes || fits.is_none()) {
             fits = Some(at);
         }
-        if size > CARRIED && fits.is_some() {
+        if size > max_bytes && fits.is_some() {
             break;
         }
     }
     match fits {
-        Some(at) if size > CARRIED && at > from => (at, Some(TOO_LONG)),
+        Some(at) if size > max_bytes && at > from => (at, Some(TOO_LONG)),
         _ => (from, why),
     }
 }
@@ -619,8 +627,8 @@ const TOO_LONG: &str =
 /// The conversation of `messages` as alternating turns, user first and assistant last, and
 /// what was left out of it: from where [`start`] says, after a note saying why and the prompts
 /// before it (the latest [`PROMPTS`] of them).
-fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
-    let (from, why) = start(messages);
+fn turns(messages: &[RehydrateMessage], max_bytes: usize) -> (Vec<Turn<'_>>, Flattened) {
+    let (from, why) = start(messages, max_bytes);
     let mut opening = Vec::new();
     if let Some(why) = why {
         let mut budget = PROMPTS;

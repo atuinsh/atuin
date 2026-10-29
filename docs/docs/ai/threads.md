@@ -381,6 +381,21 @@ session.
 
 ## Settings
 
+`continue_max_bytes` limits how much conversation Atuin carries when continuing
+in another agent, from the command line or the picker. It counts the source
+messages' JSON content in bytes and defaults to 409600 (400 KiB, about 100k tokens).
+Raise it for a larger context window, or set it to `0` to remove the size limit:
+
+```toml
+[threads]
+continue_max_bytes = 0
+```
+
+Atuin keeps the most recent turns that fit, always including the last user turn.
+After a cut, it adds a note and up to 80 KiB of earlier prompts. A compaction
+whose summary can't be read still starts the continuation, regardless of this
+setting.
+
 The picker follows the history search's `style`, `invert`, `show_preview`,
 `max_preview_height`, `keymap_mode` and theme settings. ++enter++ always resumes,
 whatever `enter_accept` says. Its own

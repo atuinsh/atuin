@@ -105,6 +105,10 @@ pub struct Threads {
     /// tool's name.
     pub capture_tools: bool,
 
+    /// Limit on the source rows' JSON content when continuing in another agent, in bytes.
+    /// Zero means no size limit. The last user turn is always kept.
+    pub continue_max_bytes: usize,
+
     /// The filter the picker opens in. Unset: `global`. A mode that can't apply here opens in
     /// `workspace` inside a git repository (`branch` on a detached `HEAD`), else in `global`; and
     /// `workspace` opens in `global` when the workspace has no threads at all.
@@ -133,6 +137,7 @@ impl Default for Threads {
         Self {
             capture: false,
             capture_tools: true,
+            continue_max_bytes: atuin_common::harnesstools::continuation::DEFAULT_MAX_BYTES,
             filter_mode: None,
             inline_height: None,
             resume_chooser: true,
@@ -152,6 +157,7 @@ mod tests {
     fn empty_table_uses_defaults() {
         let parsed: Threads = toml::from_str("").unwrap();
         assert_eq!(parsed, Threads::default());
+        assert_eq!(parsed.continue_max_bytes, 400 * 1024);
     }
 
     #[rstest]
@@ -160,6 +166,7 @@ mod tests {
             r#"
             capture = true
             capture_tools = false
+            continue_max_bytes = 0
             filter_mode = "global"
             inline_height = 20
             resume_chooser = false
@@ -173,6 +180,7 @@ mod tests {
         .unwrap();
         assert!(parsed.capture);
         assert!(!parsed.capture_tools);
+        assert_eq!(parsed.continue_max_bytes, 0);
         assert_eq!(parsed.filter_mode, Some(AiSessionFilterMode::Global));
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);
