@@ -10,10 +10,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::dirs::home_dir;
-use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
-use crate::harnesstools::ccode::Ccode;
+use crate::harnesstools::ccode::{Ccode, config_dir};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
@@ -45,10 +43,7 @@ impl CcodeSessions {
 /// Claude Code's projects directory: `$CLAUDE_CONFIG_DIR/projects`, else
 /// `~/.claude/projects`.
 pub(crate) fn default_root() -> PathBuf {
-    var_nonempty("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().joined(".claude"))
-        .joined("projects")
+    config_dir().joined("projects")
 }
 
 /// The transcript of session `id` under the projects directory `root`:
