@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use futures::TryStreamExt;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
 use super::*;
@@ -333,7 +333,8 @@ async fn every_pair_continues_in_the_targets_shape(
     let calls = count(&original);
     assert!(calls > 0, "the {} fixture calls tools", source.name());
 
-    let continued = continue_in(source, &original, Some(ATUIN_ID), target).unwrap();
+    let continued =
+        continue_in(source, &original, Some(ATUIN_ID), target, DEFAULT_MAX_BYTES).unwrap();
     assert_ids(target, &continued.session);
     assert_shape(target, source, &original.id, &continued.session);
     assert_ne!(continued.session.id, original.id);
@@ -462,7 +463,8 @@ async fn the_target_reads_back_the_conversation_and_its_parent(
         return;
     }
     let original = recorded(source).await;
-    let continued = continue_in(source, &original, Some(ATUIN_ID), target).unwrap().session;
+    let continued =
+        continue_in(source, &original, Some(ATUIN_ID), target, DEFAULT_MAX_BYTES).unwrap().session;
     let rows = written(target, &continued).await;
 
     let expected = conversation(&continued.messages);
@@ -541,7 +543,9 @@ fn an_away_recap_is_not_carried_over() {
         msg(Role::Assistant, vec![text("Fixed.")], 2),
         msg(recap, vec![Content::Summary("You fixed the flaky test.".into())], 3),
     ]);
-    let c = continue_at(CLAUDE, &original, None, CODEX, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c =
+        continue_at(CLAUDE, &original, None, CODEX, DEFAULT_MAX_BYTES, OffsetDateTime::UNIX_EPOCH)
+            .unwrap();
     let said: Vec<(Role, Vec<Content>)> =
         c.session.messages[1..].iter().map(|m| (m.role.clone(), m.content.clone())).collect();
     assert_eq!(said, vec![
@@ -582,7 +586,9 @@ fn calls_become_notes_and_turns_merge() {
         msg(Role::Assistant, vec![Content::Error("overloaded_error: Overloaded".into())], 10),
         msg(Role::System, vec![Content::Summary("We fixed the store.".into())], 11),
     ]);
-    let c = continue_at(CLAUDE, &original, None, CODEX, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c =
+        continue_at(CLAUDE, &original, None, CODEX, DEFAULT_MAX_BYTES, OffsetDateTime::UNIX_EPOCH)
+            .unwrap();
     assert_eq!(c.flattened, Flattened {
         tool_calls: 2,
         tool_results: 3,
@@ -627,7 +633,9 @@ fn texts(c: &Continuation) -> Vec<(Role, String)> {
 /// it, as Codex goes on. An empty summary of another kind (opencode's, of a compaction that
 /// stopped) is no such cut.
 #[rstest]
-fn an_unreadable_compaction_starts_the_conversation() {
+fn an_unreadable_compaction_starts_the_conversation(
+    #[values(DEFAULT_MAX_BYTES, 0)] max_bytes: usize,
+) {
     let original = session_of("orig", vec![
         msg(Role::User, vec![text("first, a long task")], 1),
         msg(Role::Assistant, vec![call("exec_command", Value::Null)], 2),
@@ -638,7 +646,8 @@ fn an_unreadable_compaction_starts_the_conversation() {
         msg(Role::System, vec![Content::Summary(String::new())], 7),
         msg(Role::Assistant, vec![text("Done.")], 8),
     ]);
-    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c =
+        continue_at(CODEX, &original, None, CLAUDE, max_bytes, OffsetDateTime::UNIX_EPOCH).unwrap();
     assert_eq!(c.flattened, Flattened::default());
     pretty_assertions::assert_eq!(texts(&c), vec![
         (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nthen this\n\nand now this")),
@@ -656,26 +665,30 @@ fn the_prompts_before_a_cut_leave_out_a_marker() {
         msg(Role::User, vec![text("and now this")], 3),
         msg(Role::Assistant, vec![text("Done.")], 4),
     ]);
-    let c = continue_at(PI, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(PI, &original, None, CLAUDE, DEFAULT_MAX_BYTES, OffsetDateTime::UNIX_EPOCH)
+        .unwrap();
     pretty_assertions::assert_eq!(texts(&c), vec![
         (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nand now this")),
         (Role::Assistant, "Done.".to_owned()),
     ]);
 }
 
-/// A conversation longer than a continuation carries (one captured before Codex's compactions
-/// were kept) starts at the prompt its last part does, saying so, with the latest prompts
-/// before it.
-#[rstest]
-fn a_long_conversation_starts_where_it_fits() {
-    let big = "x".repeat(CARRIED / 3);
+#[fixture]
+fn long_conversation() -> RehydrateSession {
+    let big = "x".repeat(DEFAULT_MAX_BYTES / 3);
     let mut rows = Vec::new();
     for n in 0..6 {
         rows.push(msg(Role::User, vec![text(&format!("prompt {n}"))], 2 * n));
         rows.push(msg(Role::Assistant, vec![text(&big)], 2 * n + 1));
     }
-    let original = session_of("orig", rows);
-    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    session_of("orig", rows)
+}
+
+/// A conversation longer than a continuation carries starts at the prompt its last part does,
+/// saying so, with the latest prompts before it.
+#[rstest]
+fn a_long_conversation_starts_where_it_fits(long_conversation: RehydrateSession) {
+    let c = continue_in(CODEX, &long_conversation, None, CLAUDE, DEFAULT_MAX_BYTES).unwrap();
     let turns = texts(&c);
     // The last two turns fit; the third from last would not.
     assert_eq!(turns.len(), 4, "{turns:.200?}");
@@ -684,6 +697,17 @@ fn a_long_conversation_starts_where_it_fits() {
         format!("{TOO_LONG}\n\nprompt 0\n\nprompt 1\n\nprompt 2\n\nprompt 3\n\nprompt 4")
     );
     assert_eq!(turns[2].1, "prompt 5");
+}
+
+#[rstest]
+#[case::raised(DEFAULT_MAX_BYTES * 3)]
+#[case::unbounded(0)]
+fn a_larger_limit_carries_the_whole_conversation(
+    long_conversation: RehydrateSession,
+    #[case] max_bytes: usize,
+) {
+    let c = continue_in(CODEX, &long_conversation, None, CLAUDE, max_bytes).unwrap();
+    assert_eq!(texts(&c), conversation(&long_conversation.messages));
 }
 
 /// Calls captured without their input (all of them, now) say only what they did, and the same
@@ -698,7 +722,7 @@ fn repeated_notes_are_counted() {
         msg(Role::Assistant, vec![call("apply_patch", Value::Null)], 5),
         msg(Role::Assistant, vec![call("exec_command", Value::Null), text("It's sparse.")], 6),
     ]);
-    let c = continue_in(CODEX, &original, None, CLAUDE).unwrap();
+    let c = continue_in(CODEX, &original, None, CLAUDE, DEFAULT_MAX_BYTES).unwrap();
     let [Content::Text(reply)] = c.session.messages[2].content.as_slice() else {
         panic!("{:?}", c.session.messages[2]);
     };
@@ -790,7 +814,7 @@ fn a_continuations_marker_is_not_carried_on(
         msg(Role::User, vec![text(&old)], 3),
         msg(Role::Assistant, vec![text("that's a marker")], 4),
     ]);
-    let c = continue_in(PI, &original, None, target).unwrap();
+    let c = continue_in(PI, &original, None, target, DEFAULT_MAX_BYTES).unwrap();
     let said: Vec<&str> = c
         .session
         .messages
@@ -819,15 +843,15 @@ fn an_empty_session_is_not_continued(
     #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
 ) {
     let original = session_of("orig", messages);
-    let err = continue_in(CODEX, &original, Some(ATUIN_ID), target).unwrap_err();
+    let err = continue_in(CODEX, &original, Some(ATUIN_ID), target, DEFAULT_MAX_BYTES).unwrap_err();
     assert_eq!(err.to_string(), "nothing to continue: the session has no messages");
-    assert_eq!(flattened(&original), Err(NothingToContinue));
+    assert_eq!(flattened(&original, DEFAULT_MAX_BYTES), Err(NothingToContinue));
 }
 
 #[rstest]
 fn a_conversation_opening_with_a_reply_gets_a_user_turn_first() {
     let original = session_of("orig", vec![msg(Role::Assistant, vec![text("hello")], 1)]);
-    let c = continue_in(PI, &original, None, CLAUDE).unwrap();
+    let c = continue_in(PI, &original, None, CLAUDE, DEFAULT_MAX_BYTES).unwrap();
     let roles: Vec<Role> = c.session.messages.iter().map(|m| m.role.clone()).collect();
     assert_eq!(roles, vec![Role::System, Role::User, Role::Assistant]);
 }
@@ -844,7 +868,7 @@ fn rows_chain_where_the_target_keeps_a_tree(#[case] target: AnyHarness, #[case] 
         msg(Role::User, vec![text("a")], 1),
         msg(Role::Assistant, vec![text("b")], 2),
     ]);
-    let s = continue_in(CLAUDE, &original, None, target).unwrap().session;
+    let s = continue_in(CLAUDE, &original, None, target, DEFAULT_MAX_BYTES).unwrap().session;
     let parents: Vec<Option<&str>> =
         s.messages.iter().map(|m| m.parent_source_id.as_deref()).collect();
     if tree {
@@ -976,7 +1000,7 @@ fn calls_carry_over_in_the_targets_rows(#[case] target: AnyHarness, #[case] want
         msg(Role::Tool, vec![answer("c2", "edited"), answer("c3", "cargo test")], 5),
         msg(Role::Assistant, vec![text("Fixed.")], 6),
     ]);
-    let c = continue_in(CLAUDE, &original, None, target).unwrap();
+    let c = continue_in(CLAUDE, &original, None, target, DEFAULT_MAX_BYTES).unwrap();
     pretty_assertions::assert_eq!(layout(&c.session), want);
     assert_eq!(c.flattened, Flattened::default());
     assert_eq!(c.flattened.summary(), "");
@@ -1006,7 +1030,7 @@ fn opencode_writes_each_step_as_a_message() {
         msg(Role::Tool, vec![answer("c2", "edited")], 5),
         msg(Role::Assistant, vec![text("Fixed.")], 6),
     ]);
-    let c = continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    let c = continue_in(CLAUDE, &original, None, OPENCODE, DEFAULT_MAX_BYTES).unwrap();
     let export = opencode::rehydrate::export(&c.session);
     let messages: Vec<Vec<String>> = export["messages"]
         .as_array()
@@ -1052,7 +1076,7 @@ fn calls_that_cant_be_carried_become_notes() {
             5,
         ),
     ]);
-    let c = continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    let c = continue_in(CLAUDE, &original, None, OPENCODE, DEFAULT_MAX_BYTES).unwrap();
     pretty_assertions::assert_eq!(layout(&c.session), vec![
         "System: marker".to_owned(),
         r#"User: "what changed?""#.to_owned(),
@@ -1083,7 +1107,7 @@ fn each_model_call_is_a_step_and_the_assistant_ends() {
         row(2, "1700:opencode/big-pickle", "c1", "read"),
         row(3, "1701:opencode/big-pickle", "c2", "read"),
     ]);
-    let c = continue_in(OPENCODE, &original, None, CLAUDE).unwrap();
+    let c = continue_in(OPENCODE, &original, None, CLAUDE, DEFAULT_MAX_BYTES).unwrap();
     pretty_assertions::assert_eq!(layout(&c.session), vec![
         "System: marker",
         r#"User: "read it""#,

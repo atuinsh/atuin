@@ -257,6 +257,11 @@ pub trait Resumer: Send + Sync {
         Vec::new()
     }
 
+    /// The byte limit used by continuations and their preview; zero means no size limit.
+    fn continue_max_bytes(&self) -> usize {
+        continuation::DEFAULT_MAX_BYTES
+    }
+
     /// Write `session`, from what `source` holds of it along `head` (one of its heads; for a
     /// session that diverged, the newest when `None`: see [`restored_session`]), out as a new
     /// session of `target` ([`continuation`]), and plan resuming that. Only once the user has
@@ -463,6 +468,7 @@ impl Machine for ThisMachine {
 /// the session's transcript from sync when it isn't on this machine.
 pub struct HarnessResumer {
     templates: AiSessionResume,
+    continue_max_bytes: usize,
     context: ResumeContext,
     machine: Box<dyn Machine>,
     /// Where a copy switched to another branch is kept as it was: a directory of each harness's
@@ -479,7 +485,10 @@ pub fn switched_dir(settings: &Settings) -> PathBuf {
 impl HarnessResumer {
     pub fn new(context: ResumeContext, settings: &Settings) -> Self {
         let templates = settings.threads.resume.clone();
-        Self::on(context, templates, ThisMachine, switched_dir(settings))
+        Self {
+            continue_max_bytes: settings.threads.continue_max_bytes,
+            ..Self::on(context, templates, ThisMachine, switched_dir(settings))
+        }
     }
 
     /// A resumer looking at `machine` instead of this one.
@@ -491,6 +500,7 @@ impl HarnessResumer {
     ) -> Self {
         Self {
             templates,
+            continue_max_bytes: continuation::DEFAULT_MAX_BYTES,
             context,
             machine: Box::new(machine),
             switched: switched.into(),
@@ -870,6 +880,10 @@ impl Resumer for HarnessResumer {
             .collect()
     }
 
+    fn continue_max_bytes(&self) -> usize {
+        self.continue_max_bytes
+    }
+
     /// Every harness atuin writes forks (Copilot isn't one), when installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
         self.runs_here(session.handle.harness, session)
@@ -956,7 +970,13 @@ impl Resumer for HarnessResumer {
             .await
             .map_err(|e| fail(format!("{e:#}")))?;
         let atuin_id = session.atuin_id.to_string();
-        let continued = continuation::continue_in(from, &original, Some(&atuin_id), into)?;
+        let continued = continuation::continue_in(
+            from,
+            &original,
+            Some(&atuin_id),
+            into,
+            self.continue_max_bytes,
+        )?;
         // Checked before anything is written.
         let planned = ResumeTarget::new(&continued.session.id).with_cwd(&continued.session.cwd);
         self.check_installed(&self.unwritten_plan(into, target, &planned)?)?;
