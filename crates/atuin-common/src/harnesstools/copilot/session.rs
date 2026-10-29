@@ -38,13 +38,27 @@
 //! writes it to `workspace.yaml` (`name`, with `user_named` when `--name` or `/rename` set it,
 //! neither of which writes an event). The reader checks the sidecar as each line of the log
 //! arrives, and yields the name as a row of its own (a system row with nothing but the title,
-//! timed by the sidecar's modification time, and with an id made of the two) whenever it has
+//! timed by the sidecar's modification time, and with an id made of the name) whenever it has
 //! changed, the first line of a read included: a re-read, or a read resumed past a checkpoint,
 //! yields the same row again under the same id, so the session is named again without a new
-//! row, and a rename is a row of its own however long after the last message it came. A rename
-//! after the log's last line (then `/exit`, which writes one) is picked up by the next line
-//! written. Such a row says nothing of where the session works: the context the log's lines
-//! carry is theirs.
+//! row, and a rename is a row of its own however long after the last message it came. The id
+//! is the name's alone so that a copy of the session atuin wrote elsewhere, whose sidecar it
+//! names the same, reads back with the same row rather than a new one (a session named back
+//! to an earlier name stays under the later one in atuin). A rename after the log's last line
+//! (then `/exit`, which writes one) is picked up by the next line written. Such a row says
+//! nothing of where the session works: the context the log's lines carry is theirs.
+//!
+//! **Links.** Copilot's events chain (`parentId`), through the bookkeeping the reader skips, so
+//! each row names the row before it in its lane as its parent (a subagent's rows chain among
+//! themselves, the parent's among themselves): sync sees the session as a tree, so two machines
+//! going on from one copy are two branches of it. A title row names none: keyed on its content
+//! (`syn-`), it sits beside the tree, with the branch it was read on.
+//!
+//! **Forks and continuations.** Copilot forks nothing itself. A fork atuin wrote names the
+//! session it was forked from in its `session.start`, under `atuin` (see the writer), which
+//! every row of the fork then names as its parent. A continuation's marker is a `user.message`
+//! atuin wrote (`source: "atuin"`), its text in `transformedContent`, which Copilot gives the
+//! model as it gives its own memory: read as a system row, which capture reads the marker from.
 //!
 //! **Ids.** Every event has a `parentId`, the event before it, bookkeeping included: a chain
 //! through rows the reader skips. The rows are read in file order, so none names a parent.
@@ -65,12 +79,14 @@ use tokio::sync::{mpsc, watch};
 use typed_builder::TypedBuilder;
 
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
+use crate::harnesstools::copilot::rehydrate::ATUIN_SOURCE;
 use crate::harnesstools::copilot::{Copilot, copilot_home};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
     ToolResult, ToolUse, Usage,
 };
+use crate::harnesstools::session::synthetic::SYNTHETIC;
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch,
     RuntimeError, Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after,
@@ -84,7 +100,7 @@ use crate::sync::BlockingPool;
 /// A session's event log, in its directory.
 pub(crate) const EVENTS_FILE: &str = "events.jsonl";
 /// The sidecar beside the log, with the session's directory, branch and name.
-const SIDECAR_FILE: &str = "workspace.yaml";
+pub(crate) const SIDECAR_FILE: &str = "workspace.yaml";
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct CopilotSessions {
@@ -415,7 +431,7 @@ impl CopilotSession {
                 if let Some((owner, mut message)) = row.filter(|(owner, _)| owner.as_deref() == mine) {
                     let _ = owner;
                     if let Some(lane) = &self.lane {
-                        message.parent = self.parent_id();
+                        message.parent = self.parent_id().map(|id| (id, ParentKind::Subagent));
                         // The agent's name rides on the subagent's first row, a stable one.
                         if !titled {
                             message.title = lane.title();
@@ -430,7 +446,7 @@ impl CopilotSession {
                     let watch = Arc::clone(&sidecar);
                     let renamed = self.pool.run(move || watch.lock().refresh()).await.ok().flatten();
                     if let Some((title, at)) = renamed {
-                        yield Ok((checkpoint, Reading::title_row(title, at)));
+                        yield Ok((checkpoint, reading.title_row(title, at)));
                     }
                 }
             }
@@ -528,6 +544,8 @@ struct Lane {
     name: Option<String>,
     /// Its interaction, once its first row (its prompt) said.
     interaction: Option<String>,
+    /// The id of its last row, which its next row names as its parent.
+    last_row: Option<String>,
 }
 
 impl Lane {
@@ -542,14 +560,39 @@ fn lanes_in(path: &Path) -> io::Result<Vec<Lane>> {
     Ok(Reading::before(path, u64::MAX)?.lanes)
 }
 
+/// The parent's rows of the log at `path`, holding `bytes`, as a read of the whole log yields
+/// them (the sidecar's title row after the first line included), for sync to key as capture
+/// does. Blocking; a line that doesn't parse is skipped, as the readers skip it.
+pub(crate) fn read_log(path: &Path, bytes: &[u8]) -> Vec<CopilotMessage> {
+    let mut reading = Reading::default();
+    let mut sidecar = SidecarWatch::new(path.with_file_name(SIDECAR_FILE));
+    let mut out = Vec::new();
+    for line in bytes.split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace)) {
+        let Ok(event) = Envelope::decode(line) else {
+            continue;
+        };
+        if let Some((None, message)) = reading.absorb(event) {
+            out.push(message);
+        }
+        if let Some((title, at)) = sidecar.refresh() {
+            out.push(reading.title_row(title, at));
+        }
+    }
+    out
+}
+
 /// What the reader carries from one event to the ones after it.
 #[derive(Debug, Default)]
 struct Reading {
     /// Where the session works, from the last `session.start` or `session.resume`.
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    /// The session this one was forked from, as its `session.start` says (a fork atuin wrote).
+    fork_of: Option<SessionId>,
     /// The subagents started so far, in order.
     lanes: Vec<Lane>,
+    /// The id of the parent's last row, which its next row names as its parent.
+    last_row: Option<String>,
     /// The last `session.usage_record`: the model call it is for and its usage, claimed by the
     /// `assistant.message` of that call, which Copilot writes right after it.
     usage: Option<(String, Usage)>,
@@ -598,6 +641,9 @@ impl Reading {
                 if let Some(branch) = context["branch"].as_str() {
                     self.git_branch = Some(branch.to_owned());
                 }
+                if let Some(of) = event.data["atuin"]["forkedFrom"].as_str() {
+                    self.fork_of = Some(SessionId::from(of.to_owned()));
+                }
                 None
             }
             "session.usage_record" => {
@@ -614,6 +660,7 @@ impl Reading {
                         call: call.to_owned(),
                         name: name.map(str::to_owned),
                         interaction: None,
+                        last_row: None,
                     });
                 }
                 None
@@ -626,13 +673,19 @@ impl Reading {
                     let lane = self.lanes.iter_mut().find(|lane| lane.interaction.is_none())?;
                     lane.interaction = Some(interaction);
                     let call = lane.call.clone();
-                    Some((Some(call), self.message(event, None)))
+                    Some(self.row(Some(call), event, None))
+                }
+                // Text atuin put in the user's turn (a continuation's marker): the model's to
+                // read, not what the user said.
+                Some(source) if source == ATUIN_SOURCE => {
+                    let owner = self.owner_of(&event);
+                    Some(self.row(owner, event, None))
                 }
                 Some(_) => None,
                 None if event.str("content").is_none_or(str::is_empty) => None,
                 None => {
                     let owner = self.owner_of(&event);
-                    Some((owner, self.message(event, None)))
+                    Some(self.row(owner, event, None))
                 }
             },
             "assistant.message" => {
@@ -641,20 +694,43 @@ impl Reading {
                     (Some(call), Some((of, _))) if call == of => self.usage.take().map(|(_, u)| u),
                     _ => None,
                 };
-                Some((owner, self.message(event, usage)))
+                Some(self.row(owner, event, usage))
             }
             "tool.execution_complete" => {
                 let owner = self.owner_of(&event);
-                Some((owner, self.message(event, None)))
+                Some(self.row(owner, event, None))
             }
             // A compaction that failed, or was abandoned, changed nothing.
             "session.compaction_complete"
                 if event.data["success"] == true && event.str("outcome") == Some("applied") =>
             {
-                Some((None, self.message(event, None)))
+                Some(self.row(None, event, None))
             }
             _ => None,
         }
+    }
+
+    /// The row `event` is, in the lane of `owner` (a subagent's `task` call, or `None` for the
+    /// parent's): named after the lane's last row, and the lane's last row from now on.
+    fn row(
+        &mut self,
+        owner: Option<String>,
+        event: Envelope,
+        usage: Option<Usage>,
+    ) -> (Option<String>, CopilotMessage) {
+        let mut message = self.message(event, usage);
+        let last = match &owner {
+            Some(call) => match self.lanes.iter_mut().find(|lane| lane.call == *call) {
+                Some(lane) => &mut lane.last_row,
+                None => &mut self.last_row,
+            },
+            None => &mut self.last_row,
+        };
+        message.parent_row.clone_from(last);
+        if let Some(id) = &message.event.id {
+            *last = Some(id.clone());
+        }
+        (owner, message)
     }
 
     /// The subagent whose row `event` is, by its `task` call; `None` for the parent's.
@@ -670,18 +746,20 @@ impl Reading {
             usage,
             title: None,
             at: None,
-            parent: None,
+            parent: self.fork_of.clone().map(|of| (of, ParentKind::Fork)),
+            parent_row: None,
         }
     }
 
     /// A row carrying `title`, which the sidecar gave the session at `at` (see the module docs).
-    /// Its id is the name's and the time's, so the same name read again is the same row.
-    fn title_row(title: TitleChange, at: Option<SystemTime>) -> CopilotMessage {
+    /// Its id is the name's alone, so the same name read again, here or from a copy of the
+    /// session written elsewhere, is the same row; keyed on its content ([`SYNTHETIC`]), it is
+    /// no node of the session's tree (see the module docs).
+    fn title_row(&self, title: TitleChange, at: Option<SystemTime>) -> CopilotMessage {
         let at = at.map(OffsetDateTime::from);
-        let keyed = serde_json::json!([title, at.map(OffsetDateTime::unix_timestamp_nanos)]);
         let id = format!(
-            "{TITLE_ROW}-{:016x}",
-            xxhash_rust::xxh3::xxh3_64(keyed.to_string().as_bytes())
+            "{SYNTHETIC}title-{:016x}",
+            xxhash_rust::xxh3::xxh3_64(title.text.as_deref().unwrap_or_default().as_bytes())
         );
         CopilotMessage {
             event: Envelope {
@@ -695,13 +773,14 @@ impl Reading {
             usage: None,
             title: Some(title),
             at,
-            parent: None,
+            parent: self.fork_of.clone().map(|of| (of, ParentKind::Fork)),
+            parent_row: None,
         }
     }
 }
 
-/// The kind of the reader's own title rows, which no Copilot event has, and the prefix of their
-/// ids.
+/// The kind of the reader's own title rows, which no Copilot event has: their role, as Claude
+/// Code's title lines are read under theirs.
 const TITLE_ROW: &str = "atuin-title";
 
 /// A `session.usage_record`'s `usage` as [`Usage`] counts it: Copilot's `inputTokens` is the
@@ -737,13 +816,16 @@ impl Sidecar {
                 continue;
             };
             let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-                .unwrap_or(value);
+            let value = match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                Some(quoted) => unescape(quoted),
+                None => value
+                    .strip_prefix('\'')
+                    .and_then(|v| v.strip_suffix('\''))
+                    .unwrap_or(value)
+                    .to_owned(),
+            };
             match key.trim() {
-                "name" => sidecar.name = Some(value.to_owned()),
+                "name" => sidecar.name = Some(value),
                 "user_named" => sidecar.user_named = value == "true",
                 _ => {}
             }
@@ -760,6 +842,32 @@ impl Sidecar {
         };
         self.name.as_deref().map(|name| TitleChange::new(source, name))
     }
+}
+
+/// The text of a double-quoted YAML scalar `quoted`, its escapes decoded: the ones the writer
+/// and Copilot use (`\"`, `\\`, `\n`, `\r`, `\t`); any other backslash is kept as it is.
+fn unescape(quoted: &str) -> String {
+    let mut out = String::with_capacity(quoted.len());
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// Follows the sidecar: what its title was when last read, re-read when the file changes.
@@ -812,8 +920,11 @@ pub struct CopilotMessage {
     title: Option<TitleChange>,
     /// When a title row's sidecar was written: the row's time.
     at: Option<OffsetDateTime>,
-    /// On a subagent's rows, the session that spawned it.
-    parent: Option<SessionId>,
+    /// On a subagent's rows, the session that spawned it; on a fork's, the session it was
+    /// forked from.
+    parent: Option<(SessionId, ParentKind)>,
+    /// The row before this one in its lane (see the module docs); none on a title row.
+    parent_row: Option<String>,
 }
 
 impl CopilotMessage {
@@ -887,12 +998,17 @@ impl Message for CopilotMessage {
 
     fn role(&self) -> Role {
         match self.kind() {
+            "user.message" if self.event.str("source") == Some(ATUIN_SOURCE) => Role::System,
             "user.message" => Role::User,
             "assistant.message" => Role::Assistant,
             "tool.execution_complete" => Role::Tool,
-            "session.compaction_complete" | TITLE_ROW => Role::System,
+            "session.compaction_complete" => Role::System,
             other => Role::Other(other.to_owned()),
         }
+    }
+
+    fn parent_id(&self) -> Option<MessageId> {
+        self.parent_row.clone().map(MessageId::from)
     }
 
     fn timestamp(&self) -> Option<OffsetDateTime> {
@@ -903,12 +1019,20 @@ impl Message for CopilotMessage {
 
     fn content(&self) -> Vec<Content> {
         match self.kind() {
-            "user.message" => self
-                .event
-                .str("content")
-                .map(|text| Content::Text(text.to_owned()))
-                .into_iter()
-                .collect(),
+            "user.message" => {
+                // What atuin put in the user's turn is the transformed text, as the model
+                // reads it.
+                let field = if self.event.str("source") == Some(ATUIN_SOURCE) {
+                    "transformedContent"
+                } else {
+                    "content"
+                };
+                self.event
+                    .str(field)
+                    .map(|text| Content::Text(text.to_owned()))
+                    .into_iter()
+                    .collect()
+            }
             "assistant.message" => {
                 let mut content = Vec::new();
                 if self.reasoned() {
@@ -990,11 +1114,11 @@ impl Message for CopilotMessage {
     }
 
     fn parent_session(&self) -> Option<SessionId> {
-        self.parent.clone()
+        self.parent.as_ref().map(|(session, _)| session.clone())
     }
 
     fn parent_kind(&self) -> Option<ParentKind> {
-        self.parent.as_ref().map(|_| ParentKind::Subagent)
+        self.parent.as_ref().map(|(_, kind)| *kind)
     }
 
     fn title(&self) -> Option<TitleChange> {
@@ -1224,9 +1348,22 @@ mod tests {
             messages.iter().all(|m| m.cwd().as_deref() == Some(Path::new("/tmp/copilot-play")))
         );
         assert!(messages.iter().all(|m| m.git_branch().as_deref() == Some("main")));
-        assert!(messages.iter().all(|m| m.parent_id().is_none()));
         assert!(messages.iter().all(|m| m.timestamp().is_some()));
         assert!(messages.iter().all(|m| m.id().is_some()));
+    }
+
+    /// Each row names the row before it in its lane: the parent's rows chain past the
+    /// subagent's, and the subagent's among themselves from a root of their own.
+    #[rstest]
+    fn rows_name_the_row_before_them_in_their_lane() {
+        for lane in [None, Some(TASK_CALL)] {
+            let messages = parse_lane(TASK_AND_EDIT, lane);
+            assert!(messages.len() > 1, "{lane:?}");
+            assert_eq!(messages[0].parent_id(), None, "{lane:?}: a root");
+            for pair in messages.windows(2) {
+                assert_eq!(pair[1].parent_id(), pair[0].id(), "{lane:?}");
+            }
+        }
     }
 
     /// Copilot's injected rows are not the user's: the `memory` it adds before a prompt (an
@@ -1258,7 +1395,7 @@ mod tests {
         let roles: Vec<_> = messages.iter().map(Message::role).collect();
         assert_eq!(roles, [
             // The sidecar's name, with the log's first line.
-            Role::System,
+            Role::Other(TITLE_ROW.to_owned()),
             Role::User,
             Role::Assistant,
             Role::Tool,
@@ -1308,6 +1445,7 @@ mod tests {
             call: TASK_CALL.to_owned(),
             name: Some("count-lines".to_owned()),
             interaction: None,
+            last_row: None,
         };
         let child = parent.child(&lane);
         assert_eq!(child.id().as_ref(), format!("agent-{TASK_CALL}"));
@@ -1332,6 +1470,13 @@ mod tests {
         );
         let parent_rows: Vec<CopilotMessage> = parent.messages().try_collect().await.unwrap();
         assert!(parent_rows.iter().all(|m| m.parent_session().is_none()));
+        // The sidecar's title row names no parent; the rest chain past the subagent's rows.
+        let (titles, rows): (Vec<_>, Vec<_>) =
+            parent_rows.iter().partition(|m| m.title().is_some());
+        assert!(titles.iter().all(|m| m.parent_id().is_none()));
+        for pair in rows.windows(2) {
+            assert_eq!(pair[1].parent_id(), pair[0].id());
+        }
         // The parent's rows and its title row, and the subagent's four.
         assert_eq!(
             parent_rows.len() + messages.len(),
@@ -1455,6 +1600,8 @@ mod tests {
     #[case::generated("name: Project Overview\nuser_named: false\n", Some((TitleSource::Generated, "Project Overview")))]
     #[case::named("id: x\nname: atuin-sample-edit\nuser_named: true\n", Some((TitleSource::Named, "atuin-sample-edit")))]
     #[case::quoted("name: \"a: b\"\nuser_named: true\n", Some((TitleSource::Named, "a: b")))]
+    #[case::escaped("name: \"Fix \\\"login\\\" in C:\\\\x\\tnow\"\nuser_named: true\n", Some((TitleSource::Named, "Fix \"login\" in C:\\x\tnow")))]
+    #[case::single_quoted("name: 'a \"b\"'\n", Some((TitleSource::Generated, "a \"b\"")))]
     #[case::unnamed("id: x\ncwd: /tmp\n", None)]
     fn sidecar_names_the_session(#[case] yaml: &str, #[case] want: Option<(TitleSource, &str)>) {
         let title = Sidecar::parse(yaml).title();
@@ -1473,8 +1620,9 @@ mod tests {
         let root = root_with("s", TASK_AND_EDIT, Some(TASK_AND_EDIT_SIDECAR));
         let messages = read_all(root.path(), "s").await;
         let title = &messages[0];
-        assert_eq!(title.role(), Role::System);
+        assert_eq!(title.role(), Role::Other(TITLE_ROW.to_owned()));
         assert!(title.content().is_empty());
+        assert_eq!(title.parent_id(), None, "beside the tree");
         assert_eq!(title.title(), Some(TitleChange::new(TitleSource::Named, "atuin-sample-edit")));
         assert!(title.timestamp().is_some());
         // Nothing of where the session works: the log's lines say, and a title row read again
@@ -1486,7 +1634,7 @@ mod tests {
 
         // Read again, the same row, under the same id: no new row for an unchanged name.
         let id = title.id().expect("a title row has an id of its own");
-        assert!(id.as_ref().starts_with("atuin-title-"), "{id}");
+        assert!(id.as_ref().starts_with("syn-title-"), "{id}");
         let again = read_all(root.path(), "s").await;
         assert_eq!(again[0].id(), Some(id.clone()));
 
@@ -1530,6 +1678,7 @@ mod tests {
             call: TASK_CALL.to_owned(),
             name: None,
             interaction: None,
+            last_row: None,
         });
         let child_all: Vec<(Checkpoint, CopilotMessage)> =
             child.clone().messages_from(None).try_collect().await.unwrap();

@@ -99,17 +99,6 @@ const MARKER_ATUIN_ID: &str = " (atuin id ";
 #[error("nothing to continue: the session has no messages")]
 pub struct NothingToContinue;
 
-/// Why a session can't be continued in a target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ContinueError {
-    #[error(transparent)]
-    NothingToContinue(#[from] NothingToContinue),
-    /// The target's transcripts are never written by atuin
-    /// ([`Harness::writes_transcripts`](crate::harnesstools::Harness::writes_transcripts)).
-    #[error("{0} sessions can't be written")]
-    Unwritable(&'static str),
-}
-
 /// A session to continue in another harness, and what was left out of it.
 #[derive(Clone, Debug)]
 pub struct Continuation {
@@ -297,14 +286,13 @@ pub fn flattened(original: &RehydrateSession) -> Result<Flattened, NothingToCont
 
 /// `original`, recorded by `source`, as a new session of `target` resuming in `original.cwd`.
 /// Its marker names `original`'s atuin id too, when given. Refused, whatever the target, when
-/// `original` has no conversation to carry over; and whatever the original, for a target whose
-/// transcripts atuin never writes.
+/// `original` has no conversation to carry over.
 pub fn continue_in(
     source: AnyHarness,
     original: &RehydrateSession,
     atuin_id: Option<&str>,
     target: AnyHarness,
-) -> Result<Continuation, ContinueError> {
+) -> Result<Continuation, NothingToContinue> {
     continue_at(source, original, atuin_id, target, OffsetDateTime::now_utc())
 }
 
@@ -315,13 +303,10 @@ fn continue_at(
     atuin_id: Option<&str>,
     target: AnyHarness,
     now: OffsetDateTime,
-) -> Result<Continuation, ContinueError> {
-    if !target.writes_transcripts() {
-        return Err(ContinueError::Unwritable(target.name()));
-    }
+) -> Result<Continuation, NothingToContinue> {
     let (turns, flattened) = turns(&original.messages);
     let Some(start) = turns.first().map(|t| t.at) else {
-        return Err(NothingToContinue.into());
+        return Err(NothingToContinue);
     };
     let ids = Ids::new(target, now);
     let id = ids.session();
@@ -475,10 +460,8 @@ impl Rows {
         }
         let calling = Some(StopReason::ToolUse);
         match self.target {
-            AnyHarness::Copilot(_) => unreachable!(
-                "refused by continue_at and fork: Copilot transcripts are never written"
-            ),
-            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) => {
+            // Copilot answers each call with a result event of its own, as pi does.
+            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -804,14 +787,11 @@ impl Ids {
         }
     }
 
-    /// A new session's id: a UUID (Claude Code's random, Codex's and Pi's time-ordered), or an
-    /// opencode `ses_` id, which sort newest first.
+    /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's and Pi's
+    /// time-ordered), or an opencode `ses_` id, which sort newest first.
     fn session(&self) -> String {
         match self.target {
-            AnyHarness::Copilot(_) => unreachable!(
-                "refused by continue_at and fork: Copilot transcripts are never written"
-            ),
-            AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
             AnyHarness::Codex(_) | AnyHarness::Pi(_) => Uuid::now_v7().to_string(),
             AnyHarness::Opencode(_) => {
                 opencode::rehydrate::mint_session(self.now, &Uuid::new_v4().to_string())
@@ -819,7 +799,8 @@ impl Ids {
         }
     }
 
-    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code; for Codex, a
+    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code, an event id for
+    /// Copilot; for Codex, a
     /// content-keyed `syn-` id, which its writer leaves off the line as Codex itself does for a
     /// message it names no id; an opencode `prt_` part id, in time order (rows of one message,
     /// the marker and the first prompt, are read in id order); a pi entry id (8 hex digits,
@@ -827,10 +808,7 @@ impl Ids {
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::Copilot(_) => unreachable!(
-                    "refused by continue_at and fork: Copilot transcripts are never written"
-                ),
-                AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+                AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

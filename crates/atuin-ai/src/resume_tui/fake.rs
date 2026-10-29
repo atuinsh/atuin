@@ -1166,7 +1166,7 @@ impl Resumer for FakeResumer {
         })
     }
 
-    /// Every harness atuin writes is installed.
+    /// Every harness is installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
         session.handle.harness.harness().is_some()
     }

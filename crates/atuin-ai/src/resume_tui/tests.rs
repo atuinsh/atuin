@@ -1118,15 +1118,15 @@ async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
 
     // A harness atuin can't continue from (one it doesn't know) has only its own line, saying
     // why.
-    let mut copilot = fake::row(HarnessKind::Unknown, "cp1", "t");
-    copilot.host_id = fake::THIS_HOST_ID.to_owned();
-    state.results = vec![copilot.clone()];
+    let mut unknown = fake::row(HarnessKind::Unknown, "u1", "t");
+    unknown.host_id = fake::THIS_HOST_ID.to_owned();
+    state.results = vec![unknown.clone()];
     state.list.selected = 0;
-    state.plans.insert(copilot.handle.clone(), FakeResumer::default().plan(&copilot).await);
+    state.plans.insert(unknown.handle.clone(), FakeResumer::default().plan(&unknown).await);
     state.open_chooser(
-        &copilot,
-        FakeResumer::default().continue_targets(&copilot),
-        FakeResumer::default().can_fork(&copilot),
+        &unknown,
+        FakeResumer::default().continue_targets(&unknown),
+        FakeResumer::default().can_fork(&unknown),
         Pending::Resume,
     );
     let out = text(&render(&mut state, &s, 100, 30));

@@ -13,9 +13,12 @@
 //! - **Claude Code and Pi** link each line to the one before it (`parent_source_id`). Rows keyed
 //!   on their content (`syn-`: titles and other lines with no id) are no node; a session holding
 //!   nothing else is linear.
+//! - **Copilot** rows name the row before them in their lane since the reader learnt to; those
+//!   captured before it did have no parent, and each follows on from the row before it (as a
+//!   row whose parent is not stored does, below). Its title rows (`syn-`) are no node.
 //! - **Codex** lines name no parent, so capture links each row to the row it captured before it
 //!   (see the daemon's `MessageEnricher`). Rows captured before it did have no parent: each
-//!   follows on from the row before it, as a row whose parent is not stored does (below).
+//!   follows on from the row before it the same way.
 //! - **opencode** is linear. In time order, each row follows on from its host's row before it,
 //!   and a host's first row from the row before it at all (it carries on what it restored). A
 //!   host whose rows come back after another host's rows (any rows, tool rows too) have come
@@ -91,11 +94,13 @@ pub struct Analysis {
 /// How a harness's rows string together (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Model {
-    /// By parent pointers. `chained`: every row is a node, and one with no parent follows on
-    /// from the row before it (Codex, whose capture links rows); otherwise it is a root, and
-    /// content-addressed rows are no node.
+    /// By parent pointers. `chained`: a row with no parent follows on from the row before it
+    /// (Codex, whose capture links rows; Copilot's rows from before its reader did); otherwise
+    /// it is a root. `beside`: content-addressed rows are no node (titles, lines with no id);
+    /// otherwise they are nodes like any other (Codex).
     Tree {
         chained: bool,
+        beside: bool,
     },
     Interleaving,
     Linear,
@@ -104,12 +109,20 @@ enum Model {
 impl Model {
     const fn of(harness: HarnessKind) -> Self {
         match harness {
-            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => {
-                Self::Tree { chained: false }
-            }
-            HarnessKind::Codex => Self::Tree { chained: true },
+            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => Self::Tree {
+                chained: false,
+                beside: true,
+            },
+            HarnessKind::Copilot => Self::Tree {
+                chained: true,
+                beside: true,
+            },
+            HarnessKind::Codex => Self::Tree {
+                chained: true,
+                beside: false,
+            },
             HarnessKind::Opencode => Self::Interleaving,
-            HarnessKind::Copilot | HarnessKind::Unknown => Self::Linear,
+            HarnessKind::Unknown => Self::Linear,
         }
     }
 }
@@ -124,7 +137,7 @@ impl Analysis {
 
         let mut model = Model::of(harness);
         let mut in_tree = vec![true; rows.len()];
-        if model == (Model::Tree { chained: false }) {
+        if matches!(model, Model::Tree { beside: true, .. }) {
             for (i, row) in rows.iter().enumerate() {
                 in_tree[i] = !row.source_id.as_ref().starts_with(SYNTHETIC);
             }
@@ -135,7 +148,7 @@ impl Analysis {
             }
         }
         let mut parent = match model {
-            Model::Tree { chained } => tree_parents(&rows, &in_tree, chained),
+            Model::Tree { chained, .. } => tree_parents(&rows, &in_tree, chained),
             Model::Interleaving => interleaved_parents(&rows),
             Model::Linear => (0..rows.len()).map(|i| i.checked_sub(1)).collect(),
         };

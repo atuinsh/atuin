@@ -257,15 +257,13 @@ back.
   agent, with the same history, tool calls and all, and resumes that. The
   original is left as it is. The fork is linked to it the way the agent links
   its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's
-  `parentSession`; opencode gets a line it keeps from the model), so it's
+  `parentSession`; Copilot's start event gets a note it keeps; opencode gets a
+  line it keeps from the model), so it's
   grouped under the original, with an Atuin id of its own. It keeps the
   original's title. Pi names the original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
   the original when the original can't resume here, or its agent has it open
-  on this machine. Sessions with no messages can't be forked, and neither can
-  Copilot sessions: Atuin reads Copilot's transcripts but never writes them
-  (its format is undocumented), so a Copilot session resumes only on a machine
-  that has it, in Copilot itself or continued in another agent.
+  on this machine. Sessions with no messages can't be forked.
 - Every other agent installed on this machine follows. Picking one continues
   the session there as a new session: the conversation carries over, and so do
   the tool calls captured with their input and output (`capture_tools`), with
@@ -281,8 +279,8 @@ back.
   else to offer (no other agent installed, and a session that can't be
   forked) ++enter++ resumes straight away.
 - If the session's own agent can't resume it here (an agent that isn't
-  installed, a Copilot session recorded on another machine, or a session whose
-  transcript is here but whose directory is gone, for an agent that needs it),
+  installed, or a session whose transcript is here but whose directory is
+  gone, for an agent that needs it),
   its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent
@@ -318,16 +316,15 @@ synced messages:
   `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin
   never deletes these copies. The branch this copy was on stays in Atuin too,
   so forking it brings it back.
-  Claude Code, Codex and Pi sessions can switch. These can only fork, and get
-  no switch line: a Codex session that was reverted, so its history spans
+  Claude Code, Codex, Copilot and Pi sessions can switch. These can only fork,
+  and get no switch line: a Codex session that was reverted, so its history spans
   several files, or that Codex wrote in its older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
-  live in a database. Copilot sessions are neither caught up nor switched,
-  since Atuin never writes them.
+  live in a database.
 
 Atuin never merges branches, and never writes to a session its agent has open.
-Claude Code, and Codex where it keeps session locks, say which session they
-have open. opencode, Pi and other Codex installs don't, so Atuin treats a
+Claude Code, Copilot, and Codex where it keeps session locks, say which session
+they have open. opencode, Pi and other Codex installs don't, so Atuin treats a
 session as possibly open, and doesn't catch it up, while one of that agent's
 processes works in the session's directory or below it: the directory this
 copy records, or else where the session works on this machine. A process elsewhere

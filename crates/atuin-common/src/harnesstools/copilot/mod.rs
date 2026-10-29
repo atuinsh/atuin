@@ -1,8 +1,8 @@
-//! GitHub Copilot CLI (`copilot`): reading its sessions, installing its hooks and resuming.
+//! GitHub Copilot CLI (`copilot`): reading its sessions, writing them back out, installing its
+//! hooks and resuming.
 //!
-//! Capture only, for now: a Copilot session is read and resumed where its log is, but never
-//! written (no rehydrate, no fast-forward). Copilot's log format is undocumented and the CLI
-//! closed, and it says a log may be recreated on restart.
+//! Copilot's log format is undocumented and the CLI closed: what the reader and writer know of
+//! it was verified against Copilot CLI 1.0.104 (see their module docs).
 
 use std::path::PathBuf;
 
@@ -15,6 +15,7 @@ use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
 
+pub mod rehydrate;
 pub mod session;
 
 /// Copilot's config directory: `$COPILOT_HOME`, else `~/.copilot`.
@@ -32,10 +33,6 @@ impl Harness for Copilot {
 
     fn alias_names(&self) -> &'static [&'static str] {
         &["github-copilot", "copilot-cli"]
-    }
-
-    fn writes_transcripts(&self) -> bool {
-        false
     }
 
     /// Copilot reads every `*.json` in its hooks directory. Under PascalCase event names it
@@ -67,8 +64,8 @@ impl Harness for Copilot {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, _: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        Err(RehydrateError::Unsupported("Copilot"))
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }
 

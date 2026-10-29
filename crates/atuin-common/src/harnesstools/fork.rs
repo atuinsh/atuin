@@ -29,12 +29,10 @@
 use time::OffsetDateTime;
 
 use super::rehydrate::{ForkOf, RehydrateMessage, RehydrateSession};
-use super::{AnyHarness, Harness as _, continuation};
+use super::{AnyHarness, continuation};
 
 /// `original`, recorded by `harness`, as a new session of it forked from `of`: its rows up to
-/// `tip` (the row of that source id, it included), or all of them. `None` when no row is `tip`,
-/// and for a harness whose transcripts atuin never writes
-/// ([`Harness::writes_transcripts`](super::Harness::writes_transcripts)).
+/// `tip` (the row of that source id, it included), or all of them. `None` when no row is `tip`.
 #[must_use]
 pub fn fork(
     harness: AnyHarness,
@@ -42,9 +40,6 @@ pub fn fork(
     of: ForkOf,
     tip: Option<&str>,
 ) -> Option<RehydrateSession> {
-    if !harness.writes_transcripts() {
-        return None;
-    }
     let messages = match tip {
         Some(tip) => up_to(&original.messages, tip)?.to_vec(),
         None => original.messages.clone(),

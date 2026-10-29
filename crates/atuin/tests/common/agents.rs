@@ -70,12 +70,6 @@ impl Agent {
         }
     }
 
-    /// Whether atuin writes its transcripts: restores, forks and continuations into it. Copilot's
-    /// it only reads.
-    pub fn writable(self) -> bool {
-        self != Self::Copilot
-    }
-
     /// A fresh session id of the agent's own shape.
     pub fn new_id(self) -> String {
         let uuid = atuin_common::utils::uuid_v7();

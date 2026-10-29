@@ -146,6 +146,7 @@ pub struct Cmd {
 enum ContinueIn {
     Claude,
     Codex,
+    Copilot,
     Opencode,
     Pi,
     Omp,
@@ -156,6 +157,7 @@ impl ContinueIn {
         match self {
             Self::Claude => HarnessKind::ClaudeCode,
             Self::Codex => HarnessKind::Codex,
+            Self::Copilot => HarnessKind::Copilot,
             Self::Opencode => HarnessKind::Opencode,
             Self::Pi => HarnessKind::Pi,
             Self::Omp => HarnessKind::Omp,

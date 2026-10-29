@@ -286,44 +286,6 @@ async fn a_session_on_disk_resumes_directly(dirs: Dirs) {
     assert_eq!(resume.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
 }
 
-/// A Copilot copy here resumes as it is: atuin never writes Copilot's transcripts, so there is
-/// no catching it up, whatever the copy reads as (here, not at all) and whatever sync holds.
-#[rstest]
-#[tokio::test]
-async fn a_copilot_copy_resumes_as_it_is_without_catching_up(dirs: Dirs) {
-    let machine = FakeMachine {
-        found: HashMap::from([("cp-1".to_owned(), PathBuf::from("/t/cp-1/events.jsonl"))]),
-        tip_error: Some("Copilot sessions can't be written here"),
-        ..FakeMachine::default()
-    };
-    let session = row(HarnessKind::Copilot, "cp-1", &dirs.elsewhere, false);
-    let resumer = resumer(&dirs, &machine);
-    let resume = resumer.plan(&session).await.unwrap();
-    assert!(!resume.catch_up, "{resume:?}");
-    assert_eq!(resume.plan.args, ["--resume=cp-1"]);
-
-    let source = fake::FakeSource::from_rows(vec![session.clone()])
-        .with_synced(&session.handle, fake::synced_rows(true));
-    let caught = resumer.catch_up(&source, &session, None).await.unwrap();
-    assert!(
-        matches!(&caught, CatchUp::Ready { plan, status: None } if plan.args == ["--resume=cp-1"]),
-        "{caught:?}"
-    );
-    assert!(machine.appended.lock().is_empty());
-}
-
-/// A Copilot session that isn't here can't be restored (atuin never writes Copilot's
-/// transcripts): planned as not resumable, not as a restore that would fail once accepted.
-#[rstest]
-#[tokio::test]
-async fn a_copilot_session_not_here_is_not_resumable(dirs: Dirs) {
-    let machine = FakeMachine::default();
-    let remote = row(HarnessKind::Copilot, "cp-2", &dirs.elsewhere, true);
-    let err = resumer(&dirs, &machine).plan(&remote).await.unwrap_err();
-    assert_eq!(err, NotResumable::Unwritable("copilot"));
-    assert!(machine.written.lock().is_empty());
-}
-
 /// Reading a copy can move it (a rollout Codex compressed, made plain again): a `{path}` template
 /// names where it is now.
 #[rstest]
@@ -670,7 +632,8 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
 #[tokio::test]
 async fn an_empty_session_is_not_continued(
     dirs: Dirs,
-    #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)] target: HarnessKind,
+    #[values(HarnessKind::Codex, HarnessKind::Copilot, HarnessKind::Opencode, HarnessKind::Pi)]
+    target: HarnessKind,
 ) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
@@ -688,7 +651,13 @@ async fn an_empty_session_is_not_continued(
 #[tokio::test]
 async fn an_empty_session_is_not_forked(
     dirs: Dirs,
-    #[values(HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)]
+    #[values(
+        HarnessKind::ClaudeCode,
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
     harness: HarnessKind,
 ) {
     let machine = FakeMachine::default();
@@ -733,6 +702,7 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
+        HarnessKind::Copilot,
         HarnessKind::Pi,
         HarnessKind::Omp
     ]);
@@ -744,16 +714,6 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
         resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode, None).await.unwrap_err();
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
-
-    // A Copilot session is continued like any other, but never into Copilot, whose sessions
-    // atuin doesn't write.
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert_eq!(resumer.continue_targets(&copilot), [
-        HarnessKind::ClaudeCode,
-        HarnessKind::Codex,
-        HarnessKind::Pi,
-        HarnessKind::Omp
-    ]);
 }
 
 #[rstest]
@@ -896,8 +856,6 @@ async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
     resumer.fork(&Worked, &session, from).await.unwrap();
     assert_eq!(machine.written.lock()[1].messages.len(), 2, "up to the tip");
 
-    let copilot = row(HarnessKind::Copilot, "cp", &dirs.elsewhere, false);
-    assert!(!resumer.can_fork(&copilot));
     let missing = FakeMachine {
         missing_programs: vec!["claude"],
         ..FakeMachine::default()
