@@ -1106,6 +1106,9 @@ struct SessionJson {
     harness: String,
     session_id: String,
     atuin_id: String,
+    /// The recording host's id, as 32 hex digits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1287,6 +1290,7 @@ fn session_json(s: &Session) -> SessionJson {
         harness: harness_name(s.handle.harness).to_owned(),
         session_id: s.handle.session.to_string(),
         atuin_id: s.atuin_id.to_string(),
+        host: s.host.map(|h| h.0.as_simple().to_string()),
         parent: s.parent.as_ref().map(handle_json),
         parent_kind: s.parent_kind.map(|kind| match kind {
             ParentKind::Subagent => "subagent",
@@ -1375,7 +1379,7 @@ mod tests {
     use atuin_client::ai_session::{AtuinSessionId, NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
     use atuin_common::string::highlighted::TextHighlighter;
-    use atuin_domain::record::RecordId;
+    use atuin_domain::record::{HostId, RecordId};
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -1603,6 +1607,7 @@ mod tests {
         assert_eq!(v["title"], "hello");
         // Absent optionals are omitted rather than serialized as null.
         assert!(v.get("cwd").is_none());
+        assert!(v.get("host").is_none());
         assert!(v.get("parent_kind").is_none());
         assert!(v.get("last_reply").is_none());
     }
@@ -1621,6 +1626,15 @@ mod tests {
         assert_eq!(v["parent"]["session_id"], "parent");
         assert_eq!(v["parent_kind"], want);
         assert_eq!(v["last_reply"], "done");
+    }
+
+    #[rstest]
+    fn session_json_names_the_recording_host() {
+        let mut s = session(HarnessKind::Codex, "abc");
+        s.host = Some(HostId(uuid::Uuid::from_u128(0x3f9a_12bc)));
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["host"], "0000000000000000000000003f9a12bc");
     }
 
     /// `show` names a session's links by atuin id, in text and JSON, leaving out those unknown.

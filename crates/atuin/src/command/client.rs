@@ -370,7 +370,7 @@ impl Cmd {
             Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
 
             Self::Info => {
-                info::run(&settings);
+                info::run(&settings).await;
                 Ok(())
             }
 

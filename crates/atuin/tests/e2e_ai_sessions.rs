@@ -438,7 +438,10 @@ fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
             _ => Err(synced),
         }
     });
-    assert!(here.session(&original.id).is_some(), "not listed once synced");
+    let host = there.host_id().replace('-', "");
+    assert_eq!(there.session(&original.id).unwrap()["host"], host, "not its own machine's");
+    let listed = here.session(&original.id).expect("not listed once synced");
+    assert_eq!(listed["host"], host, "not the other machine's");
 }
 
 /// A copy behind the session's other machine catches up with it as it resumes, saying so, and
