@@ -253,12 +253,13 @@ fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
 fn a_subagent_resumes_as_the_session_it_works_for(
     machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Copilot)] agent: Agent,
+    #[values(Agent::Claude, Agent::Copilot, Agent::Kiro)] agent: Agent,
 ) {
     let turns = [Turn::new()];
     let parent = Transcript::create(machine.home(), agent, project.path(), &turns);
     let subagent = match agent {
         Agent::Claude => Transcript::claude_subagent(&parent, project.path(), &[Turn::new()]),
+        Agent::Kiro => Transcript::kiro_subagent(&parent, &[Turn::new()]),
         _ => Transcript::copilot_subagent(&parent, &[Turn::new()]),
     };
     machine.wait_until_said(&parent.id, &said(&turns));

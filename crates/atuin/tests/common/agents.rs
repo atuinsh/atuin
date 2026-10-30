@@ -728,11 +728,9 @@ impl Transcript {
         let first = fs::metadata(&self.path).map(|log| log.len() == 0).unwrap_or(true);
         let uuid = || uuid::Uuid::new_v4().to_string();
         let mut lines = Vec::new();
-        let mut row = |id: String, at: OffsetDateTime, payload: Value| {
-            lines.push(json!({"id": id, "timestamp": rfc3339(at), "payload": payload}));
-        };
+        let row = |id: String, at: OffsetDateTime, payload: Value| json!({"id": id, "timestamp": rfc3339(at), "payload": payload});
         if first {
-            row(
+            lines.push(row(
                 format!("context_snapshot_{}", uuid()),
                 tick(),
                 json!({
@@ -742,25 +740,12 @@ impl Transcript {
                                 The current model is Auto (model selected dynamically on the \
                                 server).\n</session_context>",
                 }),
-            );
+            ));
         }
         for turn in turns {
             let execution = uuid();
             let tag = format!("prompt_{}", uuid());
-            let in_turn = json!({"executionId": execution, "turnId": execution});
-            let meta_kiro = json!({"kiro": {"agentMode": mode}});
-            // A reply carries the fields every row of a turn shares.
-            let assistant = |content: &str, operation: &str| {
-                let mut row = json!({
-                    "type": "assistant",
-                    "content": content,
-                    "operationType": operation,
-                    "_meta": meta_kiro,
-                });
-                row.as_object_mut().unwrap().extend(in_turn.as_object().unwrap().clone());
-                row
-            };
-            row(
+            lines.push(row(
                 uuid(),
                 tick(),
                 json!({
@@ -770,8 +755,8 @@ impl Transcript {
                     "images": [],
                     "_meta": {"kiro": {"userMessageTag": tag}},
                 }),
-            );
-            row(
+            ));
+            lines.push(row(
                 format!("{execution}-turn-start"),
                 tick(),
                 json!({
@@ -781,52 +766,9 @@ impl Transcript {
                     "boundarySource": "observed",
                     "userMessageTag": tag,
                 }),
-            );
-            let mut reasoning = assistant(&turn.thinking, "Reasoning");
-            reasoning["reasoningSignature"] = json!(".KTR~~sig");
-            reasoning["reasoningModelId"] = json!("qdev::auto");
-            row(format!("{}-say", uuid()), tick(), reasoning);
-            // The shell tool's call id wraps the id the model saw: 22 characters, from the random
-            // tail of the uuid (its head is the time, the same for two calls in one millisecond).
-            let model_call = format!("tooluse_{}", &short()[10..]);
-            let call = format!("run_command_{model_call}");
-            row(
-                format!("{call}-call"),
-                tick(),
-                json!({
-                    "type": "tool_call",
-                    "toolCallId": call,
-                    "toolName": self.agent.tool(),
-                    "args": {
-                        "command": turn.command,
-                        "description": "Run the command",
-                        "run_in_background": false,
-                    },
-                    "status": "completed",
-                    "kind": "execute",
-                    "executionId": execution,
-                    "turnId": execution,
-                    "actionType": "run_command",
-                    "modelToolUseId": model_call,
-                    "title": "Run the command",
-                    "_meta": {"kiro": {"agentMode": mode, "toolOrigin": "default"}},
-                }),
-            );
-            row(
-                format!("{call}-result"),
-                tick(),
-                json!({
-                    "type": "tool_result",
-                    "toolCallId": call,
-                    "content": format!("Output:\n{}\n\n\nExit Code: 0", turn.output),
-                    "success": true,
-                    "executionId": execution,
-                    "turnId": execution,
-                    "_meta": meta_kiro,
-                }),
-            );
-            row(format!("{}-say", uuid()), tick(), assistant(&turn.reply, "Say"));
-            row(
+            ));
+            lines.extend(self.kiro_turn(turn, &execution, &mode, None));
+            lines.push(row(
                 uuid(),
                 tick(),
                 json!({
@@ -835,11 +777,11 @@ impl Transcript {
                     "value": {"usagePercentage": 0.99},
                     "executionId": execution,
                 }),
-            );
+            ));
             // Kiro writes the turn's end last, stamped before the usage and pause rows ahead of
             // it: a reader has to go by file order.
             let ended = tick();
-            row(
+            lines.push(row(
                 format!("{execution}-usage"),
                 tick(),
                 json!({
@@ -856,8 +798,8 @@ impl Transcript {
                     "turnId": execution,
                     "requestIds": [uuid()],
                 }),
-            );
-            row(
+            ));
+            lines.push(row(
                 format!("{execution}-complete"),
                 tick(),
                 json!({
@@ -865,8 +807,8 @@ impl Transcript {
                     "category": "session_pause",
                     "context": {"executionId": execution, "turnId": execution, "status": "success"},
                 }),
-            );
-            row(
+            ));
+            lines.push(row(
                 format!("{execution}-turn-end"),
                 ended,
                 json!({
@@ -876,11 +818,11 @@ impl Transcript {
                     "turnId": execution,
                     "boundarySource": "observed",
                 }),
-            );
+            ));
         }
         if first {
             let system_prompt = format!("You are Kiro, an AI assistant {}.", word());
-            row(
+            lines.push(row(
                 format!("session_start_{}_{mode}", self.id),
                 tick(),
                 json!({
@@ -892,7 +834,7 @@ impl Transcript {
                     "forcedRole": true,
                     "messageId": uuid(),
                 }),
-            );
+            ));
         }
         write_lines(&self.path, &lines);
 
@@ -905,6 +847,169 @@ impl Transcript {
             roots.push(json!(cwd));
         }
         fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// The model's rows of `turn` in execution `execution` of a Kiro session in agent mode
+    /// `mode`: its reasoning, its `execute_bash` call and the result, and its reply. A
+    /// subagent's rows name the subagent (`subExecutionId`).
+    fn kiro_turn(
+        &self,
+        turn: &Turn,
+        execution: &str,
+        mode: &str,
+        subagent: Option<&str>,
+    ) -> Vec<Value> {
+        let uuid = || uuid::Uuid::new_v4().to_string();
+        let mut shared = json!({"executionId": execution, "turnId": execution});
+        let mut meta_kiro = json!({"kiro": {"agentMode": mode}});
+        if let Some(subagent) = subagent {
+            shared["subExecutionId"] = json!(subagent);
+            meta_kiro["kiro"]["agentSubtaskId"] = json!(subagent);
+        }
+        // Every row of a turn carries the turn, and a subagent's the subagent.
+        let in_turn = |mut row: Value| {
+            row.as_object_mut().unwrap().extend(shared.as_object().unwrap().clone());
+            row
+        };
+        let assistant = |content: &str, operation: &str| {
+            in_turn(json!({
+                "type": "assistant",
+                "content": content,
+                "operationType": operation,
+                "_meta": meta_kiro,
+            }))
+        };
+        let mut lines = Vec::new();
+        let mut row = |id: String, payload: Value| {
+            lines.push(json!({"id": id, "timestamp": rfc3339(tick()), "payload": payload}));
+        };
+        let mut reasoning = assistant(&turn.thinking, "Reasoning");
+        reasoning["reasoningSignature"] = json!(".KTR~~sig");
+        reasoning["reasoningModelId"] = json!("qdev::auto");
+        row(format!("{}-say", uuid()), reasoning);
+        // The shell tool's call id wraps the id the model saw: 22 characters, from the random
+        // tail of the uuid (its head is the time, the same for two calls in one millisecond).
+        let model_call = format!("tooluse_{}", &short()[10..]);
+        let call = format!("run_command_{model_call}");
+        let mut tool_meta = meta_kiro.clone();
+        tool_meta["kiro"]["toolOrigin"] = json!("default");
+        row(
+            format!("{call}-call"),
+            in_turn(json!({
+                "type": "tool_call",
+                "toolCallId": call,
+                "toolName": self.agent.tool(),
+                "args": {
+                    "command": turn.command,
+                    "description": "Run the command",
+                    "run_in_background": false,
+                },
+                "status": "completed",
+                "kind": "execute",
+                "actionType": "run_command",
+                "modelToolUseId": model_call,
+                "title": "Run the command",
+                "_meta": tool_meta,
+            })),
+        );
+        row(
+            format!("{call}-result"),
+            in_turn(json!({
+                "type": "tool_result",
+                "toolCallId": call,
+                "content": format!("Output:\n{}\n\n\nExit Code: 0", turn.output),
+                "success": true,
+                "_meta": meta_kiro,
+            })),
+        );
+        row(format!("{}-say", uuid()), assistant(&turn.reply, "Say"));
+        lines
+    }
+
+    /// A Kiro subagent `parent` spawned, working through `turns`: its rows in a log of its own
+    /// under the parent's directory, ending with the `subagent_response` call that answered the
+    /// parent, whose log gets the spawn (`sub_agent_start`, before the subagent's first row, as
+    /// Kiro writes it) and the answer (`sub_agent_complete`).
+    pub fn kiro_subagent(parent: &Self, turns: &[Turn]) -> Self {
+        assert_eq!(parent.agent, Agent::Kiro);
+        let dir = parent.path.parent().unwrap();
+        let meta: Value =
+            serde_json::from_str(&fs::read_to_string(dir.join("session.json")).unwrap()).unwrap();
+        let mode = meta["agentMode"].as_str().unwrap().to_owned();
+        let sub = uuid::Uuid::new_v4().to_string();
+        let execution = uuid::Uuid::new_v4().to_string();
+        let spawn = format!("invoke_subagent_tooluse_{}", &short()[10..]);
+        let name = format!("worker-{}", word());
+        let prompt = turns.first().map(|turn| turn.prompt.clone()).unwrap_or_default();
+        let response = turns.last().map(|turn| turn.reply.clone()).unwrap_or_default();
+        let kiro_row = |id: String, payload: Value| json!({"id": id, "timestamp": rfc3339(tick()), "payload": payload});
+        write_lines(&parent.path, &[kiro_row(
+            format!("{spawn}-sub-agent-start"),
+            json!({
+                "type": "sub_agent_start",
+                "parentExecutionId": execution,
+                "subSessionId": sub,
+                "subAgentName": name,
+                "prompt": prompt,
+                "explanation": "Delegating the work to a subagent.",
+            }),
+        )]);
+
+        let mut lines = Vec::new();
+        for turn in turns {
+            lines.extend(parent.kiro_turn(turn, &execution, &mode, Some(&sub)));
+        }
+        let answer = format!("tooluse_{}", &short()[10..]);
+        lines.push(kiro_row(
+            format!("{answer}-call"),
+            json!({
+                "type": "tool_call",
+                "toolCallId": answer,
+                "toolName": "subagent_response",
+                "args": {"response": response, "files": []},
+                "status": "completed",
+                "kind": "other",
+                "executionId": execution,
+                "turnId": execution,
+                "actionType": "subagent_response",
+                "title": "Subagent Response",
+                "subExecutionId": sub,
+                "_meta": {"kiro": {"agentMode": mode, "agentSubtaskId": sub, "toolOrigin": "acp"}},
+            }),
+        ));
+        lines.push(kiro_row(
+            format!("{answer}-result"),
+            json!({
+                "type": "tool_result",
+                "toolCallId": answer,
+                "content": "Response recorded.",
+                "success": true,
+                "executionId": execution,
+                "turnId": execution,
+                "subExecutionId": sub,
+                "_meta": {"kiro": {"agentMode": mode}},
+            }),
+        ));
+        let subagents = dir.join("sub-executions");
+        fs::create_dir_all(&subagents).unwrap();
+        let path = subagents.joined(format!("{sub}.jsonl"));
+        write_lines(&path, &lines);
+
+        write_lines(&parent.path, &[kiro_row(
+            format!("{spawn}-sub-agent-complete"),
+            json!({
+                "type": "sub_agent_complete",
+                "parentExecutionId": execution,
+                "subSessionId": sub,
+                "response": response,
+                "status": "success",
+            }),
+        )]);
+        Self {
+            agent: Agent::Kiro,
+            id: sub,
+            path,
+        }
     }
 
     fn append_pi(&self, turns: &[Turn]) {
