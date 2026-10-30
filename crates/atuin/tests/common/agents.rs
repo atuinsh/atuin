@@ -786,8 +786,9 @@ impl Transcript {
             reasoning["reasoningSignature"] = json!(".KTR~~sig");
             reasoning["reasoningModelId"] = json!("qdev::auto");
             row(format!("{}-say", uuid()), tick(), reasoning);
-            // The shell tool's call id wraps the id the model saw.
-            let model_call = format!("tooluse_{}", &short()[..22]);
+            // The shell tool's call id wraps the id the model saw: 22 characters, from the random
+            // tail of the uuid (its head is the time, the same for two calls in one millisecond).
+            let model_call = format!("tooluse_{}", &short()[10..]);
             let call = format!("run_command_{model_call}");
             row(
                 format!("{call}-call"),
