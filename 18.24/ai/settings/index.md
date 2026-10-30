@@ -133,7 +133,7 @@ Settings for capturing your AI coding agents' sessions as [threads](https://docs
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
 
 ### `capture_tools`
 

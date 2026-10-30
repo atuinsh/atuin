@@ -45,14 +45,16 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 An `ATUIN_*` environment variable overrides the same key in `server.toml`. An empty one, such as `ATUIN_DB_URI=` left in a compose file, counts as unset. `ATUIN_PORT` in the `tcp://10.96.0.12:8888` form, which Kubernetes sets for a Service named `atuin`, is ignored with a warning; see [Kubernetes](https://docs.atuin.sh/self-hosting/kubernetes/#service-links).
 
-| Parameter           | Description                                                                |
-| ------------------- | -------------------------------------------------------------------------- |
-| `db_uri`            | A valid database URI, for saving history (required, no default)            |
-| `db_password_file`  | A file holding the database password, kept out of `db_uri` (default: none) |
-| `host`              | The host to listen on (default: 127.0.0.1)                                 |
-| `port`              | The TCP port to listen on (default: 8888)                                  |
-| `open_registration` | If `true`, accept new user registrations (default: false)                  |
-| `path`              | A path to prepend to all routes of the server (default: empty)             |
+| Parameter              | Description                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `db_uri`               | A valid database URI, for saving history (required, no default)                    |
+| `db_password_file`     | A file holding the database password, kept out of `db_uri` (default: none)         |
+| `host`                 | The host to listen on (default: 127.0.0.1)                                         |
+| `port`                 | The TCP port to listen on (default: 8888)                                          |
+| `open_registration`    | If `true`, accept new user registrations (default: false)                          |
+| `path`                 | A path to prepend to all routes of the server (default: empty)                     |
+| `trusted_proxies`      | Reverse proxies whose client address header is trusted (default: empty)            |
+| `trusted_proxy_header` | The header those proxies report the client address in (default: `X-Forwarded-For`) |
 
 ## Database
 
@@ -142,3 +144,25 @@ atuin-server admin user delete alice
 We strongly urge you enable TLS with Atuin. Without TLS, passwords are sent plaintext, which is wildly insecure.
 
 For TLS/HTTPS support, we recommend using a reverse proxy such as [nginx](https://nginx.org/), [Caddy](https://caddyserver.com/), or [Traefik](https://traefik.io/traefik) in front of the Atuin server.
+
+## Reverse proxies and client addresses
+
+Behind a reverse proxy, the server only sees the proxy's address, so request logs show that instead of the real client. Proxies pass the original address along in a header, usually `X-Forwarded-For`, but as any client can set that header it's only honoured for connections that come from a proxy you list in `trusted_proxies`:
+
+```
+trusted_proxies = ["172.18.0.0/16", "10.0.0.1"]
+```
+
+Entries are CIDR networks or bare addresses. The same list can be given via the environment as a comma-separated string:
+
+```
+ATUIN_TRUSTED_PROXIES="172.18.0.0/16,10.0.0.1"
+```
+
+If your proxy reports the client in a different header, name it with `trusted_proxy_header` (or `ATUIN_TRUSTED_PROXY_HEADER`):
+
+```
+trusted_proxy_header = "X-Real-IP"
+```
+
+When a request arrives from a trusted proxy, the header is read from right to left and the first address that isn't itself a trusted proxy is logged as the client. Leave the list empty, the default, to always log the connecting peer.

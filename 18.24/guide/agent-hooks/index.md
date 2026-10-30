@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -12,6 +12,9 @@ atuin hook install claude-code
 
 # Codex
 atuin hook install codex
+
+# GitHub Copilot CLI
+atuin hook install copilot
 
 # opencode
 atuin hook install opencode
@@ -34,6 +37,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | ----------- | ------------------------------------------------------------------------------------------------- |
 | Claude Code | `~/.claude/settings.json`                                                                         |
 | Codex       | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
+| Copilot     | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                       |
 | opencode    | `~/.config/opencode/plugins/atuin.ts`                                                             |
 | pi          | `~/.pi/agent/extensions/atuin.ts`                                                                 |
 
@@ -101,6 +105,16 @@ atuin hook install codex
 This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
 
 Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
+
+### Copilot
+
+```
+atuin hook install copilot
+```
+
+This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
+
+Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
 
 ### opencode
 

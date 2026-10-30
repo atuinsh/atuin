@@ -18,6 +18,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 - `default` theme
 - `autumn` theme
 - `marine` theme
+- `pumpkin` theme (orange, purple and slime green, for spooky season)
 - `default-powershell` theme (same as `default`, but with PowerShell default syntax colors)
 - `(none)` theme (removes all styling)
 

@@ -763,7 +763,7 @@ These shells are supported too. For how to load the plugin in each, see [install
 
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -775,6 +775,9 @@ atuin hook install claude-code
 
 # Codex
 atuin hook install codex
+
+# GitHub Copilot CLI
+atuin hook install copilot
 
 # opencode
 atuin hook install opencode
@@ -797,6 +800,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | ----------- | ------------------------------------------------------------------------------------------------- |
 | Claude Code | `~/.claude/settings.json`                                                                         |
 | Codex       | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
+| Copilot     | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                       |
 | opencode    | `~/.config/opencode/plugins/atuin.ts`                                                             |
 | pi          | `~/.pi/agent/extensions/atuin.ts`                                                                 |
 
@@ -864,6 +868,16 @@ atuin hook install codex
 This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
 
 Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
+
+### Copilot
+
+```
+atuin hook install copilot
+```
+
+This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
+
+Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
 
 ### opencode
 
@@ -1378,6 +1392,7 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 - `default` theme
 - `autumn` theme
 - `marine` theme
+- `pumpkin` theme (orange, purple and slime green, for spooky season)
 - `default-powershell` theme (same as `default`, but with PowerShell default syntax colors)
 - `(none)` theme (removes all styling)
 
@@ -4694,14 +4709,16 @@ ATUIN_DB_URI="postgres://user:password@hostname/database"
 
 An `ATUIN_*` environment variable overrides the same key in `server.toml`. An empty one, such as `ATUIN_DB_URI=` left in a compose file, counts as unset. `ATUIN_PORT` in the `tcp://10.96.0.12:8888` form, which Kubernetes sets for a Service named `atuin`, is ignored with a warning; see [Kubernetes](https://docs.atuin.sh/self-hosting/kubernetes/#service-links).
 
-| Parameter           | Description                                                                |
-| ------------------- | -------------------------------------------------------------------------- |
-| `db_uri`            | A valid database URI, for saving history (required, no default)            |
-| `db_password_file`  | A file holding the database password, kept out of `db_uri` (default: none) |
-| `host`              | The host to listen on (default: 127.0.0.1)                                 |
-| `port`              | The TCP port to listen on (default: 8888)                                  |
-| `open_registration` | If `true`, accept new user registrations (default: false)                  |
-| `path`              | A path to prepend to all routes of the server (default: empty)             |
+| Parameter              | Description                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `db_uri`               | A valid database URI, for saving history (required, no default)                    |
+| `db_password_file`     | A file holding the database password, kept out of `db_uri` (default: none)         |
+| `host`                 | The host to listen on (default: 127.0.0.1)                                         |
+| `port`                 | The TCP port to listen on (default: 8888)                                          |
+| `open_registration`    | If `true`, accept new user registrations (default: false)                          |
+| `path`                 | A path to prepend to all routes of the server (default: empty)                     |
+| `trusted_proxies`      | Reverse proxies whose client address header is trusted (default: empty)            |
+| `trusted_proxy_header` | The header those proxies report the client address in (default: `X-Forwarded-For`) |
 
 ## Database
 
@@ -4791,6 +4808,28 @@ atuin-server admin user delete alice
 We strongly urge you enable TLS with Atuin. Without TLS, passwords are sent plaintext, which is wildly insecure.
 
 For TLS/HTTPS support, we recommend using a reverse proxy such as [nginx](https://nginx.org/), [Caddy](https://caddyserver.com/), or [Traefik](https://traefik.io/traefik) in front of the Atuin server.
+
+## Reverse proxies and client addresses
+
+Behind a reverse proxy, the server only sees the proxy's address, so request logs show that instead of the real client. Proxies pass the original address along in a header, usually `X-Forwarded-For`, but as any client can set that header it's only honoured for connections that come from a proxy you list in `trusted_proxies`:
+
+```
+trusted_proxies = ["172.18.0.0/16", "10.0.0.1"]
+```
+
+Entries are CIDR networks or bare addresses. The same list can be given via the environment as a comma-separated string:
+
+```
+ATUIN_TRUSTED_PROXIES="172.18.0.0/16,10.0.0.1"
+```
+
+If your proxy reports the client in a different header, name it with `trusted_proxy_header` (or `ATUIN_TRUSTED_PROXY_HEADER`):
+
+```
+trusted_proxy_header = "X-Real-IP"
+```
+
+When a request arrives from a trusted proxy, the header is read from right to left and the first address that isn't itself a trusted proxy is logged as the client. Leave the list empty, the default, to always log the connecting peer.
 
 # Using a self hosted server
 
@@ -5549,7 +5588,7 @@ Settings for capturing your AI coding agents' sessions as [threads](https://docs
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
 
 ### `capture_tools`
 
@@ -5951,7 +5990,7 @@ atuin threads enable
 
 That's short for `atuin config enable threads`. It sets `capture = true` under `[threads]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while capture is off, and `atuin config disable threads` turns it off again.
 
-With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, opencode and Pi) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
+With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and Pi) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record store, and brings it up to date as threads are captured, synced in from your other machines, or imported.
 
@@ -5967,7 +6006,7 @@ That imports every session the agents have on this machine (or just one agent's,
 
 Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
 
-When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin threads show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
+When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, Copilot, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin threads show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
 
 Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. An edit's diff past 64 KiB keeps only the files it changed. Search covers a call's input, but not its output.
 
@@ -6085,18 +6124,18 @@ Once you choose a thread, with `Enter` (or `Tab` to edit the command first), Atu
 The help line says what the keys do there: `Enter` resumes (or edits, opened with `Tab`), `Tab` edits the command first, and `Esc` goes back.
 
 - The session's own agent comes first and is already selected, so `Enter` `Enter` resumes it. If the session was recorded on another machine, or its transcript was deleted, Atuin writes the transcript back out from the synced messages before resuming it ("from sync").
-- Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's `parentSession`; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Copilot sessions, and sessions with no messages, can't be forked.
+- Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's `parentSession`; Copilot's start event gets a note it keeps; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Sessions with no messages can't be forked.
 - Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, and so do the tool calls captured with their input and output (`capture_tools`), with what they returned. Each becomes the new agent's own tool where it has one that does the same (a shell command, reading, writing or editing a file, a search), and stays the tool it was otherwise: the agent reads it, it just can't call it again. Calls captured without their input, calls that never got a result, and web searches the model's provider ran itself become notes in the text, and reasoning is dropped. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
-- If the session's own agent can't resume it here (a Copilot session, an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
+- If the session's own agent can't resume it here (an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent and its transcript is on this machine, Atuin first catches it up with the synced messages:
 
 - If the session continued on another machine since, the messages this copy lacks are appended to it, and it resumes in place. The status line says `caught up: 12 messages from @3f9a12bc`.
 - If this copy is up to date, or went on past the newest messages along the same branch, it resumes unchanged.
 - Otherwise Atuin writes nothing and asks, with the chooser saying why: when the agent is running this session here (`Claude Code is running this session here`), when this copy went another way than the newest messages, when it has messages sync hasn't got, or when this copy can't be caught up (`couldn't catch up: ...`). Its first line resumes this copy unchanged, and a fork line for each branch of the session, newest first, forks from that branch (`fork @3f9a12bc's · +11 since they split · 20m ago`). With the agent running here, the newest fork is selected.
-- When this copy went another way, sync holds every message of it, and the agent isn't running it here, a switch line for each other branch comes after the first line (`switch to @3f9a12bc's · replaces this copy, yours stays in atuin`). It moves this copy onto that branch, in place, under the same session id, and resumes it. The history this copy shares with that branch stays exactly as it was, and the messages this copy went on with are taken out. The branch's messages since the two split are added from sync, so, like a restore, they carry what Atuin keeps of them: the conversation and which tools were called, but not the other machine's tool input and output, or its images. Before anything changes, your copy is saved whole to `ai/switched/<agent>/` in Atuin's data directory, where no agent lists it, and the status line says where: `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin never deletes these copies. The branch this copy was on stays in Atuin too, so forking it brings it back. Claude Code, Codex and Pi sessions can switch. These can only fork, and get no switch line: a Codex session that was reverted, so its history spans several files, or that Codex wrote in its older format; a Pi session file Pi hasn't opened since version 2 of its format; and opencode sessions, which live in a database.
+- When this copy went another way, sync holds every message of it, and the agent isn't running it here, a switch line for each other branch comes after the first line (`switch to @3f9a12bc's · replaces this copy, yours stays in atuin`). It moves this copy onto that branch, in place, under the same session id, and resumes it. The history this copy shares with that branch stays exactly as it was, and the messages this copy went on with are taken out. The branch's messages since the two split are added from sync, so, like a restore, they carry what Atuin keeps of them: the conversation and which tools were called, but not the other machine's tool input and output, or its images. Before anything changes, your copy is saved whole to `ai/switched/<agent>/` in Atuin's data directory, where no agent lists it, and the status line says where: `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin never deletes these copies. The branch this copy was on stays in Atuin too, so forking it brings it back. Claude Code, Codex, Copilot and Pi sessions can switch. These can only fork, and get no switch line: a Codex session that was reverted, so its history spans several files, or that Codex wrote in its older format; a Pi session file Pi hasn't opened since version 2 of its format; and opencode sessions, which live in a database.
 
-Atuin never merges branches, and never writes to a session its agent has open. Claude Code, and Codex where it keeps session locks, say which session they have open. opencode, Pi and other Codex installs don't, so Atuin treats a session as possibly open, and doesn't catch it up, while one of that agent's processes works in the session's directory or below it: the directory this copy records, or else where the session works on this machine. A process elsewhere counts when its command line names the session (`opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has changed in the last two minutes, any running process of that agent counts, wherever it works.
+Atuin never merges branches, and never writes to a session its agent has open. Claude Code, Copilot, and Codex where it keeps session locks, say which session they have open. opencode, Pi and other Codex installs don't, so Atuin treats a session as possibly open, and doesn't catch it up, while one of that agent's processes works in the session's directory or below it: the directory this copy records, or else where the session works on this machine. A process elsewhere counts when its command line names the session (`opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has changed in the last two minutes, any running process of that agent counts, wherever it works.
 
 A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
 
@@ -6113,7 +6152,7 @@ resume_chooser = false
 
 The chooser still opens for a session its own agent can't resume.
 
-From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude`, `codex`, `opencode` or `pi`). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
+From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude-code`, `codex`, `copilot`, `opencode`, `pi` or `omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
 
 The id can be the agent's own, or the thread's Atuin id, which Inspect and the MCP threads tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
 
@@ -6138,7 +6177,7 @@ inline_height = 40
 mouse = true
 ```
 
-To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[threads.resume]` (`claude`, `codex`, `opencode` or `pi`). It runs after `cd -- <cwd> &&`, with these substituted:
+To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[threads.resume]` (`claude`, `codex`, `copilot`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these substituted:
 
 - `{id}`: the agent's own id for the session;
 - `{path}`: the session's transcript on this machine (for a session written back out from sync, the one Atuin wrote);
