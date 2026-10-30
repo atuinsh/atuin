@@ -58,6 +58,13 @@ impl Harness for Kiro {
     /// `kiro-cli chat --resume-id <id>`. Kiro finds the session in whichever bucket holds it,
     /// wherever it is run from, and goes on in that session's own directory.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
+        // A subagent is captured as a session of its own, but Kiro only resumes the session
+        // that spawned it.
+        if session::is_subagent_id(&target.id) {
+            return Err(ResumeError::NotResumable(
+                "a Kiro subagent cannot be resumed on its own; resume its parent session",
+            ));
+        }
         let args = ["chat".to_owned(), "--resume-id".to_owned(), target.id.clone()];
         Ok(resume::plan(target, CwdRequirement::None, "kiro-cli", args))
     }
@@ -86,6 +93,12 @@ mod tests {
         assert_eq!(plan.program, "kiro-cli");
         assert_eq!(plan.args, ["chat", "--resume-id", "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48"]);
         assert_eq!(plan.cwd_requirement, CwdRequirement::None);
+    }
+
+    #[rstest]
+    fn a_subagent_is_not_resumable_on_its_own() {
+        let target = ResumeTarget::new("5d13f3d7-73ae-431d-847f-04729b40503e");
+        assert!(matches!(Kiro.resume_plan(&target), Err(ResumeError::NotResumable(_))));
     }
 
     #[rstest]
