@@ -1352,7 +1352,8 @@ mod parser_contract {
         ];
         std::fs::write(&path, lines(&after)).unwrap();
 
-        let batch2: Vec<_> = gs.clone().messages_from(Some(checkpoint)).try_collect().await.unwrap();
+        let batch2: Vec<_> =
+            gs.clone().messages_from(Some(checkpoint)).try_collect().await.unwrap();
         let mut resumed = MessageEnricher::new(HarnessKind::Grok);
         resumed.resume(&session_id, None, &[], rows1.last(), &[]);
         let stored: std::collections::HashSet<_> =
