@@ -21,24 +21,28 @@
 //!
 //! **Liveness.** Kiro keeps no lock on a session it has open. Its header's `status` is `idle`
 //! between turns (and `completed` or `failed` once a session is over) and `in_progress` or
-//! `waiting_on_user` while a turn runs: a running turn whose header or log changed in the last
-//! [`RECENT`](super::RECENT) says a Kiro has the session, wherever it runs (`kiro-cli chat
-//! --resume-id` reopens a session from anywhere). A Kiro that died mid-turn leaves `in_progress`
-//! behind for good, so a stale one says only that someone may. Kiro rewrites the header in place,
-//! so one that doesn't parse is being written. Between turns, a log still changing may have a
-//! Kiro at its prompt.
+//! `waiting_on_user` while a turn runs (seen mid-turn in 2.36.0): a running turn whose header or
+//! log changed in the last [`RECENT`](super::RECENT) says a Kiro has the session, wherever it
+//! runs (`kiro-cli chat --resume-id` reopens a session from anywhere). A Kiro that died mid-turn
+//! leaves `in_progress` behind for good, so a stale one says only that someone may. Kiro rewrites
+//! the header in place, so one that doesn't parse is being written. Between turns, a Kiro at its
+//! prompt says nothing in the session's files, so the processes say ([`agent_running`]): a chat
+//! (`kiro-cli-chat`, and the agent engine it runs under node from `kiro-cli/kas/`) working in
+//! the session's directory or where the caller last saw it, one naming the session on its
+//! command line (`--resume-id`), or, while the log or header still changes, any at all, may have
+//! it; none says no one has.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::liveness::changed_lately;
+use super::liveness::{agent_running, changed_lately};
 use super::{
-    AppendOptions, AppendOutcome, Links, Liveness, LocalTip, RehydrateMessage, ReplaceOutcome,
-    SessionSync, Stamp, SyncError, append_jsonl, blocking, blocking_liveness, branch_point,
-    capture_key, check_segment, continuing_from, kept_lines, modified, past, replace_jsonl,
-    require_idle, resumes_from, switched_to, with_merged,
+    AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, RehydrateMessage,
+    ReplaceOutcome, Seen, SessionSync, Stamp, SyncError, append_jsonl, blocking, blocking_liveness,
+    branch_point, capture_key, check_segment, continuing_from, kept_lines, modified, past,
+    replace_jsonl, require_idle, resumes_from, switched_to, with_merged,
 };
 use crate::harnesstools::kiro::session::{
     HEADER_FILE, LOG_FILE, default_root, locate, read_log, session_dir,
@@ -56,11 +60,11 @@ impl SessionSync for Kiro {
         blocking(move || locate(&root, &id).map(|path| read_tip(&path)).transpose()).await
     }
 
-    async fn is_live(&self, id: &str, _cwd: Option<&Path>) -> Liveness {
+    async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
         let root = default_root();
-        let id = id.to_owned();
+        let (id, cwd) = (id.to_owned(), cwd.map(Path::to_path_buf));
         blocking_liveness(move || match session_dir(&root, &id) {
-            Some(dir) => liveness(&dir),
+            Some(dir) => liveness(&dir, &id, cwd.as_deref(), &Processes::here()),
             None => Liveness::NotLive,
         })
         .await
@@ -73,7 +77,7 @@ impl SessionSync for Kiro {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        require_idle(self.is_live(id, None).await)?;
+        require_idle(self.is_live(id, options.cwd).await)?;
         let (id, base, lines) = (id.to_owned(), base.clone(), lines.to_vec());
         let taken = options.taken_ids.cloned();
         blocking(move || append_to(&id, &base, &lines, taken.as_ref())).await
@@ -87,7 +91,7 @@ impl SessionSync for Kiro {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        require_idle(self.is_live(id, None).await)?;
+        require_idle(self.is_live(id, options.cwd).await)?;
         let (id, base, branch) = (id.to_owned(), base.clone(), branch.to_vec());
         let (taken, backups) = (options.taken_ids.cloned(), backups.to_path_buf());
         blocking(move || replace_to(&id, &base, &branch, taken.as_ref(), &backups)).await
@@ -294,6 +298,12 @@ fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
     })
 }
 
+/// The program a Kiro chat runs as, and the path the agent engine it runs (a node program) is
+/// kept under; neither `kiro-cli` itself (whose `kiro-cli-term` shell integration and desktop
+/// helper run all day) nor the launcher, which runs only while the chat does.
+const CHAT: &str = "kiro-cli-chat";
+const ENGINE: &str = "kiro-cli/kas/";
+
 /// What the header's `status` says of the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {
@@ -307,34 +317,52 @@ enum Status {
     Unreadable,
 }
 
-fn status(header: &Path) -> Status {
+/// The header's status, and the directory it says the session works in.
+fn status(header: &Path) -> (Status, Option<PathBuf>) {
     let text = match std::fs::read_to_string(header) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Status::Missing,
-        Err(_) => return Status::Unreadable,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (Status::Missing, None),
+        Err(_) => return (Status::Unreadable, None),
     };
-    let Ok(header) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Status::Unreadable;
+    let Ok(header) = serde_json::from_str::<Value>(&text) else {
+        return (Status::Unreadable, None);
     };
-    match header["status"].as_str() {
+    let status = match header["status"].as_str() {
         Some("in_progress" | "waiting_on_user") => Status::Busy,
         Some("idle" | "completed" | "failed") | None => Status::Idle,
         Some(_) => Status::Unreadable,
-    }
+    };
+    (status, header["workspacePaths"][0].as_str().map(PathBuf::from))
 }
 
-/// Whether a Kiro has the session in `dir` open (see the module docs).
-fn liveness(dir: &Path) -> Liveness {
+/// Whether a Kiro has session `id` in `dir`, last seen working in `cwd`, open (see the module
+/// docs).
+fn liveness(dir: &Path, id: &str, cwd: Option<&Path>, procs: &Processes) -> Liveness {
     let header = dir.join(HEADER_FILE);
-    let log_changing = || changed_lately(modified(&dir.join(LOG_FILE)));
-    match status(&header) {
+    let changing =
+        changed_lately(modified(&dir.join(LOG_FILE))) || changed_lately(modified(&header));
+    let (status, works_in) = status(&header);
+    match status {
         // A turn's progress rewrites the header and appends to the log.
-        Status::Busy if log_changing() || changed_lately(modified(&header)) => {
-            Liveness::Live { pid: None }
-        }
+        Status::Busy if changing => Liveness::Live { pid: None },
         Status::Busy | Status::Unreadable => Liveness::Unknown,
-        Status::Idle | Status::Missing if log_changing() => Liveness::Unknown,
-        Status::Idle | Status::Missing => Liveness::NotLive,
+        Status::Idle | Status::Missing => {
+            let dirs: Vec<PathBuf> = works_in
+                .into_iter()
+                .chain(cwd.map(Path::to_path_buf))
+                .filter(|dir| dir.is_dir())
+                .collect();
+            let seen = Seen {
+                dirs: if dirs.is_empty() {
+                    Dirs::Any
+                } else {
+                    Dirs::Within(dirs)
+                },
+                names: vec![id.to_owned()],
+                changing,
+            };
+            agent_running(procs, CHAT, &[ENGINE], &seen)
+        }
     }
 }
 
@@ -347,9 +375,13 @@ mod tests {
 
     use super::*;
     use crate::harnesstools::session::{Content, Role};
+    use crate::harnesstools::sync::TableEntry;
+    use crate::harnesstools::sync::liveness::tests::{entry, table};
 
     const HEADER: &str = include_str!("../../../tests/fixtures/kiro/probe.session.json");
     const SESSION: &str = "sess_5e55e55e-0000-4000-8000-000000000001";
+    /// The session the fixture's header is of.
+    const PROBE: &str = "sess_0550199b-937b-4dd4-94e0-6901bd990fb0";
 
     /// A synced row, `role` `id`, written at second `at`.
     fn row(id: &str, role: Role, at: i64) -> RehydrateMessage {
@@ -564,6 +596,38 @@ mod tests {
         HEADER.replace(r#""status": "idle""#, &format!(r#""status": "{status}""#))
     }
 
+    /// No Kiro runs.
+    fn nobody() -> Processes {
+        table(&[])
+    }
+
+    /// A Kiro chat with its engine, run from `cwd` with `args`; beside them the shell
+    /// integration and the desktop helper, which run all day and are no chat.
+    fn chat(cwd: Option<&Path>, args: &[&str]) -> Processes {
+        let mut command = vec!["/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat", "chat"];
+        command.extend(args);
+        let engine = "/Users/u/Library/Application \
+                      Support/kiro-cli/kas/2.36.0-abc/node_modules/@kiro/agent/dist/server/\
+                      acp-server.js";
+        table(&[
+            TableEntry {
+                cwd: cwd.map(Path::to_path_buf),
+                ..entry(10, "kiro-cli-chat", &command, 1)
+            },
+            TableEntry {
+                cwd: cwd.map(Path::to_path_buf),
+                ..entry(11, "node", &["node", "--experimental-wasm-modules", engine], 1)
+            },
+            entry(12, "zsh", &["zsh (kiro-cli-term)"], 1),
+            entry(
+                13,
+                "kiro_cli_desktop",
+                &["/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop"],
+                1,
+            ),
+        ])
+    }
+
     /// The header was just rewritten with the status, as a turn's progress rewrites it.
     #[rstest]
     #[case::running("in_progress", Liveness::Live { pid: None })]
@@ -575,7 +639,7 @@ mod tests {
     fn the_headers_status_says_whether_a_turn_runs(#[case] status: &str, #[case] want: Liveness) {
         assert!(HEADER.contains(r#""status": "idle""#));
         let dir = session(Some(&with_status(status)));
-        assert_eq!(liveness(dir.path()), want);
+        assert_eq!(liveness(dir.path(), PROBE, None, &nobody()), want);
     }
 
     /// A Kiro that died mid-turn leaves `in_progress` behind: with nothing written for a while,
@@ -586,29 +650,51 @@ mod tests {
     fn a_stale_running_turn_may_or_may_not_have_a_writer(#[case] status: &str) {
         let dir = session(Some(&with_status(status)));
         age(&dir.path().join(HEADER_FILE));
-        assert_eq!(liveness(dir.path()), Liveness::Unknown);
+        assert_eq!(liveness(dir.path(), PROBE, None, &nobody()), Liveness::Unknown);
         // The log still changing says the turn goes on.
         std::fs::write(dir.path().join(LOG_FILE), "{}\n{}\n").unwrap();
-        assert_eq!(liveness(dir.path()), Liveness::Live { pid: None });
+        assert_eq!(liveness(dir.path(), PROBE, None, &nobody()), Liveness::Live { pid: None });
     }
 
     /// Kiro rewrites the header in place: one that doesn't parse is being written.
     #[rstest]
     fn a_half_written_header_is_a_writer() {
         let dir = session(Some(&HEADER[..HEADER.len() / 2]));
-        assert_eq!(liveness(dir.path()), Liveness::Unknown);
+        assert_eq!(liveness(dir.path(), PROBE, None, &nobody()), Liveness::Unknown);
     }
 
-    /// Between turns, the log says: untouched for a while, no one has it; just written, someone
-    /// may.
+    /// Between turns, the processes say: with no Kiro chat running, no one has the session,
+    /// however new the log (a copy just restored); with one running, it may: one working in the
+    /// session's directory or where the caller saw the session, one naming the session, or any
+    /// while the log still changes. The shell integration and the desktop helper are no chat.
     #[rstest]
-    fn between_turns_a_changing_log_may_have_a_writer() {
-        let dir = session(None);
-        assert_eq!(liveness(dir.path()), Liveness::NotLive);
-        std::fs::write(dir.path().join(LOG_FILE), "{}\n{}\n").unwrap();
-        assert_eq!(liveness(dir.path()), Liveness::Unknown);
+    fn between_turns_the_processes_say() {
         let dir = session(Some(HEADER));
+        let works = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let probe_dir = "/tmp/kiro-play";
+        let header = HEADER.replace(probe_dir, works.path().to_str().unwrap());
+        assert_ne!(header, HEADER);
+        std::fs::write(dir.path().join(HEADER_FILE), header).unwrap();
+        let live = |cwd: Option<&Path>, procs: &Processes| liveness(dir.path(), PROBE, cwd, procs);
+        let (here, there) = (Some(works.path()), Some(elsewhere.path()));
+
+        assert_eq!(live(None, &nobody()), Liveness::NotLive);
         std::fs::write(dir.path().join(LOG_FILE), "{}\n{}\n").unwrap();
-        assert_eq!(liveness(dir.path()), Liveness::Unknown);
+        assert_eq!(live(None, &nobody()), Liveness::NotLive, "a new log, and no Kiro");
+        assert_eq!(live(None, &chat(there, &[])), Liveness::Unknown, "changing");
+        age(&dir.path().join(LOG_FILE));
+        age(&dir.path().join(HEADER_FILE));
+        assert_eq!(live(None, &chat(there, &[])), Liveness::NotLive);
+        assert_eq!(live(None, &chat(here, &[])), Liveness::Unknown, "where it works");
+        assert_eq!(live(there, &chat(there, &[])), Liveness::Unknown, "where the caller saw it");
+        assert_eq!(live(None, &chat(None, &[])), Liveness::Unknown, "working who knows where");
+        let named = chat(there, &["--resume-id", PROBE]);
+        assert_eq!(live(None, &named), Liveness::Unknown, "named");
+        assert_eq!(live(None, &Processes::Unavailable), Liveness::Unknown);
+        // With no header, a chat anywhere may have it.
+        std::fs::remove_file(dir.path().join(HEADER_FILE)).unwrap();
+        assert_eq!(live(None, &chat(there, &[])), Liveness::Unknown);
+        assert_eq!(live(None, &nobody()), Liveness::NotLive);
     }
 }
