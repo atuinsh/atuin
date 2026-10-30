@@ -69,7 +69,8 @@ pub(crate) fn rehydrate_into(
     std::fs::create_dir_all(&sdir)?;
 
     let mut prev_gk = None;
-    let rendered = render_messages(&session.id, &session.messages, &mut prev_gk, 0);
+    let meta = meta_id(&session.id);
+    let rendered = render_messages(&session.id, &session.messages, &mut prev_gk, 0, Some(&meta));
     let body = join_jsonl(&rendered.chat_lines);
     let updates_body = join_jsonl(&rendered.update_lines);
     let summary = summary_json(session, grok_home, rendered.chat_lines.len());
@@ -193,9 +194,6 @@ pub(crate) fn summary_json(
 }
 
 fn is_session_bookkeeping_row(session_id: &str, row: &RehydrateMessage) -> bool {
-    if row.role == Role::System && row.content.is_empty() {
-        return true;
-    }
     row.source_id == session_id
         || row.source_id == meta_id(session_id)
         || row.source_id.starts_with("atuin-")
@@ -203,16 +201,19 @@ fn is_session_bookkeeping_row(session_id: &str, row: &RehydrateMessage) -> bool 
 
 /// Render `messages` into pure Grok `chat_history.jsonl` lines, `updates.jsonl` lines, and
 /// `.atuin.json` sidecar mappings, continuing `prev_gk` and `next_prompt_index` when appending
-/// onto an existing transcript.
+/// onto an existing transcript. A row with nothing to write is merged into the line before it:
+/// the last written, else `after`, the line the rows follow (the session's metadata row, for a
+/// transcript written whole), so the transcript holds every row of the session.
 pub(crate) fn render_messages(
     session_id: &str,
     messages: &[RehydrateMessage],
     prev_gk: &mut Option<String>,
     mut next_prompt_index: u64,
+    after: Option<&str>,
 ) -> Rendered {
     let (flattened, mut merged_into) = merge_uncaptured_runs(messages);
     let mut rendered = Rendered::default();
-    let mut last_written: Option<String> = None;
+    let mut last_written: Option<String> = after.map(str::to_owned);
 
     for row in &flattened {
         if row.role == Role::System && row.content.is_empty() {
@@ -665,7 +666,7 @@ mod tests {
             sample_msg("a2", Role::Assistant, vec![Content::Text("done".to_owned())], 13),
         ];
         let mut prev_gk = None;
-        let rendered = render_messages(sid, &messages, &mut prev_gk, 0);
+        let rendered = render_messages(sid, &messages, &mut prev_gk, 0, None);
         assert_eq!(rendered.chat_lines.len(), 2);
         assert!(
             rendered.chat_lines[1]["content"].as_str().unwrap().contains("[ran a shell command]")

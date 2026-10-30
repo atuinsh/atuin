@@ -211,7 +211,8 @@ fn extend(
 ) -> Result<Rendered, SyncError> {
     check_segment(lines, base, taken, Links::Chained)?;
     let mut prev_gk = file.last_gk.clone();
-    Ok(rehydrate::render_messages(id, lines, &mut prev_gk, file.prompt_count))
+    let after = base.tip_source_id.as_deref();
+    Ok(rehydrate::render_messages(id, lines, &mut prev_gk, file.prompt_count, after))
 }
 
 fn write_sidecar(transcript_path: &Path, sidecar: &AtuinSidecar) -> Result<(), SyncError> {
@@ -380,7 +381,8 @@ pub(super) fn replace_to(
     };
 
     let mut full_prev_gk = None;
-    let full_updates = rehydrate::render_messages(id, branch, &mut full_prev_gk, 0).update_lines;
+    let full_updates =
+        rehydrate::render_messages(id, branch, &mut full_prev_gk, 0, None).update_lines;
     touch_updates_and_summary(path, &full_updates, true, branch);
 
     Ok(ReplaceOutcome {
@@ -697,5 +699,30 @@ mod tests {
             .collect();
         let kept = shared_lines(&bytes, &AtuinSidecar::default(), ID, &keys[1]);
         assert_eq!(kept, join_jsonl(&lines[..4]).into_bytes());
+    }
+
+    /// A row a restore writes no line for (context the daemon keeps without its text) is merged
+    /// into the line before it, the session's metadata at the start: the copy holds every row,
+    /// so a switch finds where a branch leaves it.
+    #[rstest]
+    fn a_restored_copy_holds_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = |id: &str, parent: Option<&str>, at: i64| RehydrateMessage {
+            content: Vec::new(),
+            ..row(id, parent, Role::System, "", at)
+        };
+        let rows = vec![
+            context("s1", None, 1_700_000_001),
+            row("u1", Some("s1"), Role::User, "first", 1_700_000_002),
+            context("s2", Some("u1"), 1_700_000_003),
+            row("a1", Some("s2"), Role::Assistant, "reply", 1_700_000_004),
+        ];
+        let path = seed_session(&dir.path().join("sessions"), dir.path(), rows);
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        for id in ["s1", "u1", "s2", "a1"] {
+            assert!(tip.known_source_ids.contains(id), "{id} not held: {tip:?}");
+        }
+        assert_eq!(tip.merged.get("s1").map(String::as_str), Some(meta_id(ID).as_str()));
+        assert_eq!(tip.merged.get("s2").map(String::as_str), Some("u1"));
     }
 }

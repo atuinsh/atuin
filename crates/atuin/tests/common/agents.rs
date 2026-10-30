@@ -21,12 +21,14 @@ pub enum Agent {
     Claude,
     Codex,
     Copilot,
+    Grok,
     Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Copilot, Self::Opencode, Self::Pi];
+    pub const ALL: [Self; 6] =
+        [Self::Claude, Self::Codex, Self::Copilot, Self::Grok, Self::Opencode, Self::Pi];
 
     /// The `harness` atuin's JSON output names it by.
     pub fn harness(self) -> &'static str {
@@ -34,6 +36,7 @@ impl Agent {
             Self::Claude => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Grok => "grok",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -45,6 +48,7 @@ impl Agent {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Grok => "grok",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -55,6 +59,7 @@ impl Agent {
         match self {
             Self::Claude => "Bash",
             Self::Codex => "exec_command",
+            Self::Grok => "run_terminal_command",
             Self::Copilot | Self::Opencode | Self::Pi => "bash",
         }
     }
@@ -65,6 +70,7 @@ impl Agent {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Copilot => "Copilot",
+            Self::Grok => "Grok Build",
             Self::Opencode => "opencode",
             Self::Pi => "Pi",
         }
@@ -86,6 +92,7 @@ impl Agent {
             Self::Claude => home.join(".claude/projects"),
             Self::Codex => home.join(".codex/sessions"),
             Self::Copilot => home.join(".copilot/session-state"),
+            Self::Grok => home.join(".grok/sessions"),
             Self::Opencode => home.join(".local/share/opencode/opencode.db"),
             Self::Pi => home.join(".pi/agent/sessions"),
         }
@@ -214,6 +221,11 @@ impl Transcript {
                 agent.root(home).joined(dir).joined(format!("{stamp}_{id}.jsonl"))
             }
             Agent::Copilot => agent.root(home).joined(&id).joined("events.jsonl"),
+            Agent::Grok => agent
+                .root(home)
+                .joined(grok_workspace(cwd))
+                .joined(&id)
+                .joined("chat_history.jsonl"),
             Agent::Opencode => agent.root(home),
         };
         let transcript = Self { agent, id, path };
@@ -245,6 +257,26 @@ impl Transcript {
                         "context": {"cwd": cwd, "gitRoot": cwd, "branch": "main"},
                     }),
                 )]);
+            }
+            Agent::Grok => {
+                let dir = transcript.path.parent().unwrap();
+                fs::create_dir_all(dir).unwrap();
+                fs::write(
+                    dir.join("summary.json"),
+                    json!({
+                        "info": {"id": transcript.id, "cwd": cwd},
+                        "created_at": rfc3339(started),
+                        "updated_at": rfc3339(started),
+                        "generated_title": format!("Grok session {}", word()),
+                        "chat_format_version": 1,
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+                write_lines(&transcript.path, &[
+                    json!({"type": "system", "content": "You are Grok 4.7 released by xAI."}),
+                    json!({"type": "user", "content": [{"type": "text", "text": format!("<user_info>\nWorkspace Path: {}\n</user_info>", cwd.display())}]}),
+                ]);
             }
             Agent::Claude | Agent::Pi | Agent::Codex => {
                 fs::create_dir_all(transcript.path.parent().unwrap()).unwrap();
@@ -320,6 +352,15 @@ impl Transcript {
                 path,
             });
         }
+        if agent == Agent::Grok {
+            let workspaces = fs::read_dir(agent.root(home)).ok()?;
+            let path = workspaces
+                .flatten()
+                .map(|workspace| workspace.path().joined(id).joined("chat_history.jsonl"))
+                .find(|path| path.is_file())?;
+            let id = id.to_owned();
+            return Some(Self { agent, id, path });
+        }
         let mut dirs = vec![agent.root(home)];
         while let Some(dir) = dirs.pop() {
             // A directory gone or unreadable holds nothing to find: the rest may.
@@ -378,6 +419,7 @@ impl Transcript {
             Agent::Claude => self.append_claude(cwd, turns),
             Agent::Codex => self.append_codex(turns),
             Agent::Copilot => self.append_copilot(turns),
+            Agent::Grok => self.append_grok(turns),
             Agent::Pi => self.append_pi(turns),
             Agent::Opencode => self.append_opencode(cwd, turns),
         }
@@ -601,6 +643,53 @@ impl Transcript {
         lines
     }
 
+    /// Grok Build's transcript (1.0.70): each turn a prompt with its index, reasoning, a reply
+    /// calling `run_terminal_command`, the call's result, then the reply ending the turn. The
+    /// times are in `updates.jsonl` beside it, written first, as the transcript names none.
+    fn append_grok(&self, turns: &[Turn]) {
+        let prompts = fs::read_to_string(&self.path)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|line| line["prompt_index"].as_u64())
+            .max()
+            .map_or(0, |index| index + 1);
+        let (mut lines, mut updates) = (Vec::new(), Vec::new());
+        let mut update = |update: Value| {
+            let at = tick();
+            updates.push(json!({
+                "timestamp": at.unix_timestamp(),
+                "method": "session/update",
+                "params": {"sessionId": self.id, "update": update, "_meta": {"agentTimestampMs": millis(at)}},
+            }));
+        };
+        for (turn, index) in turns.iter().zip(prompts..) {
+            let call = format!("call-{}-0", uuid::Uuid::new_v4());
+            update(
+                json!({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": turn.prompt}, "_meta": {"promptIndex": index}}),
+            );
+            lines.push(json!({"type": "user", "content": [{"type": "text", "text": format!("<user_query>\n{}\n</user_query>", turn.prompt)}], "prompt_index": index}));
+            lines.push(json!({"type": "reasoning", "id": format!("rs_{}", uuid::Uuid::new_v4()), "summary": [{"type": "summary_text", "text": turn.thinking}], "encrypted_content": "e30=", "status": "completed"}));
+            update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": call, "title": self.agent.tool(), "rawInput": {"command": turn.command}}),
+            );
+            lines.push(json!({"type": "assistant", "content": "", "tool_calls": [{"id": call, "name": self.agent.tool(), "arguments": json!({"command": turn.command}).to_string()}], "model_id": "grok-4.7"}));
+            update(
+                json!({"sessionUpdate": "tool_call_update", "toolCallId": call, "status": "completed"}),
+            );
+            lines.push(json!({"type": "tool_result", "tool_call_id": call, "content": format!("exit: 0\n{}\n", turn.output)}));
+            update(
+                json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": turn.reply}}),
+            );
+            lines.push(json!({"type": "assistant", "content": turn.reply, "model_id": "grok-4.7"}));
+            update(
+                json!({"sessionUpdate": "turn_completed", "stop_reason": "end_turn", "usage": {"inputTokens": 12, "outputTokens": 5, "cachedReadTokens": 2, "cacheCreationTokens": 0, "reasoningTokens": 3}}),
+            );
+        }
+        write_lines(&self.path.with_file_name("updates.jsonl"), &updates);
+        write_lines(&self.path, &lines);
+    }
+
     fn append_codex(&self, turns: &[Turn]) {
         let mut lines = Vec::new();
         let mut item = |payload: Value| {
@@ -781,6 +870,21 @@ fn write_lines(path: &Path, lines: &[Value]) {
     }
     // One write, so the daemon never reads half a turn.
     file.write_all(text.as_bytes()).unwrap();
+}
+
+/// Grok Build's directory for the sessions of the project at `cwd`: its path percent-encoded, all
+/// but the unreserved characters.
+fn grok_workspace(cwd: &Path) -> String {
+    cwd.display()
+        .to_string()
+        .bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// Claude Code's directory for the project at `cwd`: every character but a letter or digit a dash.
