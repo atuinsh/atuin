@@ -425,7 +425,15 @@ impl KiroSession {
     }
 }
 
-/// A unit for each rewrite of the header `changes` watches; nothing, for no watch.
+/// How often a followed header is looked at between the watcher's reports of it.
+const HEADER_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A unit for each rewrite of the header `changes` watches, and one every [`HEADER_POLL`]
+/// besides; nothing, for no watch.
+///
+/// The poll backs the watcher's events: a rewrite can go unreported (on Windows, a stat failing
+/// mid-replace makes the watcher forget the file until its next scan, closing `changes`), and
+/// a check that finds the header unchanged costs a stat.
 fn header_rewrites(
     changes: Option<watch::Receiver<FileStat>>,
 ) -> impl Stream<Item = ()> + Send + 'static {
@@ -433,8 +441,18 @@ fn header_rewrites(
         let Some(mut changes) = changes else {
             return;
         };
-        while changes.changed().await.is_ok() {
-            yield ();
+        let mut poll = tokio::time::interval(HEADER_POLL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        poll.tick().await;
+        let mut reported = true;
+        loop {
+            tokio::select! {
+                changed = changes.changed(), if reported => match changed {
+                    Ok(()) => yield (),
+                    Err(_) => reported = false,
+                },
+                _ = poll.tick() => yield (),
+            }
         }
     }
 }
