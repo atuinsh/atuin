@@ -32,7 +32,9 @@ use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, merge_uncaptured_runs,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, FilePatch, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::{
+    Content, FilePatch, Patch, Role, ToolCallId, ToolResult, ToolUse,
+};
 use crate::path::PathBufExt as _;
 
 /// Rendered files for a full restore or incremental append/switch.
@@ -222,6 +224,16 @@ pub(crate) fn render_messages(
     after: Option<&str>,
 ) -> Rendered {
     let (flattened, mut merged_into) = merge_uncaptured_runs(messages);
+    // An edit's diff is on its result, or on the turn's reply when it was captured before Grok
+    // Build wrote the turn's snapshots.
+    let patches: Vec<&Patch> = messages
+        .iter()
+        .flat_map(|row| &row.content)
+        .filter_map(|c| match c {
+            Content::Patch(patch) => Some(patch),
+            _ => None,
+        })
+        .collect();
     let mut rendered = Rendered::default();
     let mut last_written: Option<String> = after.map(str::to_owned);
 
@@ -235,7 +247,7 @@ pub(crate) fn render_messages(
             continue;
         }
 
-        let pieces = render_row_pieces(session_id, row, &mut next_prompt_index);
+        let pieces = render_row_pieces(session_id, row, &patches, &mut next_prompt_index);
         if pieces.is_empty() {
             if let Some(ancestor) = &last_written {
                 merged_into.entry(row.source_id.clone()).or_insert_with(|| ancestor.clone());
@@ -293,6 +305,7 @@ fn update_envelope(session_id: &str, at: OffsetDateTime, update: Value) -> Value
 fn render_row_pieces(
     session_id: &str,
     row: &RehydrateMessage,
+    patches: &[&Patch],
     next_prompt_index: &mut u64,
 ) -> Vec<Piece> {
     match &row.role {
@@ -464,14 +477,10 @@ fn render_row_pieces(
                 };
                 // The edits the call made, as Grok Build's own show in its scrollback: the
                 // diff of each, under the file it changed.
-                let files: Vec<&FilePatch> = row
-                    .content
+                let files: Vec<&FilePatch> = patches
                     .iter()
-                    .filter_map(|c| match c {
-                        Content::Patch(patch) if patch.call == result.call => Some(&patch.files),
-                        _ => None,
-                    })
-                    .flatten()
+                    .filter(|patch| patch.call == result.call)
+                    .flat_map(|patch| &patch.files)
                     .collect();
                 let diffs: Vec<Value> = files
                     .iter()
@@ -710,9 +719,10 @@ mod tests {
     }
 
     /// A restored edit shows in Grok Build as its own do: the call's update is an edit of its
-    /// file, holding each hunk's lines before and after.
+    /// file, holding each hunk's lines before and after: whether the diff is on the call's result
+    /// or, captured live, on the turn's reply.
     #[rstest]
-    fn an_edits_result_gets_its_diff_back() {
+    fn an_edits_result_gets_its_diff_back(#[values(false, true)] on_reply: bool) {
         let dir = tempfile::tempdir().unwrap();
         let call = ToolCallId::from("c1".to_owned());
         let patch = Patch {
@@ -723,6 +733,13 @@ mod tests {
                 "def add(a, b):\n    return a + b\n",
             )],
         };
+        let (mut result, mut reply) = (Vec::new(), vec![Content::Text("fixed".to_owned())]);
+        if on_reply {
+            &mut reply
+        } else {
+            &mut result
+        }
+        .push(Content::Patch(patch));
         let session = RehydrateSession {
             id: "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned(),
             title: None,
@@ -751,16 +768,16 @@ mod tests {
                 sample_msg(
                     "t1",
                     Role::Tool,
-                    vec![
-                        Content::ToolResult(ToolResult {
-                            call,
-                            output: json!("updated"),
-                            error: false,
-                        }),
-                        Content::Patch(patch),
-                    ],
+                    std::iter::once(Content::ToolResult(ToolResult {
+                        call,
+                        output: json!("updated"),
+                        error: false,
+                    }))
+                    .chain(result)
+                    .collect(),
                     1_700_000_030,
                 ),
+                sample_msg("a2", Role::Assistant, reply, 1_700_000_040),
             ],
             fork_of: None,
         };

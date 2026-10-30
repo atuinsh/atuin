@@ -48,6 +48,12 @@ const REWINDS_FILE: &str = "rewind_points.jsonl";
 /// the whole transcript as it stood before the compaction replaced it.
 const COMPACTIONS_DIR: &str = "compaction_requests";
 
+/// How long a live read waits, at most, for what Grok Build writes once a turn ends (its usage,
+/// and its file snapshots, [`REWINDS_FILE`]) when the turn's reply is the newest line: they
+/// land within a tenth of a second of it.
+const TURN_END_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+const TURN_END_POLLS: u32 = 20;
+
 /// `synthetic_reason` of the lines a compaction writes in place of the conversation it replaced:
 /// the `<user_info>` preamble, then the summary.
 const COMPACTION: &str = "compaction_meta";
@@ -398,6 +404,8 @@ pub(crate) struct UpdateTimes {
     pub usage: HashMap<u64, Usage>,
     /// Each turn's last reply, by the prompt index that started it.
     pub replies: HashMap<u64, OffsetDateTime>,
+    /// When each compaction happened (`compaction_checkpoint`), in order.
+    pub compactions: Vec<OffsetDateTime>,
 }
 
 fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
@@ -468,6 +476,7 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
                     times.call_ends.insert(call_id.to_owned(), ts);
                 }
             }
+            "compaction_checkpoint" => times.compactions.push(ts),
             "turn_completed" if update["usage"].is_object() => {
                 if let Some(idx) = current_prompt {
                     times.usage.insert(idx, usage_of(&update["usage"]));
@@ -593,16 +602,19 @@ pub(crate) fn read_summary_beside(transcript_path: &Path) -> GrokSummary {
                 .filter(|s| !s.is_empty())
                 .map(|t| TitleChange::new(TitleSource::Summary, t))
         });
-    let parent = raw["parent_session_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(
-        |parent_id| {
-            let kind = if raw["session_kind"].as_str().is_some_and(|k| k.starts_with("subagent")) {
-                ParentKind::Subagent
-            } else {
-                ParentKind::Fork
-            };
-            (SessionId::from(parent_id.to_owned()), kind)
-        },
-    );
+    let subagent = raw["session_kind"].as_str().is_some_and(|k| k.starts_with("subagent"));
+    let kind = if subagent {
+        ParentKind::Subagent
+    } else {
+        ParentKind::Fork
+    };
+    let parent = raw["parent_session_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|parent_id| SessionId::from(parent_id.to_owned()))
+        .or_else(|| subagent.then(|| spawned_by(transcript_path, created_at)).flatten())
+        .map(|parent| (parent, kind));
     GrokSummary {
         present: true,
         cwd,
@@ -611,6 +623,33 @@ pub(crate) fn read_summary_beside(transcript_path: &Path) -> GrokSummary {
         title,
         parent,
     }
+}
+
+/// The session that spawned the subagent whose transcript is at `transcript_path`, created at
+/// `created_at`. Grok Build names a subagent's parent only in the parent's own `updates.jsonl`
+/// (`subagent_spawned`): one of the sessions of the same workspace started before it and active
+/// since.
+fn spawned_by(transcript_path: &Path, created_at: Option<OffsetDateTime>) -> Option<SessionId> {
+    let dir = transcript_path.parent()?;
+    let id = dir.file_name()?.to_str()?;
+    let created = std::time::SystemTime::from(created_at?);
+    std::fs::read_dir(dir.parent()?).ok()?.filter_map(Result::ok).find_map(|entry| {
+        let name = entry.file_name();
+        let updates = entry.path().joined(UPDATES_FILE);
+        if name.to_str()? >= id || std::fs::metadata(&updates).ok()?.modified().ok()? < created {
+            return None;
+        }
+        let bytes = std::fs::read(updates).ok()?;
+        bytes.split(|b| *b == b'\n').find_map(|line| {
+            memchr::memmem::find(line, id.as_bytes())?;
+            let event = crate::json::js::from_slice::<Value>(line).ok()?;
+            let update = &event["params"]["update"];
+            (update["sessionUpdate"] == "subagent_spawned" && update["child_session_id"] == id)
+                .then(|| update["parent_session_id"].as_str())
+                .flatten()
+                .map(|parent| SessionId::from(parent.to_owned()))
+        })
+    })
 }
 
 /// Deterministic id for session `session_id`'s metadata header row (`atuin-meta-<session>`).
@@ -729,10 +768,15 @@ struct ReaderState {
     sidecar_sig: FileSignature,
     snapshots: Snapshots,
     snapshots_sig: FileSignature,
-    /// What the turn's edits so far left each file holding, by its snapshot's path, and the
-    /// edits not yet answered, by call id.
+    /// What the turn's edits so far left each file holding, by its snapshot's path, the edits
+    /// not yet answered, by call id, and those answered before the turn's snapshots were
+    /// written (Grok Build writes them once the turn ends), replayed on its reply.
     edited: HashMap<String, Option<String>>,
     edits: HashMap<String, GrokToolCall>,
+    late: Vec<GrokToolCall>,
+    /// Whether the lines being read are of a transcript a compaction replaced (see
+    /// [`Self::compacted`]).
+    replaced: bool,
     chain: Chain,
     prompt_seq: usize,
     current_turn: Option<usize>,
@@ -781,6 +825,8 @@ impl ReaderState {
             snapshots_sig,
             edited: HashMap::new(),
             edits: HashMap::new(),
+            late: Vec::new(),
+            replaced: false,
             chain: Chain::default(),
             prompt_seq: 0,
             current_turn: None,
@@ -822,6 +868,7 @@ impl ReaderState {
     fn compacted(&mut self, lines: Vec<Value>, rejoin: &mut Rejoin) -> Vec<GrokMessage> {
         self.restart();
         rejoin.again();
+        self.replaced = true;
         let mut out = Vec::new();
         for line in lines {
             let Ok(mut message) = serde_json::from_value::<GrokMessage>(line) else {
@@ -834,6 +881,7 @@ impl ReaderState {
         }
         self.restart();
         rejoin.again();
+        self.replaced = false;
         out
     }
 
@@ -921,12 +969,22 @@ impl ReaderState {
         })
     }
 
+    /// Whether the turn being read has ended without Grok Build writing yet what it writes once
+    /// a turn ends: its usage, or the snapshots its edits are replayed on.
+    fn awaiting_turn_end(&self) -> bool {
+        self.prompt.is_some_and(|prompt| {
+            !self.times.usage.contains_key(&prompt)
+                || (!self.late.is_empty() && !self.snapshots.contains_key(&prompt))
+        })
+    }
+
     /// Start reading another of the session's transcripts (one a compaction replaced, or the
     /// file rewritten), whose lines key from the start again.
     fn restart(&mut self) {
         self.chain = Chain::default();
         self.edited.clear();
         self.edits.clear();
+        self.late.clear();
         self.prompt_seq = 0;
         self.current_turn = None;
         self.prompt = None;
@@ -948,6 +1006,7 @@ impl ReaderState {
         if role == Role::User {
             self.prompt = msg.prompt_index;
             self.edited.clear();
+            self.late.clear();
         }
         for call in msg
             .tool_calls
@@ -959,7 +1018,16 @@ impl ReaderState {
         if let Some(call) = msg.tool_call_id.as_ref().and_then(|id| self.edits.remove(id))
             && !inferred_tool_error(&msg.content)
         {
-            msg.patch = self.replay(&call);
+            if self.prompt.is_some_and(|prompt| self.snapshots.contains_key(&prompt)) {
+                msg.patches.extend(self.replay(&call));
+            } else {
+                self.late.push(call);
+            }
+        }
+        if msg.stop_reason() == Some(StopReason::EndTurn) {
+            for call in std::mem::take(&mut self.late) {
+                msg.patches.extend(self.replay(&call));
+            }
         }
         if role != Role::User
             && msg.stop_reason() == Some(StopReason::EndTurn)
@@ -1009,6 +1077,13 @@ impl ReaderState {
                 .and_then(|id| self.times.call_ends.get(id).copied())
                 .or(self.times.latest)
                 .or(self.summary.updated_at),
+            // The transcript's own compaction lines are as old as the latest compaction, which the
+            // lines it replaced would time otherwise: Grok Build may not have written them yet.
+            Role::System
+                if !self.replaced && msg.synthetic_reason.as_deref() == Some(COMPACTION) =>
+            {
+                self.times.compactions.last().copied().or(self.last_ts).or(self.summary.created_at)
+            }
             Role::System | Role::Other(_) => self.last_ts.or(self.summary.created_at),
         }
     }
@@ -1187,18 +1262,26 @@ impl Session for GrokSession {
                                 }
                             }
                             state = Some(st);
-                        } else if live
-                            && let Some(mut st) = state.take()
-                        {
-                            let path = probe.path.clone();
-                            if let Ok((returned, late_title)) = probe
-                                .pool
-                                .run(move || {
-                                    let t = st.refresh_files(&path);
-                                    (st, t)
-                                })
-                                .await
-                            {
+                        } else if live {
+                            // A turn's reply that is the newest line waits a moment for what
+                            // Grok Build writes once the turn ends (see `TURN_END_POLL`).
+                            let ends_turn = message.stop_reason() == Some(StopReason::EndTurn);
+                            let mut polls = 0;
+                            while let Some(mut st) = state.take() {
+                                let path = probe.path.clone();
+                                let end = line.end;
+                                let Ok((returned, late_title, waiting)) = probe
+                                    .pool
+                                    .run(move || {
+                                        let t = st.refresh_files(&path);
+                                        let waiting = st.awaiting_turn_end()
+                                            && std::fs::metadata(&path).is_ok_and(|m| m.len() <= end);
+                                        (st, t, waiting)
+                                    })
+                                    .await
+                                else {
+                                    break;
+                                };
                                 let ts = returned.summary.updated_at.or(returned.last_ts);
                                 state = Some(returned);
                                 if let Some(change) = late_title
@@ -1208,6 +1291,11 @@ impl Session for GrokSession {
                                         GrokMessage::title_info(probe.id.as_ref(), change, ts),
                                     ));
                                 }
+                                if !(ends_turn && waiting) || polls == TURN_END_POLLS {
+                                    break;
+                                }
+                                polls += 1;
+                                tokio::time::sleep(TURN_END_POLL).await;
                             }
                         }
 
@@ -1316,9 +1404,10 @@ pub struct GrokMessage {
     /// A prompt a compaction repeats (see [`Chain`]).
     #[serde(skip)]
     replayed: bool,
-    /// What the edit this line answers changed (see [`ReaderState::replay`]).
+    /// What the edit this line answers changed, or, on a turn's reply, the edits answered before
+    /// the turn's snapshots were written (see [`ReaderState::replay`]).
     #[serde(skip)]
-    patch: Option<Patch>,
+    patches: Vec<Patch>,
     #[serde(skip)]
     usage: Option<Usage>,
     #[serde(skip)]
@@ -1502,7 +1591,8 @@ impl Message for GrokMessage {
             "reasoning" => vec![Content::ReasoningSummary { tokens: None }],
             "assistant" => {
                 let mut out: Vec<Content> =
-                    self.text_blocks().into_iter().map(Content::Text).collect();
+                    self.patches.iter().cloned().map(Content::Patch).collect();
+                out.extend(self.text_blocks().into_iter().map(Content::Text));
                 for call in &self.tool_calls {
                     out.push(Content::ToolUse(ToolUse {
                         id: ToolCallId::from(call.id.clone()),
@@ -1520,7 +1610,7 @@ impl Message for GrokMessage {
                     output: self.content.clone(),
                     error,
                 }))
-                .chain(self.patch.clone().map(Content::Patch))
+                .chain(self.patches.iter().cloned().map(Content::Patch))
                 .collect()
             }
             _ => Vec::new(),
@@ -1676,14 +1766,17 @@ mod tests {
         assert_eq!(twice[0].role(), Role::System);
     }
 
+    /// A subagent of Grok Build 1.0.70 names no parent: the parent's `subagent_spawned` does.
     #[rstest]
-    #[case::fork(Some("headless"), ParentKind::Fork)]
-    #[case::subagent_fork(Some("subagent_fork"), ParentKind::Subagent)]
-    #[case::subagent_resume(Some("subagent_resume"), ParentKind::Subagent)]
+    #[case::fork(Some("headless"), ParentKind::Fork, true)]
+    #[case::subagent_fork(Some("subagent_fork"), ParentKind::Subagent, true)]
+    #[case::subagent_resume(Some("subagent_resume"), ParentKind::Subagent, true)]
+    #[case::subagent(Some("subagent"), ParentKind::Subagent, false)]
     #[tokio::test]
     async fn reads_summary_updates_timestamps_and_transcript_entries(
         #[case] session_kind: Option<&str>,
         #[case] expected_parent_kind: ParentKind,
+        #[case] names_parent: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("%2Fwork%2Fproj");
@@ -1702,6 +1795,17 @@ mod tests {
         });
         if let Some(kind) = session_kind {
             summary["session_kind"] = json!(kind);
+        }
+        if !names_parent {
+            let parent = summary.as_object_mut().unwrap().remove("parent_session_id").unwrap();
+            let pdir = sdir.with_file_name(parent.as_str().unwrap());
+            std::fs::create_dir_all(&pdir).unwrap();
+            let spawned = json!({"params": {"update": {
+                "sessionUpdate": "subagent_spawned",
+                "parent_session_id": parent,
+                "child_session_id": sid,
+            }}});
+            std::fs::write(pdir.join(UPDATES_FILE), format!("{spawned}\n")).unwrap();
         }
         std::fs::write(sdir.join(SUMMARY_FILE), summary.to_string()).unwrap();
 
@@ -1764,6 +1868,146 @@ mod tests {
             error: true,
             ..
         })]));
+    }
+
+    /// Grok Build writes a turn's usage and file snapshots once the turn ends, after the reply:
+    /// a live read gives the reply both, and the diff of an edit it read before them.
+    #[rstest]
+    #[tokio::test]
+    async fn a_live_turns_reply_gets_what_grok_writes_once_the_turn_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18ef1-1f2f-77e0-b359-261d9ad4a2ef";
+        let sdir = dir.path().join("%2Fw").joined(sid);
+        std::fs::create_dir_all(&sdir).unwrap();
+        std::fs::write(
+            sdir.join(SUMMARY_FILE),
+            json!({"info": {"id": sid, "cwd": "/w"}, "created_at": "2026-10-30T22:32:09Z"})
+                .to_string(),
+        )
+        .unwrap();
+        let edit = json!({"file_path": "live.py", "old_string": "hello", "new_string": "hi"});
+        let lines = [
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nsay hi\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "name": "search_replace", "arguments": edit.to_string()},
+            ]}),
+            json!({"type": "tool_result", "tool_call_id": "c1", "content": "The file live.py has been updated successfully."}),
+            json!({"type": "assistant", "content": "DONE"}),
+        ];
+        std::fs::write(
+            sdir.join(TRANSCRIPT_FILE),
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        )
+        .unwrap();
+
+        let listener = GrokSessions::builder()
+            .root(dir.path().to_path_buf())
+            .pool(pool())
+            .build()
+            .listener()
+            .unwrap();
+        let mut sessions = std::pin::pin!(listener.watch());
+        let session = sessions.next().await.unwrap().unwrap();
+        let mut messages = std::pin::pin!(session.messages());
+        let turn_end = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let snapshot = json!({"prompt_index": 0, "file_snapshots": {
+                "live.py": {"path": "live.py", "content": "print('hello') # keep\n"},
+            }});
+            std::fs::write(sdir.join(REWINDS_FILE), format!("{snapshot}\n")).unwrap();
+            let updates = [
+                json!({"timestamp": 1_793_399_536, "params": {"update": {
+                    "sessionUpdate": "user_message_chunk", "_meta": {"promptIndex": 0},
+                }}}),
+                json!({"timestamp": 1_793_399_677, "params": {"update": {
+                    "sessionUpdate": "turn_completed",
+                    "usage": {"inputTokens": 100, "outputTokens": 7, "cachedReadTokens": 40},
+                }}}),
+            ];
+            std::fs::write(
+                sdir.join(UPDATES_FILE),
+                updates.iter().map(|l| format!("{l}\n")).collect::<String>(),
+            )
+            .unwrap();
+        });
+
+        let mut read = Vec::new();
+        while !read
+            .last()
+            .is_some_and(|m: &GrokMessage| m.stop_reason() == Some(StopReason::EndTurn))
+        {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), messages.next());
+            read.push(next.await.unwrap().unwrap().unwrap());
+        }
+        turn_end.await.unwrap();
+        let reply = read.last().unwrap();
+        let Some(Content::Patch(patch)) = reply.content().into_iter().next() else {
+            panic!("{:#?}", reply.content());
+        };
+        assert_eq!(patch.call, ToolCallId::from("c1".to_owned()));
+        assert_eq!(patch.files[0].hunks[0].lines, [
+            "-print('hello') # keep",
+            "+print('hi') # keep"
+        ]);
+        assert_eq!(reply.usage().and_then(|u| u.output), Some(7));
+    }
+
+    /// `/compact` rewrites the transcript a moment before Grok Build writes what it replaced: a
+    /// read of the rewrite in between times the compaction's lines when it happened, not when
+    /// the session started.
+    #[rstest]
+    #[tokio::test]
+    async fn a_compaction_read_before_its_request_is_written_is_timed_when_it_happened() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18ef1-1f2f-77e0-b359-261d9ad4a2ef";
+        let sdir = dir.path().join(sid);
+        std::fs::create_dir_all(&sdir).unwrap();
+        std::fs::write(
+            sdir.join(SUMMARY_FILE),
+            json!({"info": {"id": sid, "cwd": "/w"}, "created_at": "2026-10-30T22:32:09Z"})
+                .to_string(),
+        )
+        .unwrap();
+        let event = |ms: i64, update: Value| json!({"timestamp": ms / 1000, "params": {"_meta": {"agentTimestampMs": ms}, "update": update}});
+        let jsonl = |lines: &[Value]| lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+        std::fs::write(
+            sdir.join(UPDATES_FILE),
+            jsonl(&[
+                event(
+                    1_793_399_536_912,
+                    json!({"sessionUpdate": "user_message_chunk", "_meta": {"promptIndex": 0}}),
+                ),
+                event(
+                    1_793_399_677_295,
+                    json!({"sessionUpdate": "turn_completed", "usage": {"outputTokens": 7}}),
+                ),
+                event(1_793_400_410_784, json!({"sessionUpdate": "compaction_checkpoint"})),
+            ]),
+        )
+        .unwrap();
+        let meta = |text: &str| json!({"type": "user", "synthetic_reason": COMPACTION, "content": [{"type": "text", "text": text}]});
+        let path = sdir.join(TRANSCRIPT_FILE);
+        std::fs::write(
+            &path,
+            jsonl(&[
+                json!({"type": "system", "content": "You are Grok."}),
+                meta("<user_info>\nOS Version: linux\n</user_info>"),
+                json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nsay hi\n</user_query>"}]}),
+                meta("This session is being continued from a previous conversation."),
+            ]),
+        )
+        .unwrap();
+
+        let msgs: Vec<_> = GrokSession::open(SessionId::from(sid.to_owned()), path, pool())
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+        let summary =
+            msgs.iter().find(|m| matches!(m.content().first(), Some(Content::Summary(_)))).unwrap();
+        let compacted =
+            OffsetDateTime::from_unix_timestamp_nanos(1_793_400_410_784_000_000).unwrap();
+        assert_eq!(summary.timestamp(), Some(compacted));
     }
 
     #[rstest]
