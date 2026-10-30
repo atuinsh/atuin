@@ -8,6 +8,7 @@ use futures::{StreamExt, TryStreamExt};
 use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSessions};
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
 use crate::harnesstools::copilot::session::{CopilotListener, CopilotSession, CopilotSessions};
+use crate::harnesstools::kiro::session::{KiroListener, KiroSession, KiroSessions};
 use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
@@ -20,6 +21,7 @@ pub enum AnySessions {
     Ccode(CcodeSessions),
     Codex(CodexSessions),
     Copilot(CopilotSessions),
+    Kiro(KiroSessions),
     Opencode(OpencodeSessions),
     Pi(PiSessions),
 }
@@ -30,6 +32,7 @@ impl AnySessions {
             Self::Ccode(s) => AnyListener::Ccode(s.listener()?),
             Self::Codex(s) => AnyListener::Codex(s.listener()?),
             Self::Copilot(s) => AnyListener::Copilot(s.listener()?),
+            Self::Kiro(s) => AnyListener::Kiro(s.listener()?),
             Self::Opencode(s) => AnyListener::Opencode(s.listener()?),
             Self::Pi(s) => AnyListener::Pi(s.listener()?),
         })
@@ -42,6 +45,7 @@ impl AnySessions {
             Self::Ccode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Codex(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Copilot(s) => s.existing()?.map_ok(AnySession::from).boxed(),
+            Self::Kiro(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Opencode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
             Self::Pi(s) => s.existing()?.map_ok(AnySession::from).boxed(),
         })
@@ -53,6 +57,7 @@ pub enum AnyListener {
     Ccode(CcodeListener),
     Codex(CodexListener),
     Copilot(CopilotListener),
+    Kiro(KiroListener),
     Opencode(OpencodeListener),
     Pi(PiListener),
 }
@@ -64,6 +69,7 @@ impl AnyListener {
             Self::Ccode(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Codex(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Copilot(l) => l.watch().map_ok(AnySession::from).boxed(),
+            Self::Kiro(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Opencode(l) => l.watch().map_ok(AnySession::from).boxed(),
             Self::Pi(l) => l.watch().map_ok(AnySession::from).boxed(),
         }
@@ -89,6 +95,9 @@ impl AnyListener {
             Self::Copilot(l) => {
                 l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
+            Self::Kiro(l) => {
+                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+            }
             Self::Opencode(l) => {
                 l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
@@ -104,6 +113,7 @@ pub enum AnySession {
     Ccode(CcodeSession),
     Codex(CodexSession),
     Copilot(CopilotSession),
+    Kiro(KiroSession),
     Opencode(OpencodeSession),
     Pi(PiSession),
 }
@@ -115,6 +125,7 @@ impl AnySession {
             Self::Ccode(s) => s.id(),
             Self::Codex(s) => s.id(),
             Self::Copilot(s) => s.id(),
+            Self::Kiro(s) => s.id(),
             Self::Opencode(s) => s.id(),
             Self::Pi(s) => s.id(),
         }
@@ -126,6 +137,7 @@ impl AnySession {
             Self::Ccode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Copilot(s) => s.messages().map_ok(AnyMessage::from).boxed(),
+            Self::Kiro(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Opencode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.messages().map_ok(AnyMessage::from).boxed(),
         }
@@ -136,6 +148,7 @@ impl AnySession {
             Self::Ccode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Codex(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Copilot(s) => s.read().map_ok(AnyMessage::from).boxed(),
+            Self::Kiro(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Opencode(s) => s.read().map_ok(AnyMessage::from).boxed(),
             Self::Pi(s) => s.read().map_ok(AnyMessage::from).boxed(),
         }

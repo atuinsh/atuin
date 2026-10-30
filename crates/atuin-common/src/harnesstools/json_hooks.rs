@@ -114,7 +114,7 @@ fn add_hook_entries(
 }
 
 /// Build the shell command that runs `atuin hook <harness>` through `executable`.
-fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookError> {
+pub(super) fn hook_command(executable: &Path, harness: &str) -> Result<String, InstallHookError> {
     let executable_str = executable
         .to_str()
         .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;

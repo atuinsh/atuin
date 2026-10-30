@@ -7,7 +7,7 @@ use std::process::Stdio;
 use serde_json::{Value, json};
 
 use super::pi::Flavour;
-use super::{AnyHarness, codex, copilot, opencode};
+use super::{AnyHarness, codex, copilot, kiro, opencode};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::{AbsPathBuf, PathBufExt as _};
@@ -61,6 +61,7 @@ fn config_path(harness: AnyHarness) -> PathBuf {
         ),
         AnyHarness::Codex(_) => codex::home().joined("config.toml"),
         AnyHarness::Copilot(_) => copilot::copilot_home().joined("mcp-config.json"),
+        AnyHarness::Kiro(_) => kiro::kiro_home().joined("settings").joined("mcp.json"),
         AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
         AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
     }
@@ -88,6 +89,11 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
         // Writes `~/.copilot/mcp-config.json`, replacing a server of the name.
         AnyHarness::Copilot(_) => {
             run("copilot", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+        }
+        // Not `kiro-cli mcp add`: the binary's name differs per platform, and the file is plain.
+        AnyHarness::Kiro(_) => {
+            let server = json!({"command": atuin, "args": ["mcp"], "env": {}});
+            add_to_config(&config_path(harness), json!({}), "mcpServers", server).await
         }
         // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
         // doesn't load. Both load `mcp.<name>`.
@@ -223,6 +229,7 @@ mod tests {
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
     #[case("copilot", ".copilot/mcp-config.json")]
+    #[case("kiro", ".kiro/settings/mcp.json")]
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
     #[case("omp", ".omp/agent/mcp.json")]
@@ -247,6 +254,7 @@ mod tests {
     #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
     #[case("codex", "CODEX_HOME", "config.toml")]
     #[case("copilot", "COPILOT_HOME", "mcp-config.json")]
+    #[case("kiro", "KIRO_HOME", "settings/mcp.json")]
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]
     #[case("omp", "PI_CODING_AGENT_DIR", "mcp.json")]
