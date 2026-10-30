@@ -1479,9 +1479,17 @@ mod tests {
     where
         S: Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Unpin,
     {
-        tokio::time::timeout(std::time::Duration::from_secs(5), messages.next())
+        next_row_for(messages, "a row", 5).await
+    }
+
+    /// [`next_row`], saying what the row is for when it doesn't come within `secs`.
+    async fn next_row_for<S>(messages: &mut S, what: &str, secs: u64) -> (Checkpoint, KiroMessage)
+    where
+        S: Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Unpin,
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(secs), messages.next())
             .await
-            .expect("a row")
+            .unwrap_or_else(|_| panic!("{what}: no row within {secs}s"))
             .unwrap()
             .unwrap()
     }
@@ -1536,8 +1544,8 @@ mod tests {
         let (_watch, session) = watched(root.path()).await;
         let mut messages = Box::pin(session.messages_from(None));
         let mut rows = Vec::new();
-        for _ in 0..=parse(PROBE).len() {
-            rows.push(next_row(&mut messages).await.1);
+        for n in 0..=parse(PROBE).len() {
+            rows.push(next_row_for(&mut messages, &format!("row {n} of the log"), 15).await.1);
         }
         let first = rows.iter().find(|m| m.title().is_some()).unwrap().id().unwrap();
         let renamed = |to: &str| {
@@ -1547,10 +1555,10 @@ mod tests {
             )
         };
         std::fs::write(&header, renamed("B")).unwrap();
-        let (_, b) = next_row(&mut messages).await;
+        let (_, b) = next_row_for(&mut messages, "the rename to B", 15).await;
         assert_eq!(b.title(), Some(TitleChange::new(TitleSource::Named, "B")));
         std::fs::write(&header, renamed("Get Unix Time In Nanoseconds")).unwrap();
-        let (_, a) = next_row(&mut messages).await;
+        let (_, a) = next_row_for(&mut messages, "the rename back", 15).await;
         assert_eq!(
             a.title(),
             Some(TitleChange::new(TitleSource::Named, "Get Unix Time In Nanoseconds"))
