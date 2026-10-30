@@ -2,49 +2,48 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use zeroize::Zeroizing;
 
-use super::aead::{CommittingAead, Domain, PayloadDomain};
-use super::envelope::{Cek, KidMatched, Wrap};
-use super::error::{AuthenticationError, SealError, ShapeError};
-use super::storage::StoredBlobs;
+use super::aead::{CommittingAead, Domain};
+use super::bytes::EncryptedBytes;
+use super::envelope::{Cek, KidMatched};
+use super::error::{AuthenticationError, ParseError, SealError, ShapeError, UnsupportedFormat};
 use super::{EncryptedData, Key, KeyId, Layer};
 
-/// A v5 payload blob: `0x05 || nonce || P || C || T`.
-pub(super) struct PayloadV5(Vec<u8>);
+/// An avelope payload blob: `0x01 || nonce || P || C || T`.
+pub(super) struct AvelopePayload(Vec<u8>);
 
-impl PayloadV5 {
-    pub(super) const VERSION: u8 = 0x05;
-    /// The `data` prefix of a v5 payload: `v` and [`Self::VERSION`] in decimal, then a dot.
-    pub(super) const WIRE_PREFIX: &'static str = "v5.";
+impl AvelopePayload {
+    pub(super) const VERSION: u8 = 0x01;
     pub(super) const MIN_LEN: usize = 1 + CommittingAead::OVERHEAD;
     /// After the version byte, the nonce and the commitment.
     const PLAINTEXT_START: usize = 1 + CommittingAead::CIPHERTEXT_START;
 
-    /// Take a blob whose first byte is [`Self::VERSION`]; shorter than [`Self::MIN_LEN`] is malformed.
-    pub(super) fn parse(blob: Vec<u8>) -> Result<Self, ShapeError> {
+    /// Take a blob whose first byte is [`Self::VERSION`]; any other first byte is a newer version.
+    pub(super) fn parse(blob: Vec<u8>) -> Result<Self, ParseError> {
         let len = blob.len();
         match blob.first() {
             Some(&Self::VERSION) if len >= Self::MIN_LEN => Ok(Self(blob)),
             Some(&Self::VERSION) | None => Err(ShapeError::Length {
                 layer: Layer::Payload,
                 len,
-            }),
-            Some(&byte) => Err(ShapeError::VersionMismatch {
+            }
+            .into()),
+            Some(&version) => Err(UnsupportedFormat::Version {
                 layer: Layer::Payload,
-                byte,
-            }),
+                version,
+            }
+            .into()),
         }
     }
 
     pub(super) fn seal(
         cek: &Cek,
-        domain: PayloadDomain,
         nonce: &[u8; 24],
         aad: &str,
         plaintext: &[u8],
     ) -> Result<Self, SealError> {
         let mut blob = Vec::with_capacity(Self::MIN_LEN + plaintext.len());
         blob.push(Self::VERSION);
-        CommittingAead::new(cek.as_bytes(), domain.into()).seal_into(
+        CommittingAead::new(cek.as_bytes(), Domain::Payload).seal_into(
             nonce,
             aad.as_bytes(),
             plaintext,
@@ -54,13 +53,8 @@ impl PayloadV5 {
     }
 
     /// Open with `cek`, decrypting in place.
-    pub(super) fn open(
-        mut self,
-        cek: &Cek,
-        domain: PayloadDomain,
-        aad: &str,
-    ) -> Result<Vec<u8>, AuthenticationError> {
-        CommittingAead::new(cek.as_bytes(), domain.into())
+    pub(super) fn open(mut self, cek: &Cek, aad: &str) -> Result<Vec<u8>, AuthenticationError> {
+        CommittingAead::new(cek.as_bytes(), Domain::Payload)
             .open_in_place(aad.as_bytes(), &mut self.0[1..])
             .map_err(|err| err.at(Layer::Payload))?;
         self.0.truncate(self.0.len() - CommittingAead::TAG_LEN);
@@ -132,11 +126,11 @@ impl SymmetricWrap {
 }
 
 const _: () = assert!(
-    SymmetricWrap::LEN != StoredBlobs::LEGACY_CEK_LEN,
-    "a v5 wrap must never look like a packed legacy cek"
+    SymmetricWrap::LEN != EncryptedBytes::LEGACY_CEK_LEN,
+    "an avelope wrap must never look like a packed legacy cek"
 );
 
-/// The random values one v5 seal consumes; the KATs fix them.
+/// The random values one avelope seal consumes; the KATs fix them.
 pub(super) struct Draws {
     pub(super) cek: Cek,
     pub(super) payload_nonce: [u8; 24],
@@ -157,9 +151,9 @@ impl Draws {
     }
 }
 
-impl EncryptedData {
-    /// Seal as v5 with `draws`.
-    pub(super) fn seal_v5(
+impl EncryptedBytes {
+    /// Seal as avelope blobs with `draws`.
+    pub(super) fn seal_avelope(
         key: &Key,
         aad: &str,
         plaintext: &[u8],
@@ -169,15 +163,36 @@ impl EncryptedData {
             wrap_nonce,
         }: Draws,
     ) -> Result<Self, SealError> {
-        let payload = PayloadV5::seal(&cek, PayloadDomain::Record, &payload_nonce, aad, plaintext)?;
+        let payload = AvelopePayload::seal(&cek, &payload_nonce, aad, plaintext)?;
         let wrap = SymmetricWrap::seal(&cek, key, &wrap_nonce)?;
         Ok(Self {
-            raw: format!(
-                "{}{}",
-                PayloadV5::WIRE_PREFIX,
-                URL_SAFE_NO_PAD.encode(payload.into_bytes())
-            ),
-            cek: Wrap::wire(wrap.as_bytes()),
+            data: payload.into_bytes(),
+            cek: wrap.as_bytes().to_vec(),
+        })
+    }
+}
+
+impl EncryptedData {
+    /// The text prefix of both avelope fields, before the unpadded base64url blob.
+    pub(super) const AVELOPE_PREFIX: &'static str = "avelope.";
+
+    /// The text form of an avelope payload or wrap blob.
+    pub(super) fn avelope_text(blob: &[u8]) -> String {
+        format!("{}{}", Self::AVELOPE_PREFIX, URL_SAFE_NO_PAD.encode(blob))
+    }
+
+    /// Seal as avelope text with `draws`.
+    pub(super) fn seal_avelope(
+        key: &Key,
+        aad: &str,
+        plaintext: &[u8],
+        draws: Draws,
+    ) -> Result<Self, SealError> {
+        let EncryptedBytes { data, cek } =
+            EncryptedBytes::seal_avelope(key, aad, plaintext, draws)?;
+        Ok(Self {
+            raw: Self::avelope_text(&data),
+            cek: Self::avelope_text(&cek),
         })
     }
 }
@@ -188,7 +203,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::encryption::error::{MalformedError, OpenError, UnsupportedFormat};
+    use crate::encryption::error::{OpenError, UnsupportedFormat};
     use crate::encryption::tests::{
         KAT_AAD, KAT_PLAINTEXT, KAT_WIRE_CEK, KAT_WIRE_DATA, kat_draws, key,
     };
@@ -222,10 +237,10 @@ mod tests {
             match self {
                 Self::PayloadVersion => matches!(
                     err,
-                    OpenError::Malformed(MalformedError::Shape(ShapeError::VersionMismatch {
+                    OpenError::UnsupportedFormat(UnsupportedFormat::Version {
                         layer: Layer::Payload,
                         ..
-                    }))
+                    })
                 ),
                 Self::PayloadNonceOrCommitment => matches!(
                     err,
@@ -259,21 +274,25 @@ mod tests {
     impl Blob {
         /// The KAT value with bit `bit` of byte `offset` of this blob flipped, re-encoded strictly.
         fn flipped(self, offset: usize, bit: u8) -> EncryptedData {
-            let decode = |s: &str| URL_SAFE_NO_PAD.decode(s.strip_prefix("v5.").unwrap()).unwrap();
+            let decode = |s: &str| {
+                URL_SAFE_NO_PAD
+                    .decode(s.strip_prefix(EncryptedData::AVELOPE_PREFIX).unwrap())
+                    .unwrap()
+            };
             let (mut payload, mut wrap) = (decode(KAT_WIRE_DATA), decode(KAT_WIRE_CEK));
             match self {
                 Self::Payload => payload[offset] ^= 1 << bit,
                 Self::Wrap => wrap[offset] ^= 1 << bit,
             }
             EncryptedData {
-                raw: format!("v5.{}", URL_SAFE_NO_PAD.encode(payload)),
-                cek: Wrap::wire(&wrap),
+                raw: EncryptedData::avelope_text(&payload),
+                cek: EncryptedData::avelope_text(&wrap),
             }
         }
 
         const fn len(self) -> usize {
             match self {
-                Self::Payload => PayloadV5::MIN_LEN + KAT_PLAINTEXT.len(),
+                Self::Payload => AvelopePayload::MIN_LEN + KAT_PLAINTEXT.len(),
                 Self::Wrap => SymmetricWrap::LEN,
             }
         }
@@ -281,7 +300,7 @@ mod tests {
 
     #[rstest]
     fn seals_the_record_kat(key: Key, kat_draws: Draws) {
-        let sealed = EncryptedData::seal_v5(&key, KAT_AAD, &KAT_PLAINTEXT, kat_draws).unwrap();
+        let sealed = EncryptedData::seal_avelope(&key, KAT_AAD, &KAT_PLAINTEXT, kat_draws).unwrap();
 
         assert_eq!(sealed.raw, KAT_WIRE_DATA);
         assert_eq!(sealed.cek, KAT_WIRE_CEK);
@@ -338,16 +357,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty(vec![], |r: &Result<(), ShapeError>| matches!(r, Err(ShapeError::Length { layer: Layer::Payload, len: 0 })))]
-    #[case::version_only(vec![0x05], |r: &Result<(), ShapeError>| matches!(r, Err(ShapeError::Length { layer: Layer::Payload, len: 1 })))]
-    #[case::one_short(vec![0x05; 72], |r: &Result<(), ShapeError>| matches!(r, Err(ShapeError::Length { layer: Layer::Payload, len: 72 })))]
-    #[case::shortest(vec![0x05; 73], |r: &Result<(), ShapeError>| r.is_ok())]
-    #[case::wrong_version(vec![0x06; 73], |r: &Result<(), ShapeError>| matches!(r, Err(ShapeError::VersionMismatch { layer: Layer::Payload, byte: 0x06 })))]
+    #[case::empty(vec![], |r: &Result<(), ParseError>| matches!(r, Err(ParseError::Malformed(ShapeError::Length { layer: Layer::Payload, len: 0 }))))]
+    #[case::version_only(vec![0x01], |r: &Result<(), ParseError>| matches!(r, Err(ParseError::Malformed(ShapeError::Length { layer: Layer::Payload, len: 1 }))))]
+    #[case::one_short(vec![0x01; 72], |r: &Result<(), ParseError>| matches!(r, Err(ParseError::Malformed(ShapeError::Length { layer: Layer::Payload, len: 72 }))))]
+    #[case::shortest(vec![0x01; 73], |r: &Result<(), ParseError>| r.is_ok())]
+    #[case::newer_version(vec![0x02; 73], |r: &Result<(), ParseError>| matches!(r, Err(ParseError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 2 }))))]
     fn parses_a_payload_blob(
         #[case] blob: Vec<u8>,
-        #[case] expected: fn(&Result<(), ShapeError>) -> bool,
+        #[case] expected: fn(&Result<(), ParseError>) -> bool,
     ) {
-        let parsed = PayloadV5::parse(blob).map(drop);
+        let parsed = AvelopePayload::parse(blob).map(drop);
 
         assert!(expected(&parsed), "{parsed:?}");
     }

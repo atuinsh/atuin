@@ -431,6 +431,7 @@ dependencies = [
  "eyre",
  "fs-err",
  "futures",
+ "hex",
  "i18n-embed",
  "indicatif",
  "interim",

@@ -94,6 +94,7 @@ zstd = { workspace = true }
 [dev-dependencies]
 # This crate's tests require the `test-utils` feature in atuin-common.
 atuin-common = { workspace = true, features = ["test-utils"] }
+hex = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rmp-serde = { workspace = true }

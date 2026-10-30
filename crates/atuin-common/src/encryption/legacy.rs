@@ -8,11 +8,11 @@ use rusty_paseto::core::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::bytes::EncryptedBytes;
 use super::envelope::{Cek, KidMatched};
 use super::error::{
     AuthenticationError, LegacyCause, MalformedError, OpenError, SealError, ShapeError,
 };
-use super::storage::StoredBlobs;
 use super::{EncryptedData, Key, KeyId, Layer};
 
 /// The one `rusty_paseto` type outside this file, inside [`LegacyCause`].
@@ -129,7 +129,7 @@ impl LegacyToken<'_> {
 /// guess at it, so every packed value unpacks to exactly the strings it came from.
 pub(super) struct LegacyPacked {
     data: Vec<u8>,
-    cek: [u8; StoredBlobs::LEGACY_CEK_LEN],
+    cek: [u8; EncryptedBytes::LEGACY_CEK_LEN],
 }
 
 impl LegacyPacked {
@@ -152,14 +152,17 @@ impl LegacyPacked {
         (Self::unpack_cek(&cek) == value.cek).then_some(Self { data, cek })
     }
 
-    pub(super) fn unpack(data: Vec<u8>, cek: &[u8; StoredBlobs::LEGACY_CEK_LEN]) -> EncryptedData {
+    pub(super) fn unpack(
+        data: Vec<u8>,
+        cek: &[u8; EncryptedBytes::LEGACY_CEK_LEN],
+    ) -> EncryptedData {
         EncryptedData {
             raw: format!("{}{}", LegacyToken::PREFIX, URL_SAFE_NO_PAD.encode(data)),
             cek: Self::unpack_cek(cek),
         }
     }
 
-    fn unpack_cek(cek: &[u8; StoredBlobs::LEGACY_CEK_LEN]) -> String {
+    fn unpack_cek(cek: &[u8; EncryptedBytes::LEGACY_CEK_LEN]) -> String {
         let (wpk, kid) = cek.split_at(Self::WPK_LEN);
         PieWrap::canonical_json(
             format_args!("{}{}", Self::WPK_PREFIX, URL_SAFE_NO_PAD.encode(wpk)),
@@ -167,8 +170,8 @@ impl LegacyPacked {
         )
     }
 
-    pub(super) fn into_blobs(self) -> StoredBlobs {
-        StoredBlobs {
+    pub(super) fn into_bytes(self) -> EncryptedBytes {
+        EncryptedBytes {
             data: self.data,
             cek: self.cek.to_vec(),
         }
@@ -260,7 +263,7 @@ mod tests {
         let value = EncryptedData::legacy(raw, cek);
 
         assert_eq!(value.open(&key, KAT_AAD).unwrap(), plaintext);
-        assert_eq!(EncryptedData::from(value.to_blobs().unwrap()), value);
+        assert_eq!(EncryptedData::from(value.to_bytes().unwrap()), value);
     }
 
     #[rstest]
@@ -383,7 +386,7 @@ mod tests {
         let value = EncryptedData { raw, cek };
 
         assert_eq!(value.open(&key, KAT_AAD).unwrap(), [1, 2, 3, 4, 5]);
-        assert_eq!(value.to_blobs(), None);
+        assert_eq!(value.to_bytes(), None);
     }
 
     #[rstest]

@@ -3,12 +3,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use super::aead::PayloadDomain;
+use super::avelope::{AvelopePayload, Draws, SymmetricWrap};
 use super::error::{
     OpenError, ParseError, RewrapError, SealError, ShapeError, UnsupportedFormat, WrongKey,
 };
 use super::legacy::{LegacyToken, PieWrap};
-use super::v5::{Draws, PayloadV5, SymmetricWrap};
 use super::{EnvelopeFormat, Key, KeyId, Layer};
 
 /// A sealed payload and its wrapped content key, as the two strings the server stores.
@@ -39,13 +38,15 @@ impl EncryptedData {
     ) -> Result<Self, SealError> {
         match format {
             EnvelopeFormat::Legacy => Self::seal_legacy(key, aad, plaintext),
-            EnvelopeFormat::V5 => Self::seal_v5(key, aad, plaintext, Draws::random()?),
+            EnvelopeFormat::Avelope => Self::seal_avelope(key, aad, plaintext, Draws::random()?),
         }
     }
 
-    /// Open a record sealed with `aad`, in any format this build reads.
+    /// Open a value sealed with `aad`, in any format this build reads.
     pub fn open(&self, key: &Key, aad: &str) -> Result<Vec<u8>, OpenError> {
-        self.open_as(key, PayloadDomain::Record, aad)
+        let wrap = Wrap::parse(&self.cek)?;
+        let matched = wrap.matching(key)?;
+        matched.open(Payload::parse(&self.raw)?, aad)
     }
 
     /// Rewrap the content key from `old` to `new` in its own wrap format; `raw` is untouched.
@@ -63,38 +64,10 @@ impl EncryptedData {
         Wrap::parse(&self.cek).map(|wrap| wrap.key_id())
     }
 
-    /// Whether the payload names a versioned envelope format (`vN.`, N >= 5) rather than legacy PASETO.
+    /// Whether the payload is in the avelope container, whatever its version.
     #[must_use]
-    pub fn is_versioned(&self) -> bool {
-        matches!(Self::version_prefix(&self.raw), Some((5.., _)))
-    }
-
-    /// [`Self::open`] for a value sealed in `domain`; packfile bodies with legacy framing use it.
-    pub(super) fn open_as(
-        &self,
-        key: &Key,
-        domain: PayloadDomain,
-        aad: &str,
-    ) -> Result<Vec<u8>, OpenError> {
-        let wrap = Wrap::parse(&self.cek)?;
-        let matched = wrap.matching(key)?;
-        matched.open(Payload::parse(&self.raw)?, domain, aad)
-    }
-
-    /// The `vN.` prefix of `s` under the frozen grammar: N, and the rest after the dot.
-    ///
-    /// N is one to three ASCII digits with no leading zero, at most 255, so `v50.` is version 50 and
-    /// `v06.`, `v256.` and `v5` are no version at all.
-    fn version_prefix(s: &str) -> Option<(u8, &str)> {
-        let rest = s.strip_prefix('v')?;
-        let dot = rest.bytes().take(4).position(|b| b == b'.')?;
-        let (digits, rest) = (&rest[..dot], &rest[dot + 1..]);
-        if !digits.bytes().all(|b| b.is_ascii_digit())
-            || (digits.len() > 1 && digits.starts_with('0'))
-        {
-            return None;
-        }
-        Some((digits.parse().ok()?, rest))
+    pub fn is_avelope(&self) -> bool {
+        self.raw.starts_with(Self::AVELOPE_PREFIX)
     }
 }
 
@@ -123,39 +96,24 @@ impl From<[u8; 32]> for Cek {
 pub(super) enum Wrap {
     /// PASERK `k4.local-wrap.pie` plus `k4.lid`, as legacy JSON.
     Pie(PieWrap),
-    /// v5 wrap type `0x01`: committing XChaCha20-Poly1305 under the master key.
+    /// Avelope wrap type `0x01`: committing XChaCha20-Poly1305 under the master key.
     Symmetric(SymmetricWrap),
 }
 
 impl Wrap {
-    /// The `cek` prefix of the v5 wrap container, whatever the wrap type.
-    pub(super) const CONTAINER_PREFIX: &'static str = "v5.";
-
-    /// The wire `cek` of a v5-container wrap blob.
-    pub(super) fn wire(blob: &[u8]) -> String {
-        format!("{}{}", Self::CONTAINER_PREFIX, URL_SAFE_NO_PAD.encode(blob))
-    }
-
-    /// Classify a wire `cek` string.
+    /// Classify a wire `cek` string; anything outside the avelope container is legacy JSON.
     fn parse(cek: &str) -> Result<Self, ParseError> {
-        if let Some(encoded) = cek.strip_prefix(Self::CONTAINER_PREFIX) {
-            let blob = URL_SAFE_NO_PAD.decode(encoded).map_err(|source| ShapeError::Base64 {
-                layer: Layer::Wrap,
-                source,
-            })?;
-            return Self::parse_blob(&blob);
-        }
-        match EncryptedData::version_prefix(cek) {
-            Some((version @ 6.., _)) => Err(UnsupportedFormat::Version {
-                layer: Layer::Wrap,
-                version,
-            }
-            .into()),
-            Some((0..=5, _)) | None => Ok(Self::Pie(PieWrap::parse(cek)?)),
-        }
+        let Some(encoded) = cek.strip_prefix(EncryptedData::AVELOPE_PREFIX) else {
+            return Ok(Self::Pie(PieWrap::parse(cek)?));
+        };
+        let blob = URL_SAFE_NO_PAD.decode(encoded).map_err(|source| ShapeError::Base64 {
+            layer: Layer::Wrap,
+            source,
+        })?;
+        Self::parse_blob(&blob)
     }
 
-    /// Classify a v5-container wrap blob by its type byte.
+    /// Classify an avelope wrap blob by its type byte.
     pub(super) fn parse_blob(blob: &[u8]) -> Result<Self, ParseError> {
         match blob.first() {
             None => Err(ShapeError::Length {
@@ -204,13 +162,8 @@ pub(super) struct MatchedWrap<'k> {
 
 impl MatchedWrap<'_> {
     /// Unwrap the content key, then open `payload` with it.
-    pub(super) fn open(
-        self,
-        payload: Payload<'_>,
-        domain: PayloadDomain,
-        aad: &str,
-    ) -> Result<Vec<u8>, OpenError> {
-        payload.open(&self.unwrap_cek()?, domain, aad)
+    pub(super) fn open(self, payload: Payload<'_>, aad: &str) -> Result<Vec<u8>, OpenError> {
+        payload.open(&self.unwrap_cek()?, aad)
     }
 
     /// Unwrap the content key and wrap it under `new` in this wrap's own format, as a `cek` string.
@@ -221,7 +174,7 @@ impl MatchedWrap<'_> {
                 let cek = wrap.unwrap_cek(self.key, self.proof).map_err(OpenError::from)?;
                 let mut nonce = [0; 24];
                 getrandom::fill(&mut nonce).map_err(SealError::from)?;
-                Ok(Wrap::wire(SymmetricWrap::seal(&cek, new, &nonce)?.as_bytes()))
+                Ok(EncryptedData::avelope_text(SymmetricWrap::seal(&cek, new, &nonce)?.as_bytes()))
             }
         }
     }
@@ -237,7 +190,7 @@ impl MatchedWrap<'_> {
 /// A sealed payload, by format.
 pub(super) enum Payload<'a> {
     Legacy(LegacyToken<'a>),
-    V5(PayloadV5),
+    Avelope(AvelopePayload),
 }
 
 impl<'a> Payload<'a> {
@@ -246,46 +199,25 @@ impl<'a> Payload<'a> {
         if raw.starts_with(LegacyToken::PREFIX) {
             return Ok(Self::Legacy(LegacyToken(raw)));
         }
-        if let Some(encoded) = raw.strip_prefix(PayloadV5::WIRE_PREFIX) {
-            let blob = URL_SAFE_NO_PAD.decode(encoded).map_err(|source| ShapeError::Base64 {
-                layer: Layer::Payload,
-                source,
-            })?;
-            return Ok(Self::V5(PayloadV5::parse(blob)?));
-        }
-        match EncryptedData::version_prefix(raw) {
-            Some((version @ 6.., _)) => Err(UnsupportedFormat::Version {
-                layer: Layer::Payload,
-                version,
-            }
-            .into()),
-            Some((0..=5, _)) | None => Err(ShapeError::UnknownShape(Layer::Payload).into()),
-        }
+        let Some(encoded) = raw.strip_prefix(EncryptedData::AVELOPE_PREFIX) else {
+            return Err(ShapeError::UnknownShape(Layer::Payload).into());
+        };
+        let blob = URL_SAFE_NO_PAD.decode(encoded).map_err(|source| ShapeError::Base64 {
+            layer: Layer::Payload,
+            source,
+        })?;
+        Self::parse_blob(blob)
     }
 
-    /// Classify a payload blob by its version byte (packfile bodies).
+    /// Classify an avelope payload blob by its version byte.
     pub(super) fn parse_blob(blob: Vec<u8>) -> Result<Self, ParseError> {
-        match blob.first() {
-            None => Err(ShapeError::Length {
-                layer: Layer::Payload,
-                len: 0,
-            }
-            .into()),
-            Some(&PayloadV5::VERSION) => Ok(Self::V5(PayloadV5::parse(blob)?)),
-            Some(&version @ 6..) => Err(UnsupportedFormat::Version {
-                layer: Layer::Payload,
-                version,
-            }
-            .into()),
-            Some(0..=4) => Err(ShapeError::UnknownShape(Layer::Payload).into()),
-        }
+        Ok(Self::Avelope(AvelopePayload::parse(blob)?))
     }
 
-    fn open(self, cek: &Cek, domain: PayloadDomain, aad: &str) -> Result<Vec<u8>, OpenError> {
+    fn open(self, cek: &Cek, aad: &str) -> Result<Vec<u8>, OpenError> {
         match self {
-            // Legacy tokens bind no domain: records and packfile bodies differ only in their AAD.
             Self::Legacy(token) => token.open(cek, aad),
-            Self::V5(payload) => Ok(payload.open(cek, domain, aad)?),
+            Self::Avelope(payload) => Ok(payload.open(cek, aad)?),
         }
     }
 }
@@ -299,17 +231,17 @@ mod tests {
     use crate::encryption::error::{AuthenticationError, MalformedError};
     use crate::encryption::tests::{KAT_AAD, KAT_PLAINTEXT, KAT_WIRE_CEK, key, other_key};
 
-    /// `"v5." || b64(PayloadV5::seal(kat_cek, Record, payload nonce, CROSS_V5_PIE.0, KAT_PLAINTEXT))`
-    /// over `PieWrap::seal(kat_cek, key())`: a v5 payload under a legacy wrap.
-    const CROSS_V5_PIE: (&str, &str, &str) = (
+    /// `AvelopePayload::seal(kat_cek, payload nonce, CROSS_AVELOPE_PIE.0, KAT_PLAINTEXT)` over
+    /// `PieWrap::seal(kat_cek, key())`: an avelope payload under a legacy wrap.
+    const CROSS_AVELOPE_PIE: (&str, &str, &str) = (
         r#"{"id":"00000000-0000-0000-0000-00000000000a","idx":0,"version":"v1","tag":"history","host":"00000000-0000-0000-0000-000000000002"}"#,
-        "v5.BUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV2k7qeiRGVCgUPlCF2KPIvOY4ftxPD0KUNSd0J6rywyw9CItUgJk_faVYOHz8gnaDi5EL5lT",
+        "avelope.AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWV8tLPEOtgV5rrhaAy40ymxfVkh7CrDeCyWogjB46FjSald1eMG0t4h7yDdksb-h9HXmuiZki",
         r#"{"wpk":"k4.local-wrap.pie.KILkQVwLG4CYixPh3poIENlaJ_bWF-X5KLjLLL9iOSfIAJonH9KNncl6tNCGFJ8lgOUGEvT3ONThGdFr2ufsWM6nTejpvTZsrTsyAqTHtS-DBdqOZcXmGUDsoHJ2dw-Q","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#,
     );
 
-    /// `LegacyToken::seal(kat_cek, CROSS_LEGACY_V5.0, KAT_PLAINTEXT)` over
-    /// `SymmetricWrap::seal(kat_cek, key(), wrap nonce)`: a legacy payload under a v5 wrap.
-    const CROSS_LEGACY_V5: (&str, &str, &str) = (
+    /// `LegacyToken::seal(kat_cek, CROSS_LEGACY_AVELOPE.0, KAT_PLAINTEXT)` over
+    /// `SymmetricWrap::seal(kat_cek, key(), wrap nonce)`: a legacy payload under an avelope wrap.
+    const CROSS_LEGACY_AVELOPE: (&str, &str, &str) = (
         r#"{"id":"00000000-0000-0000-0000-00000000000b","idx":0,"version":"v1","tag":"history","host":"00000000-0000-0000-0000-000000000002"}"#,
         "v4.local.Qhr7mVG6u6lGbYDOuPigcE6eQvACqhlXoUZCZvDzYVC3gKMX5fM-cRehckgiYPvlro2hv8QmBqiEMBJaM5avOJhPuQxa735gtHzov1gIE2ebEg",
         KAT_WIRE_CEK,
@@ -331,27 +263,17 @@ mod tests {
             } = Draws::random().unwrap();
             let raw = match payload {
                 EnvelopeFormat::Legacy => LegacyToken::seal(&cek, aad, plaintext).unwrap(),
-                EnvelopeFormat::V5 => {
-                    let blob = PayloadV5::seal(
-                        &cek,
-                        PayloadDomain::Record,
-                        &payload_nonce,
-                        aad,
-                        plaintext,
-                    )
-                    .unwrap();
-                    format!(
-                        "{}{}",
-                        PayloadV5::WIRE_PREFIX,
-                        URL_SAFE_NO_PAD.encode(blob.into_bytes())
-                    )
-                }
+                EnvelopeFormat::Avelope => Self::avelope_text(
+                    &AvelopePayload::seal(&cek, &payload_nonce, aad, plaintext)
+                        .unwrap()
+                        .into_bytes(),
+                ),
             };
             let cek = match wrap {
                 EnvelopeFormat::Legacy => PieWrap::seal(&cek, key),
-                EnvelopeFormat::V5 => {
-                    Wrap::wire(SymmetricWrap::seal(&cek, key, &wrap_nonce).unwrap().as_bytes())
-                }
+                EnvelopeFormat::Avelope => Self::avelope_text(
+                    SymmetricWrap::seal(&cek, key, &wrap_nonce).unwrap().as_bytes(),
+                ),
             };
             Self { raw, cek }
         }
@@ -395,7 +317,9 @@ mod tests {
     }
 
     #[rstest]
-    fn round_trips(#[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] format: EnvelopeFormat) {
+    fn round_trips(
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] format: EnvelopeFormat,
+    ) {
         proptest!(|(aad in "[ -~]{0,64}", plaintext in prop::collection::vec(any::<u8>(), 0..2048))| {
             let key = Key::generate();
             let sealed = EncryptedData::seal_as(format, &key, &aad, &plaintext).unwrap();
@@ -405,8 +329,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::v5_payload_legacy_wrap(CROSS_V5_PIE)]
-    #[case::legacy_payload_v5_wrap(CROSS_LEGACY_V5)]
+    #[case::avelope_payload_legacy_wrap(CROSS_AVELOPE_PIE)]
+    #[case::legacy_payload_avelope_wrap(CROSS_LEGACY_AVELOPE)]
     fn frozen_cross_pairs_open(key: Key, #[case] pair: (&str, &str, &str)) {
         let (aad, raw, cek) = pair;
         let value = EncryptedData {
@@ -415,46 +339,41 @@ mod tests {
         };
 
         assert_eq!(value.open(&key, aad).unwrap(), KAT_PLAINTEXT);
-        assert_eq!(value.to_blobs(), None);
+        assert_eq!(value.to_bytes(), None);
     }
 
     #[rstest]
-    #[case::v5_bad_base64("v5.!!", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
-    #[case::v5_padded("v5.BQ==", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
-    #[case::v5_trailing_bits("v5.BR", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
-    #[case::v5_empty("v5.", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Length { layer: Layer::Payload, len: 0 }))))]
-    #[case::v5_wrong_version_byte(format!("v5.{}", URL_SAFE_NO_PAD.encode([6; 73])), |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::VersionMismatch { layer: Layer::Payload, byte: 6 }))))]
-    #[case::v5_short(format!("v5.{}", URL_SAFE_NO_PAD.encode([5; 72])), |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Length { layer: Layer::Payload, len: 72 }))))]
-    #[case::v6("v6.x", |e: &OpenError| matches!(e, OpenError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 6 })))]
-    #[case::v50("v50.x", |e: &OpenError| matches!(e, OpenError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 50 })))]
-    #[case::v255("v255.", |e: &OpenError| matches!(e, OpenError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 255 })))]
-    #[case::v256("v256.", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
-    #[case::v06("v06.x", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
-    #[case::v0("v0.x", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
+    #[case::bad_base64("avelope.!!", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
+    #[case::padded("avelope.AQ==", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
+    #[case::trailing_bits("avelope.AR", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Base64 { layer: Layer::Payload, .. }))))]
+    #[case::empty_blob("avelope.", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Length { layer: Layer::Payload, len: 0 }))))]
+    #[case::short(EncryptedData::avelope_text(&[1; 72]), |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::Length { layer: Layer::Payload, len: 72 }))))]
+    #[case::newer_version(EncryptedData::avelope_text(&[2; 73]), |e: &OpenError| matches!(e, OpenError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 2 })))]
+    #[case::version_zero(EncryptedData::avelope_text(&[0; 73]), |e: &OpenError| matches!(e, OpenError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Payload, version: 0 })))]
+    #[case::without_dot("avelope", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
     #[case::v4_public("v4.public.x", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
-    #[case::v5_without_dot("v5", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
     #[case::empty("", |e: &OpenError| matches!(e, OpenError::Malformed(MalformedError::Shape(ShapeError::UnknownShape(Layer::Payload)))))]
     fn classifies_the_payload(
         key: Key,
         #[case] raw: String,
         #[case] expected: fn(&OpenError) -> bool,
     ) {
-        let value =
-            EncryptedData::seal_as(EnvelopeFormat::V5, &key, KAT_AAD, b"x").unwrap().with_raw(raw);
+        let value = EncryptedData::seal_as(EnvelopeFormat::Avelope, &key, KAT_AAD, b"x")
+            .unwrap()
+            .with_raw(raw);
 
         let err = value.open(&key, KAT_AAD).unwrap_err();
         assert!(expected(&err), "{err:?}");
     }
 
     #[rstest]
-    #[case::v5_bad_base64("v5.!!", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Base64 { layer: Layer::Wrap, .. })))]
-    #[case::v5_empty("v5.", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 0 })))]
-    #[case::type_0x00(Wrap::wire(&[0x00; 138]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0x00))))]
-    #[case::type_0x02(Wrap::wire(&[0x02; 138]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0x02))))]
-    #[case::type_0xff(Wrap::wire(&[0xff]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0xff))))]
-    #[case::type_0x01_short(Wrap::wire(&[0x01; 137]), |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 137 })))]
-    #[case::type_0x01_long(Wrap::wire(&[0x01; 139]), |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 139 })))]
-    #[case::v7("v7.x", |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::Version { layer: Layer::Wrap, version: 7 })))]
+    #[case::bad_base64("avelope.!!", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Base64 { layer: Layer::Wrap, .. })))]
+    #[case::empty_blob("avelope.", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 0 })))]
+    #[case::type_0x00(EncryptedData::avelope_text(&[0x00; 138]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0x00))))]
+    #[case::type_0x02(EncryptedData::avelope_text(&[0x02; 138]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0x02))))]
+    #[case::type_0xff(EncryptedData::avelope_text(&[0xff]), |e: &ParseError| matches!(e, ParseError::UnsupportedFormat(UnsupportedFormat::WrapType(0xff))))]
+    #[case::type_0x01_short(EncryptedData::avelope_text(&[0x01; 137]), |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 137 })))]
+    #[case::type_0x01_long(EncryptedData::avelope_text(&[0x01; 139]), |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::Length { layer: Layer::Wrap, len: 139 })))]
     #[case::empty_json("{}", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::LegacyCekJson(_))))]
     #[case::v4("v4.x", |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::LegacyCekJson(_))))]
     #[case::bad_kid(r#"{"wpk":"k4.local-wrap.pie.KILkQVwLG4CYixPh3poIENlaJ_bWF-X5KLjLLL9iOSfIAJonH9KNncl6tNCGFJ8lgOUGEvT3ONThGdFr2ufsWM6nTejpvTZsrTsyAqTHtS-DBdqOZcXmGUDsoHJ2dw-Q","kid":"k4.lid.bad"}"#, |e: &ParseError| matches!(e, ParseError::Malformed(ShapeError::LegacyKeyId(_))))]
@@ -469,27 +388,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::v5("v5.x", true)]
-    #[case::v6("v6.x", true)]
-    #[case::v255("v255.x", true)]
-    #[case::v256("v256.x", false)]
+    #[case::avelope("avelope.x", true)]
+    #[case::empty_avelope("avelope.", true)]
+    #[case::without_dot("avelope", false)]
     #[case::legacy("v4.local.x", false)]
-    #[case::v4("v4.x", false)]
     #[case::garbage("garbage", false)]
-    fn is_versioned_follows_the_grammar(#[case] raw: &str, #[case] expected: bool) {
+    fn is_avelope_reads_the_prefix(#[case] raw: &str, #[case] expected: bool) {
         let value = EncryptedData {
             raw: raw.to_owned(),
             cek: String::new(),
         };
 
-        assert_eq!(value.is_versioned(), expected);
+        assert_eq!(value.is_avelope(), expected);
     }
 
     #[rstest]
     fn checks_the_key_before_the_payload(
         key: Key,
         other_key: Key,
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] format: EnvelopeFormat,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] format: EnvelopeFormat,
     ) {
         let theirs = EncryptedData::seal_as(format, &other_key, KAT_AAD, b"x").unwrap();
         let ours = EncryptedData::seal_as(format, &key, KAT_AAD, b"x").unwrap();
@@ -498,26 +415,24 @@ mod tests {
             theirs.with_raw("garbage").open(&key, KAT_AAD),
             Err(OpenError::WrongKey(_))
         ));
-        assert!(matches!(theirs.with_raw("v6.x").open(&key, KAT_AAD), Err(OpenError::WrongKey(_))));
+        let newer = EncryptedData::avelope_text(&[2; 73]);
+        assert!(matches!(theirs.with_raw(&newer).open(&key, KAT_AAD), Err(OpenError::WrongKey(_))));
         assert!(matches!(
-            ours.with_raw("v6.x").open(&key, KAT_AAD),
+            ours.with_raw(&newer).open(&key, KAT_AAD),
             Err(OpenError::UnsupportedFormat(UnsupportedFormat::Version {
                 layer: Layer::Payload,
-                version: 6
+                version: 2
             }))
         ));
         assert!(matches!(
-            ours.with_cek("v7.x").open(&key, KAT_AAD),
-            Err(OpenError::UnsupportedFormat(UnsupportedFormat::Version {
-                layer: Layer::Wrap,
-                version: 7
-            }))
+            ours.with_cek(EncryptedData::avelope_text(&[2; 138])).open(&key, KAT_AAD),
+            Err(OpenError::UnsupportedFormat(UnsupportedFormat::WrapType(2)))
         ));
     }
 
     #[rstest]
     #[case::legacy(EnvelopeFormat::Legacy, |e: &OpenError| matches!(e, OpenError::Authentication(AuthenticationError::Legacy { layer: Layer::Payload, .. })))]
-    #[case::v5(EnvelopeFormat::V5, |e: &OpenError| matches!(e, OpenError::Authentication(AuthenticationError::Commitment(Layer::Payload))))]
+    #[case::avelope(EnvelopeFormat::Avelope, |e: &OpenError| matches!(e, OpenError::Authentication(AuthenticationError::Commitment(Layer::Payload))))]
     fn the_wrong_aad_fails_authentication(
         key: Key,
         #[case] format: EnvelopeFormat,
@@ -533,7 +448,7 @@ mod tests {
     fn the_wrong_key_keeps_its_text(
         key: Key,
         other_key: Key,
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] format: EnvelopeFormat,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] format: EnvelopeFormat,
     ) {
         let value = EncryptedData::seal_as(format, &key, KAT_AAD, b"x").unwrap();
 
@@ -552,8 +467,8 @@ mod tests {
 
     #[rstest]
     fn rewrap_preserves_the_format(
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] payload: EnvelopeFormat,
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] wrap: EnvelopeFormat,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] payload: EnvelopeFormat,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] wrap: EnvelopeFormat,
     ) {
         proptest!(|(plaintext in prop::collection::vec(any::<u8>(), 0..512))| {
             let (old, new) = (Key::generate(), Key::generate());
@@ -570,9 +485,9 @@ mod tests {
                     let pie = rewrapped.cek.starts_with(r#"{"wpk":"k4.local-wrap.pie."#);
                     prop_assert!(pie, "{}", rewrapped.cek);
                 }
-                EnvelopeFormat::V5 => {
+                EnvelopeFormat::Avelope => {
                     let blob = URL_SAFE_NO_PAD
-                        .decode(rewrapped.cek.strip_prefix(Wrap::CONTAINER_PREFIX).unwrap())
+                        .decode(rewrapped.cek.strip_prefix(EncryptedData::AVELOPE_PREFIX).unwrap())
                         .unwrap();
                     prop_assert_eq!((blob[0], blob.len()), (SymmetricWrap::TYPE, SymmetricWrap::LEN));
                 }
@@ -582,14 +497,15 @@ mod tests {
 
     #[rstest]
     fn rewrap_carries_a_newer_payload_but_not_a_newer_wrap(key: Key, other_key: Key) {
-        let ours = EncryptedData::seal_as(EnvelopeFormat::V5, &key, KAT_AAD, b"x").unwrap();
+        let ours = EncryptedData::seal_as(EnvelopeFormat::Avelope, &key, KAT_AAD, b"x").unwrap();
+        let newer = EncryptedData::avelope_text(&[2; 80]);
 
-        let newer_payload = ours.with_raw("v6.anything").rewrap(&key, &other_key).unwrap();
-        assert_eq!(newer_payload.raw, "v6.anything");
+        let newer_payload = ours.with_raw(&newer).rewrap(&key, &other_key).unwrap();
+        assert_eq!(newer_payload.raw, newer);
         assert_eq!(newer_payload.key_id().unwrap(), other_key.key_id());
 
         assert!(matches!(
-            ours.with_cek(Wrap::wire(&[0x02; 138])).rewrap(&key, &other_key),
+            ours.with_cek(EncryptedData::avelope_text(&[0x02; 138])).rewrap(&key, &other_key),
             Err(RewrapError::Open(OpenError::UnsupportedFormat(UnsupportedFormat::WrapType(2))))
         ));
     }
@@ -597,12 +513,12 @@ mod tests {
     #[rstest]
     fn key_id_reads_only_the_wrap(
         key: Key,
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] format: EnvelopeFormat,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] format: EnvelopeFormat,
     ) {
         let value = EncryptedData::seal_as(format, &key, KAT_AAD, b"x").unwrap();
 
         assert_eq!(value.key_id().unwrap(), key.key_id());
-        assert_eq!(value.with_raw("v6.x").key_id().unwrap(), key.key_id());
+        assert_eq!(value.with_raw("garbage").key_id().unwrap(), key.key_id());
     }
 
     #[rstest]
@@ -613,15 +529,15 @@ mod tests {
             prop_assert!(value.open(&key, KAT_AAD).is_err(), "{value:?}");
             let _ = value.key_id();
             let _ = value.rewrap(&key, &other_key);
-            let _ = value.to_blobs();
+            let _ = value.to_bytes();
         });
     }
 
     #[rstest]
     fn never_panics_past_the_key_check(
         key: Key,
-        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::V5)] format: EnvelopeFormat,
-        #[values("v5.", "v4.local.")] prefix: &str,
+        #[values(EnvelopeFormat::Legacy, EnvelopeFormat::Avelope)] format: EnvelopeFormat,
+        #[values("avelope.", "v4.local.")] prefix: &str,
     ) {
         let ours = EncryptedData::seal_as(format, &key, KAT_AAD, b"x").unwrap();
         proptest!(|(body in prop::collection::vec(any::<u8>(), 0..256), text in "[A-Za-z0-9_.=-]{0,160}")| {

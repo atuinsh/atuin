@@ -9,11 +9,9 @@ pub enum Layer {
     Payload,
     #[display("content key wrap")]
     Wrap,
-    #[display("packfile body")]
-    Body,
 }
 
-/// Why a record or packfile body did not open.
+/// Why a value did not open.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
     /// The content key is wrapped under another key; checked before any cryptography.
@@ -25,7 +23,7 @@ pub enum OpenError {
     /// Not a well-formed value of the format it claims, or of any format.
     #[error(transparent)]
     Malformed(#[from] MalformedError),
-    /// A format this build does not know; a newer atuin wrote it.
+    /// A format this build does not know; a newer writer sealed it.
     #[error(transparent)]
     UnsupportedFormat(#[from] UnsupportedFormat),
 }
@@ -62,13 +60,6 @@ pub enum MalformedError {
     /// Found by parsing, before any key is involved.
     #[error(transparent)]
     Shape(#[from] ShapeError),
-    #[error("the packfile body is {len} bytes but its framing needs {needed}")]
-    BodyTruncated {
-        len: usize,
-        needed: usize,
-    },
-    #[error("the legacy packfile body is not two msgpack strings: {0}")]
-    BodyFraming(#[source] crate::rmp::decode::DecodeError<'static>),
     #[error("the legacy token body is {chars} base64 characters, shorter than any valid token")]
     LegacyShortBody {
         chars: usize,
@@ -88,7 +79,7 @@ pub enum MalformedError {
 /// How a value's shape is wrong, found before any key is involved.
 #[derive(Debug, thiserror::Error)]
 pub enum ShapeError {
-    #[error("the {0} is in no envelope format atuin knows")]
+    #[error("the {0} is in no known envelope format")]
     UnknownShape(Layer),
     #[error("the {layer} is not canonical unpadded base64url: {source}")]
     Base64 {
@@ -96,12 +87,7 @@ pub enum ShapeError {
         #[source]
         source: base64::DecodeError,
     },
-    #[error("the {layer} says v5 but its blob starts with {byte:#04x}")]
-    VersionMismatch {
-        layer: Layer,
-        byte: u8,
-    },
-    #[error("the v5 {layer} is {len} bytes, which its format does not allow")]
+    #[error("the avelope {layer} is {len} bytes, which its format does not allow")]
     Length {
         layer: Layer,
         len: usize,
@@ -113,21 +99,15 @@ pub enum ShapeError {
     LegacyKeyId(#[source] KeyIdParseError),
 }
 
-/// An envelope format this build does not know; a newer atuin wrote it.
+/// An envelope format this build does not know; a newer writer sealed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum UnsupportedFormat {
-    #[error(
-        "the {layer} was written by a newer version of atuin (format v{version}); upgrade atuin \
-         to read it"
-    )]
+    #[error("the {layer} is avelope version {version:#04x}, which this build cannot read")]
     Version {
         layer: Layer,
         version: u8,
     },
-    #[error(
-        "its content key was wrapped by a newer version of atuin (wrap type {0:#04x}); upgrade \
-         atuin to read it"
-    )]
+    #[error("the content key uses avelope wrap type {0:#04x}, which this build cannot read")]
     WrapType(u8),
 }
 

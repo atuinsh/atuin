@@ -11,25 +11,8 @@ use super::error::{AuthenticationError, Layer, SealError};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(super) enum Domain {
-    Record = 0x01,
+    Payload = 0x01,
     CekWrap = 0x02,
-    Packfile = 0x03,
-}
-
-/// The domains a payload can be sealed in; a content-key wrap is not one of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PayloadDomain {
-    Record,
-    Packfile,
-}
-
-impl From<PayloadDomain> for Domain {
-    fn from(domain: PayloadDomain) -> Self {
-        match domain {
-            PayloadDomain::Record => Self::Record,
-            PayloadDomain::Packfile => Self::Packfile,
-        }
-    }
 }
 
 /// Why a sealed value did not open, before the caller says which layer it was.
@@ -47,7 +30,9 @@ impl AeadOpenError {
     pub(super) fn at(self, layer: Layer) -> AuthenticationError {
         match self {
             Self::Short { .. } => {
-                unreachable!("a PayloadV5 or SymmetricWrap is never shorter than the overhead")
+                unreachable!(
+                    "an AvelopePayload or SymmetricWrap is never shorter than the overhead"
+                )
             }
             Self::Commitment => AuthenticationError::Commitment(layer),
             Self::Tag => AuthenticationError::Tag(layer),
@@ -90,7 +75,7 @@ impl<'k> CommittingAead<'k> {
     pub(super) const CIPHERTEXT_START: usize = Self::NONCE_LEN + Self::COMMITMENT_LEN;
     /// Nonce, commitment and tag.
     pub(super) const OVERHEAD: usize = Self::CIPHERTEXT_START + Self::TAG_LEN;
-    const LABEL: &'static [u8; 17] = b"atuin-envelope-v5";
+    const LABEL: &'static [u8; 9] = b"avelope-1";
 
     pub(super) const fn new(key: &'k [u8; 32], domain: Domain) -> Self {
         Self { key, domain }
@@ -246,19 +231,19 @@ mod tests {
     #[rstest]
     #[case::empty_message(
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
-        Domain::Record,
+        Domain::Payload,
         "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7",
         Vec::new(),
         "",
-        "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d705a7aa8f182f1fe7bfc7cb1c85acef1f667db21a8aa57fc844fad0efb7262213ce55ef675700d7570e594538eb60c941"
+        "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d767743964e8d0c202f4543e797fc0d0ce090f882f8d1c71bc26dc52300a3fba1a280121f7af514395006135761723b4a4"
     )]
-    #[case::record(
+    #[case::payload(
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-        Domain::Record,
+        Domain::Payload,
         "404142434445464748494a4b4c4d4e4f5051525354555657",
         KAT_AAD.as_bytes().to_vec(),
         "0102030405",
-        "404142434445464748494a4b4c4d4e4f50515253545556570021ad2462e85fb6f21ab32734bc2107516c802bf5cff68857869ad5ff4e69f95583dd763c2e1267ec7bf568178b5dcf5a9f402fe0"
+        "404142434445464748494a4b4c4d4e4f505152535455565735d7831a44d6a272a43e69e138fa6764228c4707ae067fff63152bb3032de44424aaeb22636f5497b8e626373df74ed17c419aa9d1"
     )]
     #[case::wrap(
         "5555555555555555555555555555555555555555555555555555555555555555",
@@ -266,7 +251,7 @@ mod tests {
         "808182838485868788898a8b8c8d8e8f9091929394959697",
         hex::decode("01d8bcc29b10ed6f0bb6b4ae53d57d552c4b61f2e99a23dbdb2a04c3924b7b011474").unwrap(),
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-        "808182838485868788898a8b8c8d8e8f9091929394959697a08e186bb24d1fcbc00d4297394185ea0c524c9bd6c55b74e7782521346c646a0cce40a9f3c2518292ccfdbccbb1b8bb5e774f12d18485b3350c5741108c5d40beeb8395754c8812c21ddcb9a2061cbb"
+        "808182838485868788898a8b8c8d8e8f9091929394959697308155ce26222c27a999c2261ecad62ea743f5990249099e51e0288489e09a0735c286c06b86b8c797bdfa113bea6a6bfccf4c8f73a25ca84de09f1d8743c4cd89f2ecf36ea8e009467c95438409d78a"
     )]
     fn seals_and_opens_the_kats(
         #[case] key: &str,
@@ -289,23 +274,23 @@ mod tests {
     }
 
     #[rstest]
-    #[case::record(
+    #[case::payload(
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-        Domain::Record,
+        Domain::Payload,
         "404142434445464748494a4b4c4d4e4f5051525354555657",
         KAT_AAD.as_bytes().to_vec(),
-        "03178c032a2f427632d884ac336c43e22041468ffe9a1a6ce37ba45494d88136",
-        "0021ad2462e85fb6f21ab32734bc2107516c802bf5cff68857869ad5ff4e69f9",
-        "a307a6ccdbf78c1c1f8915cba98ecdb5a02197495ced704f087b6d03bd4b9811"
+        "2fcf0a95159afd259f09f1146f67c2e64f637963f515eacac4e1cb3e0ec7347f",
+        "35d7831a44d6a272a43e69e138fa6764228c4707ae067fff63152bb3032de444",
+        "7ed7231ad0d2409cdbba585c7d4e11678dd08635dbfbca7b31c38d71dc6e1713"
     )]
     #[case::wrap(
         "5555555555555555555555555555555555555555555555555555555555555555",
         Domain::CekWrap,
         "808182838485868788898a8b8c8d8e8f9091929394959697",
         hex::decode("01d8bcc29b10ed6f0bb6b4ae53d57d552c4b61f2e99a23dbdb2a04c3924b7b011474").unwrap(),
-        "08a3bb4adc312ed9717cbe9b96b146b11c6819498c79e810d528da4924e19d50",
-        "a08e186bb24d1fcbc00d4297394185ea0c524c9bd6c55b74e7782521346c646a",
-        "44faeb2c081afd10d2ae3b81792eb9b7651eaeb26b769bd29144c6be766899d1"
+        "7177b1d6af46344cd0e43a6c7ff6f7bf1b4a2c540a112f01e58cde1528ca2881",
+        "308155ce26222c27a999c2261ecad62ea743f5990249099e51e0288489e09a07",
+        "ae8127937453a75203fd2b23e58c355db5bb963fd565935a26a92ca83c238ee6"
     )]
     fn derives_the_kat_subkeys(
         #[case] key: &str,
@@ -332,8 +317,7 @@ mod tests {
 
     #[rstest]
     fn round_trips() {
-        let domain =
-            prop_oneof![Just(Domain::Record), Just(Domain::CekWrap), Just(Domain::Packfile)];
+        let domain = prop_oneof![Just(Domain::Payload), Just(Domain::CekWrap)];
         proptest!(|(
             key in any::<[u8; 32]>(),
             nonce in any::<[u8; 24]>(),
@@ -364,7 +348,7 @@ mod tests {
         #[case] expected: AeadOpenError,
         #[values(0, 7)] bit: u8,
     ) {
-        let aead = CommittingAead::new(&PRIM_KEY, Domain::Record);
+        let aead = CommittingAead::new(&PRIM_KEY, Domain::Payload);
         let mut sealed = aead.sealed(&PRIM_NONCE, b"aad", &KAT_PLAINTEXT);
         sealed[offset] ^= 1 << bit;
 
@@ -373,7 +357,7 @@ mod tests {
 
     #[rstest]
     fn every_flipped_bit_fails_its_check() {
-        let aead = CommittingAead::new(&PRIM_KEY, Domain::Record);
+        let aead = CommittingAead::new(&PRIM_KEY, Domain::Payload);
         let original = aead.sealed(&PRIM_NONCE, b"aad", &KAT_PLAINTEXT);
         proptest!(|(offset in 0..original.len(), bit in 0..8u8)| {
             let mut flipped = original.clone();
@@ -389,17 +373,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::aad_byte(PRIM_KEY, Domain::Record, b"aaD".as_slice())]
-    #[case::aad_longer(PRIM_KEY, Domain::Record, b"aad ".as_slice())]
-    #[case::packfile_domain(PRIM_KEY, Domain::Packfile, b"aad".as_slice())]
+    #[case::aad_byte(PRIM_KEY, Domain::Payload, b"aaD".as_slice())]
+    #[case::aad_longer(PRIM_KEY, Domain::Payload, b"aad ".as_slice())]
     #[case::wrap_domain(PRIM_KEY, Domain::CekWrap, b"aad".as_slice())]
-    #[case::key([0x5a; 32], Domain::Record, b"aad".as_slice())]
+    #[case::key([0x5a; 32], Domain::Payload, b"aad".as_slice())]
     fn the_wrong_context_fails_the_commitment(
         #[case] key: [u8; 32],
         #[case] domain: Domain,
         #[case] aad: &[u8],
     ) {
-        let mut sealed = CommittingAead::new(&PRIM_KEY, Domain::Record).sealed(
+        let mut sealed = CommittingAead::new(&PRIM_KEY, Domain::Payload).sealed(
             &PRIM_NONCE,
             b"aad",
             &KAT_PLAINTEXT,
@@ -419,7 +402,7 @@ mod tests {
         let mut sealed = vec![0; len];
 
         assert_eq!(
-            CommittingAead::new(&PRIM_KEY, Domain::Record).open_in_place(b"", &mut sealed),
+            CommittingAead::new(&PRIM_KEY, Domain::Payload).open_in_place(b"", &mut sealed),
             Err(AeadOpenError::Short { len })
         );
     }

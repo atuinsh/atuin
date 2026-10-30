@@ -1,9 +1,10 @@
-//! Encryption of atuin records and packfile bodies.
+//! Envelope encryption: every value gets a fresh content key, wrapped under a master [`Key`].
 //!
-//! Every value is envelope-encrypted: a fresh 32-byte content key (CEK) seals the payload, and the
-//! CEK is wrapped under the master [`Key`]. A value travels as two strings, [`EncryptedData::raw`]
-//! (the payload) and [`EncryptedData::cek`] (the wrap), and the two parse independently. Readers
-//! accept both envelope formats; [`EnvelopeFormat::WRITE`] selects the writer.
+//! A fresh 32-byte content key (CEK) seals the payload, and the CEK is wrapped under the master
+//! key. A value travels as two strings, [`EncryptedData::raw`] (the payload) and
+//! [`EncryptedData::cek`] (the wrap), and the two parse independently; [`EncryptedBytes`] is the
+//! same value with its base64 and JSON stripped. Readers accept both envelope formats;
+//! [`EnvelopeFormat::WRITE`] selects the writer.
 //!
 //! # Formats
 //!
@@ -12,40 +13,39 @@
 //! `{"wpk":"k4.local-wrap.pie.…","kid":"k4.lid.…"}`. PASETO only takes strings, hence the base64 and
 //! the JSON.
 //!
-//! **v5** seals raw bytes with a committing XChaCha20-Poly1305: Bellare and Hoang's
+//! **Avelope** seals raw bytes with a committing XChaCha20-Poly1305: Bellare and Hoang's
 //! HtE\[UtC\[F, XChaCha20-Poly1305\], H\] ("Efficient Schemes for Committing Authenticated
 //! Encryption", EUROCRYPT 2022), with keyed BLAKE2b-256 as both `H` and `F`. For a 32-byte key `K`,
 //! a domain `d`, a random 24-byte nonce `N` and associated data `A`:
 //!
 //! ```text
-//! L      = H(K, "atuin-envelope-v5" || 0x01 || d || N || A)
-//! P      = H(L, "atuin-envelope-v5" || 0x02 || d || N)      the key commitment
-//! Ke     = H(L, "atuin-envelope-v5" || 0x03 || d || N)      the XChaCha20-Poly1305 key
+//! L      = H(K, "avelope-1" || 0x01 || d || N || A)
+//! P      = H(L, "avelope-1" || 0x02 || d || N)      the key commitment
+//! Ke     = H(L, "avelope-1" || 0x03 || d || N)      the XChaCha20-Poly1305 key
 //! C || T = XChaCha20-Poly1305(Ke, N, ad = "", M)
 //! sealed = N (24) || P (32) || C || T (16)
 //! ```
 //!
-//! `d` is `0x01` for a record payload, `0x02` for a CEK wrap and `0x03` for a packfile body. An
-//! open recomputes `P` and compares it in constant time before Poly1305 runs, so a wrong key,
-//! associated data or domain never reaches the AEAD.
+//! `d` is `0x01` for a payload and `0x02` for a CEK wrap. An open recomputes `P` and compares it in
+//! constant time before Poly1305 runs, so a wrong key, associated data or domain never reaches the
+//! AEAD.
 //!
 //! ```text
-//! payload blob = 0x05 || sealed(K = CEK, A = the record's or packfile's JSON, M = plaintext)
+//! payload blob = 0x01 || sealed(K = CEK, d = 0x01, A = the caller's associated data, M = plaintext)
 //! wrap blob    = 0x01 || kid (33) || sealed(K = master key, d = 0x02, A = 0x01 || kid, M = CEK)
-//! data         = "v5." || base64url(payload blob)
-//! cek          = "v5." || base64url(wrap blob)
-//! packfile     = 0x05 || u16be(wrap blob length) || wrap blob || payload blob
+//! raw          = "avelope." || base64url(payload blob)
+//! cek          = "avelope." || base64url(wrap blob)
 //! ```
 //!
-//! The wrap blob carries its own type byte, so another kind of wrap (a KMS, an asymmetric key) is a
-//! new type under the same `v5.` container with no new payload version. A `vN.` prefix with `N` in
-//! `6..=255` in either field is a format a newer atuin wrote ([`UnsupportedFormat`]); anything
-//! else that is neither legacy nor `v5.` is [`MalformedError`]. A value opens in this order: parse
-//! the wrap, compare its key id with the key's ([`WrongKey`]), parse the payload, unwrap the CEK,
-//! open the payload. So a value under another key is [`WrongKey`] whatever its payload, and
+//! A payload blob starts with its version and a wrap blob with its wrap type, so a new construction
+//! or another kind of wrap (a KMS, an asymmetric key) stays inside the `avelope.` container. A
+//! version or wrap type this build does not know is [`UnsupportedFormat`]; anything that is neither
+//! legacy nor `avelope.` is [`MalformedError`]. A value opens in this order: parse the wrap, compare
+//! its key id with the key's ([`WrongKey`]), parse the payload, unwrap the CEK, open the payload.
+//! So a value under another key is [`WrongKey`] whatever its payload, and
 //! [`EncryptedData::key_id`] and [`EncryptedData::rewrap`] never parse the payload at all.
 //!
-//! # What v5 does not claim
+//! # What avelope does not claim
 //!
 //! - Ciphertext integrity rests on Poly1305's 16-byte tag (legacy had a 32-byte BLAKE2b MAC), and
 //!   `P` commits to the key, nonce and associated data, not to `C`.
@@ -101,16 +101,16 @@
 //! > still be extremely fast (no network calls) but downloads/decryption that happens in the
 //! > background can make the network calls to the HSM
 mod aead;
+mod avelope;
+mod bytes;
 mod envelope;
 mod error;
 mod key;
 mod key_id;
 mod legacy;
-mod packfile;
 pub mod paseto_v4;
-mod storage;
-mod v5;
 
+pub use bytes::EncryptedBytes;
 pub use envelope::EncryptedData;
 pub use error::{
     AuthenticationError, Layer, LegacyCause, MalformedError, OpenError, ParseError, RewrapError,
@@ -121,8 +121,6 @@ pub use key::{
     MnemonicLoadingError, PlainTextEncodedKey,
 };
 pub use key_id::{KeyId, KeyIdParseError};
-pub use packfile::PackfileBody;
-pub use storage::StoredBlobs;
 
 /// An envelope format this build can seal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,11 +128,11 @@ pub enum EnvelopeFormat {
     /// PASETO v4.local payload with a PASERK `k4.local-wrap.pie` content key.
     Legacy,
     /// The committing XChaCha20-Poly1305 envelope of this module's docs.
-    V5,
+    Avelope,
 }
 
 impl EnvelopeFormat {
-    /// The format every writer seals in; **be warned**: atuin releases from before this enum existed cannot read [`EnvelopeFormat::V5`].
+    /// The format every writer seals in; **be warned**: readers built before this enum existed cannot open [`EnvelopeFormat::Avelope`].
     pub const WRITE: Self = Self::Legacy;
 }
 
@@ -144,14 +142,11 @@ mod tests {
     use rstest::fixture;
 
     use super::Key;
+    use super::avelope::Draws;
     use super::envelope::Cek;
-    use super::v5::Draws;
 
-    /// The golden record's `AdditionalData` JSON, which the v5 KATs reuse.
+    /// The golden record's `AdditionalData` JSON, which the avelope KATs reuse.
     pub(super) const KAT_AAD: &str = r#"{"id":"00000000-0000-0000-0000-000000000001","idx":7,"version":"v1","tag":"history","host":"00000000-0000-0000-0000-000000000002"}"#;
-
-    /// A frozen `PackIA` JSON.
-    pub(super) const KAT_PACK_AAD: &str = r#"{"manifest_id":"00000000-0000-0000-0000-000000000003","manifest_idx":4,"manifest_version":"v1","host":"00000000-0000-0000-0000-000000000002","tag":"packfile"}"#;
 
     pub(super) const KAT_PLAINTEXT: [u8; 5] = [1, 2, 3, 4, 5];
 
@@ -159,9 +154,9 @@ mod tests {
     pub(super) const GOLDEN_RAW: &str = "v4.local.cSFhI9n30MfwkZrRAt-YAoxp6DrAMMybmLury7svdFMkapmxQmLQaRzqCfIdanPaQ55VbJjGjqwjst2AnLiBQE9cAQAyH69u2HVHrkaKv7rGtQ";
     pub(super) const GOLDEN_CEK: &str = r#"{"wpk":"k4.local-wrap.pie.8xXPgrNyliEUy_PnbM3S88Yk8tQQA0HN2o6jyUkGHK5duUEfW-zSCI1kSYRpyPESCK7-5822hPzRAbyZXPRVAbCkoLqqwPJ8_oi8clKEr6u8nJuIQQLHVClvYJmZyZIu","kid":"k4.lid.2LzCmxDtbwu2tK5T1X1VLEth8umaI9vbKgTDkkt7ARR0"}"#;
 
-    /// `seal_v5(key(), KAT_AAD, KAT_PLAINTEXT, kat_draws())`.
-    pub(super) const KAT_WIRE_DATA: &str = "v5.BUBBQkNERUZHSElKS0xNTk9QUVJTVFVWVwAhrSRi6F-28hqzJzS8IQdRbIAr9c_2iFeGmtX_Tmn5VYPddjwuEmfse_VoF4tdz1qfQC_g";
-    pub(super) const KAT_WIRE_CEK: &str = "v5.Adi8wpsQ7W8LtrSuU9V9VSxLYfLpmiPb2yoEw5JLewEUdICBgoOEhYaHiImKi4yNjo-QkZKTlJWWl6COGGuyTR_LwA1ClzlBheoMUkyb1sVbdOd4JSE0bGRqDM5AqfPCUYKSzP28y7G4u153TxLRhIWzNQxXQRCMXUC-64OVdUyIEsId3LmiBhy7";
+    /// `EncryptedData::seal_avelope(key(), KAT_AAD, KAT_PLAINTEXT, kat_draws())`.
+    pub(super) const KAT_WIRE_DATA: &str = "avelope.AUBBQkNERUZHSElKS0xNTk9QUVJTVFVWVzXXgxpE1qJypD5p4Tj6Z2QijEcHrgZ__2MVK7MDLeREJKrrImNvVJe45iY3PfdO0XxBmqnR";
+    pub(super) const KAT_WIRE_CEK: &str = "avelope.Adi8wpsQ7W8LtrSuU9V9VSxLYfLpmiPb2yoEw5JLewEUdICBgoOEhYaHiImKi4yNjo-QkZKTlJWWlzCBVc4mIiwnqZnCJh7K1i6nQ_WZAkkJnlHgKISJ4JoHNcKGwGuGuMeXvfoRO-pqa_zPTI9zolyoTeCfHYdDxM2J8uzzbqjgCUZ8lUOECdeK";
 
     #[fixture]
     pub(super) fn key() -> Key {
