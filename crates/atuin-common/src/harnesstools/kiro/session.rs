@@ -193,6 +193,7 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
 /// The rows of the log at `path`, holding `bytes`, as a read of the whole log yields them (the
 /// header's title row after the first line included), for sync to key as capture does. Blocking;
 /// a line that doesn't parse is skipped, as the readers skip it.
+#[cfg_attr(not(test), allow(dead_code))] // used by sync once the write side is wired
 pub(crate) fn read_log(path: &Path, bytes: &[u8]) -> Vec<KiroMessage> {
     let mut header = HeaderWatch::new(path.with_file_name(HEADER_FILE));
     let title = header.refresh();
