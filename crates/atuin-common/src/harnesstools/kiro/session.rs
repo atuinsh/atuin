@@ -39,9 +39,11 @@
 //! header as each line arrives
 //! and, when the listener gave it a watch on the header, as the header is rewritten, and yields
 //! the title as a row of its own (a system row with nothing but the title, timed by the header's
-//! modification time, with an id made of the title) whenever it has changed, the first line of a
-//! read included: a re-read yields the same row under the same id, so the session is named again
-//! without a new row.
+//! modification time) whenever it has changed, the first line of a read included. Its id is made
+//! of the title and how many title rows the read yielded before it: a rename back to an earlier
+//! title is a row of its own, while a read started over (an import, a restart) names the session
+//! under the same row as any other read started over, so no new row. A title row waits until no
+//! reply is held (below), so its checkpoint never passes a row yet to be yielded.
 //!
 //! **Stop reasons.** A turn's `turn_end` carries the stop reason of the reply before it. The
 //! reader holds a turn's assistant rows back until the row after them, and stamps the stop reason
@@ -59,6 +61,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use futures::future::Either;
 use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -348,6 +351,8 @@ impl KiroSession {
             let mut generation = None;
             // The checkpoint of the last line read, which a title row between lines goes with.
             let mut last: Option<Checkpoint> = None;
+            // The title rows yielded so far in this read: part of the next one's id.
+            let mut titled: u32 = 0;
             let mut rewrites_done = false;
             loop {
                 tokio::select! {
@@ -356,6 +361,9 @@ impl KiroSession {
                         let Some(item) = item else {
                             for released in reading.finish() {
                                 yield Ok(released);
+                            }
+                            if let (Some((title, at)), Some(checkpoint)) = (pending_title.take(), last) {
+                                yield Ok((checkpoint, title_row(title, at, titled)));
                             }
                             break;
                         };
@@ -371,6 +379,7 @@ impl KiroSession {
                         if generation.replace(line.generation).is_some_and(|seen| seen != line.generation) {
                             reading = Reading::default();
                             pending_title = header.lock().current();
+                            titled = 0;
                         }
                         let checkpoint = Checkpoint::after(&line).started_over(over);
                         let context = header.lock().context();
@@ -384,20 +393,28 @@ impl KiroSession {
                         if let Some(renamed) = self.pool.run(move || watch.lock().refresh()).await.ok().flatten() {
                             pending_title = Some(renamed);
                         }
-                        if let Some((title, at)) = pending_title.take() {
-                            yield Ok((checkpoint, title_row(title, at)));
+                        // Not while a reply is held: the title's checkpoint would pass it.
+                        if !reading.holding()
+                            && let Some((title, at)) = pending_title.take()
+                        {
+                            yield Ok((checkpoint, title_row(title, at, titled)));
+                            titled += 1;
                         }
                     }
                     rewritten = rewrites.next(), if !rewrites_done => match rewritten {
                         Some(()) => {
                             let watch = Arc::clone(&header);
-                            let renamed = self.pool.run(move || watch.lock().refresh()).await.ok().flatten();
-                            match (renamed, last) {
-                                (Some((title, at)), Some(checkpoint)) => {
-                                    yield Ok((checkpoint, title_row(title, at)));
-                                }
-                                (Some(renamed), None) => pending_title = Some(renamed),
-                                (None, _) => {}
+                            if let Some(renamed) = self.pool.run(move || watch.lock().refresh()).await.ok().flatten() {
+                                pending_title = Some(renamed);
+                            }
+                            // With a line to go with, and no reply held; else the next line
+                            // brings it.
+                            if !reading.holding()
+                                && let Some(checkpoint) = last
+                                && let Some((title, at)) = pending_title.take()
+                            {
+                                yield Ok((checkpoint, title_row(title, at, titled)));
+                                titled += 1;
                             }
                         }
                         None => rewrites_done = true,
@@ -456,8 +473,24 @@ impl Session for KiroSession {
         .map(|item| item.map(|(_, message)| message))
     }
 
+    /// Once the log changes after `since`, or the header does (a title given or changed while
+    /// the log stands still), whichever is watched; at once with no watch on the log.
     async fn changed_after(mut self, since: SystemTime) -> Option<Self> {
-        modified_after(self.changes.as_mut(), since).await?;
+        match (self.changes.as_mut(), self.header.as_mut()) {
+            (Some(log), Some(header)) => {
+                let log = modified_after(Some(log), since);
+                let header = modified_after(Some(header), since);
+                futures::pin_mut!(log);
+                futures::pin_mut!(header);
+                match futures::future::select(log, header).await {
+                    Either::Left((Some(()), _)) | Either::Right((Some(()), _)) => {}
+                    // One watch ended: the other may still wake.
+                    Either::Left((None, header)) => header.await?,
+                    Either::Right((None, log)) => log.await?,
+                }
+            }
+            (log, _) => modified_after(log, since).await?,
+        }
         Some(self)
     }
 }
@@ -548,6 +581,11 @@ impl Reading {
         self.release()
     }
 
+    /// Whether a reply is held back, so no checkpoint past its line may be yielded yet.
+    fn holding(&self) -> bool {
+        !self.held.is_empty()
+    }
+
     /// Give the held reply (the last held row with text or a call, else the last held row) its
     /// stop reason.
     fn stamp(&mut self, stop: Option<StopReason>) {
@@ -583,13 +621,13 @@ fn stop_reason(raw: Option<&str>) -> Option<StopReason> {
 /// title lines are read under theirs.
 const TITLE_ROW: &str = "atuin-title";
 
-/// A row carrying `title`, which the header gave the session at `at` (see the module docs). Its
-/// id is the title's alone, so the same title read again is the same row.
-fn title_row(title: TitleChange, at: Option<SystemTime>) -> KiroMessage {
-    let id = format!(
-        "{SYNTHETIC}title-{:016x}",
-        xxhash_rust::xxh3::xxh3_64(title.text.as_deref().unwrap_or_default().as_bytes())
-    );
+/// A row carrying `title`, which the header gave the session at `at`, the `nth` title row of its
+/// read (see the module docs): the same title read again from the start is the same row, and a
+/// title the session is renamed back to is a new one.
+fn title_row(title: TitleChange, at: Option<SystemTime>, nth: u32) -> KiroMessage {
+    let mut keyed = title.text.as_deref().unwrap_or_default().as_bytes().to_vec();
+    keyed.extend_from_slice(&nth.to_le_bytes());
+    let id = format!("{SYNTHETIC}title-{:016x}", xxhash_rust::xxh3::xxh3_64(&keyed));
     KiroMessage {
         row: Row {
             id: Some(id),
@@ -1267,10 +1305,13 @@ mod tests {
         assert_eq!(say.operation(), Some("Say"));
         let rest: Vec<(Checkpoint, KiroMessage)> =
             session().messages_from(Some(*at)).try_collect().await.unwrap();
-        // The title again (the same row), then the rows after the reply.
-        assert!(rest[0].1.title().is_some());
+        // The rows after the reply, and the title again (the same row), once the replies the
+        // read starts on are out.
+        let (titles, rows): (Vec<_>, Vec<_>) = rest.iter().partition(|(_, m)| m.title().is_some());
+        assert_eq!(titles.len(), 1);
+        assert_eq!(titles[0].1.id(), all[1].1.id());
         assert_eq!(
-            rest[1..].iter().map(|(_, m)| m.id()).collect::<Vec<_>>(),
+            rows.iter().map(|(_, m)| m.id()).collect::<Vec<_>>(),
             all[5..].iter().map(|(_, m)| m.id()).collect::<Vec<_>>()
         );
         assert!(
@@ -1404,5 +1445,150 @@ mod tests {
             got.iter().rev().find(|m| m.carries_conversation()).unwrap().stop_reason(),
             Some(StopReason::EndTurn)
         );
+    }
+
+    /// The watcher's report of the one session under `root`, with its header watched (the
+    /// header may be listed after the log, which reports the session again), and the watch
+    /// itself, which keeps the session's receivers alive.
+    async fn watched(
+        root: &Path,
+    ) -> (std::pin::Pin<Box<dyn Stream<Item = Result<KiroSession, WatchError>> + Send>>, KiroSession)
+    {
+        let sessions = KiroSessions::builder().root(root.to_path_buf()).pool(pool()).build();
+        let mut watched = Box::pin(sessions.listener().unwrap().watch());
+        let mut session = next_report(&mut watched).await;
+        if session.header.is_none() {
+            session = next_report(&mut watched).await;
+        }
+        assert!(session.header.is_some(), "the header is watched too");
+        (watched, session)
+    }
+
+    async fn next_report<S>(watched: &mut S) -> KiroSession
+    where
+        S: Stream<Item = Result<KiroSession, WatchError>> + Unpin,
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
+            .await
+            .expect("the session is reported")
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn next_row<S>(messages: &mut S) -> (Checkpoint, KiroMessage)
+    where
+        S: Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Unpin,
+    {
+        tokio::time::timeout(std::time::Duration::from_secs(5), messages.next())
+            .await
+            .expect("a row")
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Make `path` an hour old.
+    fn age(path: &Path) {
+        let old = SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(old).unwrap();
+    }
+
+    /// A title row waits until no reply is held: yielded with a checkpoint past a reply still
+    /// held, a read resumed from it would skip the reply. Here the title is there before the
+    /// log's first line, a reply, which `turn_end` releases; the title follows it, and a read
+    /// resumed from the title's checkpoint skips nothing.
+    #[rstest]
+    #[tokio::test]
+    async fn a_title_row_waits_for_held_replies() {
+        let log = [
+            json!({"id": "r1-say", "timestamp": "2026-10-30T17:55:14.316Z", "payload": {"type": "assistant", "content": "hello", "operationType": "Say", "executionId": "e1"}}),
+            json!({"id": "m1", "timestamp": "2026-10-30T17:55:14.317Z", "payload": {"type": "session_metadata", "key": "contextUsage", "value": {}, "executionId": "e1"}}),
+            json!({"id": "e1-turn-end", "timestamp": "2026-10-30T17:55:14.318Z", "payload": {"type": "turn_end", "stopReason": "end_turn", "executionId": "e1"}}),
+            json!({"id": "u2", "timestamp": "2026-10-30T17:55:20.000Z", "payload": {"type": "user", "content": "next"}}),
+        ]
+        .iter()
+        .map(|row| row.to_string() + "\n")
+        .collect::<String>();
+        let root = root_with("sess_held", &log, Some(PROBE_HEADER));
+        let path = locate(root.path(), "sess_held").unwrap();
+        let session =
+            || KiroSession::open(SessionId::from("sess_held".to_owned()), path.clone(), pool());
+        let all: Vec<(Checkpoint, KiroMessage)> =
+            session().messages_from(None).try_collect().await.unwrap();
+        let kinds: Vec<_> = all.iter().map(|(_, m)| m.role()).collect();
+        assert_eq!(kinds, [Role::Assistant, Role::Other(TITLE_ROW.to_owned()), Role::User]);
+        let (reply, title, user) = (&all[0], &all[1], &all[2]);
+        assert_eq!(reply.1.stop_reason(), Some(StopReason::EndTurn));
+        assert!(reply.0.at < title.0.at && title.0.at < user.0.at, "{all:?}");
+        let rest: Vec<(Checkpoint, KiroMessage)> =
+            session().messages_from(Some(title.0)).try_collect().await.unwrap();
+        let ids: Vec<_> = rest.iter().filter_map(|(_, m)| m.id()).collect();
+        assert!(ids.contains(&user.1.id().unwrap()), "{ids:?}");
+        assert!(!ids.contains(&reply.1.id().unwrap()), "the reply was yielded before the title");
+    }
+
+    /// Renamed to another title and back, each rename is a row of its own; a read started over
+    /// names the session under the first row again.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rename_back_to_an_earlier_title_is_a_row_of_its_own() {
+        let root = root_with(PROBE_ID, PROBE, Some(PROBE_HEADER));
+        let header = root.path().join("c15e787aea4828dd").joined(PROBE_ID).joined(HEADER_FILE);
+        let (_watch, session) = watched(root.path()).await;
+        let mut messages = Box::pin(session.messages_from(None));
+        let mut rows = Vec::new();
+        for _ in 0..=parse(PROBE).len() {
+            rows.push(next_row(&mut messages).await.1);
+        }
+        let first = rows.iter().find(|m| m.title().is_some()).unwrap().id().unwrap();
+        let renamed = |to: &str| {
+            PROBE_HEADER.replace(
+                r#""title": "Get Unix Time In Nanoseconds","#,
+                &format!(r#""title": "{to}", "titleSetByUser": true,"#),
+            )
+        };
+        std::fs::write(&header, renamed("B")).unwrap();
+        let (_, b) = next_row(&mut messages).await;
+        assert_eq!(b.title(), Some(TitleChange::new(TitleSource::Named, "B")));
+        std::fs::write(&header, renamed("Get Unix Time In Nanoseconds")).unwrap();
+        let (_, a) = next_row(&mut messages).await;
+        assert_eq!(
+            a.title(),
+            Some(TitleChange::new(TitleSource::Named, "Get Unix Time In Nanoseconds"))
+        );
+        let ids = [first.clone(), b.id().unwrap(), a.id().unwrap()];
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 3, "{ids:?}");
+
+        let again = read_all(root.path(), PROBE_ID).await;
+        let title = again.iter().find(|m| m.title().is_some()).unwrap();
+        assert_eq!(title.id(), Some(first), "a read started over: the same row");
+    }
+
+    /// A session with no checkpoint is read once it changes: a header rewritten on its own (a
+    /// `/rename` of an idle session) counts, not only a line appended to the log.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_header_rewrite_is_a_change() {
+        let root = root_with(PROBE_ID, PROBE, Some(PROBE_HEADER));
+        let dir = root.path().join("c15e787aea4828dd").joined(PROBE_ID);
+        age(&dir.join(LOG_FILE));
+        age(&dir.join(HEADER_FILE));
+        let (_watch, session) = watched(root.path()).await;
+        let since = SystemTime::now() - std::time::Duration::from_secs(1);
+        let mut changed = Box::pin(session.clone().changed_after(since));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut changed)
+                .await
+                .is_err(),
+            "nothing changed since"
+        );
+        std::fs::write(
+            dir.join(HEADER_FILE),
+            PROBE_HEADER.replace("Get Unix Time In Nanoseconds", "renamed"),
+        )
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), changed)
+            .await
+            .expect("the header's rewrite wakes it")
+            .expect("the watch is live");
     }
 }
