@@ -271,15 +271,13 @@ struct Piece {
 fn update_envelope(session_id: &str, at: OffsetDateTime, update: Value) -> Value {
     let agent_ms = i64::try_from(at.unix_timestamp_nanos() / 1_000_000)
         .unwrap_or_else(|_| at.unix_timestamp().saturating_mul(1_000));
-    json!({
+    let mut envelope = json!({
         "timestamp": at.unix_timestamp(),
         "method": "session/update",
-        "params": {
-            "sessionId": session_id,
-            "update": update,
-            "_meta": {"agentTimestampMs": agent_ms},
-        },
-    })
+        "params": {"sessionId": session_id, "_meta": {"agentTimestampMs": agent_ms}},
+    });
+    envelope["params"]["update"] = update;
+    envelope
 }
 
 fn render_row_pieces(
