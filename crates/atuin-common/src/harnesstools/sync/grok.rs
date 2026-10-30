@@ -86,7 +86,11 @@ struct Transcript {
     bytes: Vec<u8>,
     modified: Option<std::time::SystemTime>,
     summary: GrokSummary,
+    /// The mappings of the lines the transcript has.
     sidecar: AtuinSidecar,
+    /// Every mapping `.atuin.json` holds, those of lines only a compaction's request still has
+    /// included: what a write keeps.
+    stored: AtuinSidecar,
     last_gk: Option<String>,
     prompt_count: u64,
     line_ids: Vec<String>,
@@ -141,8 +145,12 @@ impl Transcript {
             line_ids.push(resolved);
         }
 
-        let active_ids: HashMap<String, String> =
-            sidecar.ids.into_iter().filter(|(gk, _)| seen_gk.contains(gk)).collect();
+        let active_ids: HashMap<String, String> = sidecar
+            .ids
+            .iter()
+            .filter(|(gk, _)| seen_gk.contains(*gk))
+            .map(|(gk, id)| (gk.clone(), id.clone()))
+            .collect();
         let mut active_merged = HashMap::new();
         for (dropped, into) in &sidecar.merged {
             if !known.contains(dropped) && known.contains(into) {
@@ -150,6 +158,7 @@ impl Transcript {
                 active_merged.insert(dropped.clone(), into.clone());
             }
         }
+        let stored = sidecar.clone();
         let sidecar = AtuinSidecar {
             ids: active_ids,
             merged: active_merged,
@@ -161,6 +170,7 @@ impl Transcript {
             modified,
             summary,
             sidecar,
+            stored,
             last_gk: chain.last().map(str::to_owned),
             prompt_count,
             line_ids,
@@ -278,8 +288,8 @@ pub(super) fn append_to(
     }
     let rendered = extend(id, &file, base, lines, taken)?;
     if !rendered.chat_lines.is_empty() {
-        let prior_sidecar = file.sidecar.clone();
-        let mut combined_sidecar = file.sidecar;
+        let prior_sidecar = file.stored.clone();
+        let mut combined_sidecar = file.stored;
         combined_sidecar.ids.extend(rendered.sidecar.ids);
         combined_sidecar.merged.extend(rendered.sidecar.merged);
         // Write `.atuin.json` BEFORE appending to `chat_history.jsonl` so capture never sees new
@@ -337,7 +347,7 @@ pub(super) fn replace_to(
         out.push(b'\n');
     }
 
-    let prior_sidecar = file.sidecar.clone();
+    let prior_sidecar = file.stored.clone();
     let mut combined_sidecar = kept.sidecar;
     combined_sidecar.ids.extend(rendered.sidecar.ids);
     combined_sidecar.merged.extend(rendered.sidecar.merged);
@@ -352,8 +362,9 @@ pub(super) fn replace_to(
     .tip(path);
     resumes_from(written.tip_source_id.as_deref(), &written.merged, switched_to(&rest, &from))?;
 
-    // Stage the union of old + new sidecar mappings before replacing `chat_history.jsonl`, then
-    // write the pruned `combined_sidecar` once the atomic replace succeeds.
+    // `.atuin.json` gains the branch's mappings before `chat_history.jsonl` is replaced, and keeps
+    // the old ones: a mapping only ever names the line it is the key of, and what a compaction
+    // replaced is read through them again.
     let mut staged_sidecar = prior_sidecar.clone();
     staged_sidecar.ids.extend(combined_sidecar.ids.clone());
     staged_sidecar.merged.extend(combined_sidecar.merged.clone());
@@ -367,7 +378,6 @@ pub(super) fn replace_to(
         }
     };
 
-    write_sidecar(path, &combined_sidecar)?;
     let mut full_prev_gk = None;
     let full_updates = rehydrate::render_messages(id, branch, &mut full_prev_gk, 0).update_lines;
     touch_updates_and_summary(path, &full_updates, true, branch);
@@ -388,15 +398,11 @@ pub(super) fn replace_to(
 fn shared_lines(bytes: &[u8], sidecar: &AtuinSidecar, session_id: &str, from: &str) -> Vec<u8> {
     let mut chain = Chain::default();
     let mut past_branch = from == meta_id(session_id);
-    let mut seen_conversational = false;
     kept_lines(bytes, |raw| {
         let Ok(mut msg) = GrokMessage::decode(raw) else {
             return None;
         };
-        let Some(gk) = chain.key(&mut msg) else {
-            return Some(!seen_conversational);
-        };
-        seen_conversational = true;
+        let gk = chain.key(&mut msg)?;
         if past_branch {
             return Some(false);
         }
@@ -587,7 +593,7 @@ mod tests {
     }
 
     #[rstest]
-    fn switching_inside_a_merged_run_prunes_discarded_sidecar_mappings() {
+    fn switching_inside_a_merged_run_merges_into_the_new_branch() {
         use crate::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
 
         let dir = tempfile::tempdir().unwrap();
@@ -633,7 +639,62 @@ mod tests {
         assert_eq!(replaced.tip_source_id.as_deref(), Some("a_alt"));
 
         let sidecar = AtuinSidecar::read_beside(&path);
-        assert!(!sidecar.ids.values().any(|v| v == "a2"), "discarded branch id must be pruned");
         assert_eq!(sidecar.merged.get("a1").map(String::as_str), Some("a_alt"));
+    }
+
+    /// A compaction moves the lines atuin wrote into its request; catching up keeps their ids,
+    /// so the session read again from its start makes no rows twice.
+    #[rstest]
+    fn appending_after_a_compaction_keeps_the_ids_of_what_it_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let path = seed_session(&root, dir.path(), vec![
+            row("u1", None, Role::User, "first", 1_700_000_001),
+            row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002),
+        ]);
+        let written: Vec<Value> = jsonl_lines(&std::fs::read(&path).unwrap())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        let requests = path.with_file_name("compaction_requests");
+        std::fs::create_dir_all(&requests).unwrap();
+        std::fs::write(
+            requests.join("r1.json"),
+            json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": written}).to_string(),
+        )
+        .unwrap();
+        let compacted = [
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nfirst\n</user_query>"}]}),
+            json!({"type": "user", "content": [{"type": "text", "text": "This session is being continued."}], "synthetic_reason": "compaction_meta"}),
+        ];
+        std::fs::write(&path, join_jsonl(&compacted)).unwrap();
+
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        let next = row("u2", tip.tip_source_id.as_deref(), Role::User, "next", 1_700_000_003);
+        append_to(ID, &tip, &[next], None).unwrap();
+
+        let ids = AtuinSidecar::read_beside(&path).ids;
+        for id in ["u1", "a1", "u2"] {
+            assert!(ids.values().any(|v| v == id), "{id} lost from {ids:?}");
+        }
+    }
+
+    /// A line with nothing to key it by goes with the lines around it: a switch past it keeps it.
+    #[rstest]
+    fn a_switch_keeps_an_unkeyed_line_of_the_shared_history() {
+        let lines = [
+            json!({"type": "system", "content": "You are Grok."}),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\np1\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "assistant", "content": ""}),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\np2\n</user_query>"}], "prompt_index": 1}),
+            json!({"type": "assistant", "content": "after"}),
+        ];
+        let bytes = join_jsonl(&lines).into_bytes();
+        let mut chain = Chain::default();
+        let keys: Vec<_> = lines
+            .iter()
+            .filter_map(|l| chain.key(&mut serde_json::from_value(l.clone()).unwrap()))
+            .collect();
+        let kept = shared_lines(&bytes, &AtuinSidecar::default(), ID, &keys[1]);
+        assert_eq!(kept, join_jsonl(&lines[..4]).into_bytes());
     }
 }

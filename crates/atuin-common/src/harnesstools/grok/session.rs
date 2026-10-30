@@ -392,6 +392,8 @@ pub(crate) struct UpdateTimes {
     pub latest: Option<OffsetDateTime>,
     /// Each turn's usage (`turn_completed`), by the prompt index that started it.
     pub usage: HashMap<u64, Usage>,
+    /// Each turn's last reply, by the prompt index that started it.
+    pub replies: HashMap<u64, OffsetDateTime>,
 }
 
 fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
@@ -464,13 +466,14 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
                 if let Some(idx) = current_prompt {
                     times.usage.insert(idx, usage_of(&update["usage"]));
                 }
-                if let Some(turn_idx) = current_turn
-                    && let Some(reply) = times.turn_replies.get_mut(turn_idx)
-                {
-                    *reply = ts;
+                if let Some(idx) = current_prompt {
+                    times.replies.insert(idx, ts);
                 }
             }
             "agent_message_chunk" | "turn_completed" => {
+                if let Some(idx) = current_prompt {
+                    times.replies.insert(idx, ts);
+                }
                 if let Some(turn_idx) = current_turn {
                     if times.turn_replies.len() <= turn_idx {
                         times.turn_replies.resize(turn_idx + 1, ts);
@@ -643,6 +646,48 @@ impl Chain {
     }
 }
 
+/// How a transcript read again from its start joins what was read before. Grok Build rewrites it
+/// on `--resume`, `atuin threads resume --switch` replaces it, and a compaction replaces it with a
+/// summary. The capture of a read starts over ([`Checkpoint::generation`]), so its first line not
+/// read before would follow nothing: it follows the last line of the new read that was read
+/// before, or else, when a compaction kept none, the line the read before ended on.
+#[derive(Debug, Default)]
+struct Rejoin {
+    read: std::collections::HashSet<String>,
+    last: Option<String>,
+    from: Option<String>,
+    rejoining: bool,
+}
+
+impl Rejoin {
+    /// The transcript is read from its start again.
+    fn again(&mut self) {
+        if !self.rejoining {
+            self.from.clone_from(&self.last);
+        }
+        self.rejoining = true;
+    }
+
+    fn line(&mut self, msg: &mut GrokMessage) {
+        let Some(id) = msg.computed_id.clone() else {
+            return;
+        };
+        if !self.read.insert(id.clone()) {
+            if !self.rejoining {
+                self.last = Some(id);
+            // A compaction's `<user_info>` is read before when the session's first was the same.
+            } else if msg.synthetic_reason.as_deref() != Some(COMPACTION) {
+                self.from = Some(id);
+            }
+            return;
+        }
+        if std::mem::take(&mut self.rejoining) {
+            msg.follows_id.clone_from(&self.from);
+        }
+        self.last = Some(id);
+    }
+}
+
 /// Per-session state carried across lines without cloning growing maps on each line.
 #[derive(Debug, Default)]
 struct ReaderState {
@@ -658,6 +703,8 @@ struct ReaderState {
     /// The prompt index of the turn being read, and the turns whose usage a reply carries.
     prompt: Option<u64>,
     usage_given: std::collections::HashSet<u64>,
+    /// The ids of the lines before the checkpoint a read starts from.
+    replayed: Vec<String>,
     last_ts: Option<OffsetDateTime>,
     /// The time of the line before, which no line is timed before.
     previous_ts: Option<OffsetDateTime>,
@@ -697,6 +744,7 @@ impl ReaderState {
             current_turn: None,
             prompt: None,
             usage_given: std::collections::HashSet::new(),
+            replayed: Vec::new(),
             last_chain_id: initial_chain,
         };
         if start_offset > 0
@@ -717,31 +765,47 @@ impl ReaderState {
                 if pos > start_offset {
                     break;
                 }
-                if let Ok(mut msg) = GrokMessage::decode(&buf) {
-                    let _ = state.enrich(&mut msg);
+                if let Ok(mut msg) = GrokMessage::decode(&buf)
+                    && let Some(id) = state.enrich(&mut msg)
+                {
+                    state.replayed.push(id);
                 }
             }
         }
         state
     }
 
-    /// The messages of the transcripts compactions replaced (see [`compacted_beside`]), each read
-    /// from its start as the transcript was then; the reader then restarts for the file itself.
-    fn compacted(&mut self, transcripts: Vec<Vec<Value>>) -> Vec<GrokMessage> {
+    /// The messages of a transcript a compaction replaced (see [`compacted_beside`]), read from
+    /// its start as it was then. The reader restarts after it, for the file itself.
+    fn compacted(&mut self, lines: Vec<Value>, rejoin: &mut Rejoin) -> Vec<GrokMessage> {
+        self.restart();
+        rejoin.again();
         let mut out = Vec::new();
-        for lines in transcripts {
-            self.restart();
-            for line in lines {
-                let Ok(mut message) = serde_json::from_value::<GrokMessage>(line) else {
-                    continue;
-                };
-                if self.enrich(&mut message).is_some() {
-                    out.push(message);
-                }
+        for line in lines {
+            let Ok(mut message) = serde_json::from_value::<GrokMessage>(line) else {
+                continue;
+            };
+            if self.enrich(&mut message).is_some() {
+                rejoin.line(&mut message);
+                out.push(message);
             }
         }
         self.restart();
+        rejoin.again();
         out
+    }
+
+    /// The session's metadata row and its title, from `summary.json`, a read from the start
+    /// begins with.
+    fn header(&self, session_id: &str) -> Vec<GrokMessage> {
+        if !self.summary.present {
+            return Vec::new();
+        }
+        let title = self.summary.title.clone().map(|change| {
+            let ts = self.summary.created_at.or(self.summary.updated_at);
+            GrokMessage::title_info(session_id, change, ts)
+        });
+        std::iter::once(GrokMessage::session_meta(session_id, &self.summary)).chain(title).collect()
     }
 
     fn take_pending_title(&mut self) -> Option<TitleChange> {
@@ -829,8 +893,12 @@ impl ReaderState {
                 {
                     return Some(ts);
                 }
-                self.current_turn
-                    .and_then(|turn| self.times.turn_replies.get(turn).copied())
+                self.prompt
+                    .and_then(|prompt| self.times.replies.get(&prompt).copied())
+                    .or_else(|| {
+                        self.current_turn
+                            .and_then(|turn| self.times.turn_replies.get(turn).copied())
+                    })
                     .or(self.times.latest)
                     .or(self.summary.updated_at)
             }
@@ -927,18 +995,28 @@ impl Session for GrokSession {
                 _ => Checkpoint::new(0, b"").started_over(over),
             };
             let mut state = Some(probe.load_state(start).await);
+            let mut rejoin = Rejoin::default();
+            if let Some(st) = state.as_mut() {
+                rejoin.read.extend(std::mem::take(&mut st.replayed));
+                rejoin.last.clone_from(&st.last_chain_id);
+            }
+            let mut need_follows = start > 0;
             if start == 0 {
+                let header = state.as_ref().map(|st| st.header(probe.id.as_ref())).unwrap_or_default();
+                for message in header {
+                    yield Ok((safe_checkpoint, message));
+                }
                 let path = probe.path.clone();
                 let compacted =
                     probe.pool.run(move || compacted_beside(&path)).await.unwrap_or_default();
                 if let Some(st) = state.as_mut() {
-                    for message in st.compacted(compacted) {
-                        yield Ok((safe_checkpoint, message));
+                    for lines in compacted {
+                        for message in st.compacted(lines, &mut rejoin) {
+                            yield Ok((safe_checkpoint, message));
+                        }
                     }
                 }
             }
-            let mut need_follows = start > 0;
-            let mut emitted_header = start > 0;
             let mut last_generation = 0;
             let live = self.changes.is_some();
             let mut summary_rx = self.summary_changes;
@@ -1001,8 +1079,7 @@ impl Session for GrokSession {
                             {
                                 let ts = returned.summary.updated_at.or(returned.last_ts);
                                 state = Some(returned);
-                                if emitted_header
-                                    && let Some(change) = late_title
+                                if let Some(change) = late_title
                                 {
                                     yield Ok((
                                         safe_checkpoint,
@@ -1017,10 +1094,26 @@ impl Session for GrokSession {
                     Some(Some(Ok((line, mut message)))) => {
                         if line.generation != last_generation {
                             last_generation = line.generation;
-                            state = Some(probe.load_state(0).await);
-                            emitted_header = false;
                             need_follows = false;
-                            safe_checkpoint = Checkpoint::new(0, b"").started_over(true);
+                            safe_checkpoint = Checkpoint {
+                                generation: line.generation,
+                                ..Checkpoint::new(0, b"")
+                            }
+                            .started_over(over);
+                            let mut st = probe.load_state(0).await;
+                            for message in st.header(probe.id.as_ref()) {
+                                yield Ok((safe_checkpoint, message));
+                            }
+                            rejoin.again();
+                            let path = probe.path.clone();
+                            let compacted =
+                                probe.pool.run(move || compacted_beside(&path)).await.unwrap_or_default();
+                            for lines in compacted {
+                                for message in st.compacted(lines, &mut rejoin) {
+                                    yield Ok((safe_checkpoint, message));
+                                }
+                            }
+                            state = Some(st);
                         } else if live
                             && let Some(mut st) = state.take()
                         {
@@ -1035,28 +1128,8 @@ impl Session for GrokSession {
                             {
                                 let ts = returned.summary.updated_at.or(returned.last_ts);
                                 state = Some(returned);
-                                if emitted_header
-                                    && let Some(change) = late_title
+                                if let Some(change) = late_title
                                 {
-                                    yield Ok((
-                                        safe_checkpoint,
-                                        GrokMessage::title_info(probe.id.as_ref(), change, ts),
-                                    ));
-                                }
-                            }
-                        }
-
-                        if !emitted_header
-                            && let Some(st) = state.as_ref()
-                        {
-                            emitted_header = true;
-                            if st.summary.present {
-                                yield Ok((
-                                    safe_checkpoint,
-                                    GrokMessage::session_meta(probe.id.as_ref(), &st.summary),
-                                ));
-                                if let Some(change) = st.summary.title.clone() {
-                                    let ts = st.summary.created_at.or(st.summary.updated_at);
                                     yield Ok((
                                         safe_checkpoint,
                                         GrokMessage::title_info(probe.id.as_ref(), change, ts),
@@ -1068,9 +1141,12 @@ impl Session for GrokSession {
                         if let Some(st) = state.as_mut() {
                             let prior_chain =
                                 need_follows.then(|| st.last_chain_id.clone()).flatten();
-                            if st.enrich(&mut message).is_some() && need_follows {
-                                message.follows_id = prior_chain;
-                                need_follows = false;
+                            if st.enrich(&mut message).is_some() {
+                                if need_follows {
+                                    message.follows_id = prior_chain;
+                                    need_follows = false;
+                                }
+                                rejoin.line(&mut message);
                             }
                         }
                         let checkpoint = Checkpoint::after(&line).started_over(over);
@@ -1086,18 +1162,17 @@ impl Session for GrokSession {
         let session = self.clone();
         async_stream::stream! {
             let mut state = session.load_state(0).await;
-            if state.summary.present {
-                yield Ok(GrokMessage::session_meta(session.id.as_ref(), &state.summary));
-                if let Some(change) = state.summary.title.clone() {
-                    let ts = state.summary.created_at.or(state.summary.updated_at);
-                    yield Ok(GrokMessage::title_info(session.id.as_ref(), change, ts));
-                }
+            for message in state.header(session.id.as_ref()) {
+                yield Ok(message);
             }
+            let mut rejoin = Rejoin::default();
             let path = session.path.clone();
             let compacted =
                 session.pool.run(move || compacted_beside(&path)).await.unwrap_or_default();
-            for message in state.compacted(compacted) {
-                yield Ok(message);
+            for lines in compacted {
+                for message in state.compacted(lines, &mut rejoin) {
+                    yield Ok(message);
+                }
             }
             let messages = FollowLines::new(PooledReadLines::new(
                 PathLineReader::new(&session.path),
@@ -1109,6 +1184,7 @@ impl Session for GrokSession {
                 match item {
                     Ok((_line, mut message)) => {
                         if state.enrich(&mut message).is_some() {
+                            rejoin.line(&mut message);
                             yield Ok(message);
                         }
                     }

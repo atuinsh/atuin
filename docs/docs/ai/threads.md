@@ -257,8 +257,8 @@ back.
 - Right under it, forking writes the session out as a new session of the same
   agent, with the same history, tool calls and all, and resumes that. The
   original is left as it is. The fork is linked to it the way the agent links
-  its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's
-  `parentSession`; Copilot's start event gets a note it keeps; opencode gets a
+  its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Grok
+  Build's `parent_session_id`, Pi's `parentSession`; Copilot's start event gets a note it keeps; opencode gets a
   line it keeps from the model), so it's
   grouped under the original, with an Atuin id of its own. It keeps the
   original's title. Pi names the original by its file, so a Pi session that
@@ -317,7 +317,7 @@ synced messages:
   `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin
   never deletes these copies. The branch this copy was on stays in Atuin too,
   so forking it brings it back.
-  Claude Code, Codex, Copilot and Pi sessions can switch. These can only fork,
+  Claude Code, Codex, Copilot, Grok Build and Pi sessions can switch. These can only fork,
   and get no switch line: a Codex session that was reverted, so its history spans
   several files, or that Codex wrote in its older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
@@ -325,12 +325,12 @@ synced messages:
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, Copilot, and Codex where it keeps session locks, say which session
-they have open. opencode, Pi and other Codex installs don't, so Atuin treats a
+they have open. Grok Build, opencode, Pi and other Codex installs don't, so Atuin treats a
 session as possibly open, and doesn't catch it up, while one of that agent's
 processes works in the session's directory or below it: the directory this
 copy records, or else where the session works on this machine. A process elsewhere
-counts when its command line names the session (`opencode -s <id>`,
-`codex resume <id>`, `pi --session <file>`). While the session's transcript has
+counts when its command line names the session (`grok --resume <id>`,
+`opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has
 changed in the last two minutes, any running process of that agent counts,
 wherever it works.
 
@@ -360,7 +360,7 @@ The chooser still opens for a session its own agent can't resume.
 From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
-another (`claude-code`, `codex`, `copilot`, `opencode`, `pi` or `omp`; `claude`
+another (`claude-code`, `codex`, `copilot`, `grok`, `opencode`, `pi` or `omp`; `claude`
 is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
@@ -407,7 +407,7 @@ mouse = true
 
 To resume an agent's sessions with a command of your own in place of the
 built-in one, give a template per agent under `[threads.resume]` (`claude`,
-`codex`, `copilot`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these
+`codex`, `copilot`, `grok`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these
 substituted:
 
 - `{id}`: the agent's own id for the session;

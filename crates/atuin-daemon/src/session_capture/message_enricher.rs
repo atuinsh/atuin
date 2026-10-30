@@ -1279,4 +1279,93 @@ mod parser_contract {
         assert_eq!(rows2[0].parent_source_id, Some(rows1[0].source_id.clone()));
         assert_eq!(rows2[1].parent_source_id, Some(rows1[3].source_id.clone()));
     }
+
+    /// A session compacted while capture was stopped goes on from where its conversation was,
+    /// not from its first line, which the compaction's `<user_info>` repeats the same day.
+    #[rstest]
+    #[tokio::test]
+    async fn grok_rows_go_on_from_a_compaction_made_while_capture_was_stopped() {
+        use std::num::NonZeroUsize;
+
+        use atuin_common::harnesstools::grok::session::GrokSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use atuin_common::path::PathBufExt as _;
+        use atuin_common::sync::BlockingPool;
+        use futures::TryStreamExt;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+        let sdir = dir.path().join("%2Fwork").joined(sid);
+        std::fs::create_dir_all(sdir.join("compaction_requests")).unwrap();
+        std::fs::write(
+            sdir.join("summary.json"),
+            json!({"info": {"id": sid, "cwd": "/work"}, "created_at": "2026-10-28T10:00:00Z"})
+                .to_string(),
+        )
+        .unwrap();
+        let info = "<user_info>\nWorkspace Path: /work\n</user_info>";
+        let user =
+            |text: &str| json!({"type": "user", "content": [{"type": "text", "text": text}]});
+        let before = [
+            json!({"type": "system", "content": "You are Grok."}),
+            user(info),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nhi\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "assistant", "content": "hello"}),
+        ];
+        let lines = |lines: &[serde_json::Value]| -> String {
+            lines.iter().map(|l| format!("{l}\n")).collect()
+        };
+        let path = sdir.join("chat_history.jsonl");
+        std::fs::write(&path, lines(&before)).unwrap();
+
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let session_id = SessionId::from(sid.to_owned());
+        let gs = GrokSession::open(session_id.clone(), path.clone(), pool);
+        let batch1: Vec<_> = gs.clone().messages_from(None).try_collect().await.unwrap();
+        let checkpoint = batch1.last().unwrap().0;
+        let mut enricher = MessageEnricher::new(HarnessKind::Grok);
+        let rows1: Vec<Message> = batch1
+            .into_iter()
+            .flat_map(|(_, m)| enricher.capture(&session_id, &AnyMessage::Grok(m)))
+            .collect();
+
+        // `/compact`: the transcript is replaced, and what it held kept in the request.
+        let mut request = before.to_vec();
+        request.push(user("Your task is to produce a faithful, concise summary"));
+        std::fs::write(
+            sdir.join("compaction_requests").joined("r1.json"),
+            json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": request}).to_string(),
+        )
+        .unwrap();
+        let mut meta = |text: &str| {
+            let mut line = user(text);
+            line["synthetic_reason"] = json!("compaction_meta");
+            line
+        };
+        let after = [
+            json!({"type": "system", "content": "You are Grok."}),
+            meta(info),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nhi\n</user_query>"}]}),
+            meta("This session is being continued from a previous conversation."),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nnext\n</user_query>"}], "prompt_index": 1}),
+        ];
+        std::fs::write(&path, lines(&after)).unwrap();
+
+        let batch2: Vec<_> = gs.messages_from(Some(checkpoint)).try_collect().await.unwrap();
+        let mut resumed = MessageEnricher::new(HarnessKind::Grok);
+        resumed.resume(&session_id, None, &[], rows1.last(), &[]);
+        let stored: std::collections::HashSet<_> =
+            rows1.iter().map(|r| r.source_id.clone()).collect();
+        let new: Vec<Message> = batch2
+            .into_iter()
+            .flat_map(|(_, m)| resumed.capture(&session_id, &AnyMessage::Grok(m)))
+            .filter(|r| !stored.contains(&r.source_id))
+            .collect();
+        // The repeated prompt, the summary and the next prompt, in a line from the reply.
+        assert_eq!(new.len(), 3, "{new:#?}");
+        assert_eq!(new[0].parent_source_id, Some(rows1.last().unwrap().source_id.clone()));
+        assert_eq!(new[1].parent_source_id, Some(new[0].source_id.clone()));
+        assert_eq!(new[2].parent_source_id, Some(new[1].source_id.clone()));
+    }
 }
