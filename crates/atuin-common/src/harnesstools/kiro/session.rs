@@ -19,6 +19,11 @@
 //! - `agent_note`, `system` and `error`: context Kiro gave the model (the `<session_context>`
 //!   block, a hook's output) and errors, read as system rows, as Claude Code's injected context
 //!   is.
+//! - `sub_agent_start` and `sub_agent_complete`: a subagent spawned (`subSessionId`,
+//!   `subAgentName`, `prompt`) and its answer (`response`, `status`). No `tool_call` names the
+//!   spawn, so the start is read as the call (id `subSessionId`, name `invoke_sub_agent`, the tool
+//!   Kiro gives the model) and the end as its result, an error unless the status is `success`.
+//!   The subagent's own rows are a session of their own (see Subagents).
 //!
 //! The rest is bookkeeping, skipped: `session_start` (the system prompt, written after the first
 //! turn), `turn_start` and `turn_end` (whose `stopReason` the reader stamps on the turn's last
@@ -26,8 +31,7 @@
 //! `ContextualHookInvoked` (a hook run; atuin's own shows up here), `pending_interaction` and
 //! `interaction_resolved` (tool approval), `tombstone` (a compaction or rewind: the rows it covers
 //! are no longer what the model sees, but stay captured, as a Copilot compaction's do),
-//! `sub_agent_*` (a subagent's rows go to `sub-executions/<id>.jsonl`; a follow-up), and the
-//! rest of Kiro's internals.
+//! `sub_agent_progress`, and the rest of Kiro's internals.
 //!
 //! **Context.** No row says where the session works or which model answers: the header does
 //! (`workspacePaths[0]`, the directory the session was started in, wherever it is resumed from;
@@ -766,6 +770,8 @@ impl KiroMessage {
             "user" => !row.synthetic() && row.text("content").is_some(),
             "assistant" => row.text("content").is_some(),
             "tool_call" | "tool_result" | "agent_note" | "system" | "error" => true,
+            // The call and result stand on the subagent's id, which pairs them.
+            "sub_agent_start" | "sub_agent_complete" => row.text(SUB_SESSION_ID).is_some(),
             _ => false,
         };
         kept.then(|| Self {
@@ -790,16 +796,23 @@ impl KiroMessage {
     /// reasoning marker.
     fn carries_conversation(&self) -> bool {
         match self.kind() {
-            "tool_call" => true,
+            "tool_call" | "sub_agent_start" => true,
             "assistant" => self.operation() != Some("Reasoning"),
             _ => false,
         }
     }
 
     fn models_row(&self) -> bool {
-        matches!(self.kind(), "assistant" | "tool_call")
+        matches!(self.kind(), "assistant" | "tool_call" | "sub_agent_start")
     }
 }
+
+/// The field naming a subagent on the rows of its spawn, in the parent's log, and on its own
+/// rows (as `subExecutionId`): the name of its file under `sub-executions/`.
+const SUB_SESSION_ID: &str = "subSessionId";
+
+/// The tool Kiro gives the model to spawn a subagent, which a `sub_agent_start` stands in for.
+const SPAWN_TOOL: &str = "invoke_sub_agent";
 
 impl Message for KiroMessage {
     fn id(&self) -> Option<MessageId> {
@@ -810,8 +823,8 @@ impl Message for KiroMessage {
         match self.kind() {
             "user" => Role::User,
             "assistant" if self.operation() == Some("Summary") => Role::System,
-            "assistant" | "tool_call" => Role::Assistant,
-            "tool_result" => Role::Tool,
+            "assistant" | "tool_call" | "sub_agent_start" => Role::Assistant,
+            "tool_result" | "sub_agent_complete" => Role::Tool,
             "agent_note" | "system" | "error" => Role::System,
             other => Role::Other(other.to_owned()),
         }
@@ -844,6 +857,27 @@ impl Message for KiroMessage {
                 output: self.row.payload["content"].clone(),
                 error: self.row.payload["success"].as_bool() == Some(false),
             })),
+            "sub_agent_start" => Some(Content::ToolUse(ToolUse {
+                id: ToolCallId::from(self.row.str(SUB_SESSION_ID).unwrap_or_default().to_owned()),
+                name: SPAWN_TOOL.to_owned(),
+                input: serde_json::json!({
+                    "name": self.row.payload["subAgentName"],
+                    "prompt": self.row.payload["prompt"],
+                }),
+            })),
+            "sub_agent_complete" => Some(Content::ToolResult(ToolResult {
+                call: ToolCallId::from(self.row.str(SUB_SESSION_ID).unwrap_or_default().to_owned()),
+                output: match self.row.str("status") {
+                    Some("success") | None => self.row.payload["response"].clone(),
+                    // The answer, when there is one, over the status alone.
+                    Some(status) => self
+                        .row
+                        .text("errorMessage")
+                        .or_else(|| self.row.text("response"))
+                        .map_or_else(|| serde_json::json!(status), |text| serde_json::json!(text)),
+                },
+                error: self.row.str("status").is_some_and(|status| status != "success"),
+            })),
             "error" => Some(Content::Error(
                 text("message").or_else(|| text("code")).unwrap_or_else(|| "error".to_owned()),
             )),
@@ -864,9 +898,10 @@ impl Message for KiroMessage {
         self.cwd.clone()
     }
 
-    /// The turn (`executionId`), which every row of the turn after the prompt carries.
+    /// The turn (`executionId`), which every row of the turn after the prompt carries; a
+    /// subagent's spawn and answer name it as `parentExecutionId`.
     fn turn_id(&self) -> Option<String> {
-        self.row.str("executionId").map(str::to_owned)
+        self.row.str("executionId").or_else(|| self.row.str("parentExecutionId")).map(str::to_owned)
     }
 
     fn title(&self) -> Option<TitleChange> {
@@ -1128,7 +1163,8 @@ mod tests {
     #[case::approval(json!({"type": "pending_interaction", "interactionType": "tool_approval"}))]
     #[case::resolved(json!({"type": "interaction_resolved", "outcome": "cancelled"}))]
     #[case::tombstone(json!({"type": "tombstone", "kind": "summarization", "effectiveFromMessageId": "x"}))]
-    #[case::subagent(json!({"type": "sub_agent_start", "subSessionId": "s", "subAgentName": "reviewer", "prompt": "Review"}))]
+    #[case::subagent_progress(json!({"type": "sub_agent_progress", "subSessionId": "s", "message": "reading"}))]
+    #[case::subagent_unnamed(json!({"type": "sub_agent_start", "subAgentName": "reviewer", "prompt": "Review"}))]
     #[case::mode(json!({"type": "mode_change", "fromMode": "vibe", "toMode": "probe"}))]
     #[case::synthetic_user(json!({"type": "user", "content": "x", "_meta": {"kiro": {"syntheticUserMessageReason": "steer"}}}))]
     #[case::cleared_steer(json!({"type": "user", "content": "x", "_meta": {"kiro": {"steeringClearedIds": ["a"]}}}))]
@@ -1181,12 +1217,12 @@ mod tests {
     }
 
     /// A compaction leaves a tombstone, which yields nothing, and a summary, a system row
-    /// standing in for the conversation before it; a subagent's spawn and its answer are rows of
-    /// the parent's log the reader skips (their rows live in `sub-executions/`), and a failed
-    /// command is an error result.
+    /// standing in for the conversation before it; a subagent's spawn is a call in the parent's
+    /// story and its answer the call's result (the subagent's own rows live in
+    /// `sub-executions/`), and a failed command is an error result.
     #[rstest]
     #[tokio::test]
-    async fn a_compaction_is_a_summary_and_subagents_are_left_out() {
+    async fn a_compaction_is_a_summary_and_a_subagents_spawn_is_a_call() {
         let root = root_with("sess_d3a5510d", COMPACTED, Some(COMPACTED_HEADER));
         let messages = read_all(root.path(), "sess_d3a5510d").await;
         let summary = messages
@@ -1200,7 +1236,29 @@ mod tests {
             summary.content()
         );
         assert_eq!(summary.stop_reason(), None);
-        assert!(messages.iter().all(|m| !m.kind().starts_with("sub_agent")));
+
+        let spawn = messages.iter().find(|m| m.kind() == "sub_agent_start").expect("the spawn");
+        let Some(Content::ToolUse(call)) = spawn.content().first().cloned() else {
+            panic!("a call: {:?}", spawn.content());
+        };
+        assert_eq!(call.id.as_ref(), SUBAGENT);
+        assert_eq!(call.name, SPAWN_TOOL);
+        assert_eq!(call.input["name"], "kit-reviewer");
+        assert!(call.input["prompt"].as_str().unwrap().starts_with("Review the file calc.py"));
+        assert_eq!(spawn.role(), Role::Assistant);
+        assert_eq!(spawn.model().as_deref(), Some("auto"));
+        assert_eq!(spawn.turn_id().as_deref(), Some("e514a741-9199-48c3-a3d2-a0daa755eb32"));
+        assert_eq!(spawn.stop_reason(), Some(StopReason::ToolUse));
+        let answer = messages.iter().find(|m| m.kind() == "sub_agent_complete").expect("its end");
+        let Some(Content::ToolResult(result)) = answer.content().first().cloned() else {
+            panic!("a result: {:?}", answer.content());
+        };
+        assert_eq!(result.call, call.id);
+        assert!(result.output_text().unwrap().starts_with("Reviewed calc.py"), "{result:?}");
+        assert!(!result.error);
+        assert_eq!(answer.role(), Role::Tool);
+        assert_eq!(answer.turn_id(), spawn.turn_id());
+
         let user = texts(&messages, &Role::User);
         assert_eq!(user.len(), 3);
         assert!(user[1].starts_with("Use the kit-reviewer subagent"), "{user:?}");
@@ -1216,6 +1274,34 @@ mod tests {
         assert_eq!(messages.iter().filter_map(Message::title).count(), 1);
         assert!(messages.iter().all(|m| m.cwd().is_none()
             || m.cwd().as_deref() == Some(Path::new("/work/20261008T150143Z-K18-v3"))));
+    }
+
+    /// The subagent of the compacted session: its file under `sub-executions/`.
+    const SUBAGENT: &str = "5d13f3d7-73ae-431d-847f-04729b40503e";
+
+    /// A subagent's answer is the parent's result: its response when it succeeded; an error
+    /// otherwise, saying what went wrong, or the status when nothing does.
+    #[rstest]
+    #[case::success(json!({"status": "success", "response": "Found one bug."}), "Found one bug.", false)]
+    #[case::error(json!({"status": "error", "errorMessage": "model refused", "response": ""}), "model refused", true)]
+    #[case::cancelled(json!({"status": "cancelled"}), "cancelled", true)]
+    #[case::partial_answer(json!({"status": "error", "response": "halfway"}), "halfway", true)]
+    fn a_subagents_answer_is_its_spawns_result(
+        #[case] end: serde_json::Value,
+        #[case] output: &str,
+        #[case] error: bool,
+    ) {
+        let mut payload =
+            json!({"type": "sub_agent_complete", "subSessionId": "s1", "parentExecutionId": "e1"});
+        payload.as_object_mut().unwrap().extend(end.as_object().unwrap().clone());
+        let message = KiroMessage::of(row(payload), &Context::default()).unwrap();
+        let Some(Content::ToolResult(result)) = message.content().first().cloned() else {
+            panic!("a result: {:?}", message.content());
+        };
+        assert_eq!(result.call.as_ref(), "s1");
+        assert_eq!(result.output_text().as_deref(), Some(output));
+        assert_eq!(result.error, error);
+        assert_eq!(message.turn_id().as_deref(), Some("e1"));
     }
 
     /// The header names where the session works and which model answers, on every row.
