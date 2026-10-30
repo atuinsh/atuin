@@ -54,13 +54,27 @@
 //! on the last one with text or a call: `turn_end`'s when that row is the `turn_end`, `ToolUse`
 //! when it is a tool's result. The held rows keep their own lines' checkpoints.
 //!
+//! **Subagents.** Kiro writes a subagent's rows to a log of their own,
+//! `sub-executions/<subSessionId>.jsonl` under the parent's directory, in the parent's row shapes
+//! (`subExecutionId` naming the subagent), ending with a `tool_call` of `subagent_response` whose
+//! `args.response` is the answer the parent got. Each is read as a session of its own, a child of
+//! the parent ([`ParentKind::Subagent`]) on every row, under the `subSessionId` Kiro names it by
+//! (a bare uuid: the parent's id is `sess_<uuid>`, so a Kiro id without that prefix is a
+//! subagent's). It takes its directory and model from the parent's header, and its title from the
+//! `sub_agent_start` in the parent's log that names it (`subAgentName`, a
+//! [`TitleSource::Agent`] title, read as the header's is), which Kiro writes before the
+//! subagent's first row. A subagent's log is reported as the parent's is, by the watcher as it
+//! appears, with a checkpoint over its own file, and listed by a scan; Kiro resumes only the
+//! parent.
+//!
 //! **Ids and links.** Row ids are unique within the log. Rows name no parent: the session is
 //! linear, and each row's `executionId` (the turn) is its `turn_id`. Timestamps are not in file
 //! order (a `turn_end` is stamped before the rows written before it); rows are read in file
 //! order.
 
 use std::collections::HashMap;
-use std::io;
+use std::ffi::OsStr;
+use std::io::{self, BufRead};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -78,7 +92,8 @@ use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::kiro::{Kiro, kiro_home};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
-    Content, MessageId, Role, StopReason, TitleChange, TitleSource, ToolCallId, ToolResult, ToolUse,
+    Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
+    ToolResult, ToolUse,
 };
 use crate::harnesstools::session::synthetic::SYNTHETIC;
 use crate::harnesstools::session::{
@@ -94,8 +109,20 @@ use crate::sync::BlockingPool;
 pub(crate) const LOG_FILE: &str = "messages.jsonl";
 /// The header beside the log, with the session's directory, model, title and status.
 pub(crate) const HEADER_FILE: &str = "session.json";
+/// The directory beside the log holding the subagents' logs, `<subSessionId>.jsonl` each.
+pub(crate) const SUB_EXECUTIONS_DIR: &str = "sub-executions";
 /// The bucket of Kiro's old (V2) store, under the same root.
 const V2_BUCKET: &str = "cli";
+
+/// The prefix of every id Kiro gives a session, `sess_<uuid>`, which names its directory.
+const SESSION_PREFIX: &str = "sess_";
+
+/// Whether `id` names a subagent's session: the `subSessionId` Kiro names a subagent by is a
+/// bare uuid, the name of its log under `sub-executions/`, with no [`SESSION_PREFIX`], as
+/// Copilot's subagents are told by their `agent-` prefix.
+pub(crate) fn is_subagent_id(id: &str) -> bool {
+    resume::is_plain_name(id) && !id.starts_with(SESSION_PREFIX)
+}
 
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct KiroSessions {
@@ -116,23 +143,42 @@ pub(crate) fn default_root() -> PathBuf {
     kiro_home().joined("sessions")
 }
 
+/// The buckets under the sessions directory `root`, the V2 store's left out.
+fn buckets(root: &Path) -> impl Iterator<Item = PathBuf> {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|bucket| bucket.file_name() != V2_BUCKET)
+        .map(|bucket| bucket.path())
+}
+
 /// The directory of session `id` under the sessions directory `root`: in whichever bucket holds
 /// it (a session never moves buckets, however it is resumed).
 pub(crate) fn session_dir(root: &Path, id: &str) -> Option<PathBuf> {
     if !resume::is_plain_name(id) {
         return None;
     }
-    let buckets = std::fs::read_dir(root).ok()?;
-    buckets
-        .filter_map(Result::ok)
-        .filter(|bucket| bucket.file_name() != V2_BUCKET)
-        .map(|bucket| bucket.path().joined(id))
-        .find(|dir| dir.is_dir())
+    buckets(root).map(|bucket| bucket.joined(id)).find(|dir| dir.is_dir())
 }
 
-/// The log of session `id` under `root`, when it is there.
+/// The log of session `id` under `root`, when it is there. A subagent's names nothing but its
+/// file, so every session's `sub-executions/` is looked in.
 pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
-    let path = session_dir(root, id)?.joined(LOG_FILE);
+    if !resume::is_plain_name(id) {
+        return None;
+    }
+    let path = if is_subagent_id(id) {
+        buckets(root)
+            .filter_map(|bucket| std::fs::read_dir(bucket).ok())
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|session| session.file_name().to_string_lossy().starts_with(SESSION_PREFIX))
+            .map(|session| session.path().joined(SUB_EXECUTIONS_DIR).joined(format!("{id}.jsonl")))
+            .find(|log| log.is_file())?
+    } else {
+        session_dir(root, id)?.joined(LOG_FILE)
+    };
     path.is_file().then_some(path)
 }
 
@@ -195,32 +241,44 @@ pub struct KiroListener {
     pool: BlockingPool,
 }
 
-/// Whether `path`, under the sessions directory `root`, is a session's file called `name`:
-/// `<root>/<bucket>/<session>/<name>`, outside the V2 bucket. The rest of a session's directory
-/// is not conversation (`sub-executions/`, `tool-outputs/`, `snapshots/`), and neither is a
-/// bucket's `.index/`.
-fn is_session_file(root: &Path, path: &Path, name: &str) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return false;
+/// A file of a session's the reader looks at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SessionFile {
+    /// `<bucket>/<session>/messages.jsonl`.
+    Log,
+    /// `<bucket>/<session>/session.json`.
+    Header,
+    /// `<bucket>/<session>/sub-executions/<subSessionId>.jsonl`, a subagent's log, with its id.
+    SubExecution(String),
+}
+
+/// What `path`, under the sessions directory `root`, is to the reader, with the id of the session
+/// (the directory) it belongs to; `None` for the V2 bucket, a bucket's `.index/`, and the rest of
+/// a session's directory, which is not conversation (`tool-outputs/`, `snapshots/`).
+fn session_file(root: &Path, path: &Path) -> Option<(SessionId, SessionFile)> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Vec<&OsStr> = relative
+        .components()
+        .map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let (session, file) = match parts[..] {
+        [bucket, ..] if bucket == V2_BUCKET => return None,
+        [_, session, file] if file == LOG_FILE => (session, SessionFile::Log),
+        [_, session, file] if file == HEADER_FILE => (session, SessionFile::Header),
+        [_, session, dir, file] if dir == SUB_EXECUTIONS_DIR => {
+            let file = Path::new(file);
+            if file.extension() != Some(OsStr::new("jsonl")) {
+                return None;
+            }
+            let sub = file.file_stem()?.to_string_lossy().into_owned();
+            (session, SessionFile::SubExecution(sub))
+        }
+        _ => return None,
     };
-    let mut parts = relative.components();
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (
-            Some(Component::Normal(bucket)),
-            Some(Component::Normal(_)),
-            Some(Component::Normal(file)),
-            None,
-        ) => bucket != V2_BUCKET && file == name,
-        _ => false,
-    }
-}
-
-fn is_transcript(root: &Path, path: &Path) -> bool {
-    is_session_file(root, path, LOG_FILE)
-}
-
-fn is_header(root: &Path, path: &Path) -> bool {
-    is_session_file(root, path, HEADER_FILE)
+    Some((SessionId::from(session.to_string_lossy().into_owned()), file))
 }
 
 /// A session's two files, as the watcher has reported them so far.
@@ -231,23 +289,24 @@ struct Files {
 }
 
 impl KiroListener {
-    /// The session id a log's (or header's) directory is named with.
-    fn session_id(path: &Path) -> Option<SessionId> {
-        let dir = path.parent()?.file_name()?;
-        Some(SessionId::from(dir.to_string_lossy().into_owned()))
-    }
-
-    /// Build a read-once session for a log under `root` (no change signal), or `None`.
+    /// Build a read-once session for a log under `root` (no change signal), a parent's or a
+    /// subagent's, or `None`.
     fn open_session(
         root: &Path,
         path: &Path,
         is_file: bool,
         pool: &BlockingPool,
     ) -> Option<KiroSession> {
-        if !is_file || !is_transcript(root, path) {
+        if !is_file {
             return None;
         }
-        Some(KiroSession::open(Self::session_id(path)?, path.to_path_buf(), pool.clone()))
+        match session_file(root, path)? {
+            (id, SessionFile::Log) => Some(KiroSession::open(id, path.to_path_buf(), pool.clone())),
+            (parent, SessionFile::SubExecution(sub)) => {
+                Some(KiroSession::open_child(parent, &sub, path.to_path_buf(), pool.clone()))
+            }
+            (_, SessionFile::Header) => None,
+        }
     }
 }
 
@@ -257,16 +316,20 @@ impl Listener for KiroListener {
     /// Every log as the watcher reports it, with a watch on the header beside it when the
     /// watcher has reported that too. The watcher lists a directory in no set order, so a header
     /// reported after its log reports the session again, now with the header watched; the
-    /// consumer replaces its stream, as it does for a log made again.
+    /// consumer replaces its stream, as it does for a log made again. A subagent's log is
+    /// reported as it appears, a session of its own under the parent whose directory holds it.
     fn watch(self) -> impl Stream<Item = Result<KiroSession, WatchError>> + Send + 'static {
         let root = self.root;
         let pool = self.pool;
         async_stream::stream! {
             // The watcher reports paths under the canonical root.
             let sessions = AbsPathBuf::canonicalize(&root).map_or_else(|_| root.clone(), PathBuf::from);
-            let files = TreeWatcher::builder()
-                .filter(move |path| is_transcript(&sessions, path) || is_header(&sessions, path))
-                .watch(&root);
+            let files = {
+                let sessions = sessions.clone();
+                TreeWatcher::builder()
+                    .filter(move |path| session_file(&sessions, path).is_some())
+                    .watch(&root)
+            };
             let files = match files {
                 Ok(files) => files,
                 Err(err) => {
@@ -279,13 +342,19 @@ impl Listener for KiroListener {
             let mut seen: HashMap<PathBuf, Files> = HashMap::new();
             for await file in files {
                 let (path, stat) = file.into_parts();
+                let Some((id, kind)) = session_file(&sessions, &path) else { continue };
                 let Some(dir) = path.parent() else { continue };
-                let Some(id) = Self::session_id(&path) else { continue };
                 let files = seen.entry(dir.to_path_buf()).or_default();
-                if path.file_name().is_some_and(|name| name == HEADER_FILE) {
-                    files.header = Some(stat);
-                } else {
-                    files.log = Some((path.to_path_buf(), stat));
+                match kind {
+                    SessionFile::Header => files.header = Some(stat),
+                    SessionFile::Log => files.log = Some((path.to_path_buf(), stat)),
+                    SessionFile::SubExecution(sub) => {
+                        yield Ok(KiroSession {
+                            changes: Some(stat),
+                            ..KiroSession::open_child(id, &sub, path.to_path_buf(), pool.clone())
+                        });
+                        continue;
+                    }
                 }
                 let Some((log, changes)) = &files.log else { continue };
                 yield Ok(KiroSession {
@@ -293,6 +362,7 @@ impl Listener for KiroListener {
                     path: log.clone(),
                     changes: Some(changes.clone()),
                     header: files.header.clone(),
+                    parent: None,
                     pool: pool.clone(),
                 });
             }
@@ -310,6 +380,8 @@ pub struct KiroSession {
     /// Wakes the reader when the header is rewritten (a title generated or changed after the
     /// log's last line); `None` checks the header only as lines come.
     header: Option<watch::Receiver<FileStat>>,
+    /// For a subagent's session, the session that spawned it, whose directory holds the log.
+    parent: Option<SessionId>,
     pool: BlockingPool,
 }
 
@@ -322,7 +394,28 @@ impl KiroSession {
             path,
             changes: None,
             header: None,
+            parent: None,
             pool,
+        }
+    }
+
+    /// The session of subagent `sub` of `parent`, over its log `path` (under the parent's
+    /// directory) as it stands.
+    #[must_use]
+    pub fn open_child(parent: SessionId, sub: &str, path: PathBuf, pool: BlockingPool) -> Self {
+        Self {
+            parent: Some(parent),
+            ..Self::open(SessionId::from(sub.to_owned()), path, pool)
+        }
+    }
+
+    /// The parent's directory: the log's own for a parent, the one above `sub-executions/` for
+    /// a subagent.
+    fn session_dir(&self) -> &Path {
+        let dir = self.path.parent().unwrap_or(Path::new(""));
+        match self.parent {
+            Some(_) => dir.parent().unwrap_or(dir),
+            None => dir,
         }
     }
 
@@ -334,7 +427,7 @@ impl KiroSession {
         over: bool,
     ) -> impl Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Send + 'static {
         async_stream::stream! {
-            let header = Arc::new(Mutex::new(HeaderWatch::new(self.path.with_file_name(HEADER_FILE))));
+            let header = Arc::new(Mutex::new(Beside::of(&self)));
             // The header first: every row carries the directory it names. Its title waits for
             // the first line, whose checkpoint it goes with.
             let watch = Arc::clone(&header);
@@ -367,7 +460,7 @@ impl KiroSession {
                                 yield Ok(released);
                             }
                             if let (Some((title, at)), Some(checkpoint)) = (pending_title.take(), last) {
-                                yield Ok((checkpoint, title_row(title, at, titled)));
+                                yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
                             }
                             break;
                         };
@@ -401,7 +494,7 @@ impl KiroSession {
                         if !reading.holding()
                             && let Some((title, at)) = pending_title.take()
                         {
-                            yield Ok((checkpoint, title_row(title, at, titled)));
+                            yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
                             titled += 1;
                         }
                     }
@@ -417,7 +510,7 @@ impl KiroSession {
                                 && let Some(checkpoint) = last
                                 && let Some((title, at)) = pending_title.take()
                             {
-                                yield Ok((checkpoint, title_row(title, at, titled)));
+                                yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
                                 titled += 1;
                             }
                         }
@@ -552,11 +645,13 @@ impl Row {
     }
 }
 
-/// What the header says of the session, stamped on its rows.
+/// What is stamped on every row: what the header says of the session, and for a subagent, its
+/// parent.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Context {
     cwd: Option<PathBuf>,
     model: Option<String>,
+    parent: Option<SessionId>,
 }
 
 /// What the reader carries from one row to the ones after it.
@@ -643,10 +738,15 @@ fn stop_reason(raw: Option<&str>) -> Option<StopReason> {
 /// title lines are read under theirs.
 const TITLE_ROW: &str = "atuin-title";
 
-/// A row carrying `title`, which the header gave the session at `at`, the `nth` title row of its
-/// read (see the module docs): the same title read again from the start is the same row, and a
-/// title the session is renamed back to is a new one.
-fn title_row(title: TitleChange, at: Option<SystemTime>, nth: u32) -> KiroMessage {
+/// A row carrying `title`, which the header (or for a subagent of `parent`, its spawn) gave the
+/// session at `at`, the `nth` title row of its read (see the module docs): the same title read
+/// again from the start is the same row, and a title the session is renamed back to is a new one.
+fn title_row(
+    title: TitleChange,
+    at: Option<SystemTime>,
+    nth: u32,
+    parent: Option<SessionId>,
+) -> KiroMessage {
     let mut keyed = title.text.as_deref().unwrap_or_default().as_bytes().to_vec();
     keyed.extend_from_slice(&nth.to_le_bytes());
     let id = format!("{SYNTHETIC}title-{:016x}", xxhash_rust::xxh3::xxh3_64(&keyed));
@@ -658,10 +758,117 @@ fn title_row(title: TitleChange, at: Option<SystemTime>, nth: u32) -> KiroMessag
         },
         cwd: None,
         model: None,
+        parent,
         stop_reason: None,
         title: Some(title),
         at: at.map(OffsetDateTime::from),
     }
+}
+
+/// What the reader looks at beside the log: the header, which says where the session works and,
+/// for a parent, names it; and for a subagent, the parent's log, whose `sub_agent_start` names it.
+#[derive(Debug)]
+struct Beside {
+    header: HeaderWatch,
+    spawn: Option<SpawnWatch>,
+}
+
+impl Beside {
+    fn of(session: &KiroSession) -> Self {
+        let dir = session.session_dir();
+        let spawn = session.parent.clone().map(|parent| SpawnWatch {
+            log: dir.join(LOG_FILE),
+            sub: session.path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+            parent,
+            scanned: None,
+            found: None,
+        });
+        Self {
+            header: HeaderWatch::new(dir.join(HEADER_FILE)),
+            spawn,
+        }
+    }
+
+    /// The title the session is now given, and when, when it changed since the last call (or on
+    /// the first; see [`HeaderWatch::refresh`] and [`SpawnWatch::refresh`]). Blocking.
+    fn refresh(&mut self) -> Option<(TitleChange, Option<SystemTime>)> {
+        let header = self.header.refresh();
+        match &mut self.spawn {
+            Some(spawn) => spawn.refresh(),
+            None => header,
+        }
+    }
+
+    /// The title as last read, with when it was given.
+    fn current(&self) -> Option<(TitleChange, Option<SystemTime>)> {
+        match &self.spawn {
+            Some(spawn) => spawn.current(),
+            None => self.header.current(),
+        }
+    }
+
+    fn context(&self) -> Context {
+        Context {
+            parent: self.spawn.as_ref().map(|spawn| spawn.parent.clone()),
+            ..self.header.context()
+        }
+    }
+}
+
+/// Follows the parent's log for the `sub_agent_start` naming the subagent `sub`, which Kiro
+/// writes before the subagent's first row; nothing orders the two files for a reader, though, so
+/// the log is read again as it grows until the row is there.
+#[derive(Debug)]
+struct SpawnWatch {
+    /// The parent's log.
+    log: PathBuf,
+    sub: String,
+    parent: SessionId,
+    /// The log's length when last read: read again only once it has grown.
+    scanned: Option<u64>,
+    /// The subagent's name and when it was spawned, once its start row is read.
+    found: Option<(TitleChange, Option<SystemTime>)>,
+}
+
+impl SpawnWatch {
+    /// The subagent's name and when it was spawned, on the call that finds its start row: `None`
+    /// before, and after. Blocking.
+    fn refresh(&mut self) -> Option<(TitleChange, Option<SystemTime>)> {
+        if self.found.is_some() {
+            return None;
+        }
+        let len = std::fs::metadata(&self.log).ok()?.len();
+        if self.scanned == Some(len) {
+            return None;
+        }
+        self.scanned = Some(len);
+        self.found = spawn_of(&self.log, &self.sub);
+        self.found.clone()
+    }
+
+    fn current(&self) -> Option<(TitleChange, Option<SystemTime>)> {
+        self.found.clone()
+    }
+}
+
+/// The name the `sub_agent_start` row in the log at `path` gives subagent `sub`, and when it was
+/// written; `None` with no such row yet, or no name on it. A line that doesn't parse (the last,
+/// half written) is passed over. Blocking.
+fn spawn_of(path: &Path, sub: &str) -> Option<(TitleChange, Option<SystemTime>)> {
+    let log = io::BufReader::new(std::fs::File::open(path).ok()?);
+    log.split(b'\n')
+        .map_while(Result::ok)
+        .filter_map(|line| Row::decode(&line).ok())
+        .find(|row| row.kind() == "sub_agent_start" && row.str(SUB_SESSION_ID) == Some(sub))
+        .and_then(|row| {
+            let name = row.text("subAgentName")?;
+            let at = row
+                .timestamp
+                .as_deref()
+                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                .map(SystemTime::from);
+            Some((TitleChange::new(TitleSource::Agent, name), at))
+        })
 }
 
 /// The header, as far as the reader needs it.
@@ -680,6 +887,7 @@ impl Header {
             context: Context {
                 cwd: header["workspacePaths"][0].as_str().map(PathBuf::from),
                 model: header["modelId"].as_str().map(str::to_owned),
+                parent: None,
             },
             title: header["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_owned),
             user_titled: header["titleSetByUser"].as_bool() == Some(true),
@@ -755,6 +963,8 @@ pub struct KiroMessage {
     cwd: Option<PathBuf>,
     /// The model the header names, on the model's rows.
     model: Option<String>,
+    /// On a subagent's rows, the session that spawned it.
+    parent: Option<SessionId>,
     /// On a turn's last reply, from its `turn_end` (or `ToolUse`, before a tool's result).
     stop_reason: Option<StopReason>,
     /// On a title row ([`TITLE_ROW`]), the session's title from the header.
@@ -777,6 +987,7 @@ impl KiroMessage {
         kept.then(|| Self {
             cwd: context.cwd.clone(),
             model: context.model.clone(),
+            parent: context.parent.clone(),
             row,
             stop_reason: None,
             title: None,
@@ -907,6 +1118,14 @@ impl Message for KiroMessage {
     fn title(&self) -> Option<TitleChange> {
         self.title.clone()
     }
+
+    fn parent_session(&self) -> Option<SessionId> {
+        self.parent.clone()
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent.as_ref().map(|_| ParentKind::Subagent)
+    }
 }
 
 #[cfg(test)]
@@ -927,6 +1146,9 @@ mod tests {
     const COMPACTED: &str = include_str!("../../../tests/fixtures/kiro/compacted.jsonl");
     const COMPACTED_HEADER: &str =
         include_str!("../../../tests/fixtures/kiro/compacted.session.json");
+    /// The log of the subagent the compacted session spawned, `sub-executions/<SUBAGENT>.jsonl`.
+    const COMPACTED_SUBAGENT: &str =
+        include_str!("../../../tests/fixtures/kiro/compacted.subagent.jsonl");
 
     const RESUMED_ID: &str = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
 
@@ -946,13 +1168,31 @@ mod tests {
         root
     }
 
-    async fn read_all(root: &Path, id: &str) -> Vec<KiroMessage> {
+    /// Write the log of subagent `sub` of session `id` under `root`: its path.
+    fn with_subagent(root: &Path, id: &str, sub: &str, log: &str) -> PathBuf {
+        let dir = session_dir(root, id).expect("the parent is under the root");
+        let dir = dir.joined(SUB_EXECUTIONS_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.joined(format!("{sub}.jsonl"));
+        std::fs::write(&path, log).unwrap();
+        path
+    }
+
+    /// The session `id` under `root` (a parent's or a subagent's), read once.
+    fn open(root: &Path, id: &str) -> KiroSession {
         let path = locate(root, id).expect("the session is under the root");
-        KiroSession::open(SessionId::from(id.to_owned()), path, pool())
-            .messages()
-            .try_collect()
-            .await
-            .unwrap()
+        if is_subagent_id(id) {
+            // The parent's directory holds `sub-executions/`.
+            let parent = path.parent().unwrap().parent().unwrap().file_name().unwrap();
+            let parent = SessionId::from(parent.to_string_lossy().into_owned());
+            KiroSession::open_child(parent, id, path, pool())
+        } else {
+            KiroSession::open(SessionId::from(id.to_owned()), path, pool())
+        }
+    }
+
+    async fn read_all(root: &Path, id: &str) -> Vec<KiroMessage> {
+        open(root, id).messages().try_collect().await.unwrap()
     }
 
     /// The messages of a log, read without a header.
@@ -991,27 +1231,41 @@ mod tests {
         Row::decode(line.to_string().as_bytes()).unwrap()
     }
 
+    /// A session's log, header and subagents' logs are its files, named by its directory; the
+    /// rest of what Kiro keeps is not.
     #[rstest]
-    #[case::log("c15e787aea4828dd/sess_1/messages.jsonl", true)]
-    #[case::header("c15e787aea4828dd/sess_1/session.json", false)]
-    #[case::v2("cli/sess_1/messages.jsonl", false)]
-    #[case::subagent("c15e787aea4828dd/sess_1/sub-executions/x.jsonl", false)]
-    #[case::index("c15e787aea4828dd/.index/index.json", false)]
-    #[case::at_root("messages.jsonl", false)]
-    fn logs_are_the_sessions(#[case] relative: &str, #[case] expected: bool) {
+    #[case::log("c15e787aea4828dd/sess_1/messages.jsonl", Some(SessionFile::Log))]
+    #[case::header("c15e787aea4828dd/sess_1/session.json", Some(SessionFile::Header))]
+    #[case::subagent("c15e787aea4828dd/sess_1/sub-executions/x.jsonl", Some(SessionFile::SubExecution("x".to_owned())))]
+    #[case::v2("cli/sess_1/messages.jsonl", None)]
+    #[case::v2_header("cli/sess_1/session.json", None)]
+    #[case::v2_subagent("cli/sess_1/sub-executions/x.jsonl", None)]
+    #[case::index("c15e787aea4828dd/.index/index.json", None)]
+    #[case::at_root("messages.jsonl", None)]
+    #[case::tool_output("c15e787aea4828dd/sess_1/tool-outputs/read_file-0a1b2c3d.txt", None)]
+    #[case::snapshot("c15e787aea4828dd/sess_1/snapshots/x/messages.jsonl", None)]
+    #[case::not_a_log("c15e787aea4828dd/sess_1/sub-executions/x.txt", None)]
+    #[case::too_deep("c15e787aea4828dd/sess_1/sub-executions/x/y.jsonl", None)]
+    fn a_sessions_files_are_named_by_its_directory(
+        #[case] relative: &str,
+        #[case] want: Option<SessionFile>,
+    ) {
         let root = Path::new("/sessions");
-        assert_eq!(is_transcript(root, &root.join(relative)), expected);
-        assert!(!is_transcript(root, Path::new("/elsewhere/b/sess_1/messages.jsonl")));
-        assert!(is_header(root, Path::new("/sessions/b/sess_1/session.json")));
-        assert!(!is_header(root, Path::new("/sessions/cli/sess_1/session.json")));
+        let found = session_file(root, &root.join(relative));
+        assert_eq!(found.as_ref().map(|(_, file)| file), want.as_ref());
+        assert!(found.is_none_or(|(id, _)| id.as_ref() == "sess_1"));
+        assert_eq!(session_file(root, Path::new("/elsewhere/b/sess_1/messages.jsonl")), None);
     }
 
+    /// A subagent's id is the bare id Kiro files it under; a session's has Kiro's prefix.
     #[rstest]
-    fn session_id_is_the_directory_name() {
-        for file in [LOG_FILE, HEADER_FILE] {
-            let path = Path::new("/sessions/c15e787aea4828dd").join(RESUMED_ID).joined(file);
-            assert_eq!(KiroListener::session_id(&path).unwrap().as_ref(), RESUMED_ID);
-        }
+    #[case::session("sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48", false)]
+    #[case::subagent("5d13f3d7-73ae-431d-847f-04729b40503e", true)]
+    #[case::empty("", false)]
+    #[case::escaping("../x", false)]
+    #[case::a_path("a/b", false)]
+    fn a_subagents_id_has_no_session_prefix(#[case] id: &str, #[case] want: bool) {
+        assert_eq!(is_subagent_id(id), want);
     }
 
     #[rstest]
@@ -1026,6 +1280,14 @@ mod tests {
         std::fs::create_dir_all(&v2).unwrap();
         std::fs::write(v2.join(LOG_FILE), RESUMED).unwrap();
         assert_eq!(locate(root.path(), "sess_old"), None);
+        // A subagent's log, by its id alone, under whichever session holds it; not a V2
+        // session's.
+        let sub = with_subagent(root.path(), RESUMED_ID, "x", PROBE);
+        assert_eq!(locate(root.path(), "x"), Some(sub));
+        assert_eq!(locate(root.path(), "y"), None);
+        std::fs::create_dir_all(v2.join(SUB_EXECUTIONS_DIR)).unwrap();
+        std::fs::write(v2.join(SUB_EXECUTIONS_DIR).joined("z.jsonl"), PROBE).unwrap();
+        assert_eq!(locate(root.path(), "z"), None);
     }
 
     /// The conversation in file order: three prompts (the last two from another directory),
@@ -1278,6 +1540,200 @@ mod tests {
 
     /// The subagent of the compacted session: its file under `sub-executions/`.
     const SUBAGENT: &str = "5d13f3d7-73ae-431d-847f-04729b40503e";
+    const COMPACTED_ID: &str = "sess_d3a5510d";
+
+    /// The subagent's own conversation, read from its log: its rows (its reasoning, a read, its
+    /// reply, and the `subagent_response` call that answered the parent) name the parent and
+    /// take its directory and model, and the agent's name, from the parent's `sub_agent_start`,
+    /// is its title, a row of its own once no reply is held.
+    #[rstest]
+    #[tokio::test]
+    async fn a_subagent_is_a_child_session_over_its_own_log() {
+        let root = root_with(COMPACTED_ID, COMPACTED, Some(COMPACTED_HEADER));
+        with_subagent(root.path(), COMPACTED_ID, SUBAGENT, COMPACTED_SUBAGENT);
+        let child = SUBAGENT;
+        let session = open(root.path(), child);
+        assert_eq!(session.id().as_ref(), child);
+        let messages: Vec<KiroMessage> = session.messages().try_collect().await.unwrap();
+        let roles: Vec<_> = messages.iter().map(Message::role).collect();
+        assert_eq!(roles, [
+            Role::Assistant,
+            Role::Assistant,
+            Role::Tool,
+            Role::Other(TITLE_ROW.to_owned()),
+            Role::Assistant,
+            Role::Assistant,
+            Role::Assistant,
+            Role::Tool,
+        ]);
+        assert_eq!(texts(&messages, &Role::Assistant), ["The file has one bug."]);
+        let calls: Vec<_> = messages
+            .iter()
+            .filter_map(|m| match m.content().first() {
+                Some(Content::ToolUse(call)) => Some(call.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [
+            "read_file",
+            "subagent_response"
+        ]);
+        assert!(calls[1].input["response"].as_str().unwrap().starts_with("Reviewed calc.py"));
+        assert!(
+            messages
+                .iter()
+                .all(|m| m.parent_session().as_ref().map(AsRef::as_ref) == Some(COMPACTED_ID))
+        );
+        assert!(messages.iter().all(|m| m.parent_kind() == Some(ParentKind::Subagent)));
+        let (title, rows): (Vec<_>, Vec<_>) = messages.iter().partition(|m| m.title().is_some());
+        assert_eq!(title.len(), 1);
+        assert_eq!(title[0].title(), Some(TitleChange::new(TitleSource::Agent, "kit-reviewer")));
+        assert_eq!(
+            title[0].timestamp().map(|at| at.unix_timestamp()),
+            Some(
+                OffsetDateTime::parse("2026-10-08T15:02:33.394Z", &Rfc3339)
+                    .unwrap()
+                    .unix_timestamp()
+            ),
+            "the title is given when the subagent was spawned"
+        );
+        assert!(
+            rows.iter()
+                .all(|m| m.cwd().as_deref() == Some(Path::new("/work/20261008T150143Z-K18-v3")))
+        );
+        assert!(
+            rows.iter().filter(|m| m.models_row()).all(|m| m.model().as_deref() == Some("auto"))
+        );
+        assert!(
+            rows.iter()
+                .all(|m| m.turn_id().as_deref() == Some("e514a741-9199-48c3-a3d2-a0daa755eb32"))
+        );
+        assert_eq!(
+            rows.iter().rev().find(|m| m.carries_conversation()).unwrap().stop_reason(),
+            Some(StopReason::ToolUse),
+            "the answer is a call, before its result"
+        );
+        // The parent's rows are its own.
+        let parent = read_all(root.path(), COMPACTED_ID).await;
+        assert!(parent.iter().all(|m| m.parent_session().is_none() && m.parent_kind().is_none()));
+        assert!(
+            parent.iter().all(|m| m.title() != title[0].title()),
+            "the agent's name isn't the parent's"
+        );
+
+        // Resumed past a checkpoint, the rest, and the title again.
+        let all: Vec<(Checkpoint, KiroMessage)> =
+            open(root.path(), child).messages_from(None).try_collect().await.unwrap();
+        let (at, _) = &all[4];
+        let rest: Vec<(Checkpoint, KiroMessage)> =
+            open(root.path(), child).messages_from(Some(*at)).try_collect().await.unwrap();
+        let (titles, rows): (Vec<_>, Vec<_>) = rest.iter().partition(|(_, m)| m.title().is_some());
+        assert_eq!(titles.len(), 1);
+        assert_eq!(titles[0].1.id(), all[3].1.id(), "the same title row");
+        assert_eq!(
+            rows.iter().map(|(_, m)| m.id()).collect::<Vec<_>>(),
+            all[5..].iter().map(|(_, m)| m.id()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A subagent whose spawn the parent's log doesn't hold yet (or at all) has no title; it is
+    /// named once the row lands, by the next read, or the next line of a read that goes on.
+    #[rstest]
+    #[tokio::test]
+    async fn a_subagent_is_named_once_its_spawn_is_in_the_parents_log() {
+        let spawn = COMPACTED
+            .lines()
+            .find(|line| line.contains("\"sub_agent_start\""))
+            .expect("the fixture's spawn");
+        let unspawned: String =
+            COMPACTED.lines().filter(|l| *l != spawn).map(|l| format!("{l}\n")).collect();
+        let root = root_with(COMPACTED_ID, &unspawned, Some(COMPACTED_HEADER));
+        with_subagent(root.path(), COMPACTED_ID, SUBAGENT, COMPACTED_SUBAGENT);
+        let messages = read_all(root.path(), SUBAGENT).await;
+        assert!(messages.iter().all(|m| m.title().is_none()), "no spawn, no name");
+        assert_eq!(messages.len(), 7, "the rows are read all the same");
+        assert!(messages.iter().all(|m| m.parent_session().is_some()));
+
+        let log = locate(root.path(), COMPACTED_ID).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        std::io::Write::write_all(&mut file, format!("{spawn}\n").as_bytes()).unwrap();
+        let messages = read_all(root.path(), SUBAGENT).await;
+        assert_eq!(messages.iter().filter_map(Message::title).collect::<Vec<_>>(), [
+            TitleChange::new(TitleSource::Agent, "kit-reviewer")
+        ]);
+        assert!(spawn_of(&log, "no-such-subagent").is_none());
+        assert!(spawn_of(Path::new("/no/such/log"), SUBAGENT).is_none());
+    }
+
+    /// A subagent's log is reported as it appears, a session under its parent followed on its
+    /// own: its rows come through as they are written, and so does its name, when the parent's
+    /// spawn row lands after the subagent's first rows.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_listener_reports_a_subagents_log_as_it_appears() {
+        let spawn = COMPACTED
+            .lines()
+            .find(|line| line.contains("\"sub_agent_start\""))
+            .expect("the fixture's spawn");
+        let unspawned: String =
+            COMPACTED.lines().filter(|l| *l != spawn).map(|l| format!("{l}\n")).collect();
+        let root = root_with(COMPACTED_ID, &unspawned, Some(COMPACTED_HEADER));
+        let (mut watched, parent) = watched(root.path()).await;
+        assert_eq!(parent.id().as_ref(), COMPACTED_ID);
+
+        // The subagent's first rows: its reasoning, a read and the read's result.
+        let mut lines = COMPACTED_SUBAGENT.lines();
+        let first: String = lines.by_ref().take(4).map(|l| format!("{l}\n")).collect();
+        let path = with_subagent(root.path(), COMPACTED_ID, SUBAGENT, &first);
+        let child = next_report(&mut watched).await;
+        assert_eq!(child.id().as_ref(), SUBAGENT);
+        assert_eq!(child.parent.as_ref().map(AsRef::as_ref), Some(COMPACTED_ID));
+        assert!(child.changes.is_some(), "followed");
+        assert!(child.header.is_none(), "the header names the parent, not the subagent");
+        let mut messages = Box::pin(child.messages_from(None));
+        let mut got = Vec::new();
+        for n in 0..3 {
+            got.push(next_row_for(&mut messages, &format!("row {n}"), 15).await.1);
+        }
+        assert_eq!(got.iter().map(Message::role).collect::<Vec<_>>(), [
+            Role::Assistant,
+            Role::Assistant,
+            Role::Tool
+        ]);
+        assert!(got.iter().all(|m| m.parent_session().is_some()));
+        assert!(got.iter().all(|m| m.cwd().is_some()), "the parent's header");
+
+        // The parent names the subagent: the next row of its log brings the name through.
+        let log = locate(root.path(), COMPACTED_ID).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        std::io::Write::write_all(&mut file, format!("{spawn}\n").as_bytes()).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, format!("{}\n", lines.next().unwrap()).as_bytes())
+            .unwrap();
+        let (_, named) = next_row_for(&mut messages, "the name", 15).await;
+        assert_eq!(
+            named.title(),
+            Some(TitleChange::new(TitleSource::Agent, "kit-reviewer")),
+            "{named:?}"
+        );
+        // The rest of the subagent's log.
+        std::io::Write::write_all(
+            &mut file,
+            lines.map(|l| format!("{l}\n")).collect::<String>().as_bytes(),
+        )
+        .unwrap();
+        let mut rest = Vec::new();
+        for n in 0..4 {
+            rest.push(next_row_for(&mut messages, &format!("later row {n}"), 15).await.1);
+        }
+        assert_eq!(rest.iter().map(Message::role).collect::<Vec<_>>(), [
+            Role::Assistant,
+            Role::Assistant,
+            Role::Assistant,
+            Role::Tool
+        ]);
+        assert!(rest.iter().all(|m| m.title().is_none()), "named once");
+    }
 
     /// A subagent's answer is the parent's result: its response when it succeeded; an error
     /// otherwise, saying what went wrong, or the status when nothing does.
@@ -1451,8 +1907,11 @@ mod tests {
             .try_collect()
             .await
             .unwrap();
+        // The subagent is a session too, listed after its parent.
+        let at = |id: &str| ids.iter().position(|found| found == id).expect(id);
+        assert!(at(PROBE_ID) < at("x"), "{ids:?}");
         ids.sort();
-        assert_eq!(ids, [PROBE_ID, RESUMED_ID]);
+        assert_eq!(ids, [PROBE_ID, RESUMED_ID, "x"]);
         assert!(matches!(
             KiroSessions::builder().root(PathBuf::from("/no/such")).pool(pool()).build().listener(),
             Err(RuntimeError::NotFound(_))
