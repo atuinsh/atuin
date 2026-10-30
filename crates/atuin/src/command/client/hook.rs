@@ -102,16 +102,17 @@ async fn install(agent_name: &str) -> Result<()> {
 }
 
 /// Grok Build executes Claude Code hooks from `~/.claude/settings.json` when Claude compatibility
-/// is enabled, setting `GROK_SESSION_ID` and `GROK_HOOK_EVENT` in the hook environment. When a
+/// is enabled, setting `GROK_HOOK_EVENT` in the environment of every hook it runs. When a
 /// native `grok` hook is installed too, skip `atuin hook claude-code` so the two hooks do not
 /// record duplicates or race on `$TMPDIR/atuin-hook-<tool_use_id>`; otherwise keep the event and
 /// attribute it to `grok`.
 fn resolve_hook_author(harness_name: &str) -> Option<&str> {
+    let inside_grok = harness_name == "claude-code"
+        && atuin_common::env::var_nonempty("GROK_HOOK_EVENT").is_some();
     resolve_hook_author_with(
         harness_name,
-        atuin_common::env::var_nonempty("GROK_SESSION_ID").is_some()
-            || atuin_common::env::var_nonempty("GROK_HOOK_EVENT").is_some(),
-        atuin_common::harnesstools::grok::has_installed_hooks(),
+        inside_grok,
+        inside_grok && atuin_common::harnesstools::grok::has_installed_hooks(),
     )
 }
 
@@ -128,12 +129,13 @@ fn resolve_hook_author_with(
 
 async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
     let harness = AnyHarness::from_name(agent_name)?;
+
+    // Read whatever the hook is skipped for, so the agent's write of the event never fails.
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
     let Some(author) = resolve_hook_author(harness.name()) else {
         return Ok(());
     };
-
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
 
     if input.trim().is_empty() {
         return Ok(());
