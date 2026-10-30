@@ -228,7 +228,8 @@ mouse = false
   child session is a subagent, a fork or a continuation as it captures it.
   Sessions captured by older versions don't say, and for Codex and opencode
   nearly all such children are subagents, so the picker treats them as such
-  (they still resume by id).
+  (they still resume by id). A Kiro subagent's id is the bare id Kiro files it
+  under, without the `sess_` prefix its parent's has.
 
 Once you choose a thread, with ++enter++ (or ++tab++ to edit the command
 first), Atuin asks where to resume it, under the thread in the list, the two
