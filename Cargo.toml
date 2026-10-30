@@ -38,8 +38,13 @@ axoupdater = "0.10"
 axum = "0.8"
 # held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
+# held at 0.10: rusty_paseto 0.8 and rusty_paserk 0.5 lock blake2 0.10; 0.11 would add a 2nd copy
+blake2 = "0.10"
 bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
+# held at 0.10: reuses the chacha20 0.9, poly1305 0.8 and aead 0.5 already locked; 0.11 would add
+# a 2nd copy of each. No default features: only the detached in-place API is used.
+chacha20poly1305 = { version = "0.10", default-features = false }
 chrono = "0.4"
 chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
@@ -73,6 +78,7 @@ futures = "0.3"
 futures-util = "0.3"
 getrandom = "0.4"
 glob-match = "0.2"
+hex = "0.4"
 http = "1"
 humantime = "2"
 hyper-tls = "0.6"
@@ -153,6 +159,7 @@ sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
+subtle = "2"
 sysinfo = "0.39"
 tempfile = { version = "3" }
 thiserror = "2"
@@ -203,6 +210,8 @@ zstd = "0.14"
 [profile.dev.package]
 libsqlite3-sys.opt-level = 3
 chacha20.opt-level = 3
+chacha20poly1305.opt-level = 3
+poly1305.opt-level = 3
 blake2.opt-level = 3
 rusty_paseto.opt-level = 3
 rusty_paserk.opt-level = 3

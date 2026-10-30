@@ -486,8 +486,10 @@ dependencies = [
  "async-stream",
  "atuin-vt100",
  "base64 0.22.1",
+ "blake2",
  "bytes",
  "bytesize",
+ "chacha20poly1305",
  "colored",
  "crypto_secretbox",
  "derive_more",
@@ -499,6 +501,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "glob-match",
+ "hex",
  "humantime",
  "i18n-embed",
  "i18n-embed-fl",
@@ -535,6 +538,7 @@ dependencies = [
  "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
+ "subtle",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
@@ -1213,6 +1217,19 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead",
+ "chacha20 0.9.1",
+ "cipher",
+ "poly1305",
+ "zeroize",
 ]
 
 [[package]]
