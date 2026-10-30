@@ -130,7 +130,7 @@ This writes Atuin's hooks to `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/
 
 Kiro loads hooks when a session starts, so restart any Kiro already running. Hooks in your home directory run in every workspace; a hook file in a project's `.kiro/hooks` only runs once you have trusted that workspace, which is why the install writes to your home.
 
-Like Copilot, Kiro doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. A command Kiro runs in the background isn't recorded, since Kiro reports it as done as soon as it starts. When Kiro reports a command that never ran (one whose permission was denied, say), it gives exit code -1, and Atuin records that.
+Like Copilot, Kiro doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. A command Kiro runs in the background isn't recorded, since Kiro reports it as done as soon as it starts. When Kiro reports a command that never ran (one whose permission was denied, say), it gives the exit code `-1`, and Atuin records that.
 
 ### opencode
 
