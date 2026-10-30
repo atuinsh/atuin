@@ -12,7 +12,8 @@
 //! - `assistant`: the model's reply, one row per part (`operationType`): `Say` and `Print` are
 //!   text; `Reasoning` is its thinking, which Kiro redacts to `...` (read as a marker that the
 //!   model reasoned) or leaves empty (skipped); `Summary` is the summary a compaction left to
-//!   stand in for the conversation before it.
+//!   stand in for the conversation before it, read as a system row, as Claude Code's and
+//!   Copilot's compaction summaries are.
 //! - `tool_call`: a call (`toolCallId`, `toolName`, `args`), and `tool_result` its result
 //!   (`content`, a string, `success`). A denied call has a result too, with `success: false`.
 //! - `agent_note`, `system` and `error`: context Kiro gave the model (the `<session_context>`
@@ -34,7 +35,8 @@
 //! no git branch, and no token usage.
 //!
 //! **Titles.** The header's `title`, which Kiro generates after the first turn and `/rename`
-//! replaces, neither of which writes a row. The reader checks the header as each line arrives
+//! replaces (setting `titleSetByUser`), neither of which writes a row. The reader checks the
+//! header as each line arrives
 //! and, when the listener gave it a watch on the header, as the header is rewritten, and yields
 //! the title as a row of its own (a system row with nothing but the title, timed by the header's
 //! modification time, with an id made of the title) whenever it has changed, the first line of a
@@ -607,6 +609,8 @@ fn title_row(title: TitleChange, at: Option<SystemTime>) -> KiroMessage {
 struct Header {
     context: Context,
     title: Option<String>,
+    /// `titleSetByUser`: the title is the user's (`/rename`), not the generated one.
+    user_titled: bool,
 }
 
 impl Header {
@@ -618,13 +622,18 @@ impl Header {
                 model: header["modelId"].as_str().map(str::to_owned),
             },
             title: header["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_owned),
+            user_titled: header["titleSetByUser"].as_bool() == Some(true),
         })
     }
 
-    /// The session's title. Kiro generates one and `/rename` replaces it, with nothing in the
-    /// header to tell the two apart.
+    /// The session's title: the user's when they set it, else Kiro's.
     fn title(&self) -> Option<TitleChange> {
-        self.title.as_deref().map(|title| TitleChange::new(TitleSource::Generated, title))
+        let source = if self.user_titled {
+            TitleSource::Named
+        } else {
+            TitleSource::Generated
+        };
+        self.title.as_deref().map(|title| TitleChange::new(source, title))
     }
 }
 
@@ -743,6 +752,7 @@ impl Message for KiroMessage {
     fn role(&self) -> Role {
         match self.kind() {
             "user" => Role::User,
+            "assistant" if self.operation() == Some("Summary") => Role::System,
             "assistant" | "tool_call" => Role::Assistant,
             "tool_result" => Role::Tool,
             "agent_note" | "system" | "error" => Role::System,
@@ -1113,7 +1123,7 @@ mod tests {
         );
     }
 
-    /// A compaction leaves a tombstone, which yields nothing, and a summary, an assistant row
+    /// A compaction leaves a tombstone, which yields nothing, and a summary, a system row
     /// standing in for the conversation before it; a subagent's spawn and its answer are rows of
     /// the parent's log the reader skips (their rows live in `sub-executions/`), and a failed
     /// command is an error result.
@@ -1126,13 +1136,13 @@ mod tests {
             .iter()
             .find(|m| m.operation() == Some("Summary"))
             .expect("the compaction's summary");
-        assert_eq!(summary.role(), Role::Assistant);
+        assert_eq!(summary.role(), Role::System);
         assert!(
             matches!(&summary.content()[..], [Content::Summary(text)] if text.starts_with("## Overview")),
             "{:?}",
             summary.content()
         );
-        assert!(summary.carries_conversation());
+        assert_eq!(summary.stop_reason(), None);
         assert!(messages.iter().all(|m| !m.kind().starts_with("sub_agent")));
         let user = texts(&messages, &Role::User);
         assert_eq!(user.len(), 3);
@@ -1194,19 +1204,39 @@ mod tests {
         let again = read_all(root.path(), RESUMED_ID).await;
         assert_eq!(again[1].id(), Some(id.clone()));
 
-        // Renamed, another row.
-        let renamed = RESUMED_HEADER.replace("Read README and Run Probe Command", "renamed");
+        // Renamed with `/rename`, another row, the user's.
+        let renamed = RESUMED_HEADER.replace(
+            r#""title": "Read README and Run Probe Command","#,
+            r#""title": "renamed", "titleSetByUser": true,"#,
+        );
+        assert_ne!(renamed, RESUMED_HEADER);
         let header = root.path().join("c15e787aea4828dd").joined(RESUMED_ID).joined(HEADER_FILE);
         std::fs::write(&header, renamed).unwrap();
         let again = read_all(root.path(), RESUMED_ID).await;
         let titles: Vec<_> = again.iter().filter_map(Message::title).collect();
-        assert_eq!(titles, [TitleChange::new(TitleSource::Generated, "renamed")]);
+        assert_eq!(titles, [TitleChange::new(TitleSource::Named, "renamed")]);
         assert_ne!(again[1].id(), Some(id));
 
         // A header half written says nothing; the rows keep what the last whole one said.
         std::fs::write(&header, &RESUMED_HEADER[..RESUMED_HEADER.len() / 2]).unwrap();
         let partial = read_all(root.path(), RESUMED_ID).await;
         assert!(partial.iter().all(|m| m.title().is_none()));
+    }
+
+    /// Kiro's generated title, or the user's own once `/rename` set it (`titleSetByUser`).
+    #[rstest]
+    #[case::generated(r#"{"title": "Read README", "workspacePaths": ["/w"]}"#, Some((TitleSource::Generated, "Read README")))]
+    #[case::renamed(r#"{"title": "probe run", "titleSetByUser": true}"#, Some((TitleSource::Named, "probe run")))]
+    #[case::flag_off(r#"{"title": "Read README", "titleSetByUser": false}"#, Some((TitleSource::Generated, "Read README")))]
+    #[case::untitled(r#"{"title": "", "titleSetByUser": false}"#, None)]
+    #[case::no_title(r#"{"workspacePaths": ["/w"]}"#, None)]
+    fn the_header_names_the_session(#[case] json: &str, #[case] want: Option<(TitleSource, &str)>) {
+        let title = Header::parse(json).unwrap().title();
+        assert_eq!(
+            title.map(|t| (t.source, t.text.unwrap())),
+            want.map(|(source, text)| (source, text.to_owned()))
+        );
+        assert!(Header::parse("{").is_err());
     }
 
     #[rstest]

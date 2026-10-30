@@ -3,10 +3,12 @@
 //!
 //! **Liveness.** Kiro keeps no lock on a session it has open. Its header's `status` is `idle`
 //! between turns (and `completed` or `failed` once a session is over) and `in_progress` or
-//! `waiting_on_user` while a turn runs: a running turn says a Kiro has the session, wherever it
-//! runs (`kiro-cli chat --resume-id` reopens a session from anywhere). Kiro rewrites the header
-//! in place, so one that doesn't parse is being written. Between turns, a log still changing in
-//! the last [`RECENT`](super::RECENT) may have a Kiro at its prompt.
+//! `waiting_on_user` while a turn runs: a running turn whose header or log changed in the last
+//! [`RECENT`](super::RECENT) says a Kiro has the session, wherever it runs (`kiro-cli chat
+//! --resume-id` reopens a session from anywhere). A Kiro that died mid-turn leaves `in_progress`
+//! behind for good, so a stale one says only that someone may. Kiro rewrites the header in place,
+//! so one that doesn't parse is being written. Between turns, a log still changing may have a
+//! Kiro at its prompt.
 
 use std::path::Path;
 
@@ -88,12 +90,15 @@ fn status(header: &Path) -> Status {
 
 /// Whether a Kiro has the session in `dir` open (see the module docs).
 fn liveness(dir: &Path) -> Liveness {
-    match status(&dir.join(HEADER_FILE)) {
-        Status::Busy => Liveness::Live { pid: None },
-        Status::Unreadable => Liveness::Unknown,
-        Status::Idle | Status::Missing if changed_lately(modified(&dir.join(LOG_FILE))) => {
-            Liveness::Unknown
+    let header = dir.join(HEADER_FILE);
+    let log_changing = || changed_lately(modified(&dir.join(LOG_FILE)));
+    match status(&header) {
+        // A turn's progress rewrites the header and appends to the log.
+        Status::Busy if log_changing() || changed_lately(modified(&header)) => {
+            Liveness::Live { pid: None }
         }
+        Status::Busy | Status::Unreadable => Liveness::Unknown,
+        Status::Idle | Status::Missing if log_changing() => Liveness::Unknown,
         Status::Idle | Status::Missing => Liveness::NotLive,
     }
 }
@@ -106,23 +111,30 @@ mod tests {
 
     const HEADER: &str = include_str!("../../../tests/fixtures/kiro/probe.session.json");
 
-    /// A session directory whose log last changed an hour ago, with `header` beside it.
+    /// A session directory whose log last changed an hour ago, with `header` beside it, written
+    /// just now.
     fn session(header: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join(LOG_FILE);
         std::fs::write(&log, "{}\n").unwrap();
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        std::fs::File::options().write(true).open(&log).unwrap().set_modified(old).unwrap();
+        age(&log);
         if let Some(header) = header {
             std::fs::write(dir.path().join(HEADER_FILE), header).unwrap();
         }
         dir
     }
 
+    /// Make `path` an hour old.
+    fn age(path: &Path) {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(old).unwrap();
+    }
+
     fn with_status(status: &str) -> String {
         HEADER.replace(r#""status": "idle""#, &format!(r#""status": "{status}""#))
     }
 
+    /// The header was just rewritten with the status, as a turn's progress rewrites it.
     #[rstest]
     #[case::running("in_progress", Liveness::Live { pid: None })]
     #[case::asking("waiting_on_user", Liveness::Live { pid: None })]
@@ -134,6 +146,20 @@ mod tests {
         assert!(HEADER.contains(r#""status": "idle""#));
         let dir = session(Some(&with_status(status)));
         assert_eq!(liveness(dir.path()), want);
+    }
+
+    /// A Kiro that died mid-turn leaves `in_progress` behind: with nothing written for a while,
+    /// it says only that someone may have the session.
+    #[rstest]
+    #[case::running("in_progress")]
+    #[case::asking("waiting_on_user")]
+    fn a_stale_running_turn_may_or_may_not_have_a_writer(#[case] status: &str) {
+        let dir = session(Some(&with_status(status)));
+        age(&dir.path().join(HEADER_FILE));
+        assert_eq!(liveness(dir.path()), Liveness::Unknown);
+        // The log still changing says the turn goes on.
+        std::fs::write(dir.path().join(LOG_FILE), "{}\n{}\n").unwrap();
+        assert_eq!(liveness(dir.path()), Liveness::Live { pid: None });
     }
 
     /// Kiro rewrites the header in place: one that doesn't parse is being written.
