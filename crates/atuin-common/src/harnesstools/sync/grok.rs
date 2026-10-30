@@ -17,7 +17,7 @@ use crate::harnesstools::grok::Grok;
 use crate::harnesstools::grok::rehydrate::{self, Rendered, join_jsonl, timestamp};
 use crate::harnesstools::grok::session::{
     AtuinSidecar, Chain, GrokMessage, GrokSummary, SIDECAR_FILE, SUMMARY_FILE, UPDATES_FILE,
-    default_root, locate, meta_id, read_summary_beside, title_id,
+    default_root, locate, meta_id, read_summary_beside, read_update_times_beside, title_id,
 };
 use crate::harnesstools::rehydrate::RehydrateMessage;
 use crate::harnesstools::session::Message as _;
@@ -103,7 +103,11 @@ impl Transcript {
         let bytes = std::fs::read(path)?;
         let summary = read_summary_beside(path);
         let sidecar = AtuinSidecar::read_beside(path);
-        Ok(Self::parse(bytes, modified, id, summary, sidecar))
+        let mut file = Self::parse(bytes, modified, id, summary, sidecar);
+        // A compaction keeps no prompt's index in the transcript: the next one's is past theirs.
+        let prompted = read_update_times_beside(path).prompts_by_index.into_keys().max();
+        file.prompt_count = file.prompt_count.max(prompted.map_or(0, |index| index + 1));
+        Ok(file)
     }
 
     fn parse(
@@ -158,19 +162,16 @@ impl Transcript {
                 active_merged.insert(dropped.clone(), into.clone());
             }
         }
-        let stored = sidecar.clone();
-        let sidecar = AtuinSidecar {
-            ids: active_ids,
-            merged: active_merged,
-        };
-
         Self {
             session_id: id.to_owned(),
             bytes,
             modified,
             summary,
-            sidecar,
-            stored,
+            sidecar: AtuinSidecar {
+                ids: active_ids,
+                merged: active_merged,
+            },
+            stored: sidecar,
             last_gk: chain.last().map(str::to_owned),
             prompt_count,
             line_ids,

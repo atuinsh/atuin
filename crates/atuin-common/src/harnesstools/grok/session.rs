@@ -24,9 +24,9 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, modified_after,
+    Sessions, WatchError, checkpoint_offset, modified_after,
 };
-use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::path::{AbsPathBuf, PathBufExt as _};
 use crate::sync::BlockingPool;
@@ -518,7 +518,7 @@ fn compacted_beside(transcript_path: &Path) -> Vec<Vec<Value>> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let bytes = std::fs::read(entry.path()).ok()?;
-            let mut request = serde_json::from_slice::<Value>(&bytes).ok()?;
+            let mut request = crate::json::js::from_slice::<Value>(&bytes).ok()?;
             let at = request["created_at"].as_str()?.to_owned();
             let Value::Array(mut lines) = request["chat_history"].take() else {
                 return None;
@@ -939,34 +939,6 @@ impl GrokSession {
         let path = self.path.clone();
         self.pool.run(move || ReaderState::load(&id, &path, start_offset)).await.unwrap_or_default()
     }
-
-    async fn start(&self, from: Checkpoint) -> u64 {
-        let path = self.path.clone();
-        let found = self
-            .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
-            .await
-            .map_err(io::Error::other)
-            .and_then(|found| found);
-        match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
-            Ok(_) => {
-                tracing::debug!(
-                    path = %self.path.display(),
-                    "the checkpoint no longer names its line; reading from the start"
-                );
-                0
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    "failed to read the line a checkpoint names; reading from the start"
-                );
-                0
-            }
-        }
-    }
 }
 
 impl Session for GrokSession {
@@ -983,7 +955,7 @@ impl Session for GrokSession {
         async_stream::stream! {
             let probe = self.clone();
             let start = match from {
-                Some(from) => self.start(from).await,
+                Some(from) => checkpoint_offset(&self.path, &self.pool, from).await,
                 None => 0,
             };
             let over = from.is_some() && start == 0;
@@ -1365,7 +1337,7 @@ fn parse_tool_arguments(raw: &Value) -> Value {
     }
 }
 
-fn inferred_tool_error(output: &Value) -> bool {
+pub(crate) fn inferred_tool_error(output: &Value) -> bool {
     let Some(text) = output.as_str() else {
         return false;
     };

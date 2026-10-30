@@ -26,7 +26,7 @@ use time::macros::format_description;
 
 use super::session::{
     AtuinSidecar, SIDECAR_FILE, SUMMARY_FILE, TRANSCRIPT_FILE, UPDATES_FILE, default_root,
-    encode_cwd, line_key, locate, meta_id,
+    encode_cwd, inferred_tool_error, line_key, locate, meta_id,
 };
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, merge_uncaptured_runs,
@@ -454,21 +454,7 @@ fn render_row_pieces(
                 let text_preview = result
                     .output_text()
                     .map_or_else(|| UNCAPTURED_OUTPUT.to_owned(), std::borrow::Cow::into_owned);
-                let inferred_err = match &output_val {
-                    Value::String(s) => {
-                        if let Some(rest) = s.strip_prefix("exit: ") {
-                            rest.lines()
-                                .next()
-                                .unwrap_or_default()
-                                .trim()
-                                .parse::<i64>()
-                                .is_ok_and(|n| n != 0)
-                        } else {
-                            s.starts_with("Error: ") || s.starts_with("Failed to parse arguments")
-                        }
-                    }
-                    _ => false,
-                };
+                let inferred_err = inferred_tool_error(&output_val);
                 let status = if result.error || inferred_err {
                     "failed"
                 } else {

@@ -1338,7 +1338,7 @@ mod parser_contract {
             json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": request}).to_string(),
         )
         .unwrap();
-        let mut meta = |text: &str| {
+        let meta = |text: &str| {
             let mut line = user(text);
             line["synthetic_reason"] = json!("compaction_meta");
             line
