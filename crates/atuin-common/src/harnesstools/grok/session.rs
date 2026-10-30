@@ -23,8 +23,8 @@ use crate::harnesstools::session::model::{
     ToolResult, ToolUse, Usage,
 };
 use crate::harnesstools::session::{
-    Checkpoint, Listener, Message, MessageError, Observable, RuntimeError, Session, SessionId,
-    Sessions, WatchError, checkpoint_offset, modified_after,
+    Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
+    Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after,
 };
 use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -39,6 +39,10 @@ pub(crate) const SUMMARY_FILE: &str = "summary.json";
 
 /// ACP update log beside [`TRANSCRIPT_FILE`], carrying per-event timestamps and TUI scrollback.
 pub(crate) const UPDATES_FILE: &str = "updates.jsonl";
+
+/// Grok Build's rewind points beside [`TRANSCRIPT_FILE`]: per turn, what each file it changed held
+/// before the turn first touched it.
+const REWINDS_FILE: &str = "rewind_points.jsonl";
 
 /// Directory beside [`TRANSCRIPT_FILE`] where Grok Build keeps each compaction's request, holding
 /// the whole transcript as it stood before the compaction replaced it.
@@ -405,12 +409,12 @@ fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
     }
 }
 
+/// When an `updates.jsonl` event happened: Grok Build's milliseconds (`params._meta`), else its
+/// whole seconds.
 fn event_timestamp(entry: &Value) -> Option<OffsetDateTime> {
     parse_unix_timestamp(&entry["params"]["_meta"]["agentTimestampMs"])
         .or_else(|| parse_unix_timestamp(&entry["timestamp"]))
 }
-/// When an `updates.jsonl` event happened: Grok Build's milliseconds (`params._meta`), else its
-/// whole seconds.
 
 type FileSignature = Option<(std::time::SystemTime, u64)>;
 
@@ -507,6 +511,26 @@ fn usage_of(usage: &Value) -> Usage {
         cache_write,
         reasoning: field("reasoningTokens"),
     }
+}
+
+/// What each turn's files held before the turn first touched them (`rewind_points.jsonl`): by the
+/// turn's prompt index, then the file's path as Grok Build names it (relative to the session's
+/// directory); `None` for a file that didn't exist.
+type Snapshots = HashMap<u64, HashMap<String, Option<String>>>;
+
+fn read_snapshots_beside(transcript_path: &Path) -> Snapshots {
+    let Ok(text) = std::fs::read_to_string(transcript_path.with_file_name(REWINDS_FILE)) else {
+        return Snapshots::default();
+    };
+    text.lines()
+        .filter_map(|line| crate::json::js::from_slice::<Value>(line.as_bytes()).ok())
+        .filter_map(|point| {
+            let files = point["file_snapshots"].as_object()?.iter().map(|(path, snapshot)| {
+                (path.clone(), snapshot["content"].as_str().map(str::to_owned))
+            });
+            Some((point["prompt_index"].as_u64()?, files.collect()))
+        })
+        .collect()
 }
 
 /// The transcripts Grok Build replaced with each compaction of the session at `transcript_path`
@@ -637,7 +661,10 @@ impl Chain {
         } else if self.compacting && msg.kind == "user" && msg.prompt_index.is_none() {
             msg.replayed = true;
         }
-        let key = line_key(self.last.as_deref(), &msg.role(), &msg.content())?;
+        // What an edit changed is read from beside the transcript, when it's there: not the line.
+        let content: Vec<_> =
+            msg.content().into_iter().filter(|c| !matches!(c, Content::Patch(_))).collect();
+        let key = line_key(self.last.as_deref(), &msg.role(), &content)?;
         self.last = Some(key.clone());
         Some(key)
     }
@@ -699,6 +726,12 @@ struct ReaderState {
     summary_sig: FileSignature,
     updates_sig: FileSignature,
     sidecar_sig: FileSignature,
+    snapshots: Snapshots,
+    snapshots_sig: FileSignature,
+    /// What the turn's edits so far left each file holding, by its snapshot's path, and the
+    /// edits not yet answered, by call id.
+    edited: HashMap<String, Option<String>>,
+    edits: HashMap<String, GrokToolCall>,
     chain: Chain,
     prompt_seq: usize,
     current_turn: Option<usize>,
@@ -719,6 +752,8 @@ impl ReaderState {
         let summary_sig = file_signature(&transcript_path.with_file_name(SUMMARY_FILE));
         let updates_sig = file_signature(&transcript_path.with_file_name(UPDATES_FILE));
         let sidecar_sig = file_signature(&transcript_path.with_file_name(SIDECAR_FILE));
+        let snapshots_sig = file_signature(&transcript_path.with_file_name(REWINDS_FILE));
+        let snapshots = read_snapshots_beside(transcript_path);
         let summary = read_summary_beside(transcript_path);
         let times = read_update_times_beside(transcript_path);
         let sidecar = AtuinSidecar::read_beside(transcript_path);
@@ -741,6 +776,10 @@ impl ReaderState {
             summary_sig,
             updates_sig,
             sidecar_sig,
+            snapshots,
+            snapshots_sig,
+            edited: HashMap::new(),
+            edits: HashMap::new(),
             chain: Chain::default(),
             prompt_seq: 0,
             current_turn: None,
@@ -825,6 +864,11 @@ impl ReaderState {
             self.updates_sig = next_updates;
             self.times = read_update_times_beside(transcript_path);
         }
+        let next_snapshots = file_signature(&transcript_path.with_file_name(REWINDS_FILE));
+        if next_snapshots != self.snapshots_sig {
+            self.snapshots_sig = next_snapshots;
+            self.snapshots = read_snapshots_beside(transcript_path);
+        }
         let next_sidecar = file_signature(&transcript_path.with_file_name(SIDECAR_FILE));
         if next_sidecar != self.sidecar_sig {
             self.sidecar_sig = next_sidecar;
@@ -839,10 +883,49 @@ impl ReaderState {
         self.take_pending_title()
     }
 
+    /// The change edit `call` made to its file, replayed on what the turn's snapshot and its edits
+    /// before say the file held. `None` when they don't say (a file outside the session's
+    /// directory), or the edit doesn't apply (the file was changed some other way).
+    fn replay(&mut self, call: &GrokToolCall) -> Option<Patch> {
+        let input = parse_tool_arguments(&call.arguments);
+        let path = input["file_path"].as_str()?;
+        let files = self.snapshots.get(&self.prompt?)?;
+        let relative =
+            self.summary.cwd.as_deref().and_then(|cwd| Path::new(path).strip_prefix(cwd).ok());
+        let key = [relative.and_then(Path::to_str), Some(path)]
+            .into_iter()
+            .flatten()
+            .find(|key| files.contains_key(*key) || self.edited.contains_key(*key))?
+            .to_owned();
+        let before = match self.edited.get(&key) {
+            Some(edited) => edited.clone(),
+            None => files.get(&key)?.clone(),
+        };
+        let after = if call.name == "write" {
+            input["content"].as_str()?.to_owned()
+        } else {
+            let (old, new) = (input["old_string"].as_str()?, input["new_string"].as_str()?);
+            let text = before.as_deref().filter(|text| !old.is_empty() && text.contains(old))?;
+            if input["replace_all"].as_bool() == Some(true) {
+                text.replace(old, new)
+            } else {
+                text.replacen(old, new, 1)
+            }
+        };
+        let file = FilePatch::between(path.to_owned(), before.as_deref(), &after);
+        self.edited.insert(key, Some(after));
+        Some(Patch {
+            call: ToolCallId::from(call.id.clone()),
+            files: vec![file],
+        })
+    }
+
     /// Start reading another of the session's transcripts (one a compaction replaced, or the
     /// file rewritten), whose lines key from the start again.
     fn restart(&mut self) {
         self.chain = Chain::default();
+        self.edited.clear();
+        self.edits.clear();
         self.prompt_seq = 0;
         self.current_turn = None;
         self.prompt = None;
@@ -863,7 +946,22 @@ impl ReaderState {
         }
         if role == Role::User {
             self.prompt = msg.prompt_index;
-        } else if msg.stop_reason() == Some(StopReason::EndTurn)
+            self.edited.clear();
+        }
+        for call in msg
+            .tool_calls
+            .iter()
+            .filter(|call| matches!(call.name.as_str(), "search_replace" | "write"))
+        {
+            self.edits.insert(call.id.clone(), call.clone());
+        }
+        if let Some(call) = msg.tool_call_id.as_ref().and_then(|id| self.edits.remove(id))
+            && !inferred_tool_error(&msg.content)
+        {
+            msg.patch = self.replay(&call);
+        }
+        if role != Role::User
+            && msg.stop_reason() == Some(StopReason::EndTurn)
             && let Some(prompt) = self.prompt
             && let Some(usage) = self.times.usage.get(&prompt)
             && self.usage_given.insert(prompt)
@@ -1217,6 +1315,9 @@ pub struct GrokMessage {
     /// A prompt a compaction repeats (see [`Chain`]).
     #[serde(skip)]
     replayed: bool,
+    /// What the edit this line answers changed (see [`ReaderState::replay`]).
+    #[serde(skip)]
+    patch: Option<Patch>,
     #[serde(skip)]
     usage: Option<Usage>,
     #[serde(skip)]
@@ -1413,11 +1514,13 @@ impl Message for GrokMessage {
             "tool_result" => {
                 let call = ToolCallId::from(self.tool_call_id.clone().unwrap_or_default());
                 let error = inferred_tool_error(&self.content);
-                vec![Content::ToolResult(ToolResult {
+                std::iter::once(Content::ToolResult(ToolResult {
                     call,
                     output: self.content.clone(),
                     error,
-                })]
+                }))
+                .chain(self.patch.clone().map(Content::Patch))
+                .collect()
             }
             _ => Vec::new(),
         }
@@ -1541,6 +1644,23 @@ mod tests {
             .collect();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].role(), Role::System);
+
+        // The edit's diff, replayed on the file as the turn found it (`rewind_points.jsonl`).
+        let patches: Vec<_> = msgs
+            .iter()
+            .flat_map(Message::content)
+            .filter_map(|c| match c {
+                Content::Patch(patch) => Some(patch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(patches.len(), 1, "{patches:#?}");
+        assert_eq!(patches[0].files[0].path, "/work/proj/calc.py");
+        assert_eq!(patches[0].files[0].hunks[0].lines, [
+            " def add(a, b):",
+            "-    return a - b",
+            "+    return a + b"
+        ]);
 
         // Each turn's usage is on its reply, and the lines are timed in order.
         let used: Vec<_> = msgs.iter().filter_map(Message::usage).collect();

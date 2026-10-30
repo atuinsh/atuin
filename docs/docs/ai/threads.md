@@ -43,7 +43,8 @@ in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker
 that the model reasoned.
 
 When an agent edits a file, capture also keeps the diff the agent recorded for
-the edit (Claude Code, Codex, Copilot, opencode and pi each keep one), so a resumed
+the edit (Claude Code, Codex, Copilot, opencode and pi each keep one; for Grok
+Build, Atuin works it out from the file as the turn found it), so a resumed
 session shows its edits as the agent showed them, and `atuin threads show`
 prints them. A diff names its file and the lines changed, with a few lines
 around them, not the whole file. Search covers the names of the files a session

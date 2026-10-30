@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:zstd", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:zstd", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -56,6 +56,7 @@ getrandom = { workspace = true }
 humantime = { workspace = true }
 i18n-embed = { workspace = true }
 i18n-embed-fl = { workspace = true }
+imara-diff = { workspace = true, optional = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true }

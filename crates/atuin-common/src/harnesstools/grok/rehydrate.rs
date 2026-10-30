@@ -32,7 +32,7 @@ use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, merge_uncaptured_runs,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, Role, ToolCallId, ToolResult, ToolUse};
+use crate::harnesstools::session::{Content, FilePatch, Role, ToolCallId, ToolResult, ToolUse};
 use crate::path::PathBufExt as _;
 
 /// Rendered files for a full restore or incremental append/switch.
@@ -268,7 +268,7 @@ struct Piece {
     read_content: Vec<Content>,
 }
 
-fn update_envelope(session_id: &str, at: OffsetDateTime, mut update: Value) -> Value {
+fn update_envelope(session_id: &str, at: OffsetDateTime, update: Value) -> Value {
     let agent_ms = i64::try_from(at.unix_timestamp_nanos() / 1_000_000)
         .unwrap_or_else(|_| at.unix_timestamp().saturating_mul(1_000));
     json!({
@@ -454,22 +454,55 @@ fn render_row_pieces(
                 } else {
                     "completed"
                 };
+                // The edits the call made, as Grok Build's own show in its scrollback: the
+                // diff of each, under the file it changed.
+                let files: Vec<&FilePatch> = row
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        Content::Patch(patch) if patch.call == result.call => Some(&patch.files),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                let diffs: Vec<Value> = files
+                    .iter()
+                    .flat_map(|file| {
+                        file.hunks.iter().map(|hunk| {
+                            let one = FilePatch {
+                                hunks: vec![hunk.clone()],
+                                ..(*file).clone()
+                            };
+                            json!({
+                                "type": "diff",
+                                "path": file.path,
+                                "oldText": one.side('-'),
+                                "newText": one.side('+'),
+                                "_meta": {"old_line": hunk.old_start, "new_line": hunk.new_start},
+                            })
+                        })
+                    })
+                    .collect();
+                let mut update = json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": result.call.as_ref(),
+                    "status": status,
+                    "content": [{"type": "content", "content": {"type": "text", "text": text_preview}}],
+                });
+                if !diffs.is_empty() {
+                    update["kind"] = json!("edit");
+                    update["content"] = json!(diffs);
+                    update["locations"] = json!(
+                        files.iter().map(|file| json!({"path": file.path})).collect::<Vec<_>>()
+                    );
+                }
                 pieces.push(Piece {
                     chat_line: json!({
                         "type": "tool_result",
                         "tool_call_id": result.call.as_ref(),
                         "content": output_val,
                     }),
-                    update_lines: vec![update_envelope(
-                        session_id,
-                        row.timestamp,
-                        json!({
-                            "sessionUpdate": "tool_call_update",
-                            "toolCallId": result.call.as_ref(),
-                            "status": status,
-                            "content": [{"type": "content", "content": {"type": "text", "text": text_preview}}],
-                        }),
-                    )],
+                    update_lines: vec![update_envelope(session_id, row.timestamp, update)],
                     read_role: Role::Tool,
                     read_content: vec![Content::ToolResult(ToolResult {
                         call: result.call.clone(),
@@ -493,7 +526,7 @@ mod tests {
     use super::*;
     use crate::harnesstools::grok::session::GrokSession;
     use crate::harnesstools::rehydrate::ForkOf;
-    use crate::harnesstools::session::{Message, ParentKind, Session, SessionId};
+    use crate::harnesstools::session::{Message, ParentKind, Patch, Session, SessionId};
     use crate::sync::BlockingPool;
 
     fn sample_msg(id: &str, role: Role, content: Vec<Content>, at: i64) -> RehydrateMessage {
@@ -666,5 +699,81 @@ mod tests {
         );
         assert_eq!(rendered.sidecar.merged.get("a1").map(String::as_str), Some("a2"));
         assert_eq!(rendered.sidecar.merged.get("t1").map(String::as_str), Some("a2"));
+    }
+
+    /// A restored edit shows in Grok Build as its own do: the call's update is an edit of its
+    /// file, holding each hunk's lines before and after.
+    #[rstest]
+    fn an_edits_result_gets_its_diff_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let call = ToolCallId::from("c1".to_owned());
+        let patch = Patch {
+            call: call.clone(),
+            files: vec![FilePatch::between(
+                "/work/proj/calc.py".to_owned(),
+                Some("def add(a, b):\n    return a - b\n"),
+                "def add(a, b):\n    return a + b\n",
+            )],
+        };
+        let session = RehydrateSession {
+            id: "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned(),
+            title: None,
+            cwd: PathBuf::from("/work/proj"),
+            original_cwd: None,
+            git_branch: None,
+            model: None,
+            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            messages: vec![
+                sample_msg(
+                    "u1",
+                    Role::User,
+                    vec![Content::Text("fix add".to_owned())],
+                    1_700_000_010,
+                ),
+                sample_msg(
+                    "a1",
+                    Role::Assistant,
+                    vec![Content::ToolUse(ToolUse {
+                        id: call.clone(),
+                        name: "search_replace".to_owned(),
+                        input: json!({"file_path": "/work/proj/calc.py", "old_string": "a - b", "new_string": "a + b"}),
+                    })],
+                    1_700_000_020,
+                ),
+                sample_msg(
+                    "t1",
+                    Role::Tool,
+                    vec![
+                        Content::ToolResult(ToolResult {
+                            call,
+                            output: json!("updated"),
+                            error: false,
+                        }),
+                        Content::Patch(patch),
+                    ],
+                    1_700_000_030,
+                ),
+            ],
+            fork_of: None,
+        };
+        let path = rehydrate_into(&dir.path().join("sessions"), dir.path(), &session).unwrap();
+        let updates = std::fs::read_to_string(path.with_file_name(UPDATES_FILE)).unwrap();
+        let edit = updates
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .map(|line| line["params"]["update"].clone())
+            .find(|update| update["kind"] == "edit")
+            .unwrap();
+        assert_eq!(edit["locations"], json!([{"path": "/work/proj/calc.py"}]));
+        assert_eq!(
+            edit["content"],
+            json!([{
+                "type": "diff",
+                "path": "/work/proj/calc.py",
+                "oldText": "def add(a, b):\n    return a - b\n",
+                "newText": "def add(a, b):\n    return a + b\n",
+                "_meta": {"old_line": 1, "new_line": 1},
+            }])
+        );
     }
 }
