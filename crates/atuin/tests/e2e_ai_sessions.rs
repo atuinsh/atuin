@@ -65,7 +65,8 @@ fn last_word(text: &str) -> &str {
 #[rstest]
 fn capture_keeps_the_conversation_and_tool_calls(
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Kiro, Agent::Opencode, Agent::Pi)]
+    agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
     let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
@@ -150,7 +151,8 @@ fn capture_applies_the_history_and_output_filters_to_agent_commands(project: Tem
 fn capture_follows_a_transcript_exactly_once_across_restarts(
     mut machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Kiro, Agent::Opencode, Agent::Pi)]
+    agent: Agent,
 ) {
     let turns: Vec<Turn> = (0..3).map(|_| Turn::new()).collect();
 
@@ -192,13 +194,16 @@ fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: Te
 /// alone until the agent goes on with it, and then captured whole; or until `atuin threads
 /// import` brings it in.
 #[rstest]
-fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
+fn capture_starts_when_the_config_turns_it_on(
+    project: TempDir,
+    #[values(Agent::Claude, Agent::Kiro)] agent: Agent,
+) {
     let mut machine = Machine::with_config("", "capture = false\n");
     machine.start_daemon();
     let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
-    let resumed = Transcript::create(machine.home(), Agent::Claude, project.path(), &old[..1]);
+    let resumed = Transcript::create(machine.home(), agent, project.path(), &old[..1]);
     let idle = [Turn::new()];
-    let untouched = Transcript::create(machine.home(), Agent::Claude, project.path(), &idle);
+    let untouched = Transcript::create(machine.home(), agent, project.path(), &idle);
     // Longer than the daemon takes to see a new transcript when capturing.
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
@@ -209,7 +214,7 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     // Longer than the daemon takes to see the config change.
     std::thread::sleep(std::time::Duration::from_secs(3));
     let new = [Turn::new()];
-    let started = Transcript::create(machine.home(), Agent::Claude, project.path(), &new);
+    let started = Transcript::create(machine.home(), agent, project.path(), &new);
     machine.wait_until_said(&started.id, &said(&new));
 
     resumed.append(project.path(), &old[1..]);
@@ -229,6 +234,7 @@ fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
         Agent::Claude => vec!["--resume", id],
         Agent::Codex => vec!["resume", id],
         Agent::Copilot => vec![resume_arg.as_str()],
+        Agent::Kiro => vec!["chat", "--resume-id", id],
         Agent::Opencode => vec!["--session", id],
         Agent::Pi => vec!["--session", transcript.path.to_str().unwrap()],
     };
@@ -310,6 +316,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 #[case::claude(Agent::Claude, "agent id")]
 #[case::codex(Agent::Codex, "agent id")]
 #[case::copilot(Agent::Copilot, "agent id")]
+#[case::kiro(Agent::Kiro, "agent id")]
 #[case::opencode(Agent::Opencode, "agent id")]
 #[case::pi(Agent::Pi, "agent id")]
 #[case::by_atuin_id(Agent::Opencode, "atuin id")]
@@ -663,6 +670,7 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 #[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
 #[case::copilot_to_pi(Agent::Copilot, Agent::Pi)]
 #[case::codex_to_pi(Agent::Codex, Agent::Pi)]
+#[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 #[case::opencode_to_claude(Agent::Opencode, Agent::Claude)]
 #[case::opencode_to_codex(Agent::Opencode, Agent::Codex)]
 #[case::pi_to_claude(Agent::Pi, Agent::Claude)]
