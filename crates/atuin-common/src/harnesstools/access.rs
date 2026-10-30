@@ -78,6 +78,8 @@ impl Access {
                 | "run_terminal_cmd"
                 | "execute_command"
                 | "run_command"
+                | "execute_bash"
+                | "execute_pwsh"
         ) {
             let command = match input.get("command").or_else(|| input.get("cmd")) {
                 Some(Value::String(line)) => Some(line.clone()),
@@ -234,6 +236,9 @@ mod tests {
     #[case::claude_bash("Bash", json!({"command": "cat .env"}), shell("cat .env", None))]
     #[case::codex_argv("shell", json!({"command": ["bash", "-lc", "ls"], "workdir": "/w"}), shell("ls", Some("/w")))]
     #[case::codex_exec("exec_command", json!(r#"{"cmd":"git status","workdir":"/w"}"#), shell("git status", Some("/w")))]
+    #[case::kiro_bash("execute_bash", json!({"command": "cat .pgpass", "description": "Read the file", "cwd": "/w", "run_in_background": false}), shell("cat .pgpass", Some("/w")))]
+    #[case::kiro_bash_redirect("execute_bash", json!({"command": "echo A=1 > .env", "cwd": null}), Access { writes: vec![".env".into()], ..shell("echo A=1 > .env", None) })]
+    #[case::kiro_pwsh("execute_pwsh", json!({"command": "Get-Content .env"}), shell("Get-Content .env", None))]
     #[case::claude_read("Read", json!({"file_path": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::opencode_read("read", json!({"filePath": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::grep("Grep", json!({"pattern": "x", "path": "/w"}), reads(&["/w"]))]

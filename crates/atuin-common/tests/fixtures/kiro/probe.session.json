@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+  "title": "Get Unix Time In Nanoseconds",
+  "agentMode": "probe",
+  "workspacePaths": [
+    "/tmp/kiro-play"
+  ],
+  "rootPaths": [
+    "/tmp/kiro-play"
+  ],
+  "createdAt": "2026-10-30T17:57:59.502Z",
+  "lastModifiedAt": "2026-10-30T17:58:03.021Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "workflowLaunch": "when-asked",
+  "contextSnapshotModelDisplay": {
+    "modelId": "auto",
+    "display": "Auto (model selected dynamically on the server)"
+  },
+  "semanticReviewEnabled": true,
+  "disableAutoCompaction": false,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "memoryConfig": {
+    "mode": "disabled",
+    "reflection": false
+  },
+  "memoryConfigSource": "explicit",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "memory": {
+          "mode": "disabled",
+          "reflection": false
+        },
+        "workflows": {
+          "enabled": false
+        },
+        "goal": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}

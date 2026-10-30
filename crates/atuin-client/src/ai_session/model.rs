@@ -25,6 +25,7 @@ pub enum HarnessKind {
     Opencode = 4,
     Pi = 5,
     Omp = 6,
+    Kiro = 7,
 }
 
 impl From<&AnyHarness> for HarnessKind {
@@ -33,6 +34,7 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Copilot(_) => Self::Copilot,
+            AnyHarness::Kiro(_) => Self::Kiro,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -47,11 +49,12 @@ impl HarnessKind {
     /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{ccode, codex, copilot, opencode, pi};
+        use atuin_common::harnesstools::{ccode, codex, copilot, kiro, opencode, pi};
         match self {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
+            Self::Kiro => Some(AnyHarness::Kiro(kiro::Kiro)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
@@ -591,6 +594,7 @@ mod tests {
     #[case::opencode(HarnessKind::Opencode, true)]
     #[case::pi(HarnessKind::Pi, true)]
     #[case::copilot(HarnessKind::Copilot, true)]
+    #[case::kiro(HarnessKind::Kiro, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,

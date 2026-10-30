@@ -525,6 +525,7 @@ pub mod any;
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
 use crate::harnesstools::copilot::session::CopilotMessage;
+use crate::harnesstools::kiro::session::KiroMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
@@ -534,6 +535,7 @@ pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
     Copilot(CopilotMessage),
+    Kiro(KiroMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
 }

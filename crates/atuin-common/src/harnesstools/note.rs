@@ -103,7 +103,7 @@ pub fn tool_note(name: &str, input: &Value) -> String {
     let lower = name.to_ascii_lowercase();
     let note = match lower.as_str() {
         "bash" | "shell" | "shell_command" | "exec_command" | "local_shell" | "container.exec"
-        | "unified_exec" => on(
+        | "unified_exec" | "execute_bash" | "execute_pwsh" => on(
             field(&["command", "cmd"])
                 .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a))),
             &|c| format!("ran {}", code(c)),
@@ -251,6 +251,7 @@ mod tests {
     #[case::codex_shell("shell", json!(r#"{"command":["bash","-lc","rg -n foo src"]}"#), "[ran `rg -n foo src`]")]
     #[case::codex_argv("shell", json!({"command": ["git", "log", "--oneline"]}), "[ran `git log --oneline`]")]
     #[case::codex_exec("exec_command", json!(r#"{"cmd":"ls -la"}"#), "[ran `ls -la`]")]
+    #[case::kiro_exec("execute_bash", json!({"command": "ls -la", "run_in_background": false}), "[ran `ls -la`]")]
     #[case::codex_patch(
         "apply_patch",
         json!("*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Add File: src/b.rs\n+z\n*** End Patch"),

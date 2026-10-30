@@ -60,13 +60,15 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
-/// Tells the user how to make an agent pick up a freshly installed extension. Only the
-/// extension-based agents need a nudge; command-hook agents load on next run.
+/// Tells the user how to make an agent pick up freshly installed hooks. The extension-based
+/// agents need a nudge, and so does Kiro, which reads its hook files when a session starts;
+/// the other command-hook agents load them on the next run.
 fn show_reload_hint(harness_name: &str) {
     match harness_name {
         "pi" => userio::log::info!("hook-reload-hint-pi"),
         "omp" => userio::log::info!("hook-reload-hint-omp"),
         "opencode" => userio::log::info!("hook-reload-hint-opencode"),
+        "kiro" => userio::log::info!("hook-reload-hint-kiro"),
         _ => {}
     }
 }
@@ -111,7 +113,7 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
         return Ok(());
     }
 
-    match HookEvent::from_json_str(&input)? {
+    match HookEvent::from_json_str(&input, harness.name())? {
         Some(HookEvent::Start {
             command,
             intent,
