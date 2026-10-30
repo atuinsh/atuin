@@ -50,9 +50,12 @@ pub enum HookEvent {
     },
 }
 
-impl From<WireHookEvent> for Option<HookEvent> {
-    /// Reduce a decoded wire event to a [`HookEvent`], or `None` when we don't care about the given
-    /// event.
+/// The harness whose bare `tool_response` ends in the exit code.
+const KIRO: &str = "kiro";
+
+impl HookEvent {
+    /// Reduce a decoded wire event from `harness` (the name `atuin hook` was given) to a
+    /// [`HookEvent`], or `None` when we don't care about the given event.
     ///
     /// We **don't** care about:
     ///   - Non-shell tool invocations.
@@ -61,7 +64,7 @@ impl From<WireHookEvent> for Option<HookEvent> {
     ///   - Commands started in the background (Copilot's `mode: async`, Kiro's
     ///     `run_in_background`): their end says only that they started, so recording one would
     ///     give it the wrong exit and duration.
-    fn from(wire: WireHookEvent) -> Self {
+    fn reduce(wire: WireHookEvent, harness: &str) -> Option<Self> {
         if matches!(wire.tool_name, WireToolName::Other) {
             return None;
         }
@@ -89,14 +92,20 @@ impl From<WireHookEvent> for Option<HookEvent> {
                     tool_use_id,
                 })
             }
-            HookEventName::PostToolUse => Some(HookEvent::End {
-                tool_use_id,
-                exit: wire
-                    .tool_response
-                    .and_then(|response| response.exit_code())
-                    .or_else(|| wire.tool_result.and_then(|result| result.exit_code())),
-                transcript: wire.transcript_path,
-            }),
+            HookEventName::PostToolUse => {
+                // Only Kiro's bare response ends in the exit code. Codex's is the output alone,
+                // with the exit in its transcript, so a line the command printed is never read
+                // as one.
+                let exit = wire.tool_response.and_then(|response| match harness {
+                    KIRO => response.kiro_exit_code(),
+                    _ => response.exit_code(),
+                });
+                Some(HookEvent::End {
+                    tool_use_id,
+                    exit: exit.or_else(|| wire.tool_result.and_then(|result| result.exit_code())),
+                    transcript: wire.transcript_path,
+                })
+            }
             // Failed: with the exit code its error starts with (`Exit code 2`), else 1.
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
                 tool_use_id,
@@ -121,17 +130,18 @@ fn failure_exit_code(error: &str) -> Option<i64> {
 }
 
 impl HookEvent {
-    /// Parse a raw hook payload (the JSON an agent writes to stdin) into a [`HookEvent`], or `None`
-    /// when there is nothing to record.
+    /// Parse a raw hook payload (the JSON `harness` writes to stdin) into a [`HookEvent`], or
+    /// `None` when there is nothing to record. The harness name decides only what a bare
+    /// `tool_response` says (see [`Self::reduce`]).
     ///
     /// Well-formed JSON that doesn't fit the hook-event schema yields `Ok(None)`.
     ///
     /// Only *malformed* JSON (a syntax error or truncated input) is surfaced as a
     /// [`ParseError`]: an agent could never send that legitimately, so it signals
     /// a real fault worth seeing.
-    pub fn from_json_str(input: &str) -> Result<Option<Self>, ParseError> {
+    pub fn from_json_str(input: &str, harness: &str) -> Result<Option<Self>, ParseError> {
         match serde_json::from_str::<WireHookEvent>(input) {
-            Ok(wire) => Ok(wire.into()),
+            Ok(wire) => Ok(Self::reduce(wire, harness)),
             Err(err) if err.classify() == Category::Data => Ok(None),
             Err(err) => Err(ParseError::MalformedJson {
                 line: err.line(),
@@ -352,6 +362,91 @@ mod tests {
         }),
         Some(HookEvent::End { tool_use_id: copilot_key("exit 3"), exit: Some(3), transcript: None })
     )]
+    // An empty tool_use_id is treated the same as missing.
+    #[case::empty_tool_use_id_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi"},
+            "tool_use_id": ""
+        }),
+        None
+    )]
+    // An empty command has nothing to record.
+    #[case::empty_command_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": ""},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A command carrying a NUL fails to deserialize, so the whole event is
+    // dropped rather than recording a mangled command (issue #3589).
+    #[case::command_with_nul_rejected(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi\0rm -rf /"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A command that is nothing but a NUL prefix is likewise rejected.
+    #[case::command_only_nul_rejected(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "\0rm -rf /"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // No tool_input at all → empty command → skip.
+    #[case::missing_tool_input_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A null tool_input decodes to None → skip.
+    #[case::null_tool_input_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": null,
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // An event name we don't model is ignored.
+    #[case::unknown_event_skipped(
+        json!({
+            "hook_event_name": "SomeFutureEvent",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    // A missing event name is ignored.
+    #[case::missing_event_skipped(
+        json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    /// The harness name only decides what a bare `tool_response` says, which none of these have.
+    fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
+        assert_eq!(HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(), expected);
+    }
+
+    #[rstest]
     // Kiro CLI 2.36.0 sends Claude Code's event with no tool_use_id, its shell tool named
     // `execute_bash`, and a bare-string response ending in the exit code (real payloads).
     #[case::kiro_pre_tool_use(
@@ -479,103 +574,39 @@ mod tests {
         }),
         None
     )]
-    // An empty tool_use_id is treated the same as missing.
-    #[case::empty_tool_use_id_skipped(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "echo hi"},
-            "tool_use_id": ""
-        }),
-        None
-    )]
-    // An empty command has nothing to record.
-    #[case::empty_command_skipped(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": ""},
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // A command carrying a NUL fails to deserialize, so the whole event is
-    // dropped rather than recording a mangled command (issue #3589).
-    #[case::command_with_nul_rejected(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "echo hi\0rm -rf /"},
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // A command that is nothing but a NUL prefix is likewise rejected.
-    #[case::command_only_nul_rejected(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "\0rm -rf /"},
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // No tool_input at all → empty command → skip.
-    #[case::missing_tool_input_skipped(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // A null tool_input decodes to None → skip.
-    #[case::null_tool_input_skipped(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": null,
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // An event name we don't model is ignored.
-    #[case::unknown_event_skipped(
-        json!({
-            "hook_event_name": "SomeFutureEvent",
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    // A missing event name is ignored.
-    #[case::missing_event_skipped(
-        json!({
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-            "tool_use_id": "toolu_abc123"
-        }),
-        None
-    )]
-    fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
-        assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), expected);
+    fn parses_kiro_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
+        assert_eq!(HookEvent::from_json_str(&input.to_string(), "kiro").unwrap(), expected);
     }
 
     /// Codex serializes `tool_response` as a bare string, unlike the object
     /// Claude Code sends. Dropping the completion leaves the history entry
     /// opened by the matching `PreToolUse` unfinished, so nothing is recorded
     /// when the daemon owns the store (issue #4169).
+    ///
+    /// Its exit code is in its transcript, never in that string: a command that prints
+    /// `Exit Code: 7` itself is not read as exit 7. Only Kiro's bare response ends that way.
     #[rstest]
-    #[case::string_tool_response(
+    #[case::codex_string_tool_response(
+        "codex",
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
         Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
     )]
-    fn completion_accepts_string_tool_response(
+    #[case::codex_output_that_prints_an_exit_code(
+        "codex",
+        r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"echo 'Exit Code: 7'"},"tool_response":"Exit Code: 7\n"}"#,
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
+    )]
+    #[case::kiro_output_ending_in_its_exit_code(
+        "kiro",
+        r#"{"hook_event_name":"PostToolUse","tool_name":"execute_bash","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"exit 7"},"tool_response":"Output:\n\n\n\nExit Code: 7"}"#,
+        Some(HookEvent::End { tool_use_id: correlation_key("example-session", "exit 7"), exit: Some(7), transcript: None })
+    )]
+    fn a_bare_tool_response_says_the_exit_for_kiro_alone(
+        #[case] harness: &str,
         #[case] input: &str,
         #[case] expected: Option<HookEvent>,
     ) {
-        assert_eq!(HookEvent::from_json_str(input).unwrap(), expected);
+        assert_eq!(HookEvent::from_json_str(input, harness).unwrap(), expected);
     }
 
     /// Well-formed JSON that isn't a hook event we model is skipped, not an
@@ -587,7 +618,7 @@ mod tests {
         r#"{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": 5, "tool_input": {"command": "ls"}}"#
     )]
     fn well_formed_non_events_are_skipped(#[case] input: &str) {
-        assert_eq!(HookEvent::from_json_str(input).unwrap(), None);
+        assert_eq!(HookEvent::from_json_str(input, "claude-code").unwrap(), None);
     }
 
     /// Malformed JSON is a genuine fault an agent could never send by design,
@@ -596,7 +627,7 @@ mod tests {
     #[case::not_json("not json")]
     #[case::truncated(r#"{"tool_name":"#)]
     fn malformed_json_is_an_error(#[case] input: &str) {
-        let err = HookEvent::from_json_str(input).unwrap_err();
+        let err = HookEvent::from_json_str(input, "claude-code").unwrap_err();
         let ParseError::MalformedJson { line, column, .. } = err;
 
         assert!(line >= 1 && column >= 1, "position should be 1-based, got {line}:{column}");
@@ -629,7 +660,7 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::Start {
                     command: NonNulStr::new(command).unwrap(),
                     intent: description,
@@ -652,7 +683,7 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::End { tool_use_id, exit: Some(exit), transcript: None })
             );
         }
@@ -672,7 +703,7 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::End { tool_use_id, exit: Some(1), transcript: None })
             );
         }
@@ -697,7 +728,7 @@ mod tests {
                 "tool_use_id": tool_use_id,
             });
 
-            prop_assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), None);
+            prop_assert_eq!(HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(), None);
         }
     }
 }

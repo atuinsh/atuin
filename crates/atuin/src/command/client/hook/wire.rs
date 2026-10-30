@@ -113,18 +113,27 @@ pub enum WireToolResponse {
 }
 
 impl WireToolResponse {
-    /// The exit code the agent reported, if any.
+    /// The exit code the agent reported as a field, if any. A bare response says none here:
+    /// see [`Self::kiro_exit_code`].
     pub fn exit_code(&self) -> Option<i64> {
         match self {
-            WireToolResponse::Output(output) => trailing_exit_code(output),
+            WireToolResponse::Output(_) => None,
             WireToolResponse::Object { exit_code } => *exit_code,
+        }
+    }
+
+    /// The exit code a Kiro response ends in, its last line `Exit Code: <n>` (`-1` for a call
+    /// that never ran: denied, or failed before it was answered). For Kiro's events only: a
+    /// Codex response is the output alone, and a command that prints such a line itself must
+    /// not pass for it.
+    pub fn kiro_exit_code(&self) -> Option<i64> {
+        match self {
+            WireToolResponse::Output(output) => trailing_exit_code(output),
+            WireToolResponse::Object { .. } => None,
         }
     }
 }
 
-/// The exit code a Kiro response ends in, its last line `Exit Code: <n>` (`-1` for a call that
-/// never ran: denied, or failed before it was answered). A Codex response ends in one only when
-/// the command itself printed it, and then it is the best guess anyway.
 fn trailing_exit_code(output: &str) -> Option<i64> {
     output.trim_end().lines().next_back()?.strip_prefix("Exit Code:")?.trim().parse().ok()
 }
@@ -161,7 +170,7 @@ mod tests {
         Some(-1)
     )]
     #[case::kiro_no_output("Output:\n\n\n\nExit Code: 0\n", Some(0))]
-    #[case::codex_output_alone("ls: cannot access '/nope': No such file or directory\n", None)]
+    #[case::output_alone("ls: cannot access '/nope': No such file or directory\n", None)]
     #[case::not_a_number("Output:\nExit Code: lots", None)]
     #[case::empty("", None)]
     fn reads_the_exit_code_at_the_end_of_a_bare_response(

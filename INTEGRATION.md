@@ -34,9 +34,10 @@ async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
 - `atuin hook kiro` and `atuin hook install kiro` dispatch through `AnyHarness::from_name`, so
   the CLI needs no change. `hook.rs`'s `every_harness_author_is_a_known_agent` then needs
   `"kiro"` in `atuin-client`'s `KNOWN_AGENTS` (the reader branch adds it).
-- The hook wire (`crates/atuin/src/command/client/hook/{wire,event}.rs`) is harness-agnostic:
-  `execute_bash` / `execute_pwsh` alias the shell tool, `run_in_background` skips like Copilot's
-  `mode: async`, and a bare-string `tool_response` yields the exit code on its last line.
+- The hook wire (`crates/atuin/src/command/client/hook/{wire,event}.rs`) keys on the harness
+  name `atuin hook` was given, not the enum: `execute_bash` / `execute_pwsh` alias the shell
+  tool, `run_in_background` skips like Copilot's `mode: async`, and for `kiro` alone a
+  bare-string `tool_response` yields the exit code on its last line.
 - The e2e branch's fake Kiro should send `tool_name: "execute_bash"` and a `tool_response` of
   the form `"Output:\n<out>\n\n\nExit Code: <n>"` with no `tool_use_id`.
 
@@ -46,8 +47,8 @@ async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
   recorded with exit -1, closing the entry its `PreToolUse` opened. Dropping the end instead
   would leave the entry open forever. Whether Kiro sends `PostToolUse` at all for a denied call
   was not observed; the `-1` shape comes from `tool_result` rows in its transcript.
-- A Codex `tool_response` whose last line happens to be `Exit Code: <n>` now reads as that exit
-  instead of falling through to the transcript lookup. Only a command that prints such a line
-  itself hits this.
+- `HookEvent::from_json_str` now takes the harness name, and reads the exit code from a bare
+  `tool_response` only when it is `"kiro"` (`event::KIRO`); it must equal `Kiro::name()`. A
+  Codex response that ends in `Exit Code: <n>` still yields no exit, and its transcript decides.
 - The docs say `atuin mcp install` (no agent) detects Kiro and that `kiro` is a recognized
   author name. Both hold only after the arms above and `KNOWN_AGENTS` land.
