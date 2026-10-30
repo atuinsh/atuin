@@ -716,11 +716,12 @@ impl HeaderWatch {
     /// the last call (or on the first): `None` when it hasn't, or the header can't be read. Kiro
     /// rewrites the header in place, so a read can catch it half written: that read says
     /// nothing, and the next tries again. Blocking.
+    ///
+    /// The header is read every time, not only when its modification time moved: Windows
+    /// reported the same time for two rewrites 300 ms apart (seen on CI), which would hide the
+    /// second for good. The file is a few kilobytes.
     fn refresh(&mut self) -> Option<(TitleChange, Option<SystemTime>)> {
         let modified = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok();
-        if modified.is_some() && modified == self.modified {
-            return None;
-        }
         let header = Header::parse(&std::fs::read_to_string(&self.path).ok()?).ok()?;
         self.modified = modified;
         self.header = header;
@@ -1566,38 +1567,12 @@ mod tests {
             )
         };
         std::fs::write(&header, renamed("B")).unwrap();
-        let written_b = std::fs::metadata(&header).unwrap().modified().unwrap();
         let (_, b) = next_row_for(&mut messages, "the rename to B", 15).await;
         assert_eq!(b.title(), Some(TitleChange::new(TitleSource::Named, "B")));
+        // Written right after the first rename was seen: Windows can stamp both rewrites with
+        // one modification time, which the header watch must not go by.
         std::fs::write(&header, renamed("Get Unix Time In Nanoseconds")).unwrap();
-        let written = std::fs::metadata(&header).unwrap().modified().unwrap();
-        let (_, a) = match tokio::time::timeout(std::time::Duration::from_secs(15), messages.next())
-            .await
-        {
-            Ok(row) => row.unwrap().unwrap(),
-            // What the header looks like now, what a fresh look at it says, and whether the
-            // reader still follows it at all (a third rename), for a platform where the
-            // rename back never shows (Windows CI).
-            Err(_) => {
-                let now = std::fs::metadata(&header).unwrap();
-                let mut fresh = HeaderWatch::new(header.clone());
-                let fresh = fresh.refresh().map(|(title, _)| title);
-                std::fs::write(&header, renamed("C")).unwrap();
-                let written_c = std::fs::metadata(&header).unwrap().modified().unwrap();
-                let c = tokio::time::timeout(std::time::Duration::from_secs(5), messages.next())
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|row| row.unwrap().1.title());
-                panic!(
-                    "the rename back: no row within 15s; B written at {written_b:?}, back at \
-                     {written:?}, now {:?} and {} bytes, a fresh refresh says {fresh:?}; a third \
-                     rename written at {written_c:?} gave {c:?}",
-                    now.modified().unwrap(),
-                    now.len(),
-                );
-            }
-        };
+        let (_, a) = next_row_for(&mut messages, "the rename back", 15).await;
         assert_eq!(
             a.title(),
             Some(TitleChange::new(TitleSource::Named, "Get Unix Time In Nanoseconds"))
