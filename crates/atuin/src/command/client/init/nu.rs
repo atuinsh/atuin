@@ -22,10 +22,19 @@ const BIND_UP_ARROW: &str = r"$env.config = (
             keycode: up
             mode: [emacs, vi_normal, vi_insert]
             event: {
-                until: [
-                    {send: menuup}
-                    {send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
-                ]
+                # Before Nu 0.116.0, a blocked movelineup also stops the fallback chain.
+                until: (if (version).major > 0 or (version).minor >= 116 {
+                    [
+                        {send: menuup}
+                        {edit: movelineup}
+                        {send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
+                    ]
+                } else {
+                    [
+                        {send: menuup}
+                        {send: executehostcommand cmd: (_atuin_search_cmd '--shell-up-key-binding') }
+                    ]
+                })
             }
         }
     )
