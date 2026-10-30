@@ -125,7 +125,15 @@ mod tests {
     #[case::home(Some("/home/u"), "/home/u/.kiro")]
     #[case::above_home(Some("/home"), "/home/u/.kiro")]
     fn home_follows_kiros_rule(#[case] var: Option<&str>, #[case] want: &str) {
-        let home = Path::new("/home/u");
-        assert_eq!(home_from(var.map(OsStr::new), home), Path::new(want));
+        // A path is only absolute on Windows with a drive, so the cases get one there.
+        let rooted = |path: &str| -> PathBuf {
+            match path.strip_prefix('/') {
+                Some(rest) if cfg!(windows) => PathBuf::from(format!("C:/{rest}")),
+                _ => PathBuf::from(path),
+            }
+        };
+        let (home, want) = (rooted("/home/u"), rooted(want));
+        let var = var.map(rooted);
+        assert_eq!(home_from(var.as_deref().map(Path::as_os_str), &home), want);
     }
 }
