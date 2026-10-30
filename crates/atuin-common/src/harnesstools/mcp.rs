@@ -162,7 +162,7 @@ async fn install_opencode(path: &Path, atuin: &str) -> Result<(), InstallMcpErro
 /// Kiro's user-level MCP config under its home (`$KIRO_HOME`, else `~/.kiro`): the file
 /// `kiro-cli mcp add --scope global` writes, which every session loads.
 fn kiro_config_path(kiro_home: &Path) -> PathBuf {
-    kiro_home.join("settings").join("mcp.json")
+    kiro_home.join("settings").joined("mcp.json")
 }
 
 /// Add the server to the Kiro config at `path`, keeping the rest of it, as `kiro-cli mcp add

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::super::{InstallHookError, json_hooks};
+use crate::path::PathBufExt as _;
 
 /// What Kiro runs the hook as: `atuin hook kiro`.
 const HARNESS: &str = "kiro";
@@ -23,7 +24,7 @@ const MATCHER: &str = "execute_bash";
 /// [`InstallHookError::AlreadyInstalled`] when the file already says exactly this, so a rerun
 /// after an upgrade or a moved binary rewrites it and nothing else does.
 pub async fn install(home: &Path, executable: &Path) -> Result<PathBuf, InstallHookError> {
-    let path = home.join("hooks").join("atuin.json");
+    let path = home.join("hooks").joined("atuin.json");
     let wanted = hook_file(&json_hooks::hook_command(executable, HARNESS)?);
 
     match tokio::fs::read_to_string(&path).await {
@@ -79,8 +80,10 @@ mod tests {
 
         let path = install(home.path(), Path::new("/opt/atuin/bin/atuin")).await.unwrap();
 
-        assert_eq!(path, home.path().join("hooks").join("atuin.json"));
-        let action = json!({"type": "command", "command": "/opt/atuin/bin/atuin hook kiro"});
+        assert_eq!(path, home.path().join("hooks").joined("atuin.json"));
+        // Quoted as the platform's shell wants it (double quotes on Windows).
+        let command = json_hooks::hook_command(Path::new("/opt/atuin/bin/atuin"), HARNESS).unwrap();
+        let action = json!({"type": "command", "command": command});
         assert_eq!(
             read_json(&path),
             json!({
@@ -133,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn an_outdated_file_is_rewritten(#[case] existing: &str) {
         let home = tempfile::tempdir().unwrap();
-        let path = home.path().join("hooks").join("atuin.json");
+        let path = home.path().join("hooks").joined("atuin.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, existing).unwrap();
 
@@ -141,8 +144,9 @@ mod tests {
 
         let hooks = read_json(&path)["hooks"].as_array().unwrap().clone();
         assert_eq!(hooks.len(), 2);
+        let command = json_hooks::hook_command(Path::new("/opt/atuin/bin/atuin"), HARNESS).unwrap();
         for hook in hooks {
-            assert_eq!(hook["action"]["command"], "/opt/atuin/bin/atuin hook kiro");
+            assert_eq!(hook["action"]["command"], command);
         }
     }
 

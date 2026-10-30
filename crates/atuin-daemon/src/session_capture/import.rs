@@ -228,6 +228,7 @@ mod tests {
     use atuin_common::harnesstools::kiro::session::KiroSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_common::harnesstools::session::ParentKind;
+    use atuin_common::path::PathBufExt as _;
     use atuin_domain::record::HostId;
     use futures::StreamExt;
     use futures::future::BoxFuture;
@@ -505,7 +506,7 @@ mod tests {
     async fn import_reads_a_kiro_sessions_header_and_rows() {
         let root = tempfile::tempdir().unwrap();
         let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
-        let dir = root.path().join("c15e787aea4828dd").join(id);
+        let dir = root.path().join("c15e787aea4828dd").joined(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("messages.jsonl"),
