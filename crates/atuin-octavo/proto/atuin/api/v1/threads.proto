@@ -1,0 +1,292 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+// The agent harnesses atuin captures threads from, numbered as atuin's own harness kinds. Never
+// renumber a value.
+enum HarnessKind {
+  HARNESS_KIND_UNSPECIFIED = 0;
+  HARNESS_KIND_CLAUDE_CODE = 1;
+  HARNESS_KIND_CODEX = 2;
+  HARNESS_KIND_COPILOT = 3;
+  HARNESS_KIND_OPENCODE = 4;
+  HARNESS_KIND_PI = 5;
+  HARNESS_KIND_OMP = 6;
+}
+
+// A session as its harness names it: the identity of a thread.
+message HarnessSession {
+  // Logically required; the hub rejects `HARNESS_KIND_UNSPECIFIED`.
+  HarnessKind harness = 1 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // The harness's id for the session, e.g. a Claude Code session UUID or an opencode `ses_...`.
+  string session_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 512
+  }];
+}
+
+// How a thread relates to the thread its harness named as its parent.
+enum ThreadParentKind {
+  THREAD_PARENT_KIND_UNSPECIFIED = 0;
+  // Spawned by its parent to do part of its work.
+  THREAD_PARENT_KIND_SUBAGENT = 1;
+  // A copy of the parent's conversation that went its own way.
+  THREAD_PARENT_KIND_FORK = 2;
+  // The parent's conversation carried on under a new session.
+  THREAD_PARENT_KIND_CONTINUATION = 3;
+}
+
+// The tokens of one model call, as the harness reported them. A count it did not report is unset,
+// never 0.
+message TokenUsage {
+  // Input neither read from the prompt cache nor written to it.
+  optional uint64 input = 1 [(buf.validate.field).uint64.lte = 9223372036854775807];
+  optional uint64 output = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
+  // Input read from the prompt cache.
+  optional uint64 cache_read = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
+  // Input written to the prompt cache.
+  optional uint64 cache_write = 4 [(buf.validate.field).uint64.lte = 9223372036854775807];
+  // Of `output`, the tokens spent reasoning.
+  optional uint64 reasoning = 5 [(buf.validate.field).uint64.lte = 9223372036854775807];
+}
+
+// One ordered piece of a message's content.
+message ContentBlock {
+  oneof block {
+    option (buf.validate.oneof).required = true;
+
+    // Text the person or the model wrote.
+    string text = 1;
+    // The model asked to run a tool.
+    ToolCall tool_call = 2;
+    // A tool answered.
+    ToolResult tool_result = 3;
+    // The model reasoned, and the harness kept only that it did.
+    ReasoningSummary reasoning_summary = 5;
+    // A model-written summary standing in for earlier conversation: a compaction or an abandoned
+    // branch.
+    string summary = 7;
+    // Why a model call failed or was aborted, as the harness reported it.
+    string failure = 8;
+    // The changes a tool call made to files.
+    Patch patch = 9;
+  }
+
+  // Numbered as atuin's daemon numbers its blocks; Octavo stores neither reasoning text nor
+  // blocks atuin doesn't model.
+  reserved 4, 6;
+  reserved "thinking", "other";
+
+  // The model's request to run a tool.
+  message ToolCall {
+    // The call's id, which its result names.
+    string id = 1 [(buf.validate.field).string.max_bytes = 512];
+    // e.g. `Bash`.
+    string name = 2 [(buf.validate.field).string.max_bytes = 256];
+    // The arguments, as JSON; unset when the capture kept none.
+    optional string input = 3;
+  }
+
+  // What a tool handed back.
+  message ToolResult {
+    // The `ToolCall.id` this answers.
+    string call_id = 1 [(buf.validate.field).string.max_bytes = 512];
+    // The output, as JSON; unset when the capture kept none.
+    optional string output = 2;
+    // Whether the tool reported a failure.
+    bool is_error = 3;
+  }
+
+  message ReasoningSummary {
+    // The tokens the call spent reasoning, for display only: `ThreadMessage.usage` counts them.
+    optional uint64 tokens = 1;
+  }
+
+  // What a tool call changed, file by file in the order its harness listed them.
+  message Patch {
+    // The `ToolCall.id` of the call that made the changes.
+    string call_id = 1 [(buf.validate.field).string.max_bytes = 512];
+    repeated FilePatch files = 2;
+  }
+
+  message FilePatch {
+    // The file, as the harness named it: absolute, or relative to the session's directory.
+    string path = 1;
+    // Logically required; the hub rejects `CHANGE_UNSPECIFIED`.
+    Change change = 2 [
+      (buf.validate.field).required = true,
+      (buf.validate.field).enum.defined_only = true
+    ];
+    // Where an update moved the file to, if it did.
+    optional string moved_to = 3;
+    repeated Hunk hunks = 4;
+
+    enum Change {
+      CHANGE_UNSPECIFIED = 0;
+      CHANGE_ADD = 1;
+      CHANGE_UPDATE = 2;
+      CHANGE_DELETE = 3;
+    }
+  }
+
+  // A unified diff hunk, `@@ -old_start,old_lines +new_start,new_lines @@`, and its lines, each
+  // starting with ` `, `-`, `+` or `\`.
+  message Hunk {
+    uint64 old_start = 1;
+    uint64 old_lines = 2;
+    uint64 new_start = 3;
+    uint64 new_lines = 4;
+    repeated string lines = 5;
+  }
+}
+
+// One line of a thread, as the atuin install that captured it recorded it.
+message ThreadMessage {
+  // The id of the record the client stored the line in. Unique per user.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // The harness's id for the line, unique within its thread: a thread keeps one line per
+  // `source_id`, the first stored.
+  string source_id = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 512
+  }];
+  // The `source_id` of the line this one follows, if any.
+  optional string parent_source_id = 3 [(buf.validate.field).string.max_bytes = 512];
+  // When the line was written.
+  google.protobuf.Timestamp timestamp = 4 [(buf.validate.field).required = true];
+  // Logically required; the hub rejects `ROLE_UNSPECIFIED`.
+  Role role = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum.defined_only = true
+  ];
+  // The harness's own role, e.g. Codex's `developer`. Set exactly when `role` is `ROLE_OTHER`.
+  optional string role_label = 6 [(buf.validate.field).string.max_bytes = 128];
+  // In order. Empty for a line kept only for its usage, title or place in the thread. Its strings
+  // hold at most 1 MiB together.
+  repeated ContentBlock content = 7;
+  // The working directory at this line.
+  optional string cwd = 8 [(buf.validate.field).string.max_bytes = 4096];
+  // The git branch checked out at this line.
+  optional string git_branch = 9 [(buf.validate.field).string.max_bytes = 256];
+  // The model that wrote the line.
+  optional string model = 10 [(buf.validate.field).string.max_bytes = 256];
+  // Who served `model`, e.g. `openai-codex`.
+  optional string provider = 11 [(buf.validate.field).string.max_bytes = 256];
+  // The tokens of the model call the line came from, as this line reported them: lines of one
+  // call repeat or grow the same counts (see `turn_id`).
+  TokenUsage usage = 12;
+  // Why the model call ended; `STOP_REASON_UNSPECIFIED` when the harness did not say.
+  StopReason stop_reason = 13 [(buf.validate.field).enum.defined_only = true];
+  // The harness's own stop reason. Set exactly when `stop_reason` is `STOP_REASON_OTHER`.
+  optional string stop_reason_label = 14 [(buf.validate.field).string.max_bytes = 128];
+  // The model call the line came from, the same on every line of that call.
+  optional string turn_id = 15 [(buf.validate.field).string.max_bytes = 512];
+  // The atuin install that captured the line.
+  HostId host = 16 [(buf.validate.field).required = true];
+
+  // Who wrote a line, as its harness said. Tool output a harness sends back as a user turn stays
+  // `ROLE_USER`.
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_USER = 1;
+    ROLE_ASSISTANT = 2;
+    ROLE_SYSTEM = 3;
+    // A turn carrying tool output, for harnesses that make it its own turn.
+    ROLE_TOOL = 4;
+    // A role none of the above names; `role_label` carries it.
+    ROLE_OTHER = 5;
+  }
+
+  // Why a model call ended. 1-7 are numbered as atuin's daemon numbers them.
+  enum StopReason {
+    STOP_REASON_UNSPECIFIED = 0;
+    STOP_REASON_END_TURN = 1;
+    STOP_REASON_TOOL_USE = 2;
+    STOP_REASON_MAX_TOKENS = 3;
+    STOP_REASON_ABORTED = 4;
+    STOP_REASON_ERROR = 5;
+    STOP_REASON_STOP_SEQUENCE = 6;
+    STOP_REASON_REFUSAL = 7;
+    // A reason none of the above names; `stop_reason_label` carries it.
+    STOP_REASON_OTHER = 8;
+  }
+}
+
+// A line as the install that captured it uploads it, with what that install knew of its thread.
+message CapturedThreadMessage {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  // Atuin's id for the thread, as this install minted it. Installs may mint different ones for
+  // one thread; the hub keeps the least.
+  UuidV7 atuin_id = 2 [(buf.validate.field).required = true];
+  // The thread `thread` came from, if its harness named one. May be of another harness; `thread`
+  // itself is rejected.
+  HarnessSession parent = 3;
+  // How `thread` relates to `parent`; `THREAD_PARENT_KIND_UNSPECIFIED` when the harness did not
+  // say. Any other kind is rejected while `parent` is unset.
+  ThreadParentKind parent_kind = 4 [(buf.validate.field).enum.defined_only = true];
+  // The thread's title when the line was captured. The newest line's title, or its absence, is
+  // the thread's.
+  optional string thread_title = 5 [(buf.validate.field).string.max_bytes = 1024];
+  // Logically required.
+  ThreadMessage message = 6 [(buf.validate.field).required = true];
+}
+
+// A thread as `ListThreads` lists it: what identifies it, and what its messages say of it.
+message Thread {
+  // The harness session the thread is.
+  HarnessSession session = 1;
+  // The least `CapturedThreadMessage.atuin_id` any install sent for the thread.
+  UuidV7 atuin_id = 2;
+  // The thread `session` came from, if its harness named one. May be of another harness.
+  HarnessSession parent = 3;
+  // How `session` relates to `parent`; `THREAD_PARENT_KIND_UNSPECIFIED` when no message said.
+  ThreadParentKind parent_kind = 4;
+  // The parent's atuin id; unset while the parent is not stored.
+  UuidV7 parent_atuin_id = 5;
+  // The newest message's `thread_title`, if it had one.
+  optional string title = 6;
+  // When the earliest message was written.
+  google.protobuf.Timestamp started_at = 7;
+  // When the newest message was written.
+  google.protobuf.Timestamp last_message_at = 8;
+  // The install that captured the earliest message.
+  HostId host = 9;
+  // How many messages have content.
+  uint64 message_count = 10;
+  // The tokens of the thread's model calls, each call counted once.
+  TokenUsage usage = 11;
+  // The opening prompt: the first text of the earliest user message that has any among the
+  // thread's first 64 messages, clipped to 600 characters, then `…` when there was more.
+  optional string preview = 12;
+  // The newest assistant message with a non-blank text: its non-blank texts, trimmed, joined by
+  // lines and clipped to 600 characters, then `…` when there was more.
+  optional string last_reply = 13;
+  // Where the thread started: the first working directory, git branch and model its first 64
+  // messages name, and who served that model.
+  optional string cwd = 14;
+  optional string git_branch = 15;
+  optional string model = 16;
+  optional string provider = 17;
+  // How many stored threads name this one as their parent.
+  uint64 child_count = 18;
+}
+
+// Which of the calling user's threads to list.
+//
+// Unset fields match any thread, except that subagents are left out unless asked for.
+message ThreadFilter {
+  // Whether to list threads spawned as subagents (`THREAD_PARENT_KIND_SUBAGENT`), which most
+  // threads are.
+  bool include_subagents = 1;
+  // Only the threads naming this thread as their parent. Set `include_subagents` too for its
+  // subagents.
+  HarnessSession parent = 2;
+}

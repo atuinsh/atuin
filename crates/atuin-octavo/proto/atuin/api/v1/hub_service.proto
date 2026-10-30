@@ -4,6 +4,7 @@ package atuin.api.v1;
 
 import "atuin/api/v1/common.proto";
 import "atuin/api/v1/history.proto";
+import "atuin/api/v1/threads.proto";
 import "buf/validate/validate.proto";
 
 // The hub's user-facing API.
@@ -51,6 +52,40 @@ service HubService {
   //
   // Fails with `NOT_FOUND` (`HISTORY_OUTPUT_NOT_FOUND`) when none is stored.
   rpc GetHistoryOutput(GetHistoryOutputRequest) returns (GetHistoryOutputResponse);
+
+  // Store the calling user's thread messages that their threads don't hold yet, with the threads
+  // they name.
+  //
+  // A thread keeps one message per `source_id`, the first stored, so a client can repeat a request
+  // or send messages another install already sent. Messages of a thread the user deleted are
+  // accepted and dropped. Fails with `INVALID_ARGUMENT` (`INVALID_THREAD_MESSAGES`), naming the
+  // first field at fault and storing none of the request, and with `RESOURCE_EXHAUSTED` when the
+  // request body, gRPC framing included, is over 10 MiB.
+  rpc InsertThreadMessages(InsertThreadMessagesRequest) returns (InsertThreadMessagesResponse);
+
+  // Return one page of the calling user's threads that match the filter, the most recently active
+  // first.
+  //
+  // Pass `next_page_token` back as `page_token`, with the same filter and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages.
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+
+  // Return one page of the messages of the calling user's thread, in transcript order: by
+  // timestamp, then by id.
+  //
+  // A page may hold fewer than `page_size` messages when their content is large. Pages as
+  // `ListThreads` does, with the same thread. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the
+  // user has no such thread.
+  rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
+
+  // Delete the calling user's thread with this handle, with its messages, and keep it from being
+  // stored again.
+  //
+  // A handle that names no stored thread is still remembered as deleted, so a client can repeat a
+  // deletion, or send it before the upload it races. Deletes only the named thread: list the
+  // threads naming it as their parent to delete those too.
+  rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
 
   // Identify the user the call's token logs in.
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
@@ -155,6 +190,53 @@ message GetHistoryOutputResponse {
   // Logically required.
   HistoryOutput output = 1 [(buf.validate.field).required = true];
 }
+
+message InsertThreadMessagesRequest {
+  // At most 500, whose contents' strings hold at most 4 MiB together. An empty request stores
+  // nothing.
+  repeated CapturedThreadMessage messages = 1 [(buf.validate.field).repeated.max_items = 500];
+}
+
+message InsertThreadMessagesResponse {}
+
+message ListThreadsRequest {
+  // Which threads to return.
+  ThreadFilter filter = 1;
+  // The most threads to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+}
+
+message ListThreadsResponse {
+  // The threads on this page.
+  repeated Thread threads = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message ListThreadMessagesRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  // The most messages to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+}
+
+message ListThreadMessagesResponse {
+  // The messages on this page.
+  repeated ThreadMessage messages = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message DeleteThreadRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteThreadResponse {}
 
 message WhoAmIRequest {}
 
