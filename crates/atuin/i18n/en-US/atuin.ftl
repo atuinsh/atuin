@@ -482,6 +482,7 @@ hook-codex-trusted = Trusted them in Codex's config: { $config }
 hook-reload-hint-pi = Reload pi with `/reload` or restart pi.
 hook-reload-hint-omp = Reload omp with `/reload` or restart omp.
 hook-reload-hint-opencode = Restart opencode to load the plugin.
+hook-reload-hint-kiro = Restart any running Kiro: it loads hooks when a session starts.
 hook-already-installed = { $harness }: hooks already installed, skipping
 hook-mcp-hint = To let { $name } search your history too, run `atuin mcp install { $name }`.
 history-output-failed = history output failed with: { $error }
