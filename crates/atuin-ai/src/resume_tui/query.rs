@@ -342,7 +342,7 @@ mod tests {
     #[rstest]
     fn alt_a_round_trips() {
         let mut s = String::from("bug");
-        for _ in 0..7 {
+        for _ in 0..=HARNESS_CYCLE.len() {
             s = cycle_harness(&s);
         }
         assert_eq!(s, "bug");
