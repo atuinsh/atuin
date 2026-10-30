@@ -1,6 +1,5 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use atuin_common::utils::crypto_random_string;
@@ -9,13 +8,14 @@ use atuin_domain::api::{
     LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserResponse,
 };
 use axum::Json;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use metrics::counter;
 use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{ErrorResponse, ErrorResponseStatus, RespExt};
+use crate::client_ip::ClientIp;
 use crate::db::DbError;
 use crate::db::models::{HashedPassword, NewUser, NewUsername};
 use crate::router::{AppState, UserAuth};
@@ -183,9 +183,9 @@ pub async fn change_password(
     Ok(Json(ChangePasswordResponse {}))
 }
 
-#[instrument(skip_all, err(level = "warn"), fields(client.ip = %addr.ip(), user.username = login.username.as_str()))]
+#[instrument(skip_all, err(level = "warn"), fields(client.ip = %ip, user.username = login.username.as_str()))]
 pub async fn login(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ClientIp(ip): ClientIp,
     state: State<AppState>,
     Json(login): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ErrorResponseStatus<'static>> {
