@@ -8,15 +8,13 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
-use super::{Harness, InstallHookError, json_hooks};
+use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
-use crate::path::PathBufExt as _;
 
+pub mod hooks;
 pub mod session;
 
 /// Kiro's home directory: `$KIRO_HOME` where Kiro itself honours it, else `~/.kiro`.
@@ -52,12 +50,9 @@ impl Harness for Kiro {
         false
     }
 
-    /// Kiro reads every `*.json` in `$KIRO_HOME/hooks` at session start (a running Kiro needs a
-    /// restart). The file is atuin's own, so it is written whole.
+    /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        let config_path = kiro_home().joined("hooks").joined("atuin.json");
-        install_hooks_in(&config_path, &std::env::current_exe()?).await?;
-        Ok(config_path)
+        hooks::install(&kiro_home(), &std::env::current_exe()?).await
     }
 
     /// `kiro-cli chat --resume-id <id>`. Kiro finds the session in whichever bucket holds it,
@@ -75,40 +70,6 @@ impl Harness for Kiro {
     async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
         Err(RehydrateError::Unsupported("Kiro"))
     }
-}
-
-/// Write atuin's hooks to `config_path` in Kiro's hook-file format (`{"version": "v1", "hooks":
-/// [...]}`): `PreToolUse` and `PostToolUse` on the shell tool, each running `atuin hook kiro`
-/// through `executable`. Kiro has no `PostToolUseFailure`: a failed command still gets
-/// `PostToolUse`, with its exit code in the response. The matcher names `execute_bash`, which
-/// also matches Kiro's shell on Windows (`execute_pwsh`).
-async fn install_hooks_in(config_path: &Path, executable: &Path) -> Result<(), InstallHookError> {
-    let command = json_hooks::hook_command(executable, "kiro")?;
-    let entry = |name: &str, trigger: &str| {
-        json!({
-            "name": name,
-            "trigger": trigger,
-            "matcher": "execute_bash",
-            "action": {"type": "command", "command": command},
-        })
-    };
-    let hooks = json!({
-        "version": "v1",
-        "hooks": [entry("atuin-pre", "PreToolUse"), entry("atuin-post", "PostToolUse")],
-    });
-    let installed = match tokio::fs::read_to_string(config_path).await {
-        Ok(text) => serde_json::from_str::<Value>(&text).ok() == Some(hooks.clone()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-        Err(err) => return Err(err.into()),
-    };
-    if installed {
-        return Err(InstallHookError::AlreadyInstalled);
-    }
-    if let Some(parent) = config_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(config_path, serde_json::to_string_pretty(&hooks)?).await?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -166,37 +127,5 @@ mod tests {
     fn home_follows_kiros_rule(#[case] var: Option<&str>, #[case] want: &str) {
         let home = Path::new("/home/u");
         assert_eq!(home_from(var.map(OsStr::new), home), Path::new(want));
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn install_writes_kiros_hook_file_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hooks").joined("atuin.json");
-        let exe = Path::new("/opt/atuin/bin/atuin");
-        install_hooks_in(&path, exe).await.unwrap();
-        let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(file["version"], "v1");
-        let hooks = file["hooks"].as_array().unwrap();
-        assert_eq!(
-            hooks
-                .iter()
-                .map(|h| (h["name"].as_str().unwrap(), h["trigger"].as_str().unwrap()))
-                .collect::<Vec<_>>(),
-            [("atuin-pre", "PreToolUse"), ("atuin-post", "PostToolUse")]
-        );
-        for hook in hooks {
-            assert_eq!(hook["matcher"], "execute_bash");
-            assert_eq!(hook["action"]["type"], "command");
-            assert_eq!(hook["action"]["command"], "/opt/atuin/bin/atuin hook kiro");
-        }
-        assert!(matches!(
-            install_hooks_in(&path, exe).await,
-            Err(InstallHookError::AlreadyInstalled)
-        ));
-        // A moved binary is a new file.
-        install_hooks_in(&path, Path::new("/usr/local/bin/atuin")).await.unwrap();
-        let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(file["hooks"][0]["action"]["command"], "/usr/local/bin/atuin hook kiro");
     }
 }

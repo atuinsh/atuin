@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Kiro CLI, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -15,6 +15,9 @@ atuin hook install codex
 
 # GitHub Copilot CLI
 atuin hook install copilot
+
+# Kiro CLI
+atuin hook install kiro
 
 # opencode
 atuin hook install opencode
@@ -38,6 +41,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
 | Copilot | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`) |
+| Kiro CLI | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`) |
 | opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
@@ -46,7 +50,7 @@ The hook lifecycle:
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 2. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
+Atuin only captures shell tool invocations (`Bash`, or Kiro's `execute_bash`). It ignores other tool types (file writes, web fetches, etc.).
 
 Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
 
@@ -82,7 +86,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `kiro`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -115,6 +119,18 @@ atuin hook install copilot
 This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
 
 Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
+
+### Kiro CLI
+
+```shell
+atuin hook install kiro
+```
+
+This writes Atuin's hooks to `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Kiro calls `atuin hook kiro` before and after each `execute_bash` command (`execute_pwsh` on Windows), with the same event Claude Code sends. These hooks run under Kiro CLI's V3 engine; on Kiro CLI 2.x, where the classic engine is still the default, run `kiro-cli --v3 chat` or set `chat.agentEngine` to `v3`.
+
+Kiro loads hooks when a session starts, so restart any Kiro already running. Hooks in your home directory run in every workspace; a hook file in a project's `.kiro/hooks` only runs once you have trusted that workspace, which is why the install writes to your home.
+
+Like Copilot, Kiro doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. A command Kiro runs in the background isn't recorded, since Kiro reports it as done as soon as it starts. When Kiro reports a command that never ran (one whose permission was denied, say), it gives exit code -1, and Atuin records that.
 
 ### opencode
 
@@ -163,6 +179,9 @@ cat ~/.claude/settings.json | grep atuin
 
 # Codex
 cat ~/.codex/hooks.json | grep atuin
+
+# Kiro CLI
+cat ~/.kiro/hooks/atuin.json
 
 # opencode
 ls ~/.config/opencode/plugins/atuin.ts

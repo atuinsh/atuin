@@ -1302,12 +1302,24 @@ mod tests {
         let mut lines = PROBE.lines();
         let log = dir.join(LOG_FILE);
         std::fs::write(&log, format!("{}\n", lines.next().unwrap())).unwrap();
-        let session = tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
-            .await
-            .expect("the session is reported")
-            .unwrap()
-            .unwrap();
+        async fn reported<S>(watched: &mut S) -> KiroSession
+        where
+            S: Stream<Item = Result<KiroSession, WatchError>> + Unpin,
+        {
+            tokio::time::timeout(std::time::Duration::from_secs(5), watched.next())
+                .await
+                .expect("the session is reported")
+                .unwrap()
+                .unwrap()
+        }
+        let mut session = reported(&mut watched).await;
         assert_eq!(session.id().as_ref(), PROBE_ID);
+        // The watcher lists the directory in no set order: a header listed after its log
+        // reports the session again, with the header watched.
+        if session.header.is_none() {
+            session = reported(&mut watched).await;
+            assert_eq!(session.id().as_ref(), PROBE_ID);
+        }
         assert!(session.header.is_some(), "the header is watched too");
 
         let mut messages = Box::pin(session.messages_from(None));

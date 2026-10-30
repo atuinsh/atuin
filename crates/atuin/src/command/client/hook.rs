@@ -111,7 +111,7 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
         return Ok(());
     }
 
-    match HookEvent::from_json_str(&input)? {
+    match HookEvent::from_json_str(&input, harness.name())? {
         Some(HookEvent::Start {
             command,
             intent,
