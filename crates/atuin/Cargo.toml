@@ -129,6 +129,7 @@ norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
+rand = { workspace = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
 rpassword = { workspace = true }

@@ -20,6 +20,7 @@ pub(crate) mod builder;
 pub mod capture;
 pub mod store;
 
+pub use builder::HistoryImported;
 pub use capture::CommandCapture;
 
 /// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
@@ -350,6 +351,19 @@ pub struct HistoryStats {
     pub exits: Vec<(i64, i64)>,
     pub day_of_week: Vec<(String, i64)>,
     pub duration_over_time: Vec<(String, i64)>,
+}
+
+/// How often a command ran, and when it first and last did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandRuns {
+    pub command: String,
+    pub runs: u32,
+    /// How many of the runs exited non-zero, not counting the `-1` of a run whose exit is unknown.
+    pub failures: u32,
+    pub first: OffsetDateTime,
+    pub last: OffsetDateTime,
+    /// A directory the command ran in.
+    pub cwd: String,
 }
 
 #[derive(Debug, thiserror::Error)]

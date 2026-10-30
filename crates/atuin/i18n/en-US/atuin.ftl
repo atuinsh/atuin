@@ -118,6 +118,7 @@ cmd-mcp-install = Connect AI agents to atuin's MCP server
 arg-mcp-install-agent = Agent to connect (claude-code, codex, opencode, pi or omp); omit to connect all agents with existing config files
 cmd-wrapped = Show a fun, year-in-review recap of your shell history
 arg-wrapped-year = Year to recap (defaults to last year, or this year in December)
+cmd-trick-or-treat = Dig a forgotten command, or a ghost, out of your history
 cmd-default-config = Print the default atuin configuration (config.toml)
 cmd-info = Information about Atuin data locations and ENV vars
 cmd-daemon = Manage the background daemon
@@ -542,6 +543,26 @@ wrapped-history-empty =
     Your history for { $year } is empty!
     Maybe 'atuin import' could help you import your previous history 🪄
 wrapped-no-commands = No commands found in your { $year } history. Run a command or check your config for commands ignored by stats.ignored_commands.
+stats-witching-hour =
+    { $count ->
+        [one] 🕒 Witching hour: 1 command between 3 and 4am
+       *[other] 🕒 Witching hour: { $count } commands between 3 and 4am
+    }
+trick-or-treat-trick = 🎃 Trick! Here lies a command you used to love:
+trick-or-treat-treat =
+    { $runs ->
+        [1] 🍬 Treat! You ran this once, on { $date } in { $cwd }, and never again:
+       *[other] 🍬 Treat! You ran this twice, last on { $date } in { $cwd }, and never again:
+    }
+trick-or-treat-treat-nowhere =
+    { $runs ->
+        [1] 🍬 Treat! You ran this once, on { $date }, and never again:
+       *[other] 🍬 Treat! You ran this twice, last on { $date }, and never again:
+    }
+trick-or-treat-closed = 🎃 The porch light is off. Come back in the two weeks before Halloween.
+trick-or-treat-empty = 👻 Nothing in your bag yet. Come back once your history has a few skeletons in it.
+trick-or-treat-rip = R.I.P.
+trick-or-treat-runs = { $runs } runs
 setup-settings-updated = Settings updated successfully
 setup-no-changes = No settings changed
 search-keymap-invalid-key = invalid key in keymap config: { $key }: { $error }

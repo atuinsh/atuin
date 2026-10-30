@@ -308,6 +308,7 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "proptest",
+ "rand 0.8.7",
  "ratatui",
  "regex",
  "rpassword",

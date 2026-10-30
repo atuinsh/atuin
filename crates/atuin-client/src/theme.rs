@@ -257,7 +257,7 @@ impl StyleFactory {
 
 // Built-in themes. Rather than having extra files added before any theming
 // is available, this gives a couple of basic options, demonstrating the use
-// of themes: autumn and marine
+// of themes: autumn, marine and pumpkin
 static ALERT_TYPES: LazyLock<HashMap<tracing::Level, Meaning>> = LazyLock::new(|| {
     HashMap::from([
         (tracing::Level::INFO, Meaning::AlertInfo),
@@ -339,6 +339,32 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
                 (Meaning::Guidance, StyleFactory::known_fg_string("teal")),
             ]),
         ),
+        ("pumpkin", {
+            // Colors from the Dracula palette (MIT). Base stays unset so the theme reads on light
+            // terminals too.
+            const ORANGE: &str = "#ffb86c";
+            const PURPLE: &str = "#bd93f9";
+            const GREEN: &str = "#50fa7b";
+            const RED: &str = "#ff5555";
+            const PINK: &str = "#ff79c6";
+            const COMMENT: &str = "#6272a4";
+            HashMap::from([
+                (Meaning::AlertError, StyleFactory::known_fg_string(RED)),
+                (Meaning::AlertWarn, StyleFactory::known_fg_string(ORANGE)),
+                (Meaning::AlertInfo, StyleFactory::known_fg_string(GREEN)),
+                (Meaning::Annotation, StyleFactory::known_fg_string(COMMENT)),
+                (Meaning::Guidance, StyleFactory::known_fg_string(PURPLE)),
+                (Meaning::Important, ContentStyle {
+                    attributes: Attributes::from(Attribute::Bold),
+                    ..StyleFactory::known_fg_string(ORANGE)
+                }),
+                (Meaning::SyntaxCommand, StyleFactory::known_fg_string(ORANGE)),
+                (Meaning::SyntaxFlag, StyleFactory::known_fg_string(PURPLE)),
+                (Meaning::SyntaxString, StyleFactory::known_fg_string(GREEN)),
+                (Meaning::SyntaxVariable, StyleFactory::known_fg_string(PINK)),
+                (Meaning::SyntaxComment, StyleFactory::known_fg_string(COMMENT)),
+            ])
+        }),
         (
             // This is the default theme with default PowerShell syntax highlighting colors.
             "default-powershell",
@@ -518,9 +544,16 @@ mod theme_tests {
     }
 
     #[rstest]
-    fn test_can_load_builtin_theme(mut manager: ThemeManager) {
-        let theme = manager.load_theme("autumn", None);
-        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("brown").ok());
+    #[case::autumn("autumn", Meaning::Guidance, "brown")]
+    #[case::pumpkin("pumpkin", Meaning::Important, "#ffb86c")]
+    fn test_can_load_builtin_theme(
+        mut manager: ThemeManager,
+        #[case] name: &str,
+        #[case] meaning: Meaning,
+        #[case] color: &str,
+    ) {
+        let theme = manager.load_theme(name, None);
+        assert_eq!(theme.as_style(meaning).foreground_color, from_string(color).ok());
     }
 
     #[rstest]

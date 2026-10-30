@@ -31,6 +31,7 @@ mod config;
 mod default_config;
 mod doctor;
 mod dotfiles;
+mod halloween;
 mod history;
 mod hook;
 mod import;
@@ -47,6 +48,7 @@ mod search;
 mod setup;
 mod stats;
 mod store;
+mod trick_or_treat;
 #[cfg(feature = "self-update")]
 mod update;
 mod wrapped;
@@ -154,6 +156,9 @@ pub enum Cmd {
         #[arg(help = fl!("arg-wrapped-year"))]
         year: Option<i32>,
     },
+
+    #[command(about = fl!("cmd-trick-or-treat"), hide = true)]
+    TrickOrTreat(trick_or_treat::Cmd),
 
     #[command(about = fl!("cmd-default-config"))]
     #[couture(category = "advanced")]
@@ -380,6 +385,8 @@ impl Cmd {
             }
 
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
+
+            Self::TrickOrTreat(cmd) => cmd.run(&db, &settings).await,
 
             Self::History(_)
             | Self::Hook(_)
