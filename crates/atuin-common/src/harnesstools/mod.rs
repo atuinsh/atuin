@@ -11,6 +11,7 @@ pub mod continuation;
 pub mod copilot;
 pub mod fork;
 mod json_hooks;
+pub mod kiro;
 pub mod mcp;
 pub mod note;
 pub mod opencode;
