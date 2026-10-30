@@ -127,9 +127,10 @@ const SESSION_PREFIX: &str = "sess_";
 
 /// Whether `id` names a subagent's session: the `subSessionId` Kiro names a subagent by is a
 /// bare uuid, the name of its log under `sub-executions/`, with no [`SESSION_PREFIX`], as
-/// Copilot's subagents are told by their `agent-` prefix.
+/// Copilot's subagents are told by their `agent-` prefix. Any other id without the prefix (the
+/// placeholder a resume is planned under before a session is written) is no subagent's.
 pub(crate) fn is_subagent_id(id: &str) -> bool {
-    resume::is_plain_name(id) && !id.starts_with(SESSION_PREFIX)
+    !id.starts_with(SESSION_PREFIX) && uuid::Uuid::parse_str(id).is_ok()
 }
 
 #[derive(Debug, Clone, TypedBuilder)]
@@ -1314,10 +1315,13 @@ mod tests {
         assert_eq!(session_file(root, Path::new("/elsewhere/b/sess_1/messages.jsonl")), None);
     }
 
-    /// A subagent's id is the bare id Kiro files it under; a session's has Kiro's prefix.
+    /// A subagent's id is the bare uuid Kiro files it under; a session's has Kiro's prefix, and
+    /// a name that is neither (the id a resume is planned under before a session exists) is no
+    /// subagent's.
     #[rstest]
     #[case::session("sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48", false)]
     #[case::subagent("5d13f3d7-73ae-431d-847f-04729b40503e", true)]
+    #[case::planned("atuin", false)]
     #[case::empty("", false)]
     #[case::escaping("../x", false)]
     #[case::a_path("a/b", false)]
@@ -1339,12 +1343,17 @@ mod tests {
         assert_eq!(locate(root.path(), "sess_old"), None);
         // A subagent's log, by its id alone, under whichever session holds it; not a V2
         // session's.
-        let sub = with_subagent(root.path(), RESUMED_ID, "x", PROBE);
-        assert_eq!(locate(root.path(), "x"), Some(sub));
-        assert_eq!(locate(root.path(), "y"), None);
+        let (x, y, z) = (
+            "5d13f3d7-73ae-431d-847f-04729b405001",
+            "5d13f3d7-73ae-431d-847f-04729b405002",
+            "5d13f3d7-73ae-431d-847f-04729b405003",
+        );
+        let sub = with_subagent(root.path(), RESUMED_ID, x, PROBE);
+        assert_eq!(locate(root.path(), x), Some(sub));
+        assert_eq!(locate(root.path(), y), None);
         std::fs::create_dir_all(v2.join(SUB_EXECUTIONS_DIR)).unwrap();
-        std::fs::write(v2.join(SUB_EXECUTIONS_DIR).joined("z.jsonl"), PROBE).unwrap();
-        assert_eq!(locate(root.path(), "z"), None);
+        std::fs::write(v2.join(SUB_EXECUTIONS_DIR).joined(format!("{z}.jsonl")), PROBE).unwrap();
+        assert_eq!(locate(root.path(), z), None);
     }
 
     /// The conversation in file order: three prompts (the last two from another directory),
