@@ -1352,7 +1352,7 @@ mod parser_contract {
         ];
         std::fs::write(&path, lines(&after)).unwrap();
 
-        let batch2: Vec<_> = gs.messages_from(Some(checkpoint)).try_collect().await.unwrap();
+        let batch2: Vec<_> = gs.clone().messages_from(Some(checkpoint)).try_collect().await.unwrap();
         let mut resumed = MessageEnricher::new(HarnessKind::Grok);
         resumed.resume(&session_id, None, &[], rows1.last(), &[]);
         let stored: std::collections::HashSet<_> =
@@ -1367,5 +1367,34 @@ mod parser_contract {
         assert_eq!(new[0].parent_source_id, Some(rows1.last().unwrap().source_id.clone()));
         assert_eq!(new[1].parent_source_id, Some(new[0].source_id.clone()));
         assert_eq!(new[2].parent_source_id, Some(new[1].source_id.clone()));
+
+        // Compacted again before another prompt: the same `<user_info>` and prompt are repeated,
+        // and the second summary goes on from the first's line, not from the prompt before it.
+        let after_first = &after[..4];
+        std::fs::write(&path, lines(after_first)).unwrap();
+        // Captured from where it was, which the file no longer has.
+        let second_checkpoint = atuin_common::harnesstools::session::Checkpoint::new(1, b"");
+        let mut request = after_first.to_vec();
+        request.push(user("Your task is to produce a faithful, concise summary"));
+        std::fs::write(
+            sdir.join("compaction_requests").joined("r2.json"),
+            json!({"created_at": "2026-10-28T10:10:00Z", "chat_history": request}).to_string(),
+        )
+        .unwrap();
+        let mut again = after_first.to_vec();
+        again[3] = meta("This session is being continued, a second time.");
+        std::fs::write(&path, lines(&again)).unwrap();
+        let batch3: Vec<_> = gs.messages_from(Some(second_checkpoint)).try_collect().await.unwrap();
+        let mut third = MessageEnricher::new(HarnessKind::Grok);
+        third.resume(&session_id, None, &[], Some(&new[1]), &[]);
+        let stored: std::collections::HashSet<_> =
+            rows1.iter().chain(&new).map(|r| r.source_id.clone()).collect();
+        let newer: Vec<Message> = batch3
+            .into_iter()
+            .flat_map(|(_, m)| third.capture(&session_id, &AnyMessage::Grok(m)))
+            .filter(|r| !stored.contains(&r.source_id))
+            .collect();
+        assert_eq!(newer.len(), 1, "{newer:#?}");
+        assert_eq!(newer[0].parent_source_id, Some(new[1].source_id.clone()));
     }
 }

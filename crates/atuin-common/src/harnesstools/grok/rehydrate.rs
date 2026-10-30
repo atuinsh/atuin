@@ -66,7 +66,17 @@ pub(crate) fn rehydrate_into(
         return Err(RehydrateError::AlreadyExists(existing));
     }
     let sdir = root.join(encode_cwd(&session.cwd)).joined(&session.id);
+    // A directory with no transcript is a restore that stopped before it finished: what it wrote
+    // is written again.
+    let unfinished = sdir.is_dir();
     std::fs::create_dir_all(&sdir)?;
+    let write = |path: &Path, bytes: &[u8]| {
+        if unfinished {
+            std::fs::write(path, bytes)
+        } else {
+            crate::fs::write_new(path, bytes)
+        }
+    };
 
     let mut prev_gk = None;
     let meta = meta_id(&session.id);
@@ -86,7 +96,7 @@ pub(crate) fn rehydrate_into(
     if !rendered.sidecar.is_empty() {
         let sidecar_bytes = serde_json::to_vec_pretty(&rendered.sidecar)
             .map_err(|err| RehydrateError::Other(err.to_string()))?;
-        crate::fs::write_new(&sidecar_path, &sidecar_bytes).map_err(|err| {
+        write(&sidecar_path, &sidecar_bytes).map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 RehydrateError::AlreadyExists(sidecar_path.clone())
             } else {
@@ -96,7 +106,7 @@ pub(crate) fn rehydrate_into(
     }
 
     if !updates_body.is_empty()
-        && let Err(err) = crate::fs::write_new(&updates_path, updates_body.as_bytes())
+        && let Err(err) = write(&updates_path, updates_body.as_bytes())
     {
         let _ = std::fs::remove_file(&sidecar_path);
         return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -108,7 +118,7 @@ pub(crate) fn rehydrate_into(
 
     let summary_bytes = serde_json::to_vec_pretty(&summary)
         .map_err(|err| RehydrateError::Other(err.to_string()))?;
-    if let Err(err) = crate::fs::write_new(&summary_path, &summary_bytes) {
+    if let Err(err) = write(&summary_path, &summary_bytes) {
         let _ = std::fs::remove_file(&sidecar_path);
         let _ = std::fs::remove_file(&updates_path);
         return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -773,5 +783,34 @@ mod tests {
                 "_meta": {"old_line": 1, "new_line": 1},
             }])
         );
+    }
+
+    /// A restore that stopped before writing the transcript left its other files behind: the next
+    /// writes them again and finishes, where it would have taken the session as restored.
+    #[rstest]
+    fn a_restore_stopped_before_its_transcript_finishes_next_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let session = RehydrateSession {
+            id: "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned(),
+            title: None,
+            cwd: PathBuf::from("/work/proj"),
+            original_cwd: None,
+            git_branch: None,
+            model: None,
+            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            messages: vec![sample_msg(
+                "u1",
+                Role::User,
+                vec![Content::Text("hi".to_owned())],
+                1_700_000_010,
+            )],
+            fork_of: None,
+        };
+        let path = rehydrate_into(&root, dir.path(), &session).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(rehydrate_into(&root, dir.path(), &session).unwrap(), path);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("hi"));
     }
 }

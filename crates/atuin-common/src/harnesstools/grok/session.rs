@@ -536,7 +536,7 @@ fn read_snapshots_beside(transcript_path: &Path) -> Snapshots {
 /// The transcripts Grok Build replaced with each compaction of the session at `transcript_path`
 /// (`compaction_requests/*.json`), oldest first. Read with the transcript, they give back what a
 /// session compacted before it was captured said.
-fn compacted_beside(transcript_path: &Path) -> Vec<Vec<Value>> {
+pub(crate) fn compacted_beside(transcript_path: &Path) -> Vec<Vec<Value>> {
     let Ok(entries) = std::fs::read_dir(transcript_path.with_file_name(COMPACTIONS_DIR)) else {
         return Vec::new();
     };
@@ -704,8 +704,9 @@ impl Rejoin {
         if !self.read.insert(id.clone()) {
             if !self.rejoining {
                 self.last = Some(id);
-            // A compaction's `<user_info>` is read before when the session's first was the same.
-            } else if msg.synthetic_reason.as_deref() != Some(COMPACTION) {
+            // A compaction's `<user_info>` is read before when the session's first was the same,
+            // and the prompt it repeats when an earlier compaction repeated it too.
+            } else if msg.synthetic_reason.as_deref() != Some(COMPACTION) && !msg.replayed {
                 self.from = Some(id);
             }
             return;

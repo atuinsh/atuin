@@ -17,7 +17,8 @@ use crate::harnesstools::grok::Grok;
 use crate::harnesstools::grok::rehydrate::{self, Rendered, join_jsonl, timestamp};
 use crate::harnesstools::grok::session::{
     AtuinSidecar, Chain, GrokMessage, GrokSummary, SIDECAR_FILE, SUMMARY_FILE, UPDATES_FILE,
-    default_root, locate, meta_id, read_summary_beside, read_update_times_beside, title_id,
+    compacted_beside, default_root, locate, meta_id, read_summary_beside, read_update_times_beside,
+    title_id,
 };
 use crate::harnesstools::rehydrate::RehydrateMessage;
 use crate::harnesstools::session::Message as _;
@@ -104,6 +105,17 @@ impl Transcript {
         let summary = read_summary_beside(path);
         let sidecar = AtuinSidecar::read_beside(path);
         let mut file = Self::parse(bytes, modified, id, summary, sidecar);
+        // What a compaction replaced is the session's still, read from its request.
+        for lines in compacted_beside(path) {
+            let mut chain = Chain::default();
+            for line in lines {
+                if let Ok(mut msg) = serde_json::from_value::<GrokMessage>(line)
+                    && let Some(gk) = chain.key(&mut msg)
+                {
+                    file.known.insert(file.stored.ids.get(&gk).cloned().unwrap_or(gk));
+                }
+            }
+        }
         // A compaction keeps no prompt's index in the transcript: the next one's is past theirs.
         let prompted = read_update_times_beside(path).prompts_by_index.into_keys().max();
         file.prompt_count = file.prompt_count.max(prompted.map_or(0, |index| index + 1));
@@ -234,28 +246,40 @@ fn write_sidecar(transcript_path: &Path, sidecar: &AtuinSidecar) -> Result<(), S
     Ok(())
 }
 
-fn touch_updates_and_summary(
+/// Write `update_lines`, the scrollback of what a catch-up or switch writes, to `updates.jsonl`
+/// beside `transcript_path`: after what it holds, or (`replace`) in its place. What it held is
+/// returned, to put back ([`restore_updates`]) when the transcript can't take the lines.
+fn write_updates(
     transcript_path: &Path,
     update_lines: &[Value],
-    replace_updates: bool,
-    appended_rows: &[RehydrateMessage],
-) {
-    let updates_path = transcript_path.with_file_name(UPDATES_FILE);
-    if replace_updates {
-        let body = join_jsonl(update_lines);
-        if updates_path.exists() {
-            let _ = crate::fs::replace(&updates_path, body.as_bytes(), |_| true);
-        } else if !body.is_empty() {
-            let _ = crate::fs::write_new(&updates_path, body.as_bytes());
+    replace: bool,
+) -> Result<Option<Vec<u8>>, SyncError> {
+    let path = transcript_path.with_file_name(UPDATES_FILE);
+    let before = std::fs::read(&path).ok();
+    let body = join_jsonl(update_lines);
+    match &before {
+        Some(_) if replace => crate::fs::replace(&path, body.as_bytes(), |_| true)
+            .map_err(|err| SyncError::Other(err.to_string()))?,
+        Some(held) if !update_lines.is_empty() => {
+            append_jsonl(&path, Stamp::of(held), update_lines)?;
         }
-    } else if !update_lines.is_empty() {
-        if let Ok(existing) = std::fs::read(&updates_path) {
-            let _ = append_jsonl(&updates_path, Stamp::of(&existing), update_lines);
-        } else {
-            let _ = crate::fs::write_new(&updates_path, join_jsonl(update_lines).as_bytes());
-        }
+        None if !body.is_empty() => crate::fs::write_new(&path, body.as_bytes())?,
+        _ => {}
     }
+    Ok(before)
+}
 
+/// Put `updates.jsonl` beside `transcript_path` back as it was, `before` [`write_updates`].
+fn restore_updates(transcript_path: &Path, before: Option<Vec<u8>>) {
+    let path = transcript_path.with_file_name(UPDATES_FILE);
+    let _ = match before {
+        Some(bytes) => crate::fs::replace(&path, &bytes, |_| true).map_err(drop),
+        None => std::fs::remove_file(&path).map_err(drop),
+    };
+}
+
+/// Bring `summary.json` beside `transcript_path` up to the rows a catch-up or switch wrote.
+fn touch_summary(transcript_path: &Path, appended_rows: &[RehydrateMessage]) {
     let summary_path = transcript_path.with_file_name(SUMMARY_FILE);
     let Ok(bytes) = std::fs::read(&summary_path) else {
         return;
@@ -298,11 +322,19 @@ pub(super) fn append_to(
         // lines before their ID mappings exist on disk; roll back `.atuin.json` if `append_jsonl`
         // detects a concurrent edit.
         write_sidecar(path, &combined_sidecar)?;
+        let updates = match write_updates(path, &rendered.update_lines, false) {
+            Ok(updates) => updates,
+            Err(err) => {
+                let _ = write_sidecar(path, &prior_sidecar);
+                return Err(err);
+            }
+        };
         if let Err(err) = append_jsonl(path, base.stamp, &rendered.chat_lines) {
+            restore_updates(path, updates);
             let _ = write_sidecar(path, &prior_sidecar);
             return Err(err);
         }
-        touch_updates_and_summary(path, &rendered.update_lines, false, lines);
+        touch_summary(path, lines);
     }
     Ok(AppendOutcome {
         native_path: path.clone(),
@@ -371,19 +403,26 @@ pub(super) fn replace_to(
     staged_sidecar.ids.extend(combined_sidecar.ids.clone());
     staged_sidecar.merged.extend(combined_sidecar.merged.clone());
     write_sidecar(path, &staged_sidecar)?;
-
-    let (backup, warning) = match replace_jsonl(path, base.stamp, &file.bytes, &out, backups) {
-        Ok(res) => res,
+    let mut full_prev_gk = None;
+    let full_updates =
+        rehydrate::render_messages(id, branch, &mut full_prev_gk, 0, None).update_lines;
+    let updates = match write_updates(path, &full_updates, true) {
+        Ok(updates) => updates,
         Err(err) => {
             let _ = write_sidecar(path, &prior_sidecar);
             return Err(err);
         }
     };
 
-    let mut full_prev_gk = None;
-    let full_updates =
-        rehydrate::render_messages(id, branch, &mut full_prev_gk, 0, None).update_lines;
-    touch_updates_and_summary(path, &full_updates, true, branch);
+    let (backup, warning) = match replace_jsonl(path, base.stamp, &file.bytes, &out, backups) {
+        Ok(res) => res,
+        Err(err) => {
+            restore_updates(path, updates);
+            let _ = write_sidecar(path, &prior_sidecar);
+            return Err(err);
+        }
+    };
+    touch_summary(path, branch);
 
     Ok(ReplaceOutcome {
         native_path: path.clone(),
@@ -724,5 +763,55 @@ mod tests {
         }
         assert_eq!(tip.merged.get("s1").map(String::as_str), Some(meta_id(ID).as_str()));
         assert_eq!(tip.merged.get("s2").map(String::as_str), Some("u1"));
+    }
+
+    /// A copy compacted after the branches parted holds what the compaction replaced too, read
+    /// from its request: a switch finds where the other branch leaves it.
+    #[rstest]
+    fn a_compacted_copy_holds_what_the_compaction_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seed_session(&dir.path().join("sessions"), dir.path(), vec![
+            row("u1", None, Role::User, "first", 1_700_000_001),
+            row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002),
+        ]);
+        let written: Vec<Value> = jsonl_lines(&std::fs::read(&path).unwrap())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        let requests = path.with_file_name("compaction_requests");
+        std::fs::create_dir_all(&requests).unwrap();
+        std::fs::write(
+            requests.join("r1.json"),
+            json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": written}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(&path, join_jsonl(&[json!({"type": "user", "content": [{"type": "text", "text": "This session is being continued."}], "synthetic_reason": "compaction_meta"})])).unwrap();
+
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        for id in ["u1", "a1"] {
+            assert!(tip.known_source_ids.contains(id), "{id} not held: {tip:?}");
+        }
+    }
+
+    /// The scrollback a catch-up writes is written before the transcript: when it can't be, the
+    /// catch-up fails, leaving the transcript as it was to try again.
+    #[rstest]
+    fn a_catch_up_that_cannot_write_its_scrollback_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seed_session(&dir.path().join("sessions"), dir.path(), vec![row(
+            "u1",
+            None,
+            Role::User,
+            "first",
+            1_700_000_001,
+        )]);
+        let updates = path.with_file_name(UPDATES_FILE);
+        std::fs::remove_file(&updates).unwrap();
+        std::fs::create_dir(&updates).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        let next = row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002);
+        assert!(append_to(ID, &tip, &[next], None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 }
