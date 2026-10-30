@@ -98,6 +98,46 @@ pub enum Flatten<'f> {
     },
 }
 
+/// `rows` with none before its parent, otherwise in the order given. Sync stores rows in
+/// timestamp order, and a continuation from a machine whose clock is behind sorts before the
+/// rows it follows: a harness whose log is linear (Codex, opencode, Copilot) would then resume
+/// from an older reply. Each row follows the row it names, so a row whose parent comes later
+/// waits for it, and comes right after it, its own followers after that; rows naming no parent,
+/// or one not among `rows`, keep their place. Nothing is dropped: rows that wait for each other
+/// (which capture never produces) come last, in the order given.
+#[must_use]
+pub fn parent_order(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
+    let ids: HashSet<String> = rows.iter().map(|m| m.source_id.clone()).collect();
+    let mut emitted: HashSet<String> = HashSet::with_capacity(rows.len());
+    // Rows waiting for their parent, by its id, each with its place in `rows`.
+    let mut waiting: HashMap<String, Vec<(usize, RehydrateMessage)>> = HashMap::new();
+    let mut ordered = Vec::with_capacity(rows.len());
+
+    for (place, row) in rows.into_iter().enumerate() {
+        let later_parent = row
+            .parent_source_id
+            .as_ref()
+            .filter(|p| **p != row.source_id && ids.contains(*p) && !emitted.contains(*p));
+        if let Some(parent) = later_parent {
+            waiting.entry(parent.clone()).or_default().push((place, row));
+            continue;
+        }
+        let mut ready = vec![row];
+        while let Some(row) = ready.pop() {
+            emitted.insert(row.source_id.clone());
+            if let Some(followers) = waiting.remove(&row.source_id) {
+                ready.extend(followers.into_iter().rev().map(|(_, row)| row));
+            }
+            ordered.push(row);
+        }
+    }
+
+    let mut stuck: Vec<(usize, RehydrateMessage)> = waiting.into_values().flatten().collect();
+    stuck.sort_by_key(|(place, _)| *place);
+    ordered.extend(stuck.into_iter().map(|(_, row)| row));
+    ordered
+}
+
 /// A tool call capture kept without its input (`threads.capture_tools` off, a policy withheld it, or it
 /// was over the size limit): only its name is synced.
 #[must_use]

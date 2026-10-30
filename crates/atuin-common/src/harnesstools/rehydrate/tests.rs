@@ -45,6 +45,36 @@ fn contents(rows: &[RehydrateMessage]) -> Vec<(&str, Vec<Content>)> {
     rows.iter().map(|m| (m.source_id.as_str(), m.content.clone())).collect()
 }
 
+/// Sync hands rows over in timestamp order, and a continuation from a machine whose clock is
+/// behind sorts before the rows it follows (`a_turn_behind`); the transcript has each row after
+/// its parent again, and what followed the continuation along with it. Rows naming no parent, or
+/// one that isn't there, keep their place; rows waiting for each other come last, as given.
+#[rstest]
+#[case::a_turn_behind(&[("u2", "a1"), ("a2", "u2"), ("u1", ""), ("a1", "u1")], &["u1", "a1", "u2", "a2"])]
+#[case::in_order(&[("u1", ""), ("a1", "u1"), ("u2", "a1"), ("a2", "u2")], &["u1", "a1", "u2", "a2"])]
+#[case::followers_come_along(
+    &[("a2", "u2"), ("u3", "a2"), ("u2", "a1"), ("u1", ""), ("a1", "u1")],
+    &["u1", "a1", "u2", "a2", "u3"]
+)]
+#[case::unlinked_rows_keep_their_place(
+    &[("title", ""), ("a1", "u1"), ("u1", ""), ("note", "gone")],
+    &["title", "u1", "a1", "note"]
+)]
+#[case::waiting_on_each_other(&[("a", "b"), ("b", "a"), ("c", "")], &["c", "a", "b"])]
+#[case::its_own_parent(&[("a", "a"), ("b", "a")], &["a", "b"])]
+fn no_row_precedes_its_parent(#[case] rows: &[(&str, &str)], #[case] expected: &[&str]) {
+    let rows = rows
+        .iter()
+        .map(|(id, parent)| RehydrateMessage {
+            parent_source_id: (!parent.is_empty()).then(|| (*parent).to_owned()),
+            ..row(id, Role::User, vec![])
+        })
+        .collect();
+    let ordered = parent_order(rows);
+    let ids: Vec<&str> = ordered.iter().map(|m| m.source_id.as_str()).collect();
+    assert_eq!(ids, expected);
+}
+
 /// A Claude Code turn as capture syncs it: its text, calls without their input, each result on a
 /// line of its own, and the answer after them.
 fn turn() -> Vec<RehydrateMessage> {

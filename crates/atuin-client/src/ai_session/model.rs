@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::pi::Flavour;
-use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession, parent_order};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
@@ -378,7 +378,7 @@ impl Session {
             git_branch: self.git_branch.clone(),
             model: self.model.clone(),
             started_at: self.started_at,
-            messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+            messages: parent_order(messages.into_iter().map(RehydrateMessage::from).collect()),
             fork_of: None,
         }
     }
