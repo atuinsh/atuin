@@ -16,8 +16,8 @@ use super::{
 use crate::harnesstools::grok::Grok;
 use crate::harnesstools::grok::rehydrate::{self, Rendered, join_jsonl, timestamp};
 use crate::harnesstools::grok::session::{
-    AtuinSidecar, GrokMessage, GrokSummary, SIDECAR_FILE, SUMMARY_FILE, UPDATES_FILE, default_root,
-    line_key, locate, meta_id, read_summary_beside, title_id,
+    AtuinSidecar, Chain, GrokMessage, GrokSummary, SIDECAR_FILE, SUMMARY_FILE, UPDATES_FILE,
+    default_root, locate, meta_id, read_summary_beside, title_id,
 };
 use crate::harnesstools::rehydrate::RehydrateMessage;
 use crate::harnesstools::session::Message as _;
@@ -109,7 +109,7 @@ impl Transcript {
         summary: GrokSummary,
         sidecar: AtuinSidecar,
     ) -> Self {
-        let mut prev_gk: Option<String> = None;
+        let mut chain = Chain::default();
         let mut seen_gk = HashSet::new();
         let mut line_ids = Vec::new();
         let mut known = HashSet::new();
@@ -123,18 +123,18 @@ impl Transcript {
         }
 
         for line in jsonl_lines(&bytes) {
-            let Ok(msg) = GrokMessage::decode(line) else {
+            let Ok(mut msg) = GrokMessage::decode(line) else {
                 continue;
             };
-            let role = msg.role();
-            if role == crate::harnesstools::session::Role::User {
+            let Some(gk) = chain.key(&mut msg) else {
+                continue;
+            };
+            // The next prompt's index: past every prompt's, and the one a compaction replays.
+            if let Some(index) = msg.prompt_index() {
+                prompt_count = prompt_count.max(index + 1);
+            } else if msg.role() == crate::harnesstools::session::Role::User {
                 prompt_count += 1;
             }
-            let content = msg.content();
-            let Some(gk) = line_key(prev_gk.as_deref(), &role, &content) else {
-                continue;
-            };
-            prev_gk = Some(gk.clone());
             seen_gk.insert(gk.clone());
             let resolved = sidecar.ids.get(&gk).cloned().unwrap_or(gk);
             known.insert(resolved.clone());
@@ -161,7 +161,7 @@ impl Transcript {
             modified,
             summary,
             sidecar,
-            last_gk: prev_gk,
+            last_gk: chain.last().map(str::to_owned),
             prompt_count,
             line_ids,
             known,
@@ -386,20 +386,17 @@ pub(super) fn replace_to(
 /// branches share only `summary.json` metadata and no conversational lines, so only a leading
 /// `system` prompt line is kept.
 fn shared_lines(bytes: &[u8], sidecar: &AtuinSidecar, session_id: &str, from: &str) -> Vec<u8> {
-    let mut prev_gk: Option<String> = None;
+    let mut chain = Chain::default();
     let mut past_branch = from == meta_id(session_id);
     let mut seen_conversational = false;
     kept_lines(bytes, |raw| {
-        let Ok(msg) = GrokMessage::decode(raw) else {
+        let Ok(mut msg) = GrokMessage::decode(raw) else {
             return None;
         };
-        let role = msg.role();
-        let content = msg.content();
-        let Some(gk) = line_key(prev_gk.as_deref(), &role, &content) else {
+        let Some(gk) = chain.key(&mut msg) else {
             return Some(!seen_conversational);
         };
         seen_conversational = true;
-        prev_gk = Some(gk.clone());
         if past_branch {
             return Some(false);
         }

@@ -169,10 +169,10 @@ async fn read(source: AnyHarness) -> RehydrateSession {
             session_of(id, rows_of(&lines))
         }
         AnyHarness::Grok(_) => {
-            let id = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+            let id = "01a18a39-82d5-7fc1-ae65-177c81cb02ff";
             let lines: Vec<_> = GrokSession::open(
                 SessionId::from(id.to_owned()),
-                fixture("grok/01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9/chat_history.jsonl"),
+                fixture("grok/01a18a39-82d5-7fc1-ae65-177c81cb02ff/chat_history.jsonl"),
                 pool(),
             )
             .read()
@@ -322,7 +322,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
-            AnyHarness::Grok(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => rows[n + 1..=n + called.len()]
+            AnyHarness::Grok(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => rows
+                [n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);

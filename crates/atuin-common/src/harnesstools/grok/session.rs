@@ -40,6 +40,14 @@ pub(crate) const SUMMARY_FILE: &str = "summary.json";
 /// ACP update log beside [`TRANSCRIPT_FILE`], carrying per-event timestamps and TUI scrollback.
 pub(crate) const UPDATES_FILE: &str = "updates.jsonl";
 
+/// Directory beside [`TRANSCRIPT_FILE`] where Grok Build keeps each compaction's request, holding
+/// the whole transcript as it stood before the compaction replaced it.
+const COMPACTIONS_DIR: &str = "compaction_requests";
+
+/// `synthetic_reason` of the lines a compaction writes in place of the conversation it replaced:
+/// the `<user_info>` preamble, then the summary.
+const COMPACTION: &str = "compaction_meta";
+
 /// Atuin sidecar file inside a session directory, preserving source-id mappings and merged-row
 /// records across Grok Build's in-place rewrites of `chat_history.jsonl`.
 pub(crate) const SIDECAR_FILE: &str = ".atuin.json";
@@ -382,6 +390,8 @@ pub(crate) struct UpdateTimes {
     pub call_ends: HashMap<String, OffsetDateTime>,
     pub turn_replies: Vec<OffsetDateTime>,
     pub latest: Option<OffsetDateTime>,
+    /// Each turn's usage (`turn_completed`), by the prompt index that started it.
+    pub usage: HashMap<u64, Usage>,
 }
 
 fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
@@ -413,6 +423,7 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
     };
     let mut times = UpdateTimes::default();
     let mut current_turn: Option<usize> = None;
+    let mut current_prompt: Option<u64> = None;
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -429,6 +440,7 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
             "user_message_chunk" => {
                 if let Some(idx) = update["_meta"]["promptIndex"].as_u64() {
                     times.prompts_by_index.entry(idx).or_insert(ts);
+                    current_prompt = Some(idx);
                 }
                 times.prompts_in_order.push(ts);
                 let turn_idx = times.prompts_in_order.len() - 1;
@@ -448,6 +460,16 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
                     times.call_ends.insert(call_id.to_owned(), ts);
                 }
             }
+            "turn_completed" if update["usage"].is_object() => {
+                if let Some(idx) = current_prompt {
+                    times.usage.insert(idx, usage_of(&update["usage"]));
+                }
+                if let Some(turn_idx) = current_turn
+                    && let Some(reply) = times.turn_replies.get_mut(turn_idx)
+                {
+                    *reply = ts;
+                }
+            }
             "agent_message_chunk" | "turn_completed" => {
                 if let Some(turn_idx) = current_turn {
                     if times.turn_replies.len() <= turn_idx {
@@ -465,6 +487,51 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
         }
     }
     times
+}
+
+/// A turn's usage as Grok Build reports it, whose `inputTokens` include the cached ones.
+fn usage_of(usage: &Value) -> Usage {
+    let field = |name: &str| usage[name].as_u64();
+    let (cache_read, cache_write) = (field("cachedReadTokens"), field("cacheCreationTokens"));
+    Usage {
+        input: field("inputTokens").map(|input| {
+            input.saturating_sub(cache_read.unwrap_or(0)).saturating_sub(cache_write.unwrap_or(0))
+        }),
+        output: field("outputTokens"),
+        cache_read,
+        cache_write,
+        reasoning: field("reasoningTokens"),
+    }
+}
+
+/// The transcripts Grok Build replaced with each compaction of the session at `transcript_path`
+/// (`compaction_requests/*.json`), oldest first. Read with the transcript, they give back what a
+/// session compacted before it was captured said.
+fn compacted_beside(transcript_path: &Path) -> Vec<Vec<Value>> {
+    let Ok(entries) = std::fs::read_dir(transcript_path.with_file_name(COMPACTIONS_DIR)) else {
+        return Vec::new();
+    };
+    let mut requests: Vec<(String, Vec<Value>)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let bytes = std::fs::read(entry.path()).ok()?;
+            let mut request = serde_json::from_slice::<Value>(&bytes).ok()?;
+            let at = request["created_at"].as_str()?.to_owned();
+            let Value::Array(mut lines) = request["chat_history"].take() else {
+                return None;
+            };
+            // The request ends with the instruction to summarise, no line of the conversation.
+            if lines
+                .last()
+                .is_some_and(|line| line["type"] == "user" && line["prompt_index"].is_null())
+            {
+                lines.pop();
+            }
+            Some((at, lines))
+        })
+        .collect();
+    requests.sort_by(|a, b| a.0.cmp(&b.0));
+    requests.into_iter().map(|(_, lines)| lines).collect()
 }
 
 /// Read `summary.json` beside `transcript_path`, returning default metadata when absent or
@@ -548,6 +615,34 @@ pub(crate) fn line_key(prev_gk: Option<&str>, role: &Role, content: &[Content]) 
     Some(format!("gk-{hash:016x}"))
 }
 
+/// Keys a transcript's conversational lines in order (see [`line_key`]). It also marks the prompts
+/// a compaction repeats between its `<user_info>` preamble and its summary as replayed: context
+/// the model is given again, not prompts sent twice.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Chain {
+    last: Option<String>,
+    compacting: bool,
+}
+
+impl Chain {
+    /// The key of `msg`, the transcript's next line; `None` for a line with no content.
+    pub(crate) fn key(&mut self, msg: &mut GrokMessage) -> Option<String> {
+        if msg.synthetic_reason.as_deref() == Some(COMPACTION) {
+            self.compacting = !msg.is_compaction_summary();
+        } else if self.compacting && msg.kind == "user" && msg.prompt_index.is_none() {
+            msg.replayed = true;
+        }
+        let key = line_key(self.last.as_deref(), &msg.role(), &msg.content())?;
+        self.last = Some(key.clone());
+        Some(key)
+    }
+
+    /// The key of the last conversational line keyed.
+    pub(crate) fn last(&self) -> Option<&str> {
+        self.last.as_deref()
+    }
+}
+
 /// Per-session state carried across lines without cloning growing maps on each line.
 #[derive(Debug, Default)]
 struct ReaderState {
@@ -557,10 +652,15 @@ struct ReaderState {
     summary_sig: FileSignature,
     updates_sig: FileSignature,
     sidecar_sig: FileSignature,
-    prev_gk: Option<String>,
+    chain: Chain,
     prompt_seq: usize,
     current_turn: Option<usize>,
+    /// The prompt index of the turn being read, and the turns whose usage a reply carries.
+    prompt: Option<u64>,
+    usage_given: std::collections::HashSet<u64>,
     last_ts: Option<OffsetDateTime>,
+    /// The time of the line before, which no line is timed before.
+    previous_ts: Option<OffsetDateTime>,
     emitted_title: Option<TitleChange>,
     last_chain_id: Option<String>,
 }
@@ -584,6 +684,7 @@ impl ReaderState {
         let emitted_title = (start_offset == 0).then(|| summary.title.clone()).flatten();
         let mut state = Self {
             last_ts: summary.created_at.or(times.latest).or(fallback_mtime),
+            previous_ts: None,
             emitted_title,
             summary,
             times,
@@ -591,9 +692,11 @@ impl ReaderState {
             summary_sig,
             updates_sig,
             sidecar_sig,
-            prev_gk: None,
+            chain: Chain::default(),
             prompt_seq: 0,
             current_turn: None,
+            prompt: None,
+            usage_given: std::collections::HashSet::new(),
             last_chain_id: initial_chain,
         };
         if start_offset > 0
@@ -620,6 +723,25 @@ impl ReaderState {
             }
         }
         state
+    }
+
+    /// The messages of the transcripts compactions replaced (see [`compacted_beside`]), each read
+    /// from its start as the transcript was then; the reader then restarts for the file itself.
+    fn compacted(&mut self, transcripts: Vec<Vec<Value>>) -> Vec<GrokMessage> {
+        let mut out = Vec::new();
+        for lines in transcripts {
+            self.restart();
+            for line in lines {
+                let Ok(mut message) = serde_json::from_value::<GrokMessage>(line) else {
+                    continue;
+                };
+                if self.enrich(&mut message).is_some() {
+                    out.push(message);
+                }
+            }
+        }
+        self.restart();
+        out
     }
 
     fn take_pending_title(&mut self) -> Option<TitleChange> {
@@ -651,15 +773,36 @@ impl ReaderState {
         self.take_pending_title()
     }
 
+    /// Start reading another of the session's transcripts (one a compaction replaced, or the
+    /// file rewritten), whose lines key from the start again.
+    fn restart(&mut self) {
+        self.chain = Chain::default();
+        self.prompt_seq = 0;
+        self.current_turn = None;
+        self.prompt = None;
+    }
+
     fn enrich(&mut self, msg: &mut GrokMessage) -> Option<String> {
+        let gk = self.chain.key(msg)?;
         let role = msg.role();
-        let content = msg.content();
-        let gk = line_key(self.prev_gk.as_deref(), &role, &content)?;
-        self.prev_gk = Some(gk.clone());
         let resolved_id = self.sidecar.ids.get(&gk).cloned().unwrap_or(gk);
-        let ts = self.timestamp_for(msg, &role);
+        // Lines are in the order they happened: a line timed before the one above it (a reply
+        // timed by the turn's end, say) takes that line's time instead.
+        let ts = self
+            .timestamp_for(msg, &role)
+            .map(|ts| self.previous_ts.map_or(ts, |previous| ts.max(previous)));
         if let Some(ts) = ts {
             self.last_ts = Some(ts);
+            self.previous_ts = Some(ts);
+        }
+        if role == Role::User {
+            self.prompt = msg.prompt_index;
+        } else if msg.stop_reason() == Some(StopReason::EndTurn)
+            && let Some(prompt) = self.prompt
+            && let Some(usage) = self.times.usage.get(&prompt)
+            && self.usage_given.insert(prompt)
+        {
+            msg.usage = Some(*usage);
         }
         msg.computed_id = Some(resolved_id.clone());
         msg.computed_timestamp = ts.or(self.last_ts);
@@ -678,6 +821,8 @@ impl ReaderState {
                     .or_else(|| self.times.prompts_in_order.get(seq).copied())
                     .or(self.summary.updated_at)
             }
+            // Thinking is timed by nothing of its own: it follows the line before it.
+            Role::Assistant if msg.kind == "reasoning" => self.previous_ts.or(self.last_ts),
             Role::Assistant => {
                 if let Some(first_call) = msg.tool_calls.first()
                     && let Some(&ts) = self.times.call_starts.get(&first_call.id)
@@ -782,6 +927,16 @@ impl Session for GrokSession {
                 _ => Checkpoint::new(0, b"").started_over(over),
             };
             let mut state = Some(probe.load_state(start).await);
+            if start == 0 {
+                let path = probe.path.clone();
+                let compacted =
+                    probe.pool.run(move || compacted_beside(&path)).await.unwrap_or_default();
+                if let Some(st) = state.as_mut() {
+                    for message in st.compacted(compacted) {
+                        yield Ok((safe_checkpoint, message));
+                    }
+                }
+            }
             let mut need_follows = start > 0;
             let mut emitted_header = start > 0;
             let mut last_generation = 0;
@@ -938,6 +1093,12 @@ impl Session for GrokSession {
                     yield Ok(GrokMessage::title_info(session.id.as_ref(), change, ts));
                 }
             }
+            let path = session.path.clone();
+            let compacted =
+                session.pool.run(move || compacted_beside(&path)).await.unwrap_or_default();
+            for message in state.compacted(compacted) {
+                yield Ok(message);
+            }
             let messages = FollowLines::new(PooledReadLines::new(
                 PathLineReader::new(&session.path),
                 session.pool,
@@ -1003,6 +1164,11 @@ pub struct GrokMessage {
     prompt_index: Option<u64>,
     #[serde(default)]
     synthetic_reason: Option<String>,
+    /// A prompt a compaction repeats (see [`Chain`]).
+    #[serde(skip)]
+    replayed: bool,
+    #[serde(skip)]
+    usage: Option<Usage>,
     #[serde(skip)]
     computed_id: Option<String>,
     #[serde(skip)]
@@ -1072,8 +1238,21 @@ impl GrokMessage {
         }
     }
 
+    pub(crate) fn prompt_index(&self) -> Option<u64> {
+        self.prompt_index
+    }
+
+    /// The summary a compaction leaves in place of the conversation, after its `<user_info>`.
+    fn is_compaction_summary(&self) -> bool {
+        self.synthetic_reason.as_deref() == Some(COMPACTION)
+            && !self
+                .text_blocks()
+                .first()
+                .is_some_and(|t| t.trim_start().starts_with("<user_info>"))
+    }
+
     fn is_injected_user(&self, texts: &[String]) -> bool {
-        if self.synthetic_reason.is_some() {
+        if self.synthetic_reason.is_some() || self.replayed {
             return true;
         }
         if self.prompt_index.is_some() {
@@ -1157,6 +1336,9 @@ impl Message for GrokMessage {
     fn content(&self) -> Vec<Content> {
         match self.kind.as_str() {
             "system" => Vec::new(),
+            "user" if self.is_compaction_summary() => {
+                self.text_blocks().into_iter().map(Content::Summary).collect()
+            }
             "user" => {
                 let texts = self.text_blocks();
                 if self.is_injected_user(&texts) {
@@ -1196,7 +1378,7 @@ impl Message for GrokMessage {
     }
 
     fn usage(&self) -> Option<Usage> {
-        None
+        self.usage
     }
 
     fn stop_reason(&self) -> Option<StopReason> {
@@ -1267,22 +1449,60 @@ mod tests {
         assert_ne!(after_branch_a, after_branch_b);
     }
 
+    /// A real session (Grok Build 1.0.70): shell calls, a read and an edit, then `/compact`.
     #[rstest]
     #[tokio::test]
-    async fn fixture_session_reads_cleanly() {
+    async fn a_compacted_session_reads_back_whole() {
+        let id = "01a18a39-82d5-7fc1-ae65-177c81cb02ff";
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .joined("tests/fixtures/grok/01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9/chat_history.jsonl");
-        let id = SessionId::from("01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned());
-        let msgs: Vec<_> =
-            GrokSession::open(id, fixture, pool()).read().try_collect().await.unwrap();
-        assert_eq!(msgs.len(), 8);
+            .joined(format!("tests/fixtures/grok/{id}/chat_history.jsonl"));
+        let msgs: Vec<_> = GrokSession::open(SessionId::from(id.to_owned()), fixture, pool())
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
         assert_eq!(msgs[0].cwd(), Some(PathBuf::from("/work/proj")));
-        assert_eq!(
-            msgs[1].title(),
-            Some(TitleChange::new(TitleSource::Generated, "fix the flaky test"))
+
+        // What the compaction replaced comes from its request, each prompt once.
+        let prompts: Vec<_> = msgs.iter().filter(|m| m.role() == Role::User).collect();
+        assert_eq!(prompts.len(), 2, "{prompts:?}");
+        assert!(
+            matches!(&prompts[0].content()[..], [Content::Text(t)] if t.starts_with("Run 'ls -la'"))
         );
-        assert_eq!(msgs[3].role(), Role::User);
-        assert_eq!(msgs[3].content(), vec![Content::Text("Fix the flaky sync test".to_owned())]);
+        assert_eq!(prompts[1].content(), vec![Content::Text("Reply with exactly OK2".to_owned())]);
+        let calls: Vec<_> = msgs
+            .iter()
+            .flat_map(Message::content)
+            .filter_map(|c| match c {
+                Content::ToolUse(call) => Some(call.name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, [
+            "run_terminal_command",
+            "read_file",
+            "search_replace",
+            "run_terminal_command"
+        ]);
+
+        let summaries: Vec<_> = msgs
+            .iter()
+            .filter(|m| matches!(&m.content()[..], [Content::Summary(t)] if t.starts_with("This session is being continued")))
+            .collect();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].role(), Role::System);
+
+        // Each turn's usage is on its reply, and the lines are timed in order.
+        let used: Vec<_> = msgs.iter().filter_map(Message::usage).collect();
+        assert_eq!(used.len(), 2, "{used:?}");
+        assert_eq!(used[0].reasoning, Some(184));
+        let times: Vec<_> = msgs.iter().filter_map(Message::timestamp).collect();
+        assert!(times.is_sorted(), "{times:?}");
+        // Only the `<user_info>` both transcripts open with is read twice, as one row.
+        let mut seen = std::collections::HashSet::new();
+        let twice: Vec<_> = msgs.iter().filter(|m| !seen.insert(m.id())).collect();
+        assert_eq!(twice.len(), 1, "{twice:?}");
+        assert_eq!(twice[0].role(), Role::System);
     }
 
     #[rstest]
@@ -1315,10 +1535,10 @@ mod tests {
         std::fs::write(sdir.join(SUMMARY_FILE), summary.to_string()).unwrap();
 
         let updates = [
-            json!({"timestamp": 1_761_645_610, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Run cargo test"}, "_meta": {"promptIndex": 0}}}}),
-            json!({"timestamp": 1_761_645_620, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "run_terminal_command"}}}),
-            json!({"timestamp": 1_761_645_625, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"}}}),
-            json!({"timestamp": 1_761_645_630, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "2 tests failed."}}}}),
+            json!({"timestamp": 1_793_181_610, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "Run cargo test"}, "_meta": {"promptIndex": 0}}}}),
+            json!({"timestamp": 1_793_181_620, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "run_terminal_command"}}}),
+            json!({"timestamp": 1_793_181_625, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed"}}}),
+            json!({"timestamp": 1_793_181_630, "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "2 tests failed."}}}}),
         ]
         .iter()
         .map(Value::to_string)
@@ -1365,10 +1585,10 @@ mod tests {
         assert_eq!(msgs[1].title(), Some(expected_title));
         assert!(!msgs[1].id().unwrap().as_ref().contains("Fix login bug"));
 
-        assert_eq!(msgs[3].timestamp().unwrap().unix_timestamp(), 1_761_645_610);
-        assert_eq!(msgs[5].timestamp().unwrap().unix_timestamp(), 1_761_645_620);
-        assert_eq!(msgs[6].timestamp().unwrap().unix_timestamp(), 1_761_645_625);
-        assert_eq!(msgs[7].timestamp().unwrap().unix_timestamp(), 1_761_645_630);
+        assert_eq!(msgs[3].timestamp().unwrap().unix_timestamp(), 1_793_181_610);
+        assert_eq!(msgs[5].timestamp().unwrap().unix_timestamp(), 1_793_181_620);
+        assert_eq!(msgs[6].timestamp().unwrap().unix_timestamp(), 1_793_181_625);
+        assert_eq!(msgs[7].timestamp().unwrap().unix_timestamp(), 1_793_181_630);
         assert!(matches!(msgs[6].content().as_slice(), [Content::ToolResult(ToolResult {
             error: true,
             ..
