@@ -558,9 +558,9 @@ impl Writer {
     }
 }
 
-/// Whether `payload` is a row of the conversation, which a tombstone can cover from, rather
-/// than a turn's framing or Kiro's bookkeeping.
-fn conversation(payload: &Value) -> bool {
+/// Whether `payload` is a row of the conversation (one the reader yields), rather than a turn's
+/// framing or Kiro's bookkeeping.
+pub(crate) fn conversation(payload: &Value) -> bool {
     matches!(
         payload["type"].as_str(),
         Some(
