@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::pi::Flavour;
-use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession, parent_order};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
@@ -33,6 +33,7 @@ impl From<&AnyHarness> for HarnessKind {
         match value {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
+            AnyHarness::Copilot(_) => Self::Copilot,
             AnyHarness::Grok(_) => Self::Grok,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
@@ -44,19 +45,20 @@ impl From<&AnyHarness> for HarnessKind {
 }
 
 impl HarnessKind {
-    /// The harness tools for this kind. `None` for a kind atuin has none for (Copilot, and
-    /// sessions of no known harness), whose sessions can be viewed but not resumed.
+    /// The harness tools for this kind. `None` for a kind atuin has none for (sessions of no
+    /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{ccode, codex, grok, opencode, pi};
+        use atuin_common::harnesstools::{ccode, codex, copilot, grok, opencode, pi};
         match self {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
+            Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
             Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
-            Self::Copilot | Self::Unknown => None,
+            Self::Unknown => None,
         }
     }
 }
@@ -379,7 +381,7 @@ impl Session {
             git_branch: self.git_branch.clone(),
             model: self.model.clone(),
             started_at: self.started_at,
-            messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+            messages: parent_order(messages.into_iter().map(RehydrateMessage::from).collect()),
             fork_of: None,
         }
     }
@@ -591,7 +593,7 @@ mod tests {
     #[case::codex(HarnessKind::Codex, true)]
     #[case::opencode(HarnessKind::Opencode, true)]
     #[case::pi(HarnessKind::Pi, true)]
-    #[case::copilot(HarnessKind::Copilot, false)]
+    #[case::copilot(HarnessKind::Copilot, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,
@@ -795,11 +797,8 @@ mod tests {
 
     #[rstest]
     fn harness_kind_covers_every_known_harness() {
-        let pool = atuin_common::sync::BlockingPool::new(std::num::NonZeroUsize::MIN);
         for harness in AnyHarness::all() {
-            if harness.sessions(&pool).is_some() {
-                assert_ne!(HarnessKind::from(harness), HarnessKind::Unknown);
-            }
+            assert_ne!(HarnessKind::from(harness), HarnessKind::Unknown);
         }
     }
 

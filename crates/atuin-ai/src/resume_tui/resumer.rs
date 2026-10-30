@@ -687,6 +687,9 @@ impl Resumer for HarnessResumer {
         let Some(Copy { tip, dir }) = copy else {
             return ready(resume.plan, None);
         };
+        if !resume.catch_up {
+            return ready(resume.plan, None);
+        }
         let tip = match tip {
             Ok(Some(tip)) => Ok(tip),
             Ok(None) => {
@@ -870,7 +873,6 @@ impl Resumer for HarnessResumer {
             .collect()
     }
 
-    /// Every harness atuin writes forks (Copilot isn't one), when installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
         self.runs_here(session.handle.harness, session)
     }

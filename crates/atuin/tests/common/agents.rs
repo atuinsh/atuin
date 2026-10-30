@@ -20,18 +20,20 @@ use time::format_description::well_known::Rfc3339;
 pub enum Agent {
     Claude,
     Codex,
+    Copilot,
     Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::Opencode, Self::Pi];
+    pub const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Copilot, Self::Opencode, Self::Pi];
 
     /// The `harness` atuin's JSON output names it by.
     pub fn harness(self) -> &'static str {
         match self {
             Self::Claude => "claude-code",
             Self::Codex => "codex",
+            Self::Copilot => "copilot",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -42,6 +44,7 @@ impl Agent {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Copilot => "copilot",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -52,7 +55,7 @@ impl Agent {
         match self {
             Self::Claude => "Bash",
             Self::Codex => "exec_command",
-            Self::Opencode | Self::Pi => "bash",
+            Self::Copilot | Self::Opencode | Self::Pi => "bash",
         }
     }
 
@@ -61,6 +64,7 @@ impl Agent {
         match self {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
+            Self::Copilot => "Copilot",
             Self::Opencode => "opencode",
             Self::Pi => "Pi",
         }
@@ -81,6 +85,7 @@ impl Agent {
         match self {
             Self::Claude => home.join(".claude/projects"),
             Self::Codex => home.join(".codex/sessions"),
+            Self::Copilot => home.join(".copilot/session-state"),
             Self::Opencode => home.join(".local/share/opencode/opencode.db"),
             Self::Pi => home.join(".pi/agent/sessions"),
         }
@@ -208,10 +213,39 @@ impl Transcript {
                 let stamp = rfc3339(started).replace([':', '.'], "-");
                 agent.root(home).joined(dir).joined(format!("{stamp}_{id}.jsonl"))
             }
+            Agent::Copilot => agent.root(home).joined(&id).joined("events.jsonl"),
             Agent::Opencode => agent.root(home),
         };
         let transcript = Self { agent, id, path };
         match agent {
+            Agent::Copilot => {
+                let dir = transcript.path.parent().unwrap();
+                fs::create_dir_all(dir).unwrap();
+                fs::write(
+                    dir.join("workspace.yaml"),
+                    format!(
+                        "id: {}\ncwd: {}\ngit_root: {}\nbranch: main\nclient_name: \
+                         github/cli\nname: Copilot session {}\nuser_named: false\n",
+                        transcript.id,
+                        cwd.display(),
+                        cwd.display(),
+                        word()
+                    ),
+                )
+                .unwrap();
+                write_lines(&transcript.path, &[copilot_event(
+                    "session.start",
+                    None,
+                    &json!({
+                        "sessionId": transcript.id,
+                        "version": 1,
+                        "producer": "copilot-agent",
+                        "copilotVersion": "1.0.104",
+                        "startTime": rfc3339(started),
+                        "context": {"cwd": cwd, "gitRoot": cwd, "branch": "main"},
+                    }),
+                )]);
+            }
             Agent::Claude | Agent::Pi | Agent::Codex => {
                 fs::create_dir_all(transcript.path.parent().unwrap()).unwrap();
                 let header = match agent {
@@ -278,6 +312,14 @@ impl Transcript {
     /// Where this agent keeps the transcript of session `id` under `home`, when it has one.
     pub fn find(home: &Path, agent: Agent, id: &str) -> Option<Self> {
         assert_ne!(agent, Agent::Opencode, "opencode keeps every session in one database");
+        if agent == Agent::Copilot {
+            let path = agent.root(home).joined(id).joined("events.jsonl");
+            return path.is_file().then(|| Self {
+                agent,
+                id: id.to_owned(),
+                path,
+            });
+        }
         let mut dirs = vec![agent.root(home)];
         while let Some(dir) = dirs.pop() {
             // A directory gone or unreadable holds nothing to find: the rest may.
@@ -335,6 +377,7 @@ impl Transcript {
         match self.agent {
             Agent::Claude => self.append_claude(cwd, turns),
             Agent::Codex => self.append_codex(turns),
+            Agent::Copilot => self.append_copilot(turns),
             Agent::Pi => self.append_pi(turns),
             Agent::Opencode => self.append_opencode(cwd, turns),
         }
@@ -429,6 +472,133 @@ impl Transcript {
             );
         }
         write_lines(&self.path, &lines);
+    }
+
+    /// Copilot's events (Copilot CLI 1.0.104): each turn a prompt, the model call's usage and
+    /// its reply calling `bash`, the call's result, then the usage and reply that end the turn.
+    fn append_copilot(&self, turns: &[Turn]) {
+        let lines = self.copilot_turns(turns, None);
+        write_lines(&self.path, &lines);
+    }
+
+    /// A Copilot subagent `parent` spawned with a `task` call, working through `turns`: its rows
+    /// go into the parent's log, between the subagent's start and end, its prompt written by
+    /// the parent (`source: agent-<parent>`) and its replies naming the call.
+    pub fn copilot_subagent(parent: &Self, turns: &[Turn]) -> Self {
+        assert_eq!(parent.agent, Agent::Copilot);
+        let call = format!("toolu_{}", short());
+        let mut lines = vec![copilot_event(
+            "subagent.started",
+            parent.last("id").as_deref(),
+            &json!({
+                "toolCallId": call,
+                "agentName": "task",
+                "agentDisplayName": format!("worker-{}", word()),
+                "model": "gpt-5.6-terra",
+                "executionMode": "sync",
+            }),
+        )];
+        let mut rows = parent.copilot_turns(turns, Some(&call));
+        lines.append(&mut rows);
+        lines.push(copilot_event(
+            "subagent.completed",
+            lines.last().unwrap()["id"].as_str(),
+            &json!({"toolCallId": call, "agentName": "task", "totalToolCalls": turns.len()}),
+        ));
+        write_lines(&parent.path, &lines);
+        Self {
+            agent: Agent::Copilot,
+            id: format!("agent-{call}"),
+            path: parent.path.clone(),
+        }
+    }
+
+    /// The events of `turns` in this log: the parent's, or a subagent's spawned by `call`.
+    fn copilot_turns(&self, turns: &[Turn], subagent: Option<&str>) -> Vec<Value> {
+        let mut parent = self.last("id");
+        let mut lines = Vec::new();
+        let mut event = |kind: &str, data: Value| {
+            let line = copilot_event(kind, parent.as_deref(), &data);
+            parent = Some(line["id"].as_str().unwrap().to_owned());
+            lines.push(line);
+        };
+        for turn in turns {
+            let call = format!("toolu_{}", short());
+            let interaction = uuid::Uuid::new_v4().to_string();
+            let usage = |api_call: &str, reasoning: u64| {
+                json!({"usage": {
+                    "model": "gpt-5.6-terra",
+                    "inputTokens": 110,
+                    "outputTokens": 5,
+                    "cacheReadTokens": 100,
+                    "cacheWriteTokens": 0,
+                    "reasoningTokens": reasoning,
+                    "apiCallId": api_call,
+                }})
+            };
+            let mut prompt = json!({
+                "content": turn.prompt,
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "interactionId": interaction,
+                "turnId": "0",
+            });
+            if subagent.is_some() {
+                prompt["source"] = json!(format!("agent-{}", self.id));
+            }
+            event("user.message", prompt);
+            let calling = format!("msg_{}", short());
+            event("session.usage_record", usage(&calling, 7));
+            let mut reply = json!({
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "model": "gpt-5.6-terra",
+                "providerId": "copilot",
+                "content": "",
+                "reasoningText": turn.thinking,
+                "toolRequests": [{
+                    "toolCallId": call,
+                    "name": self.agent.tool(),
+                    "arguments": {"command": turn.command},
+                    "type": "function",
+                }],
+                "interactionId": interaction,
+                "turnId": "0",
+                "apiCallId": calling,
+            });
+            if let Some(call) = subagent {
+                reply["parentToolCallId"] = json!(call);
+            }
+            event("assistant.message", reply);
+            event(
+                "tool.execution_complete",
+                json!({
+                    "toolCallId": call,
+                    "model": "gpt-5.6-terra",
+                    "interactionId": interaction,
+                    "turnId": "0",
+                    "shellExecution": {"exitCode": 0},
+                    "success": true,
+                    "result": {"content": format!("{}\n<shellId: 0 completed with exit code 0>", turn.output)},
+                }),
+            );
+            let replying = format!("msg_{}", short());
+            event("session.usage_record", usage(&replying, 0));
+            let mut reply = json!({
+                "messageId": uuid::Uuid::new_v4().to_string(),
+                "model": "gpt-5.6-terra",
+                "providerId": "copilot",
+                "content": turn.reply,
+                "toolRequests": [],
+                "interactionId": interaction,
+                "turnId": "1",
+                "phase": "final_answer",
+                "apiCallId": replying,
+            });
+            if let Some(call) = subagent {
+                reply["parentToolCallId"] = json!(call);
+            }
+            event("assistant.message", reply);
+        }
+        lines
     }
 
     fn append_codex(&self, turns: &[Turn]) {
@@ -589,6 +759,17 @@ impl Transcript {
         }
         opencode_events(home, &events);
     }
+}
+
+/// One line of a Copilot event log: `data` under `kind`, after the event `parent`.
+fn copilot_event(kind: &str, parent: Option<&str>, data: &Value) -> Value {
+    json!({
+        "type": kind,
+        "data": data,
+        "id": uuid::Uuid::new_v4().to_string(),
+        "parentId": parent,
+        "timestamp": rfc3339(tick()),
+    })
 }
 
 fn write_lines(path: &Path, lines: &[Value]) {

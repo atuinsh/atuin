@@ -35,6 +35,7 @@ use crate::harnesstools::session::{Message, SessionId};
 
 mod ccode;
 mod codex;
+mod copilot;
 mod grok;
 pub mod liveness;
 mod opencode;
@@ -275,6 +276,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.local_tip(id).await,
             Self::Codex(h) => h.local_tip(id).await,
+            Self::Copilot(h) => h.local_tip(id).await,
             Self::Grok(h) => h.local_tip(id).await,
             Self::Opencode(h) => h.local_tip(id).await,
             Self::Pi(h) => h.local_tip(id).await,
@@ -285,6 +287,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.is_live(id, cwd).await,
             Self::Codex(h) => h.is_live(id, cwd).await,
+            Self::Copilot(h) => h.is_live(id, cwd).await,
             Self::Grok(h) => h.is_live(id, cwd).await,
             Self::Opencode(h) => h.is_live(id, cwd).await,
             Self::Pi(h) => h.is_live(id, cwd).await,
@@ -301,6 +304,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.append(id, base, lines, options).await,
             Self::Codex(h) => h.append(id, base, lines, options).await,
+            Self::Copilot(h) => h.append(id, base, lines, options).await,
             Self::Grok(h) => h.append(id, base, lines, options).await,
             Self::Opencode(h) => h.append(id, base, lines, options).await,
             Self::Pi(h) => h.append(id, base, lines, options).await,
@@ -318,6 +322,7 @@ impl SessionSync for AnyHarness {
         match self {
             Self::ClaudeCode(h) => h.replace(id, base, branch, options, backups).await,
             Self::Codex(h) => h.replace(id, base, branch, options, backups).await,
+            Self::Copilot(h) => h.replace(id, base, branch, options, backups).await,
             Self::Grok(h) => h.replace(id, base, branch, options, backups).await,
             Self::Opencode(h) => h.replace(id, base, branch, options, backups).await,
             Self::Pi(h) => h.replace(id, base, branch, options, backups).await,
@@ -507,7 +512,7 @@ fn backup_path(path: &Path, backups: &Path, at: time::OffsetDateTime, n: u32) ->
 /// to their parents, which sync places beside the tree (`Analysis::rows_for`), not on it. Codex
 /// links its content-keyed rows like any other.
 fn off_tree(m: &RehydrateMessage, links: Links) -> bool {
-    links == Links::Parents && m.source_id.starts_with(SYNTHETIC)
+    matches!(links, Links::Parents { .. }) && m.source_id.starts_with(SYNTHETIC)
 }
 
 /// Where branch `branch` (its rows root to head, along the tree, with the rows beside it that go
@@ -697,10 +702,14 @@ fn capture_key<M: Message + ?Sized>(
 /// How a harness's rows say what they follow on from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Links {
-    /// Each names its parent row (Claude Code, pi).
-    Parents,
+    /// Each names its parent row (Claude Code, pi), and rows keyed on their content (`syn-`:
+    /// titles) sit beside the tree. `chained`: a row naming no parent follows the one before
+    /// it (Copilot, whose rows captured before its reader linked them name none).
+    Parents {
+        chained: bool,
+    },
     /// Each names its parent row, or none and follows the one before it (Codex, whose rows
-    /// captured before capture linked them name none).
+    /// captured before capture linked them name none); content-keyed rows are linked like any.
     Chained,
     /// None names a row: they follow on in order (opencode).
     Linear,
@@ -722,12 +731,12 @@ fn check_segment(
     for row in lines {
         let id = row.source_id.as_str();
         let follows = match (links, row.parent_source_id.as_deref()) {
-            (Links::Linear, _) | (Links::Chained, None) => true,
+            (Links::Linear, _) | (Links::Chained | Links::Parents { chained: true }, None) => true,
             // A row beside the tree follows the row of the branch before it ([`past`]), which
             // the transcript may hold beside its lines (a title) rather than as one.
             _ if off_tree(row, links) => true,
             (_, Some(parent)) => seen.contains(parent) || base.is_tip(parent),
-            (Links::Parents, None) => false,
+            (Links::Parents { chained: false }, None) => false,
         };
         if !follows {
             return Err(SyncError::Unsupported(

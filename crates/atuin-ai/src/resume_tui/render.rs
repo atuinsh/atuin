@@ -1646,7 +1646,7 @@ impl State {
         {
             let agent = harness_label(row.handle.harness);
             let enter = if row.handle.harness.harness().is_none() {
-                // Nothing atuin can resume or continue it in (a Copilot session).
+                // Nothing atuin can resume or continue it in (a session of no known harness).
                 "can't resume here".to_owned()
             } else if settings.threads.resume_chooser {
                 // Enter asks where.

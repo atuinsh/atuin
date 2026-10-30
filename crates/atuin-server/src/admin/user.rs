@@ -2,6 +2,7 @@
 
 use std::io::{self, IsTerminal as _};
 
+use atuin_common::userio;
 use atuin_common::utils::crypto_random_string;
 use clap::Subcommand;
 use eyre::{Context as _, Result, bail};
@@ -65,7 +66,7 @@ async fn create(db: &dyn DynDatabase, username: NewUsername, email: String) -> R
         .await
         .wrap_err_with(|| format!("failed to create {}", user.username))?;
 
-    println!("created {}", user.username);
+    userio::log::info!("server-admin-user-created", username = user.username.to_string());
     Ok(())
 }
 
@@ -74,7 +75,7 @@ async fn set_password(db: &dyn DynDatabase, username: &str) -> Result<()> {
     user.password = HashedPassword::new(read_password()?).await;
     db.update_user_password(&user).await.wrap_err("failed to update the password")?;
 
-    println!("changed the password of {username}");
+    userio::log::info!("server-admin-password-changed", username = username);
     Ok(())
 }
 
@@ -85,7 +86,7 @@ async fn delete(db: &dyn DynDatabase, username: &str, yes: bool) -> Result<()> {
     }
     db.delete_user(&user).await.wrap_err("failed to delete the user")?;
 
-    println!("deleted {username}");
+    userio::log::info!("server-admin-user-deleted", username = username);
     Ok(())
 }
 

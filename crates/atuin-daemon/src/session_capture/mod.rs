@@ -36,6 +36,7 @@ use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 pub use tools::ToolCapture;
+use tracing::Instrument as _;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1033,10 +1034,13 @@ impl AiHarnessSessionCapture {
         }
         let recovery = self.recovery();
         let sink = self.sink.clone();
-        let projecting = tokio::spawn(async move {
-            recovery.finished().await;
-            recovery.project_synced(&sink.records, &sink.sidecar).await;
-        });
+        let projecting = tokio::spawn(
+            async move {
+                recovery.finished().await;
+                recovery.project_synced(&sink.records, &sink.sidecar).await;
+            }
+            .instrument(tracing::Span::current()),
+        );
         if let Err(err) = projecting.await {
             tracing::error!(?err, "projecting synced ai-session records failed");
         }

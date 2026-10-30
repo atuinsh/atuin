@@ -604,6 +604,10 @@ impl Full {
         };
         let text = |key: &str| data[key].as_str().unwrap_or_default().to_owned();
         let (mut next, info) = match self.kind.as_str() {
+            // a goal the user set, said in a kickoff opencode wrote
+            "user" | "synthetic" if let Some(goal) = goal_set(&data, &self.kind) => {
+                (said(Role::User, vec![Content::Text(goal)]), None)
+            }
             // a subagent's prompt included: opencode writes its first line, the rest is the task
             // the subagent was given (`tool/plugin/subagent.ts`)
             "user" => (said(Role::User, vec![Content::Text(text("text"))]), None),
@@ -772,6 +776,22 @@ fn summary_of(data: &Value) -> String {
         .filter_map(|part| part["text"].as_str())
         .collect();
     texts.join("\n\n")
+}
+
+/// The goal a user set with `/goal`, when `data` is the kickoff opencode sends the model for it
+/// (`plugin/goal.ts`): a `synthetic` row with a description, or a `user` one when the command
+/// carried attachments, holding the objective (trimmed, unquoted) escaped. The goal's
+/// continuations repeat the objective, but are `synthetic` rows without a description, and stay
+/// opencode's own text.
+fn goal_set(data: &Value, kind: &str) -> Option<String> {
+    let kickoff = kind == "user" || data["description"].is_string();
+    if data["metadata"]["source"] != "goal" || !kickoff {
+        return None;
+    }
+    let (_, rest) = data["text"].as_str()?.split_once("<untrusted_objective>\n")?;
+    let (objective, _) = rest.split_once("\n</untrusted_objective>")?;
+    let objective = objective.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+    Some(format!("/goal {objective}"))
 }
 
 /// What a message atuin wrote of session `session` says it was written from (see [`SOURCE`]),

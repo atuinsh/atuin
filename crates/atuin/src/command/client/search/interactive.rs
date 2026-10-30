@@ -13,6 +13,7 @@ use atuin_client::settings::{
 };
 use atuin_common::shell::Shell;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
+use atuin_common::userio::log::{Held, Message, Severity};
 use easy_cast::Conv;
 use eyre::Result;
 use futures_util::FutureExt;
@@ -181,6 +182,8 @@ pub struct State {
     search: SearchState,
     engine: AnySearchEngine,
     now: Box<dyn Fn() -> OffsetDateTime + Send>,
+    /// Messages for the user, shown with the warnings until the next key.
+    messages: Vec<Message>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -378,6 +381,7 @@ impl State {
         if input.kind == event::KeyEventKind::Release {
             return InputAction::Continue;
         }
+        self.messages.clear();
 
         // Reset switched_search_mode at start of each key event
         self.switched_search_mode = false;
@@ -1317,6 +1321,26 @@ impl State {
     }
 
     fn build_warnings(&self, settings: &Settings, theme: &Theme) -> Text<'static> {
+        let mut warnings = self.build_mode_warnings(settings, theme);
+        warnings.extend(self.messages.iter().map(|message| Self::message_line(message, theme)));
+        warnings
+    }
+
+    /// A message for the user, labelled as [`Stderr`](atuin_common::userio::log::Stderr) labels
+    /// it.
+    fn message_line(message: &Message, theme: &Theme) -> Line<'static> {
+        let (label, meaning) = match message.severity {
+            Severity::Info => ("", Meaning::AlertInfo),
+            Severity::Warn => ("warning: ", Meaning::AlertWarn),
+            Severity::Error => ("error: ", Meaning::AlertError),
+        };
+        Line::styled(
+            format!("{label}{}", message.text),
+            Style::from_crossterm(theme.as_style(meaning)),
+        )
+    }
+
+    fn build_mode_warnings(&self, settings: &Settings, theme: &Theme) -> Text<'static> {
         let get_style = || {
             Style::from_crossterm(theme.as_style(Meaning::AlertWarn)).add_modifier(Modifier::BOLD)
         };
@@ -1815,6 +1839,7 @@ pub async fn history(
     mut db: Sqlite,
     history_store: &HistoryStore,
     theme: &Theme,
+    held: &Held,
 ) -> Result<String> {
     let inline_height = if settings.shell_up_key_binding {
         settings.inline_height_shell_up_key_binding.unwrap_or(settings.inline_height)
@@ -1989,6 +2014,7 @@ pub async fn history(
         pending_vim_key: None,
         original_input_empty: original_query.is_empty(),
         shell_up_key_binding: settings.shell_up_key_binding,
+        messages: held.take(),
     };
 
     app.initialize_keymap_cursor(settings);
@@ -2022,6 +2048,7 @@ pub async fn history(
             }
         }
 
+        app.messages.extend(held.take());
         terminal.draw(|f| {
             app.draw(f, &results, stats.as_ref(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
@@ -2392,8 +2419,11 @@ mod tests {
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
+    use atuin_client::theme::ThemeManagerOptions;
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
+    use atuin_common::userio::log::{Message, Severity};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
@@ -2456,9 +2486,34 @@ mod tests {
             },
             engine: engines::engine(SearchMode::Fuzzy, &Arc::new(Settings::utc())),
             now: Box::new(OffsetDateTime::now_utc),
+            messages: Vec::new(),
         };
         state.results_state.select(selected);
         state
+    }
+
+    #[rstest]
+    fn a_message_for_the_user_shows_until_the_next_key(mut state: State, settings: Arc<Settings>) {
+        let mut themes = ThemeManagerOptions {
+            debug: false,
+            builtin_only: true,
+        }
+        .build();
+        let theme = themes.load_theme("default", None);
+        state.messages.push(Message {
+            severity: Severity::Warn,
+            text: "invalid key in keymap config".to_owned(),
+            request: None,
+        });
+        assert_eq!(
+            state.build_warnings(&settings, theme).to_string(),
+            "warning: invalid key in keymap config"
+        );
+
+        let _ = state
+            .handle_key_input(&settings, &KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        assert_eq!(state.build_warnings(&settings, theme).to_string(), "");
     }
 
     /// Build a read-only history corpus (60, 124 and 200 character commands) for

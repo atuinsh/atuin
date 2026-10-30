@@ -13,7 +13,7 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Instrument as _, Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
@@ -352,14 +352,20 @@ impl SearchSvc for SearchGrpcService {
         //
         // Using `tokio::spawn` so that a client that stops waiting for the response doesn't cancel
         // the rebuild.
-        tokio::spawn(async move {
-            let shells = index.read().await.shells.clone();
-            let search = handle.settings().await.search.clone();
-            let new_index = SearchIndex::from_db(shells, handle.history_db(), &search).await?;
-            info!("Search index rebuild complete; {} unique commands", new_index.command_count());
-            *index.write().await = new_index;
-            Ok::<_, eyre::Report>(())
-        })
+        tokio::spawn(
+            async move {
+                let shells = index.read().await.shells.clone();
+                let search = handle.settings().await.search.clone();
+                let new_index = SearchIndex::from_db(shells, handle.history_db(), &search).await?;
+                info!(
+                    "Search index rebuild complete; {} unique commands",
+                    new_index.command_count()
+                );
+                *index.write().await = new_index;
+                Ok::<_, eyre::Report>(())
+            }
+            .instrument(tracing::Span::current()),
+        )
         .await
         .map_err(eyre::Report::from)
         .and_then(std::convert::identity)

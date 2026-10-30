@@ -44,7 +44,9 @@ pub fn var_nonempty(name: &str) -> Option<OsString> {
 #[must_use]
 pub fn var_abspath(name: &str) -> Option<AbsPathBuf> {
     AbsPathBuf::new(var_nonempty(name)?)
-        .inspect_err(|err| tracing::warn!("ignoring {name}: {err}"))
+        .inspect_err(|err| {
+            crate::userio::log::warn!("env-ignored-path", name = name, error = err.to_string());
+        })
         .ok()
 }
 

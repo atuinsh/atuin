@@ -12,8 +12,8 @@
 //! session there, its tool calls carried over as the target's own where it has a like tool (notes
 //! where they weren't captured whole), and that is resumed. Harnesses
 //! that aren't installed aren't listed: there is nothing to do with them. The session's own
-//! harness is always listed, dimmed with the reason when it can't resume it here (a Copilot
-//! session, a directory that's gone, a harness that isn't installed), and the first line that
+//! harness is always listed, dimmed with the reason when it can't resume it here (a directory
+//! that's gone, a harness that isn't installed), and the first line that
 //! works is preselected instead.
 //!
 //! When catching the session's copy here up with sync needs a choice ([`Held`]), the chooser opens

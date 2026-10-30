@@ -3,6 +3,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::userio;
 use atuin_domain::record::RecordId;
 use atuin_kv::store::KvStore;
 use atuin_scripts::store::ScriptStore;
@@ -40,11 +41,11 @@ pub async fn build(
     // A failure in one store should not stop the others from building - build as much as
     // possible, and warn about the rest.
     if let Err(e) = history_store.build_all(db, downloaded).await {
-        eprintln!("Warning: failed to build history: {e}");
+        userio::log::warn!("sync-build-history-failed", error = e.to_string());
     }
 
     if let Err(e) = kv_store.build().await {
-        eprintln!("Warning: failed to build kv: {e}");
+        userio::log::warn!("sync-build-kv-failed", error = e.to_string());
     }
 
     let script_db = atuin_scripts::database::Database::new(
@@ -54,7 +55,7 @@ pub async fn build(
     .await?;
 
     if let Err(e) = script_store.build(&script_db).await {
-        eprintln!("Warning: failed to build scripts: {e}");
+        userio::log::warn!("sync-build-scripts-failed", error = e.to_string());
     }
 
     Ok(())

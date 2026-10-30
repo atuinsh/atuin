@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use atuin_client::settings::Settings;
+use atuin_common::userio;
 use colored::Colorize;
 use eyre::Result;
 use toml_edit::{DocumentMut, value};
@@ -51,9 +52,9 @@ pub async fn run(_settings: &Settings) -> Result<()> {
     if changed {
         tokio::fs::write(config_file, doc.to_string()).await?;
 
-        println!("{check} Settings updated successfully", check = "✓".bold().bright_green());
+        userio::log::info!("setup-settings-updated");
     } else {
-        println!("{check} No settings changed", check = "✓".bold().bright_green());
+        userio::log::info!("setup-no-changes");
     }
 
     Ok(())

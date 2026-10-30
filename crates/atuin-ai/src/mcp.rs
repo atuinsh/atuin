@@ -489,7 +489,7 @@ mod tests {
             );
         }
         assert!(
-            parse(json!({"terms": ["x"], "harness": "copilot"})).is_err(),
+            parse(json!({"terms": ["x"], "harness": "cursor"})).is_err(),
             "an unadvertised harness is rejected"
         );
     }

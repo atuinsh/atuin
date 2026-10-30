@@ -41,6 +41,7 @@ enum_dispatch = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+i18n-embed = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true }
@@ -51,6 +52,7 @@ prost = { workspace = true, optional = true }
 rand = { workspace = true }
 regex = { workspace = true }
 rmp-serde = { workspace = true }
+rust-embed = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

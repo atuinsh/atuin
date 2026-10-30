@@ -37,7 +37,10 @@ macro_rules! internal_errors {
 pub mod ai;
 pub mod common;
 pub mod history;
+pub mod request;
+pub mod userio;
 pub mod versioning;
 
 pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;
+pub use userio::Service as UserIoService;

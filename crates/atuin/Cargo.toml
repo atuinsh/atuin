@@ -39,6 +39,12 @@ buildflags = ["--release"]
 [package.metadata.rpm.targets]
 atuin = { path = "/usr/bin/atuin" }
 
+[package.metadata.wix]
+upgrade-guid = "313BC66B-8878-40FC-9042-45A787D28E7B"
+path-guid = "93A1B211-BC0F-4942-81E4-6F6CAA9C25F1"
+license = "LICENSE"
+eula = false
+
 [features]
 default = [
     "client",
@@ -86,7 +92,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.24.2", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.24.3", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -115,7 +121,6 @@ eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }
 i18n-embed = { workspace = true }
-i18n-embed-fl = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
@@ -150,6 +155,7 @@ tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { workspace = true, optional = true }

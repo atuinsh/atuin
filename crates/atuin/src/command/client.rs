@@ -6,6 +6,8 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
 use atuin_common::logs::{self, LogConfig};
+use atuin_common::userio;
+use atuin_common::userio::log::{Held, Nop, SINK};
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::{Result, WrapErr};
@@ -196,6 +198,14 @@ pub enum Cmd {
     InternalDecoy,
 }
 
+/// Where a command that keeps messages for the user off stderr shows them instead.
+enum Quiet {
+    /// Nowhere.
+    Drop,
+    /// In its TUI, which takes them from the [`Held`] sink.
+    Hold,
+}
+
 impl Cmd {
     pub fn run(self) -> Result<()> {
         // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do, and
@@ -262,13 +272,19 @@ impl Cmd {
             None
         };
 
+        // Before the settings load, so what loading them tells the user goes there too.
+        let messages = Held::default();
+        let sink = self.quiet().map(|quiet| match quiet {
+            Quiet::Drop => SINK.push(Nop),
+            Quiet::Hold => SINK.push(messages.clone()),
+        });
+
         // Logging is set up from the settings, so what loading them logs waits for it.
         let (settings, held) = HeldEvents::hold(Settings::new);
         let settings = settings.wrap_err("could not load client settings")?;
         let logging = self
             .log_config(&settings)
-            .map(|c| LogCtx::try_enable("atuin", &c))
-            .transpose()
+            .map_or_else(LogCtx::without_logs, |config| LogCtx::try_enable("atuin", &config))
             .wrap_err("failed to enable logging")?;
         held.emit();
 
@@ -276,7 +292,7 @@ impl Cmd {
             let result = if let Some(func) = run_internal {
                 func(settings).await
             } else {
-                Box::pin(self.run_async(settings)).await
+                Box::pin(self.run_async(settings, messages)).await
             };
             // Dropping the guard flushes and shuts down the OTEL exporter, so it must outlive the
             // command rather than this function.
@@ -285,6 +301,7 @@ impl Cmd {
                 reason = "LogCtx has drop glue only with OTEL compiled in"
             )]
             drop(logging);
+            drop(sink);
             result
         }))
     }
@@ -293,7 +310,7 @@ impl Cmd {
     // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
     // await points.
     #[allow(clippy::future_not_send)]
-    async fn run_async(self, mut settings: Settings) -> Result<()> {
+    async fn run_async(self, mut settings: Settings, messages: Held) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
         let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
 
@@ -312,7 +329,7 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
-                eprintln!("error: this command is not meant to be accessed directly");
+                userio::log::error!("client-internal-decoy");
                 std::process::exit(1);
             }
             _ => {}
@@ -331,7 +348,9 @@ impl Cmd {
             Self::Setup => setup::run(&settings).await,
             Self::Import(import) => import.run(&db).await,
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, settings, sqlite_store, theme).await,
+            Self::Search(search) => {
+                Box::pin(search.run(db, settings, sqlite_store, theme, &messages)).await
+            }
 
             #[cfg(feature = "daemon")]
             Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
@@ -351,7 +370,7 @@ impl Cmd {
             Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
 
             Self::Info => {
-                info::run(&settings);
+                info::run(&settings).await;
                 Ok(())
             }
 
@@ -418,6 +437,19 @@ impl Cmd {
 
             #[cfg(feature = "ai")]
             Self::Mcp(cmd) => cmd.run(&db, settings).await,
+        }
+    }
+
+    /// Where the command shows messages for the user, if not on stderr: a shell hook stays quiet,
+    /// and a widget answers the shell there.
+    fn quiet(&self) -> Option<Quiet> {
+        match self {
+            Self::History(cmd) if cmd.is_hook() => Some(Quiet::Drop),
+            Self::Search(cmd) if cmd.is_interactive() => Some(Quiet::Hold),
+            #[cfg(feature = "ai")]
+            Self::Ai(cmd) if cmd.is_widget() => Some(Quiet::Drop),
+            Self::Internal(_) => Some(Quiet::Drop),
+            _ => None,
         }
     }
 

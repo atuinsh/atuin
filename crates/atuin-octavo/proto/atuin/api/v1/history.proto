@@ -55,3 +55,33 @@ message HistoryOutput {
     lte: 65535
   }];
 }
+
+// Which of the calling user's history entries to match.
+//
+// Unset fields match any entry.
+message HistoryFilter {
+  // Every term must appear in the command, ignoring case.
+  repeated string terms = 1 [(buf.validate.field).repeated.max_items = 16];
+  // The machine the command ran on, as `CmdOrigin.host` gives it.
+  optional string host = 2;
+  // The working directory the command ran in.
+  optional string cwd = 3;
+  oneof exit {
+    // True matches commands that exited 0, false matches commands that did not.
+    bool succeeded = 4;
+    // The exit code the command finished with.
+    int32 exit_code = 5;
+  }
+  // The name of the author, as `Author.name` gives it.
+  optional string author = 6;
+  // Whether a person or an agent decided to run the command.
+  optional AuthorKind author_kind = 7 [(buf.validate.field).enum.defined_only = true];
+  // The terminal session the command ran in, as `History.session` gives it.
+  optional string session = 8;
+  // The shell that ran the command, as `History.shell` gives it.
+  optional string shell = 9;
+  // Only entries that started at or after this time.
+  google.protobuf.Timestamp started_after = 10;
+  // Only entries that started before this time.
+  google.protobuf.Timestamp started_before = 11;
+}

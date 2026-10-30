@@ -4,6 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme::Theme;
+use atuin_common::userio;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
@@ -311,18 +312,12 @@ pub async fn run(
 
     let history = db.range(start, end).await?;
     if history.is_empty() {
-        println!(
-            "Your history for {year} is empty!\nMaybe 'atuin import' could help you import your \
-             previous history 🪄"
-        );
+        userio::log::info!("wrapped-history-empty", year = year);
         return Ok(());
     }
 
     let Some(stats) = compute(settings, &history, 10, 1) else {
-        println!(
-            "No commands found in your {year} history. Run a command or check your config for \
-             commands ignored by stats.ignored_commands."
-        );
+        userio::log::info!("wrapped-no-commands", year = year);
         return Ok(());
     };
     let alias_map = HashMap::new();

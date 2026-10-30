@@ -11,6 +11,11 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+# The server keeps the workspace's installers without the Windows MSI, which
+# is for the shell-integrated client.
+[package.metadata.dist]
+installers = ["shell", "powershell"]
+
 [lib]
 name = "atuin_server"
 path = "src/lib.rs"
@@ -37,11 +42,13 @@ derive_more = { workspace = true }
 easy-cast = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
+i18n-embed = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rpassword = { workspace = true }
+rust-embed = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
@@ -60,7 +67,7 @@ uuid = { workspace = true }
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = { path = "../atuin-client", version = "18.24.2", default-features = false, features = ["sync"] }
+atuin-client = { path = "../atuin-client", version = "18.24.3", default-features = false, features = ["sync"] }
 futures-util = { workspace = true }
 percent-encoding = { workspace = true }
 proptest = { workspace = true }

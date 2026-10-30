@@ -13,9 +13,25 @@ service HubService {
   // Otherwise fails with `ALREADY_EXISTS` (`HISTORY_ALREADY_EXISTS`), keeping what was stored.
   rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
 
-  // Stream the calling user's history entries as they are stored, from when the call starts.
+  // Return one page of the calling user's history entries that match the filter, newest first by
+  // start time, then by id.
   //
-  // Entries stored before the call, or while no call is open, are not sent.
+  // Pass `next_page_token` back as `page_token`, with the same filter and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages.
+  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse);
+
+  // Count the calling user's history entries that match the filter, and their most common hosts,
+  // authors and working directories.
+  //
+  // Each list holds the top five values, most common first, ties broken by value, and ignores the
+  // filter's own field for it: under `host: "devbox"`, `hosts` still names the other hosts.
+  rpc TallyHistory(TallyHistoryRequest) returns (TallyHistoryResponse);
+
+  // Stream the calling user's entries that match the filter as they are stored.
+  //
+  // Sends a heartbeat once subscribed and after every 25 seconds without a message. Entries
+  // stored before the call are not sent.
   rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
 
   // Delete the calling user's history entry with this id, and keep it from being stored again.
@@ -47,12 +63,72 @@ message InsertHistoryRequest {
 
 message InsertHistoryResponse {}
 
-message WatchHistoryRequest {}
-
-message WatchHistoryResponse {
-  // An entry the user stored.
-  History history = 1 [(buf.validate.field).required = true];
+message SearchHistoryRequest {
+  // Which entries to return.
+  HistoryFilter filter = 1;
+  // The most entries to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
 }
+
+message SearchHistoryResponse {
+  // The entries on this page.
+  repeated History entries = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyHistoryRequest {
+  // Which entries to count.
+  HistoryFilter filter = 1;
+}
+
+message TallyHistoryResponse {
+  // How many entries match the filter.
+  uint64 total = 1;
+  // How many matching entries did not exit with status 0.
+  uint64 failed = 2;
+  // How many matching entries were decided by an agent.
+  uint64 by_agents = 3;
+  // The top five hosts among the entries the filter matches without its `host`, most common
+  // first, ties broken by value.
+  repeated HistoryTally hosts = 4;
+  // The top five authors among the entries the filter matches without its `author`, most common
+  // first, ties broken by value.
+  repeated HistoryTally authors = 5;
+  // The top five working directories among the entries the filter matches without its `cwd`,
+  // most common first, ties broken by value.
+  repeated HistoryTally cwds = 6;
+}
+
+// One value and how many matching entries have it.
+message HistoryTally {
+  // The value, such as a host name or a directory.
+  string value = 1;
+  // How many matching entries have this value.
+  uint64 count = 2;
+}
+
+message WatchHistoryRequest {
+  // Which entries to stream.
+  HistoryFilter filter = 1;
+}
+
+// One message on a `WatchHistory` stream.
+message WatchHistoryResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // An entry the user stored that matches the filter.
+    History history = 1;
+    // Shows the stream is still open.
+    WatchHistoryHeartbeat heartbeat = 2;
+  }
+}
+
+// Sent to show the stream is still open.
+message WatchHistoryHeartbeat {}
 
 message DeleteHistoryRequest {
   // The id of the entry to delete, as `History.id` gave it.

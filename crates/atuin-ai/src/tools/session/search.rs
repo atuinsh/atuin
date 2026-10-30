@@ -271,7 +271,7 @@ mod tests {
     #[case::no_terms(json!({"terms": []}))]
     #[case::blank(json!({"terms": ["   "]}))]
     #[case::unknown_harness(json!({"terms": ["x"], "harness": "emacs"}))]
-    #[case::uncapturable_harness(json!({"terms": ["x"], "harness": "copilot"}))]
+    #[case::uncapturable_harness(json!({"terms": ["x"], "harness": "cursor"}))]
     fn rejects_invalid_input(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinThreadsSearchToolCall>(input).is_err());
     }

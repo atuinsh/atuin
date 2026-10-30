@@ -224,7 +224,9 @@ mod tests {
     };
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
+    use atuin_common::harnesstools::copilot::session::CopilotSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
+    use atuin_common::harnesstools::session::ParentKind;
     use atuin_domain::record::HostId;
     use futures::StreamExt;
     use futures::future::BoxFuture;
@@ -436,6 +438,63 @@ mod tests {
         };
         let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
         assert_eq!(session.title.as_deref(), Some("Fix the parser"));
+    }
+
+    /// A Copilot session's name lives in the sidecar beside its log, and its directory and
+    /// branch in the log's first event: import carries all three onto the session.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_a_copilot_sessions_sidecar_and_context() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
+        let dir = root.path().join(id);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("events.jsonl"),
+            include_str!("../../../atuin-common/tests/fixtures/copilot/task-and-edit.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            include_str!(
+                "../../../atuin-common/tests/fixtures/copilot/task-and-edit.workspace.yaml"
+            ),
+        )
+        .unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            CopilotSessions::builder().root(root.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Copilot, sessions)
+            .collect()
+            .await;
+        assert_eq!(
+            sum_new(&progress),
+            13 + 1 + 4,
+            "the parent's rows and its title, and its subagent's rows"
+        );
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Copilot,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("atuin-sample-edit"));
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/copilot-play")));
+        assert_eq!(session.git_branch.as_deref(), Some("main"));
+
+        // The subagent is a session of its own, a child of the parent named for its agent.
+        let child = HarnessSession {
+            harness: HarnessKind::Copilot,
+            session: NativeSessionId::from("agent-toolu_01Cz14Gbx74QYDbB2WUL3D5T".to_owned()),
+        };
+        let subagent = sink.sidecar.get_session(&child).await.unwrap().unwrap();
+        assert_eq!(subagent.title.as_deref(), Some("count-lines"));
+        assert_eq!(subagent.parent.as_ref(), Some(&handle));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
     }
 
     #[cfg(unix)]

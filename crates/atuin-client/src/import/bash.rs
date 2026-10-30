@@ -3,6 +3,7 @@ use std::str;
 
 use async_trait::async_trait;
 use atuin_common::path::PathBufExt as _;
+use atuin_common::userio;
 use eyre::{Result, eyre};
 use itertools::Itertools;
 use time::{Duration, OffsetDateTime};
@@ -75,10 +76,7 @@ impl Importer for Bash {
                 LineType::Empty => {}                // do nothing
                 LineType::Timestamp(t) => {
                     if t < next_timestamp {
-                        warn!(
-                            "Time reversal detected in Bash history! Commands may be ordered \
-                             incorrectly."
-                        );
+                        userio::log::warn!("import-bash-time-reversal");
                     }
                     next_timestamp = t;
                 }

@@ -5,6 +5,8 @@ mod debug;
 #[cfg(unix)]
 mod foreground;
 #[cfg(unix)]
+mod i18n;
+#[cfg(unix)]
 mod parser;
 #[cfg(unix)]
 mod pty_proxy;

@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
+use atuin_common::userio::log::RequestId;
 pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
@@ -27,6 +28,7 @@ use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 
 use crate::HistoryClient;
+use crate::grpc::request;
 use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::DaemonAddress;
 use crate::service::backend::{AnyBackend, Backend, Launchd};
@@ -236,10 +238,31 @@ impl ActiveService {
         self.connection.ensure_our_build()
     }
 
-    /// The connection to the service.
+    /// A client of the service's history API.
     #[must_use]
-    pub fn into_client(self) -> HistoryClient {
+    pub fn history_client(&self) -> HistoryClient {
         self.connection.history_client()
+    }
+
+    /// Runs `request`, showing on this process's [`SINK`](atuin_common::userio::log::SINK) what the
+    /// service logs for the user while serving the calls it makes. A service that can't send its
+    /// logs still runs `request`.
+    pub async fn with_logs<R>(&self, request: impl Future<Output = R>) -> R {
+        /// How long the service has to start sending its logs: as long as it has to answer at all
+        /// when it is looked for.
+        const LISTEN_WAIT: Duration = Duration::from_secs(2);
+
+        request::scope(RequestId::generate(), async {
+            let logs = tokio::time::timeout(LISTEN_WAIT, self.connection.listen_logs()).await;
+            let result = request.await;
+            match logs {
+                Ok(Ok(logs)) => logs.finish().await,
+                Ok(Err(status)) => tracing::debug!(?status, "not listening to the daemon's logs"),
+                Err(_) => tracing::debug!("the daemon didn't start sending its logs in time"),
+            }
+            result
+        })
+        .await
     }
 
     /// Where the service listens.

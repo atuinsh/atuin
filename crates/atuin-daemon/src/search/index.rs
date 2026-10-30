@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::pin::pin;
 use std::sync::Arc;
 
@@ -18,7 +18,6 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
-use dashmap::DashMap;
 use easy_cast::Conv;
 use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
@@ -34,22 +33,73 @@ pub struct LoadFromDbError(eyre::Report);
 
 use atuin_common::string::StrExt;
 
-/// Pre-computed frecency data for O(1) lookup.
-#[derive(Debug, Clone, Default)]
-pub struct FrecencyData {
+/// Data for a unique command.
+#[derive(Debug)]
+pub struct CommandData {
+    /// History ID of the most recent invocation.
+    most_recent_id: HistoryId,
+    /// Timestamp of the most recent invocation (unix seconds).
+    most_recent_timestamp: i64,
     /// Total number of times this command was used.
-    pub count: u32,
-    /// Most recent usage timestamp (unix seconds).
-    pub last_used: i64,
+    count: u32,
+
+    // Pre-computed indexes for O(1) filter lookups
+    // Using HashSet instead of DashSet since CommandData lives behind SearchIndex's lock
+    /// All directories where this command has been run (interned keys).
+    directories: HashSet<Spur>,
+    /// All hostnames where this command has been run (interned keys).
+    hosts: HashSet<Spur>,
+    /// All sessions where this command has been run (as 16-byte UUIDs).
+    sessions: HashSet<Uuid>,
 }
 
-impl FrecencyData {
-    /// Record a new usage of this command.
-    pub fn record_use(&mut self, timestamp: i64) {
+impl CommandData {
+    /// Create a new CommandData from a history entry.
+    ///
+    /// Returns [`None`] if the history entry has invalid UUIDs.
+    pub fn new(history: &History, interner: &ThreadedRodeo) -> Option<Self> {
+        let session = Uuid::parse_str(&history.session).ok()?;
+        let timestamp = history.timestamp.unix_timestamp();
+
+        let dir_key =
+            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
+        let host_key = interner.get_or_intern(history.cmd_origin.as_str());
+
+        Some(Self {
+            most_recent_id: history.id,
+            most_recent_timestamp: timestamp,
+            count: 1,
+            directories: HashSet::from([dir_key]),
+            hosts: HashSet::from([host_key]),
+            sessions: HashSet::from([session]),
+        })
+    }
+
+    /// Add an invocation from a history entry.
+    /// Returns false if the history entry has invalid UUIDs.
+    pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
+        let Some(session) = Uuid::parse_str(&history.session).ok() else {
+            return false;
+        };
+
+        let timestamp = history.timestamp.unix_timestamp();
+
         self.count += 1;
-        if timestamp > self.last_used {
-            self.last_used = timestamp;
+
+        // Update pre-computed indexes for O(1) filter lookups
+        let dir_key =
+            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
+        self.directories.insert(dir_key);
+        self.hosts.insert(interner.get_or_intern(history.cmd_origin.as_str()));
+        self.sessions.insert(session);
+
+        // Update most recent if this invocation is newer
+        if timestamp > self.most_recent_timestamp {
+            self.most_recent_id = history.id;
+            self.most_recent_timestamp = timestamp;
         }
+
+        true
     }
 
     /// Compute frecency score based on count and recency.
@@ -63,14 +113,10 @@ impl FrecencyData {
     ///
     /// A multiplier of 0.0 disables that component, 1.0 is unchanged, 2.0 doubles weight.
     /// Values like 0.5 reduce weight by half, 1.5 increases by 50%, etc.
-    #[instrument(level = tracing::Level::TRACE, name = "index_frecency_compute")]
-    pub fn compute(&self, now: i64, recency_mul: f64, frequency_mul: f64) -> u32 {
-        if self.count == 0 {
-            return 0;
-        }
-
+    #[instrument(level = tracing::Level::TRACE, name = "index_frecency_compute", skip(self))]
+    pub fn compute_frecency(&self, now: i64, recency_mul: f64, frequency_mul: f64) -> u32 {
         // Time-based decay: score decreases as time passes
-        let age_seconds = u64::conv((now - self.last_used).max(0));
+        let age_seconds = u64::conv((now - self.most_recent_timestamp).max(0));
         let age_hours = age_seconds / 3600;
 
         // Decay factor: recent commands get higher scores
@@ -100,97 +146,6 @@ impl FrecencyData {
         {
             ((recency_score * recency_mul) + (frequency_score * frequency_mul)).round() as u32
         }
-    }
-}
-
-/// Data for a unique command.
-#[derive(Debug)]
-pub struct CommandData {
-    /// History ID of the most recent invocation.
-    most_recent_id: HistoryId,
-    /// Timestamp of the most recent invocation.
-    most_recent_timestamp: i64,
-    /// Pre-computed global frecency.
-    pub global_frecency: FrecencyData,
-
-    // Pre-computed indexes for O(1) filter lookups
-    // Using HashSet instead of DashSet since CommandData lives inside DashMap (already synchronized)
-    /// All directories where this command has been run (interned keys).
-    directories: HashSet<Spur>,
-    /// All hostnames where this command has been run (interned keys).
-    hosts: HashSet<Spur>,
-    /// All sessions where this command has been run (as 16-byte UUIDs).
-    sessions: HashSet<Uuid>,
-    /// Position of this command in `SearchIndex::haystack`, so filtered
-    /// searches can walk the command map without hashing command strings.
-    haystack_index: u32,
-}
-
-impl CommandData {
-    /// Create a new CommandData from a history entry.
-    ///
-    /// Returns [`None`] if the history entry has invalid UUIDs or if the haystack index exceeds
-    /// 2^32.
-    pub fn new(history: &History, haystack_index: usize, interner: &ThreadedRodeo) -> Option<Self> {
-        let Ok(haystack_index) = u32::try_from(haystack_index) else {
-            // TODO: It's very unlikely that we'll have more than 2^32 history entries, but if that
-            // ends up being a realistic possibility, we should handle this case better than simply
-            // dropping new commands from the index.
-            return None;
-        };
-
-        let session = Uuid::parse_str(&history.session).ok()?;
-        let timestamp = history.timestamp.unix_timestamp();
-
-        let dir_key =
-            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
-        let host_key = interner.get_or_intern(history.cmd_origin.as_str());
-
-        let mut global_frecency = FrecencyData::default();
-        global_frecency.record_use(timestamp);
-
-        Some(Self {
-            most_recent_id: history.id,
-            most_recent_timestamp: timestamp,
-            global_frecency,
-            directories: HashSet::from([dir_key]),
-            hosts: HashSet::from([host_key]),
-            sessions: HashSet::from([session]),
-            haystack_index,
-        })
-    }
-
-    /// Add an invocation from a history entry.
-    /// Returns false if the history entry has invalid UUIDs.
-    pub fn add_invocation(&mut self, history: &History, interner: &ThreadedRodeo) -> bool {
-        let Some(session) = Uuid::parse_str(&history.session).ok() else {
-            return false;
-        };
-
-        let timestamp = history.timestamp.unix_timestamp();
-
-        // Update global frecency
-        self.global_frecency.record_use(timestamp);
-
-        // Update pre-computed indexes for O(1) filter lookups
-        let dir_key =
-            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
-        self.directories.insert(dir_key);
-        self.hosts.insert(interner.get_or_intern(history.cmd_origin.as_str()));
-        self.sessions.insert(session);
-
-        // Update most recent if this invocation is newer
-        if timestamp > self.most_recent_timestamp {
-            self.most_recent_id = history.id;
-            self.most_recent_timestamp = timestamp;
-        }
-
-        true
-    }
-
-    /// Get the most recent history ID for this command.
-    pub fn most_recent_id(&self) -> HistoryId {
-        self.most_recent_id
     }
 
     /// Check if any invocation matches an interned directory (exact match).
@@ -246,6 +201,20 @@ enum CompiledFilter<'a> {
     Nothing,
 }
 
+impl CompiledFilter<'_> {
+    /// Check whether `data` matches this filter.
+    fn matches(&self, data: &CommandData, interner: &ThreadedRodeo) -> bool {
+        match self {
+            Self::All => true,
+            Self::Nothing => false,
+            Self::Directory(dir) => data.has_invocation_in_dir(*dir),
+            Self::Workspace(prefix) => data.has_invocation_in_workspace(prefix, interner),
+            Self::Host(hostname) => data.has_invocation_on_host(*hostname),
+            Self::Session(session) => data.has_invocation_in_session(session),
+        }
+    }
+}
+
 impl IndexFilterMode {
     /// "Compile" this filter by interning and parsing its strings.
     fn compile(&self, interner: &ThreadedRodeo) -> CompiledFilter<'_> {
@@ -265,38 +234,65 @@ impl IndexFilterMode {
     }
 }
 
-/// Shareable frecency map: command -> frecency score.
-type FrecencyMap = Arc<Vec<u32>>;
+/// All unique commands.
+///
+/// Multiple invocations of the same command are stored in a single [`CommandData`] for that
+/// command.
+#[derive(Debug, Default)]
+struct Commands {
+    /// Map from command text to the command's index.
+    indices: HashMap<Arc<str>, u32>,
 
-/// One entry in the fuzzy matcher's haystack: the original string plus the normalized version
-/// (diacritics removed) we actually match against.
-#[derive(Debug)]
-struct HaystackEntry {
-    /// The original text of the entry.
-    pub original: Arc<str>,
-    /// The [normalized](StrExt::normalize_diacritics) version of the text, with diacritics removed.
-    pub normalized: Arc<str>,
+    /// The fuzzy matcher's haystack: the [normalized](StrExt::normalize_diacritics) text of each
+    /// command, with diacritics removed. Shares the `Arc<str>` allocation with the key in
+    /// `indices` when normalization changes nothing.
+    ///
+    /// Stored in insertion order.
+    haystack: Vec<Arc<str>>,
+
+    /// Data for each command.
+    ///
+    /// Stored in insertion order -- aligned with [`Self::haystack`].
+    data: Vec<CommandData>,
 }
 
-impl HaystackEntry {
-    /// Create a new [`HaystackEntry`] from an [`Arc<str>`].
-    pub fn new(text: Arc<str>) -> Self {
-        let normalized = match text.normalize_diacritics() {
-            Cow::Borrowed(_) => text.clone(),
+impl Commands {
+    /// Add a history entry. See [`SearchIndex::add_history`].
+    pub fn add(&mut self, history: &History, interner: &ThreadedRodeo) {
+        let command = history.command.as_str();
+
+        if let Some(&index) = self.indices.get(command) {
+            // Existing command - just update invocations
+            self.data[usize::conv(index)].add_invocation(history, interner);
+            return;
+        }
+
+        let Ok(index) = u32::try_from(self.data.len()) else {
+            // TODO: It's very unlikely that we'll have more than 2^32 history entries, but if that
+            // ends up being a realistic possibility, we should handle this case better than simply
+            // dropping new commands from the index.
+            return;
+        };
+
+        let Some(data) = CommandData::new(history, interner) else {
+            return; // Skip invalid commands
+        };
+
+        let command: Arc<str> = Arc::from(command);
+        let normalized = match command.normalize_diacritics() {
+            Cow::Borrowed(_) => command.clone(),
             Cow::Owned(normalized) => normalized.into(),
         };
-        Self {
-            original: text,
-            normalized,
-        }
+
+        self.indices.insert(command, index);
+        self.haystack.push(normalized);
+        self.data.push(data);
     }
 }
 
 /// Represents how closely a command matches a search query.
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Score {
-    // Fields must be in this order so we rank by fuzzy score first and only use frecency
-    // for ties. See #3702.
     pub fuzzy_score: u16,
     pub frecency: u32,
     pub index: u32,
@@ -330,30 +326,17 @@ impl PartialOrd for Score {
 /// with frecency breaking ties between equally good matches.
 ///
 /// Global frecency is precomputed by a background task and used for scoring.
-/// If frecency data is not available, search still works but without frecency ranking;
+/// Until the first rebuild, search still works but without frecency ranking;
 /// although this should never happen due to precomputing the frecency map.
 #[derive(Debug)]
 pub struct SearchIndex {
-    /// Map from command text to command data.
-    ///
-    /// Using `DashMap` for concurrent read/write access, wrapped in `Arc` for sharing with scorer.
-    /// Keys are `Arc<str>` to enable zero-copy sharing with frecency_map.
-    commands: Arc<DashMap<Arc<str>, CommandData>>,
-
-    /// Unique commands in insertion order — the fuzzy matcher's haystack.
-    /// Shares the `Arc<str>` allocations with `commands`.
-    ///
-    /// Lock order: paths that need both this lock and a `commands` shard lock
-    /// must take this one first (see `add_history`, `search`,
-    /// `rebuild_frecency`); acquiring in the reverse order can deadlock.
-    haystack: RwLock<Vec<HaystackEntry>>,
+    /// All unique commands; see [`Commands`].
+    commands: RwLock<Commands>,
 
     /// Precomputed global frecency map. Updated by background task.
     ///
-    /// Aligned with [`Self::haystack`] by index, so scoring a match is an
-    /// array access instead of hashing the command string. Commands added after
-    /// the last rebuild sit past the end and score 0 until the next rebuild.
-    frecency_map: RwLock<Option<FrecencyMap>>,
+    /// Maps command index (aligned with the vecs in [`Self::commands`]) to frecency score.
+    frecency_map: RwLock<Arc<Vec<u32>>>,
 
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Arc<ThreadedRodeo>,
@@ -367,9 +350,8 @@ impl SearchIndex {
     #[must_use]
     pub fn new(shells: OrFilter<Vec<String>>) -> Self {
         Self {
-            commands: Arc::new(DashMap::new()),
-            haystack: RwLock::new(Vec::new()),
-            frecency_map: RwLock::new(None),
+            commands: RwLock::default(),
+            frecency_map: RwLock::default(),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
         }
@@ -425,27 +407,7 @@ impl SearchIndex {
             return;
         }
 
-        let command = history.command.as_str();
-
-        // DashMap with Arc<str> keys can be looked up with &str via Borrow trait
-        if let Some(mut entry) = self.commands.get_mut(command) {
-            // Existing command - just update invocations
-            entry.add_invocation(history, &self.interner);
-        } else {
-            let mut haystack = self.haystack.write();
-            match self.commands.entry(Arc::from(command)) {
-                dashmap::Entry::Occupied(mut entry) => {
-                    entry.get_mut().add_invocation(history, &self.interner);
-                }
-                dashmap::Entry::Vacant(vacant) => {
-                    let Some(data) = CommandData::new(history, haystack.len(), &self.interner)
-                    else {
-                        return; // Skip invalid commands
-                    };
-                    haystack.push(HaystackEntry::new(vacant.insert(data).key().clone()));
-                }
-            }
-        }
+        self.commands.write().add(history, &self.interner);
         // Note: frecency_map is rebuilt by background task, not invalidated here
     }
 
@@ -458,8 +420,9 @@ impl SearchIndex {
     }
 
     /// Get the number of unique commands in the index.
+    #[must_use]
     pub fn command_count(&self) -> usize {
-        self.commands.len()
+        self.commands.read().data.len()
     }
 
     /// Search for commands matching a query.
@@ -473,7 +436,7 @@ impl SearchIndex {
         filter_mode: &IndexFilterMode,
         limit: usize,
     ) -> impl Iterator<Item = HistoryId> {
-        // Get precomputed frecency map (may be None if not yet computed)
+        // Get precomputed frecency map (empty if not yet computed)
         let frecency_map = self.frecency_map.read().clone();
 
         let query = super::truncate_query(query);
@@ -484,43 +447,25 @@ impl SearchIndex {
             pattern.needle = pattern.needle.normalize_diacritics().into_owned();
         }
 
-        let haystack = self.haystack.read();
+        let commands = self.commands.read();
         let filter = filter_mode.compile(&self.interner);
 
-        // Filter pre-pass: collect the candidate commands for this filter mode. This is sorted
-        // vector of haystack indices.
-        let get_candidates = || match &filter {
-            CompiledFilter::All => haystack.iter().enumerate().map(|(i, _)| u32::conv(i)).collect(),
-            CompiledFilter::Nothing => Vec::new(),
-            _ => {
-                let mut indices: Vec<u32> = self
-                    .commands
-                    .iter()
-                    .filter(|entry| usize::conv(entry.haystack_index) < haystack.len())
-                    .filter(|entry| match &filter {
-                        CompiledFilter::All | CompiledFilter::Nothing => unreachable!(),
-                        CompiledFilter::Directory(dir) => entry.has_invocation_in_dir(*dir),
-                        CompiledFilter::Workspace(prefix) => {
-                            entry.has_invocation_in_workspace(prefix, &self.interner)
-                        }
-                        CompiledFilter::Host(hostname) => entry.has_invocation_on_host(*hostname),
-                        CompiledFilter::Session(session) => {
-                            entry.has_invocation_in_session(session)
-                        }
-                    })
-                    .map(|entry| entry.haystack_index)
-                    .collect();
-                indices.sort_unstable();
-                indices
-            }
-        };
-
-        let candidates =
-            tracing::span!(Level::TRACE, "index_search_filter").in_scope(get_candidates);
+        // Filter pre-pass: collect the candidate commands for this filter mode. This is a sorted
+        // vector of command indices.
+        let candidates: Vec<u32> =
+            tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
+                CompiledFilter::All => (0..u32::conv(commands.data.len())).collect(),
+                CompiledFilter::Nothing => Vec::new(),
+                filter => (0..)
+                    .zip(&commands.data)
+                    .filter(|(_, data)| filter.matches(data, &self.interner))
+                    .map(|(index, _)| index)
+                    .collect(),
+            });
 
         let candidate_frecency = |candidate_index: usize| {
-            let hay_idx = usize::conv(candidates[candidate_index]);
-            frecency_map.as_ref().and_then(|f| f.get(hay_idx).copied()).unwrap_or(0)
+            let cmd_idx = usize::conv(candidates[candidate_index]);
+            frecency_map.get(cmd_idx).copied().unwrap_or(0)
         };
 
         let config = frizbee::Config::default()
@@ -542,7 +487,7 @@ impl SearchIndex {
             // This is a vec of `&Arc<str>` instead of `&str` because `&Arc<str>` is the size of one
             // pointer while `&str` is the size of two.
             let normalized_commands: Vec<&Arc<str>> =
-                candidates.iter().map(|i| &haystack[usize::conv(*i)].normalized).collect();
+                candidates.iter().map(|i| &commands.haystack[usize::conv(*i)]).collect();
             // Use all cores when the number of commands is sufficiently large.
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
@@ -571,11 +516,9 @@ impl SearchIndex {
                 scored.truncate(limit);
             }
             scored.sort_unstable();
-            scored.into_iter().filter_map(move |score| {
-                let haystack_index = candidates[usize::conv(score.index)];
-                self.commands
-                    .get(haystack[usize::conv(haystack_index)].original.as_ref())
-                    .map(|data| data.most_recent_id())
+            scored.into_iter().map(move |score| {
+                let index = candidates[usize::conv(score.index)];
+                commands.data[usize::conv(index)].most_recent_id
             })
         })
     }
@@ -599,30 +542,27 @@ impl SearchIndex {
         let frequency_mul = search_settings.frequency_score_multiplier.max(0.0);
         let frecency_mul = search_settings.frecency_score_multiplier.max(0.0);
 
-        // Aligned with `haystack` by index; see FrecencyMap
-        let frecencies: Vec<u32> = {
-            let haystack = self.haystack.read();
-            haystack
-                .iter()
-                .map(|hay| {
-                    self.commands.get(hay.original.as_ref()).map_or(0, |data| {
-                        let frecency =
-                            data.global_frecency.compute(now, recency_mul, frequency_mul);
-                        // Apply overall frecency multiplier and round to u32
-                        #[allow(
-                            clippy::cast_possible_truncation,
-                            clippy::cast_sign_loss,
-                            reason = "frecency is used for ordering only -- saturating is ok"
-                        )]
-                        {
-                            (f64::from(frecency) * frecency_mul).round() as u32
-                        }
-                    })
-                })
-                .collect()
-        };
+        // Aligned with `Self::commands` by index; see `Self::frecency_map`.
+        let frecencies: Vec<u32> = self
+            .commands
+            .read()
+            .data
+            .iter()
+            .map(|data| {
+                let frecency = data.compute_frecency(now, recency_mul, frequency_mul);
+                // Apply overall frecency multiplier and round to u32
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "frecency is used for ordering only -- saturating is ok"
+                )]
+                {
+                    (f64::from(frecency) * frecency_mul).round() as u32
+                }
+            })
+            .collect();
 
-        *self.frecency_map.write() = Some(Arc::new(frecencies));
+        *self.frecency_map.write() = Arc::new(frecencies);
     }
 }
 
@@ -634,6 +574,7 @@ impl Default for SearchIndex {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
     use rstest::rstest;
     use time::macros::datetime;
 
@@ -649,78 +590,93 @@ mod tests {
             .into()
     }
 
-    #[rstest]
-    fn frecency_data_compute() {
-        let now = 1_000_000_i64;
+    /// The data for `command` in `index`.
+    fn command<'a>(
+        index: &'a SearchIndex,
+        command: &str,
+    ) -> MappedRwLockReadGuard<'a, CommandData> {
+        RwLockReadGuard::map(index.commands.read(), |commands| {
+            &commands.data[usize::conv(commands.indices[command])]
+        })
+    }
 
-        // Recent command (with default multipliers of 1.0)
-        let recent = FrecencyData {
-            count: 5,
-            last_used: now - 60, // 1 minute ago
-        };
-        assert!(recent.compute(now, 1.0, 1.0) > 100); // High score
-
-        // Old command
-        let old = FrecencyData {
-            count: 5,
-            last_used: now - 86400 * 30, // 30 days ago
-        };
-        assert!(old.compute(now, 1.0, 1.0) < recent.compute(now, 1.0, 1.0));
-
-        // Frequently used old command
-        let frequent_old = FrecencyData {
-            count: 100,
-            last_used: now - 86400 * 7, // 1 week ago
-        };
-        // Should still have decent score due to frequency
-        assert!(frequent_old.compute(now, 1.0, 1.0) > 50);
+    /// A [`CommandData`] used `count` times, most recently at `most_recent_timestamp`.
+    fn command_data(count: u32, most_recent_timestamp: i64) -> CommandData {
+        let history = make_history("git status", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let mut data = CommandData::new(&history, &ThreadedRodeo::new()).unwrap();
+        data.count = count;
+        data.most_recent_timestamp = most_recent_timestamp;
+        data
     }
 
     #[rstest]
-    fn frecency_data_compute_with_multipliers() {
+    fn command_data_compute_frecency() {
         let now = 1_000_000_i64;
 
-        let data = FrecencyData {
-            count: 5,
-            last_used: now - 60, // 1 minute ago (recency_score = 100)
-        };
+        // Recent command (with default multipliers of 1.0)
+        let recent = command_data(5, now - 60); // 1 minute ago
+        assert!(recent.compute_frecency(now, 1.0, 1.0) > 100); // High score
+
+        // Old command
+        let old = command_data(5, now - 86400 * 30); // 30 days ago
+        assert!(old.compute_frecency(now, 1.0, 1.0) < recent.compute_frecency(now, 1.0, 1.0));
+
+        // Frequently used old command
+        let frequent_old = command_data(100, now - 86400 * 7); // 1 week ago
+        // Should still have decent score due to frequency
+        assert!(frequent_old.compute_frecency(now, 1.0, 1.0) > 50);
+    }
+
+    #[rstest]
+    fn command_data_compute_frecency_with_multipliers() {
+        let now = 1_000_000_i64;
+
+        let data = command_data(5, now - 60); // 1 minute ago (recency_score = 100)
 
         // Default multipliers (1.0, 1.0)
-        let default_score = data.compute(now, 1.0, 1.0);
+        let default_score = data.compute_frecency(now, 1.0, 1.0);
 
         // Double recency weight
-        let double_recency = data.compute(now, 2.0, 1.0);
+        let double_recency = data.compute_frecency(now, 2.0, 1.0);
         assert!(double_recency > default_score);
 
         // Double frequency weight
-        let double_frequency = data.compute(now, 1.0, 2.0);
+        let double_frequency = data.compute_frecency(now, 1.0, 2.0);
         assert!(double_frequency > default_score);
 
         // Zero out recency (only frequency counts)
-        let no_recency = data.compute(now, 0.0, 1.0);
+        let no_recency = data.compute_frecency(now, 0.0, 1.0);
         assert!(no_recency < default_score);
 
         // Zero out frequency (only recency counts)
-        let no_frequency = data.compute(now, 1.0, 0.0);
+        let no_frequency = data.compute_frecency(now, 1.0, 0.0);
         assert!(no_frequency < default_score);
 
         // Zero both (should be zero)
-        let no_score = data.compute(now, 0.0, 0.0);
+        let no_score = data.compute_frecency(now, 0.0, 0.0);
         assert_eq!(no_score, 0);
 
         // Fractional multipliers
-        let half_recency = data.compute(now, 0.5, 1.0);
+        let half_recency = data.compute_frecency(now, 0.5, 1.0);
         assert!(half_recency < default_score);
         assert!(half_recency > no_recency);
 
         // 1.5x multiplier
-        let boost_recency = data.compute(now, 1.5, 1.0);
+        let boost_recency = data.compute_frecency(now, 1.5, 1.0);
         assert!(boost_recency > default_score);
         assert!(boost_recency < double_recency);
     }
 
+    /// The most recent invocation wins whichever order invocations arrive in, including
+    /// before the Unix epoch.
     #[rstest]
-    fn command_data_add_invocation() {
+    #[case::after_epoch(datetime!(2024-01-01 10:00 UTC), datetime!(2024-01-01 12:00 UTC))]
+    #[case::before_epoch(datetime!(1960-01-01 10:00 UTC), datetime!(1960-01-01 12:00 UTC))]
+    fn command_data_add_invocation(
+        #[case] older_time: OffsetDateTime,
+        #[case] newer_time: OffsetDateTime,
+        #[values(false, true)] newer_first: bool,
+    ) {
         let interner = ThreadedRodeo::new();
 
         let (dir1, dir2) = if cfg!(windows) {
@@ -729,19 +685,23 @@ mod tests {
             ("/home/user/project", "/home/user/other")
         };
 
-        let history1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
-        let history2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
+        let older = make_history("git status", dir1, older_time);
+        let newer = make_history("git status", dir2, newer_time);
+        let (first, second) = if newer_first {
+            (&newer, &older)
+        } else {
+            (&older, &newer)
+        };
 
-        let mut data = CommandData::new(&history1, 0, &interner).unwrap();
-        assert_eq!(data.global_frecency.count, 1);
-        let id1 = data.most_recent_id();
+        let mut data = CommandData::new(first, &interner).unwrap();
+        assert_eq!(data.count, 1);
+        assert_eq!(data.most_recent_id, first.id);
+        assert_eq!(data.most_recent_timestamp, first.timestamp.unix_timestamp());
 
-        data.add_invocation(&history2, &interner);
-        assert_eq!(data.global_frecency.count, 2);
-
-        // Most recent ID should update to history2 (newer timestamp)
-        let id2 = data.most_recent_id();
-        assert_ne!(id1, id2);
+        data.add_invocation(second, &interner);
+        assert_eq!(data.count, 2);
+        assert_eq!(data.most_recent_id, newer.id);
+        assert_eq!(data.most_recent_timestamp, newer_time.unix_timestamp());
     }
 
     #[rstest]
@@ -757,7 +717,7 @@ mod tests {
         let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
         let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
 
-        let mut data = CommandData::new(&h1, 0, &interner).unwrap();
+        let mut data = CommandData::new(&h1, &interner).unwrap();
         data.add_invocation(&h2, &interner);
 
         let (check1, check2, check3) = if cfg!(windows) {
@@ -859,7 +819,7 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
-            index.commands.get("foo bar --baz").unwrap().most_recent_id(),
+            command(&index, "foo bar --baz").most_recent_id,
             "contiguous match must rank above the high-frecency scattered match"
         );
     }
@@ -884,7 +844,7 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
-            index.commands.get("echo beta").unwrap().most_recent_id(),
+            command(&index, "echo beta").most_recent_id,
             "ties in match quality should be broken by frecency"
         );
     }
@@ -900,7 +860,7 @@ mod tests {
         index.add_history(&make_history("echo déjà-vu", "/tmp", datetime!(2024-01-01 10:00 UTC)));
         index.add_history(&make_history("echo plain", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
-        let expected = index.commands.get("echo déjà-vu").unwrap().most_recent_id();
+        let expected = command(&index, "echo déjà-vu").most_recent_id;
 
         let results: Vec<_> = index.search("deja", &IndexFilterMode::Global, 10).collect();
         assert_eq!(results, vec![expected]);
@@ -1025,7 +985,7 @@ mod tests {
         let index = SearchIndex::default();
         index.load_from_db(&db).await.unwrap();
 
-        assert_eq!(index.commands.get("cargo build").unwrap().global_frecency.count, 3);
+        assert_eq!(command(&index, "cargo build").count, 3);
     }
 
     #[rstest]

@@ -1,3 +1,5 @@
+use std::fmt;
+use std::io::{self, Write as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,8 +7,10 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
+use atuin_common::userio;
 use atuin_daemon::client::{DaemonClientErrorKind, HistoryClient, classify_error};
-use atuin_daemon::grpc::versioning::BUILD_STR;
+use atuin_daemon::grpc::versioning::{BUILD_STR, VersionMatchError};
+use atuin_daemon::service::address::DaemonAddress;
 use atuin_daemon::service::{
     ActiveService, FindError, Launch, PidfileWaitError, ServiceClaim, ServiceFindError, StopError,
 };
@@ -85,7 +89,7 @@ impl Cmd {
         let launch = self.launch();
         match self.subcmd {
             None => {
-                eprintln!("Warning: `atuin daemon` is deprecated, use `atuin daemon start`");
+                userio::log::warn!("daemon-deprecated");
                 run(settings, false, launch).await
             }
             Some(SubCmd::Start { force, .. }) => run(settings, force, launch).await,
@@ -113,17 +117,17 @@ pub(super) fn should_retry_after_error(err: &eyre::Report) -> bool {
 /// Acquire a [`HistoryClient`] connected to a daemon of our build, starting or replacing it first
 /// when `daemon.autostart` allows.
 pub async fn ready_client(settings: &Settings) -> Result<HistoryClient> {
-    Ok(ActiveService::ready(settings).await?.into_client())
+    Ok(ActiveService::ready(settings).await?.history_client())
 }
 
-/// Send a request to the daemon, first ensuring (via [`ready_client`]) that it is running and is
-/// our build.
+/// Send a request to the daemon, first ensuring (as [`ready_client`] does) that it is running and
+/// is our build, and show here what the daemon tells the user meanwhile.
 async fn try_with_restart<F, R>(settings: &Settings, send_request: F) -> Result<R>
 where
     F: AsyncFnOnce(&mut HistoryClient) -> Result<R> + Sync,
 {
-    let mut client = ready_client(settings).await?;
-    send_request(&mut client).await
+    let service = ActiveService::ready(settings).await?;
+    service.with_logs(async { send_request(&mut service.history_client()).await }).await
 }
 
 /// Send a request to an already-running daemon of our build.
@@ -138,7 +142,7 @@ where
         bail!("no daemon is running");
     };
     service.ensure_our_build()?;
-    send_request(&mut service.into_client()).await
+    send_request(&mut service.history_client()).await
 }
 
 /// How long `history start` waits on the daemon. It runs synchronously before every command, and a
@@ -150,7 +154,9 @@ where
 const START_HISTORY_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub async fn start_history(settings: &Settings, history: History) -> Result<HistoryId> {
-    let start = try_with_restart(settings, async |client| client.start_history(history).await);
+    // Not through `try_with_restart`: the shell hook keeps quiet, so it has no use for the daemon's
+    // messages.
+    let start = async { ready_client(settings).await?.start_history(history).await };
     let resp = tokio::time::timeout(START_HISTORY_TIMEOUT, start)
         .await
         .wrap_err("timed out waiting for the daemon")??;
@@ -185,12 +191,12 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
 }
 
 /// Have the daemon rebuild its AI sessions from the record store (see
-/// `AiClient::rebuild_sessions`), first starting or replacing it (via [`ready_client`]) as the
-/// other AI session commands do.
+/// `AiClient::rebuild_sessions`), first starting or replacing it as the other AI session commands
+/// do, and show here what it tells the user meanwhile.
 pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
-    ready_client(settings).await?;
+    let service = ActiveService::ready(settings).await?;
     let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
-    client.rebuild_sessions().await
+    service.with_logs(client.rebuild_sessions()).await
 }
 
 /// How long to look for a running daemon: a stopped daemon's socket still accepts connections but
@@ -219,15 +225,16 @@ const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
 /// connection: a daemon started later, or replacing one too old to be asked, projects them as it
 /// starts.
 pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
-    if running_daemon_of_our_build(settings).await.is_none() {
+    let Some(service) = running_daemon_of_our_build(settings).await else {
         return Ok(());
-    }
+    };
     let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
-    match tokio::time::timeout(PROJECT_SYNCED_WAIT, client.project_synced()).await {
+    let projected = tokio::time::timeout(PROJECT_SYNCED_WAIT, client.project_synced());
+    match service.with_logs(projected).await {
         Ok(Err(err)) if is_legacy_daemon_error(&err) => Ok(()),
         Ok(projected) => projected,
         Err(_) => {
-            eprintln!("Indexing threads in the background");
+            userio::log::info!("daemon-indexing-threads");
             Ok(())
         }
     }
@@ -241,16 +248,15 @@ const SEARCH_INDEX_REBUILD_WAIT: Duration = Duration::from_secs(10);
 
 /// Tell the daemon to rebuild the search index from the history DB.
 pub async fn rebuild_search_index(settings: &Settings) -> Result<()> {
-    if running_daemon_of_our_build(settings).await.is_none() {
+    let Some(service) = running_daemon_of_our_build(settings).await else {
         return Ok(());
-    }
+    };
     let mut client = atuin_daemon::client::SearchClient::from_settings(settings).await?;
-    tokio::time::timeout(SEARCH_INDEX_REBUILD_WAIT, client.rebuild_index()).await.unwrap_or_else(
-        |_| {
-            eprintln!("Rebuilding the daemon's search index in the background");
-            Ok(())
-        },
-    )
+    let rebuilt = tokio::time::timeout(SEARCH_INDEX_REBUILD_WAIT, client.rebuild_index());
+    service.with_logs(rebuilt).await.unwrap_or_else(|_| {
+        userio::log::info!("daemon-rebuilding-search-index");
+        Ok(())
+    })
 }
 
 pub async fn compact_store(settings: &Settings) -> Result<u64> {
@@ -258,33 +264,68 @@ pub async fn compact_store(settings: &Settings) -> Result<u64> {
     Ok(reply.rewritten)
 }
 
-async fn status_cmd(settings: &Settings) -> Result<()> {
-    let Some(service) = ActiveService::find(settings).await? else {
-        println!("Daemon is not running");
-        return Ok(());
-    };
+/// What `daemon status` and `daemon restart` report about the daemon they find.
+enum StatusReport {
+    NotRunning,
+    /// A daemon of this build.
+    Running {
+        pid: u32,
+        version: String,
+        healthy: bool,
+        address: DaemonAddress,
+    },
+    /// A daemon of another build, which this client can't use.
+    OtherBuild(VersionMatchError),
+}
 
-    match service.ensure_our_build() {
-        Ok(()) => {
-            let address = service.address().clone();
-            let status = service.into_client().status().await?;
-            println!("Daemon running");
-            println!("  PID:      {}", status.pid);
-            println!("  Version:  {}", status.version);
-            println!("  Build:    {BUILD_STR}");
-            println!("  Healthy:  {}", status.healthy);
-            println!("  Address:  {address}");
+impl StatusReport {
+    async fn of(service: &ActiveService) -> Result<Self> {
+        if let Err(reason) = service.ensure_our_build() {
+            return Ok(Self::OtherBuild(reason));
         }
-        Err(reason) if reason.peer_is_newer() => {
-            println!("Daemon running (newer than this client)");
-            println!("  Reason: {reason}");
-        }
-        Err(reason) => {
-            println!("Daemon running (needs restart)");
-            println!("  Reason: {reason}");
+        let status = service.history_client().status().await?;
+        Ok(Self::Running {
+            pid: status.pid,
+            version: status.version,
+            healthy: status.healthy,
+            address: service.address().clone(),
+        })
+    }
+}
+
+impl fmt::Display for StatusReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotRunning => write!(f, "Daemon is not running"),
+            Self::Running {
+                pid,
+                version,
+                healthy,
+                address,
+            } => {
+                writeln!(f, "Daemon running")?;
+                writeln!(f, "  PID:      {pid}")?;
+                writeln!(f, "  Version:  {version}")?;
+                writeln!(f, "  Build:    {BUILD_STR}")?;
+                writeln!(f, "  Healthy:  {healthy}")?;
+                write!(f, "  Address:  {address}")
+            }
+            Self::OtherBuild(reason) if reason.peer_is_newer() => {
+                write!(f, "Daemon running (newer than this client)\n  Reason: {reason}")
+            }
+            Self::OtherBuild(reason) => {
+                write!(f, "Daemon running (needs restart)\n  Reason: {reason}")
+            }
         }
     }
+}
 
+async fn status_cmd(settings: &Settings) -> Result<()> {
+    let report = match ActiveService::find(settings).await? {
+        Some(service) => StatusReport::of(&service).await?,
+        None => StatusReport::NotRunning,
+    };
+    writeln!(io::stdout(), "{report}")?;
     Ok(())
 }
 
@@ -292,22 +333,22 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
     let service = match ActiveService::find(settings).await {
         Ok(Some(service)) => service,
         Ok(None) => {
-            println!("Daemon is not running");
+            userio::log::info!("daemon-not-running");
             return Ok(());
         }
         // One that can't answer can't be asked to stop either.
         Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
             ActiveService::evict(&settings.daemon).await?;
-            println!("Daemon stopped");
+            userio::log::info!("daemon-stopped");
             return Ok(());
         }
         Err(err) => return Err(err.into()),
     };
 
     match service.stop().await {
-        Ok(()) => println!("Daemon stopped"),
+        Ok(()) => userio::log::info!("daemon-stopped"),
         Err(StopError::Pidfile(PidfileWaitError::StillHeld { .. })) => {
-            println!("Daemon may still be shutting down");
+            userio::log::info!("daemon-may-be-stopping");
         }
         Err(err) => return Err(err.into()),
     }
@@ -318,32 +359,29 @@ pub(super) async fn stop_cmd(settings: &Settings) -> Result<()> {
 pub(super) async fn restart_cmd(settings: &Settings, only_if_running: bool) -> Result<()> {
     let service = match ActiveService::find(settings).await {
         Ok(Some(service)) => {
-            println!("Restarting daemon...");
+            userio::log::info!("daemon-restarting");
             service.restart().await?
         }
         Ok(None) if only_if_running => {
-            println!("No daemon running");
+            userio::log::info!("daemon-none-running");
             return Ok(());
         }
         Ok(None) => {
-            println!("No daemon running");
-            println!("Starting daemon...");
+            userio::log::info!("daemon-none-running");
+            userio::log::info!("daemon-starting");
             ActiveService::find_or_spawn(settings).await?
         }
         Err(ServiceFindError::Find(FindError::Unresponsive(_))) => {
-            println!("Daemon isn't answering, replacing it...");
+            userio::log::info!("daemon-replacing-unresponsive");
             ActiveService::evict(&settings.daemon).await?;
             ActiveService::find_or_spawn(settings).await?
         }
         Err(err) => return Err(err.into()),
     };
 
-    let status = service.into_client().status().await?;
-
-    println!("Daemon restarted");
-    println!("  PID:      {}", status.pid);
-    println!("  Version:  {}", status.version);
-
+    let report = StatusReport::of(&service).await?;
+    userio::log::info!("daemon-restarted");
+    writeln!(io::stdout(), "{report}")?;
     Ok(())
 }
 

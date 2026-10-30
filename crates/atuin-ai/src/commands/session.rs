@@ -16,6 +16,7 @@ use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::userio;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{import_sessions_event, tail_sessions_event};
 use chrono::{DateTime, Utc};
@@ -88,8 +89,8 @@ pub enum Cmd {
     /// alone: the ones nobody has gone on with since it was turned on.
     Import {
         /// Only import threads from this harness.
-        #[arg(long, value_parser = parse_harness)]
-        harness: Option<HarnessKind>,
+        #[arg(long, value_enum)]
+        harness: Option<HarnessArg>,
 
         #[command(flatten)]
         output: Output,
@@ -102,15 +103,23 @@ pub enum Cmd {
     Enable,
 }
 
-// Only harnesses a capture path can actually produce are offered as filters (see AnyHarness);
-// Copilot has no capture source yet, so advertising it would return empty for every query.
-// Also the MCP tools' harness filter, so the CLI and the tools accept the same names.
-#[derive(Copy, Clone, Debug, ValueEnum, serde::Deserialize, schemars::JsonSchema)]
+/// A harness named on the command line (`--harness`, `--in`) or in an MCP tool call, so every
+/// place that takes one accepts the same names: the ones [`harness_name`] shows, with `claude`
+/// as a hidden synonym of `claude-code`.
+///
+/// Only harnesses a capture path can actually produce are offered (see `AnyHarness`): advertising
+/// one without a capture source would return empty for every query.
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessArg {
+    #[value(alias = "claude")]
+    #[serde(alias = "claude")]
     ClaudeCode,
     Codex,
-    #[clap(alias = "grok-build")]
+    Copilot,
+    #[value(alias = "grok-build")]
     #[serde(alias = "grok-build")]
     Grok,
     Opencode,
@@ -123,6 +132,7 @@ impl From<HarnessArg> for HarnessKind {
         match value {
             HarnessArg::ClaudeCode => Self::ClaudeCode,
             HarnessArg::Codex => Self::Codex,
+            HarnessArg::Copilot => Self::Copilot,
             HarnessArg::Grok => Self::Grok,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
@@ -171,10 +181,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     };
 
     if !settings.threads.capture {
-        // stderr so it never pollutes piped stdout (json/ndjson).
-        eprintln!(
-            "note: thread capture is off. Run `atuin config enable threads` to record new threads."
-        );
+        userio::log::warn!("threads-capture-off");
     }
 
     let mut client = AiClient::from_settings(&settings).await?;
@@ -187,11 +194,15 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         client
             .wait_for_sessions(|progress| {
                 if reported.is_none() {
-                    eprintln!("Threads are being rebuilt from the record store; waiting...");
+                    userio::log::info!("threads-rebuilding");
                 }
                 let (replayed, pending) = progress;
                 if reported != Some(progress) && pending > 0 {
-                    eprintln!("  {replayed} of {pending} records replayed");
+                    userio::log::info!(
+                        "threads-rebuild-progress",
+                        replayed = replayed,
+                        pending = pending
+                    );
                 }
                 reported = Some(progress);
             })
@@ -211,7 +222,9 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
             search(&mut client, query, harness.map(HarnessKind::from), limit, style).await
         }
         Cmd::Tail { .. } => tail(&mut client, style).await,
-        Cmd::Import { harness, .. } => import(&mut client, harness, style, &mut io::stdout()).await,
+        Cmd::Import { harness, .. } => {
+            import(&mut client, harness.map(HarnessKind::from), style, &mut io::stdout()).await
+        }
         Cmd::Resume(_) | Cmd::Enable => unreachable!("returned above"),
     };
 
@@ -1043,20 +1056,6 @@ fn rfc3339(ts: OffsetDateTime) -> Option<String> {
     to_datetime(ts).map(|dt| dt.to_rfc3339())
 }
 
-fn parse_harness(value: &str) -> Result<HarnessKind, String> {
-    match value {
-        "claude-code" => Ok(HarnessKind::ClaudeCode),
-        "codex" => Ok(HarnessKind::Codex),
-        "grok" | "grok-build" => Ok(HarnessKind::Grok),
-        "opencode" => Ok(HarnessKind::Opencode),
-        "pi" => Ok(HarnessKind::Pi),
-        "omp" => Ok(HarnessKind::Omp),
-        other => Err(format!(
-            "unknown harness `{other}` (expected claude-code, codex, grok, opencode, pi, or omp)"
-        )),
-    }
-}
-
 /// The kebab display label for a harness. Kept exhaustive over every `HarnessKind` (including ones
 /// no capture path yet produces) so a stored value always renders. Shared with the MCP
 /// session-search renderer.
@@ -1112,6 +1111,9 @@ struct SessionJson {
     harness: String,
     session_id: String,
     atuin_id: String,
+    /// The recording host's id, as 32 hex digits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<HandleJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1293,6 +1295,7 @@ fn session_json(s: &Session) -> SessionJson {
         harness: harness_name(s.handle.harness).to_owned(),
         session_id: s.handle.session.to_string(),
         atuin_id: s.atuin_id.to_string(),
+        host: s.host.map(|h| h.0.as_simple().to_string()),
         parent: s.parent.as_ref().map(handle_json),
         parent_kind: s.parent_kind.map(|kind| match kind {
             ParentKind::Subagent => "subagent",
@@ -1381,7 +1384,7 @@ mod tests {
     use atuin_client::ai_session::{AtuinSessionId, NativeSessionId, SourceId};
     use atuin_common::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
     use atuin_common::string::highlighted::TextHighlighter;
-    use atuin_domain::record::RecordId;
+    use atuin_domain::record::{HostId, RecordId};
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -1406,21 +1409,25 @@ mod tests {
             .build()
     }
 
+    /// The name a listing shows for a harness is the name the command line takes for it.
     #[rstest]
-    #[case("claude-code", HarnessKind::ClaudeCode)]
-    #[case("codex", HarnessKind::Codex)]
-    #[case("grok", HarnessKind::Grok)]
-    #[case("grok-build", HarnessKind::Grok)]
-    #[case("opencode", HarnessKind::Opencode)]
-    #[case("pi", HarnessKind::Pi)]
-    #[case("omp", HarnessKind::Omp)]
-    fn parse_harness_maps_names(#[case] input: &str, #[case] want: HarnessKind) {
-        assert_eq!(parse_harness(input).unwrap(), want);
+    #[case(HarnessKind::ClaudeCode)]
+    #[case(HarnessKind::Codex)]
+    #[case(HarnessKind::Copilot)]
+    #[case(HarnessKind::Grok)]
+    #[case(HarnessKind::Opencode)]
+    #[case(HarnessKind::Pi)]
+    #[case(HarnessKind::Omp)]
+    fn a_harness_is_named_as_listed(#[case] kind: HarnessKind) {
+        use clap::ValueEnum;
+        let parsed = HarnessArg::from_str(harness_name(kind), false).unwrap();
+        assert_eq!(HarnessKind::from(parsed), kind);
     }
 
     #[rstest]
-    fn parse_harness_rejects_unknown_harnesses() {
-        assert!(parse_harness("copilot").is_err());
+    fn an_unknown_harness_name_is_rejected() {
+        use clap::ValueEnum;
+        assert!(HarnessArg::from_str("cursor", false).is_err());
     }
 
     #[rstest]
@@ -1520,6 +1527,41 @@ mod tests {
         assert_eq!(query, expected);
     }
 
+    /// Claude Code goes by `claude-code`, the name the listings show, and by `claude`, on the
+    /// command line and in an MCP tool call alike; only the former is advertised.
+    #[rstest]
+    #[case::listed("claude-code")]
+    #[case::synonym("claude")]
+    fn claude_code_goes_by_both_names(#[case] name: &str) {
+        use clap::ValueEnum;
+
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            cmd: Cmd,
+        }
+
+        let cli = <Cli as clap::Parser>::try_parse_from(["threads", "import", "--harness", name])
+            .unwrap();
+        assert!(matches!(cli.cmd, Cmd::Import {
+            harness: Some(HarnessArg::ClaudeCode),
+            ..
+        }));
+        let cli =
+            <Cli as clap::Parser>::try_parse_from(["threads", "search", "--harness", name, "q"])
+                .unwrap();
+        assert!(matches!(cli.cmd, Cmd::Search {
+            harness: Some(HarnessArg::ClaudeCode),
+            ..
+        }));
+        let from_tool: HarnessArg = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(from_tool, HarnessArg::ClaudeCode);
+
+        let shown = HarnessArg::ClaudeCode.to_possible_value().unwrap();
+        assert_eq!(shown.get_name(), harness_name(HarnessKind::ClaudeCode));
+        assert!(shown.matches(name, false));
+    }
+
     #[rstest]
     fn an_exact_id_wins_over_the_ids_it_prefixes() {
         let sessions = vec![
@@ -1571,6 +1613,7 @@ mod tests {
         assert_eq!(v["title"], "hello");
         // Absent optionals are omitted rather than serialized as null.
         assert!(v.get("cwd").is_none());
+        assert!(v.get("host").is_none());
         assert!(v.get("parent_kind").is_none());
         assert!(v.get("last_reply").is_none());
     }
@@ -1589,6 +1632,15 @@ mod tests {
         assert_eq!(v["parent"]["session_id"], "parent");
         assert_eq!(v["parent_kind"], want);
         assert_eq!(v["last_reply"], "done");
+    }
+
+    #[rstest]
+    fn session_json_names_the_recording_host() {
+        let mut s = session(HarnessKind::Codex, "abc");
+        s.host = Some(HostId(uuid::Uuid::from_u128(0x3f9a_12bc)));
+
+        let v = serde_json::to_value(session_json(&s)).unwrap();
+        assert_eq!(v["host"], "0000000000000000000000003f9a12bc");
     }
 
     /// `show` names a session's links by atuin id, in text and JSON, leaving out those unknown.

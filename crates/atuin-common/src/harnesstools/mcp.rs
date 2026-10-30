@@ -7,7 +7,7 @@ use std::process::Stdio;
 use serde_json::{Value, json};
 
 use super::pi::Flavour;
-use super::{AnyHarness, codex, grok, opencode};
+use super::{AnyHarness, codex, copilot, grok, opencode};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::{AbsPathBuf, PathBufExt as _};
@@ -60,6 +60,7 @@ fn config_path(harness: AnyHarness) -> PathBuf {
             |dir| PathBuf::from(dir).joined(".claude.json"),
         ),
         AnyHarness::Codex(_) => codex::home().joined("config.toml"),
+        AnyHarness::Copilot(_) => copilot::copilot_home().joined("mcp-config.json"),
         AnyHarness::Grok(_) => grok::home().joined("config.toml"),
         AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
         AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
@@ -85,6 +86,10 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
             run("claude", &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
         }
         AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+        // Writes `~/.copilot/mcp-config.json`, replacing a server of the name.
+        AnyHarness::Copilot(_) => {
+            run("copilot", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+        }
         AnyHarness::Grok(_) => run("grok", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
         // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
         // doesn't load. Both load `mcp.<name>`.
@@ -197,7 +202,7 @@ async fn add_to_config(
             crate::fs::write_new(path, text.as_bytes())?;
         }
     }
-    println!("Added MCP server atuin to {}", path.display());
+    crate::userio::log::info!("mcp-server-added", path = path.display().to_string());
     Ok(())
 }
 
@@ -219,6 +224,7 @@ mod tests {
     #[rstest]
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
+    #[case("copilot", ".copilot/mcp-config.json")]
     #[case("grok", ".grok/config.toml")]
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
@@ -243,6 +249,7 @@ mod tests {
     #[rstest]
     #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
     #[case("codex", "CODEX_HOME", "config.toml")]
+    #[case("copilot", "COPILOT_HOME", "mcp-config.json")]
     #[case("grok", "GROK_HOME", "config.toml")]
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]

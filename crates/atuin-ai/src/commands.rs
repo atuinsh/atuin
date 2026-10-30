@@ -71,6 +71,13 @@ impl From<session::Cmd> for Command {
 }
 
 impl Command {
+    /// Whether the command is a widget, which draws on the terminal and answers the shell on
+    /// stderr.
+    #[must_use]
+    pub const fn is_widget(&self) -> bool {
+        matches!(self, Self::Inline { .. } | Self::Resume(_))
+    }
+
     pub fn log_config(&self, settings: &Settings) -> Option<LogConfig> {
         match self {
             Self::Inline { args, .. } => Some(LogConfig {
