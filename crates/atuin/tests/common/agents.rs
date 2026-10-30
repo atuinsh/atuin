@@ -21,12 +21,14 @@ pub enum Agent {
     Claude,
     Codex,
     Copilot,
+    Kiro,
     Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Copilot, Self::Opencode, Self::Pi];
+    pub const ALL: [Self; 6] =
+        [Self::Claude, Self::Codex, Self::Copilot, Self::Kiro, Self::Opencode, Self::Pi];
 
     /// The `harness` atuin's JSON output names it by.
     pub fn harness(self) -> &'static str {
@@ -34,6 +36,7 @@ impl Agent {
             Self::Claude => "claude-code",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Kiro => "kiro",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -45,6 +48,7 @@ impl Agent {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Kiro => "kiro-cli",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -55,6 +59,7 @@ impl Agent {
         match self {
             Self::Claude => "Bash",
             Self::Codex => "exec_command",
+            Self::Kiro => "execute_bash",
             Self::Copilot | Self::Opencode | Self::Pi => "bash",
         }
     }
@@ -65,6 +70,7 @@ impl Agent {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Copilot => "Copilot",
+            Self::Kiro => "Kiro",
             Self::Opencode => "opencode",
             Self::Pi => "Pi",
         }
@@ -74,6 +80,7 @@ impl Agent {
     pub fn new_id(self) -> String {
         let uuid = atuin_common::utils::uuid_v7();
         match self {
+            Self::Kiro => format!("sess_{}", uuid::Uuid::new_v4()),
             Self::Opencode => format!("ses_{}", uuid.as_simple()),
             _ => uuid.as_hyphenated().to_string(),
         }
@@ -86,6 +93,7 @@ impl Agent {
             Self::Claude => home.join(".claude/projects"),
             Self::Codex => home.join(".codex/sessions"),
             Self::Copilot => home.join(".copilot/session-state"),
+            Self::Kiro => home.join(".kiro/sessions"),
             Self::Opencode => home.join(".local/share/opencode/opencode.db"),
             Self::Pi => home.join(".pi/agent/sessions"),
         }
@@ -214,6 +222,9 @@ impl Transcript {
                 agent.root(home).joined(dir).joined(format!("{stamp}_{id}.jsonl"))
             }
             Agent::Copilot => agent.root(home).joined(&id).joined("events.jsonl"),
+            Agent::Kiro => {
+                agent.root(home).joined(kiro_bucket(cwd)).joined(&id).joined("messages.jsonl")
+            }
             Agent::Opencode => agent.root(home),
         };
         let transcript = Self { agent, id, path };
@@ -246,6 +257,7 @@ impl Transcript {
                     }),
                 )]);
             }
+            Agent::Kiro => transcript.create_kiro(home, cwd, started),
             Agent::Claude | Agent::Pi | Agent::Codex => {
                 fs::create_dir_all(transcript.path.parent().unwrap()).unwrap();
                 let header = match agent {
@@ -320,6 +332,19 @@ impl Transcript {
                 path,
             });
         }
+        // Kiro buckets sessions by the directory they started in, which only the session says.
+        if agent == Agent::Kiro {
+            let buckets = fs::read_dir(agent.root(home)).ok()?;
+            return buckets
+                .flatten()
+                .map(|bucket| bucket.path().joined(id).joined("messages.jsonl"))
+                .find(|path| path.is_file())
+                .map(|path| Self {
+                    agent,
+                    id: id.to_owned(),
+                    path,
+                });
+        }
         let mut dirs = vec![agent.root(home)];
         while let Some(dir) = dirs.pop() {
             // A directory gone or unreadable holds nothing to find: the rest may.
@@ -378,6 +403,7 @@ impl Transcript {
             Agent::Claude => self.append_claude(cwd, turns),
             Agent::Codex => self.append_codex(turns),
             Agent::Copilot => self.append_copilot(turns),
+            Agent::Kiro => self.append_kiro(cwd, turns),
             Agent::Pi => self.append_pi(turns),
             Agent::Opencode => self.append_opencode(cwd, turns),
         }
@@ -636,6 +662,250 @@ impl Transcript {
         write_lines(&self.path, &lines);
     }
 
+    /// Kiro's session directory (Kiro CLI 2.36.0, V3 engine): `session.json` as it stands before
+    /// the first turn, untitled, an empty log, and the session's line in the bucket's index.
+    fn create_kiro(&self, home: &Path, cwd: &Path, started: OffsetDateTime) {
+        let dir = self.path.parent().unwrap();
+        fs::create_dir_all(dir).unwrap();
+        let at = rfc3339(started);
+        let settings = json!({
+            "memory": {"mode": "disabled", "reflection": false},
+            "workflows": {"enabled": false},
+            "goal": {"enabled": false},
+        });
+        let meta = json!({
+            "schemaVersion": "1.0.0",
+            "dataModelVersion": 1,
+            "id": self.id,
+            "title": "",
+            "agentMode": "vibe",
+            "workspacePaths": [cwd],
+            "rootPaths": [cwd],
+            "createdAt": at,
+            "lastModifiedAt": at,
+            "modelId": "auto",
+            "autopilot": true,
+            "workflowLaunch": "when-asked",
+            "contextSnapshotModelDisplay": {
+                "modelId": "auto",
+                "display": "Auto (model selected dynamically on the server)",
+            },
+            "semanticReviewEnabled": true,
+            "disableAutoCompaction": false,
+            "ftaEnabled": false,
+            "workflowsEnabled": false,
+            "specPlanEnabled": false,
+            "specWorkflow": "quick",
+            "specSkipClarificationEnabled": true,
+            "memoryConfig": {"mode": "disabled", "reflection": false},
+            "memoryConfigSource": "explicit",
+            "status": "idle",
+            "_meta": {"kiro": {"settings": settings}},
+        });
+        fs::write(dir.join("session.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+        fs::write(&self.path, "").unwrap();
+        let bucket = dir.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
+        let index = Agent::Kiro.root(home).parent().unwrap().join("session-index");
+        fs::create_dir_all(&index).unwrap();
+        write_lines(&index.joined(format!("{bucket}.jsonl")), &[json!({
+            "op": "add",
+            "sessionPath": format!("{bucket}/{}", self.id),
+            "at": millis(started),
+        })]);
+    }
+
+    /// Kiro's rows: each turn a prompt, the turn's start, the model's reasoning, its
+    /// `execute_bash` call and the result, the reply, then the turn's usage, pause and end; the
+    /// system prompt is written once, after the first turn. `session.json` is rewritten after,
+    /// as Kiro bumps `lastModifiedAt`, titled after the first turn as the model would, and
+    /// naming `cwd` among its roots when the session is gone on with from elsewhere.
+    fn append_kiro(&self, cwd: &Path, turns: &[Turn]) {
+        let dir = self.path.parent().unwrap();
+        let meta_path = dir.join("session.json");
+        let mut meta: Value =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        let mode = meta["agentMode"].as_str().unwrap().to_owned();
+        let first = fs::metadata(&self.path).map(|log| log.len() == 0).unwrap_or(true);
+        let uuid = || uuid::Uuid::new_v4().to_string();
+        let mut lines = Vec::new();
+        let mut row = |id: String, at: OffsetDateTime, payload: Value| {
+            lines.push(json!({"id": id, "timestamp": rfc3339(at), "payload": payload}));
+        };
+        if first {
+            row(
+                format!("context_snapshot_{}", uuid()),
+                tick(),
+                json!({
+                    "type": "agent_note",
+                    "content": "<session_context>\nOnly the last <session_context> block is \
+                                current; it remains current until a later block supersedes it.\n\
+                                The current model is Auto (model selected dynamically on the \
+                                server).\n</session_context>",
+                }),
+            );
+        }
+        for turn in turns {
+            let execution = uuid();
+            let tag = format!("prompt_{}", uuid());
+            let in_turn = json!({"executionId": execution, "turnId": execution});
+            let meta_kiro = json!({"kiro": {"agentMode": mode}});
+            // A reply carries the fields every row of a turn shares.
+            let assistant = |content: &str, operation: &str| {
+                let mut row = json!({
+                    "type": "assistant",
+                    "content": content,
+                    "operationType": operation,
+                    "_meta": meta_kiro,
+                });
+                row.as_object_mut().unwrap().extend(in_turn.as_object().unwrap().clone());
+                row
+            };
+            row(
+                uuid(),
+                tick(),
+                json!({
+                    "type": "user",
+                    "content": turn.prompt,
+                    "documents": [],
+                    "images": [],
+                    "_meta": {"kiro": {"userMessageTag": tag}},
+                }),
+            );
+            row(
+                format!("{execution}-turn-start"),
+                tick(),
+                json!({
+                    "type": "turn_start",
+                    "executionId": execution,
+                    "turnId": execution,
+                    "boundarySource": "observed",
+                    "userMessageTag": tag,
+                }),
+            );
+            let mut reasoning = assistant(&turn.thinking, "Reasoning");
+            reasoning["reasoningSignature"] = json!(".KTR~~sig");
+            reasoning["reasoningModelId"] = json!("qdev::auto");
+            row(format!("{}-say", uuid()), tick(), reasoning);
+            // The shell tool's call id wraps the id the model saw.
+            let model_call = format!("tooluse_{}", &short()[..22]);
+            let call = format!("run_command_{model_call}");
+            row(
+                format!("{call}-call"),
+                tick(),
+                json!({
+                    "type": "tool_call",
+                    "toolCallId": call,
+                    "toolName": self.agent.tool(),
+                    "args": {
+                        "command": turn.command,
+                        "description": "Run the command",
+                        "run_in_background": false,
+                    },
+                    "status": "completed",
+                    "kind": "execute",
+                    "executionId": execution,
+                    "turnId": execution,
+                    "actionType": "run_command",
+                    "modelToolUseId": model_call,
+                    "title": "Run the command",
+                    "_meta": {"kiro": {"agentMode": mode, "toolOrigin": "default"}},
+                }),
+            );
+            row(
+                format!("{call}-result"),
+                tick(),
+                json!({
+                    "type": "tool_result",
+                    "toolCallId": call,
+                    "content": format!("Output:\n{}\n\n\nExit Code: 0", turn.output),
+                    "success": true,
+                    "executionId": execution,
+                    "turnId": execution,
+                    "_meta": meta_kiro,
+                }),
+            );
+            row(format!("{}-say", uuid()), tick(), assistant(&turn.reply, "Say"));
+            row(
+                uuid(),
+                tick(),
+                json!({
+                    "type": "session_metadata",
+                    "key": "contextUsage",
+                    "value": {"usagePercentage": 0.99},
+                    "executionId": execution,
+                }),
+            );
+            // Kiro writes the turn's end last, stamped before the usage and pause rows ahead of
+            // it: a reader has to go by file order.
+            let ended = tick();
+            row(
+                format!("{execution}-usage"),
+                tick(),
+                json!({
+                    "type": "usage_summary",
+                    "promptTurnSummaries": [{
+                        "unit": "credit",
+                        "unitPlural": "credits",
+                        "usage": 0.05,
+                        "usedTools": [self.agent.tool()],
+                    }],
+                    "elapsedTime": 3000,
+                    "status": "success",
+                    "executionId": execution,
+                    "turnId": execution,
+                    "requestIds": [uuid()],
+                }),
+            );
+            row(
+                format!("{execution}-complete"),
+                tick(),
+                json!({
+                    "type": "session_event",
+                    "category": "session_pause",
+                    "context": {"executionId": execution, "turnId": execution, "status": "success"},
+                }),
+            );
+            row(
+                format!("{execution}-turn-end"),
+                ended,
+                json!({
+                    "type": "turn_end",
+                    "stopReason": "end_turn",
+                    "executionId": execution,
+                    "turnId": execution,
+                    "boundarySource": "observed",
+                }),
+            );
+        }
+        if first {
+            let system_prompt = format!("You are Kiro, an AI assistant {}.", word());
+            row(
+                format!("session_start_{}_{mode}", self.id),
+                tick(),
+                json!({
+                    "type": "session_start",
+                    "agentType": mode,
+                    "backgroundExecution": false,
+                    "content": system_prompt,
+                    "composition": {"schema": 1, "contentChars": system_prompt.len()},
+                    "forcedRole": true,
+                    "messageId": uuid(),
+                }),
+            );
+        }
+        write_lines(&self.path, &lines);
+
+        meta["lastModifiedAt"] = json!(rfc3339(tick()));
+        if meta["title"] == "" {
+            meta["title"] = json!(format!("Kiro Session {}", word()));
+        }
+        let roots = meta["rootPaths"].as_array_mut().unwrap();
+        if !roots.iter().any(|root| root == cwd.to_str().unwrap()) {
+            roots.push(json!(cwd));
+        }
+        fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
     fn append_pi(&self, turns: &[Turn]) {
         let mut parent = self.last("id");
         let mut lines = Vec::new();
@@ -781,6 +1051,14 @@ fn write_lines(path: &Path, lines: &[Value]) {
     }
     // One write, so the daemon never reads half a turn.
     file.write_all(text.as_bytes()).unwrap();
+}
+
+/// Kiro's bucket for sessions started in `cwd`: the first 16 hex digits of the SHA-256 of the
+/// workspace paths, which for the CLI is `cwd` alone, without a trailing slash.
+fn kiro_bucket(cwd: &Path) -> String {
+    use sha2::Digest as _;
+    let path = cwd.to_str().unwrap().trim_end_matches('/');
+    format!("{:x}", sha2::Sha256::digest(path.as_bytes()))[..16].to_owned()
 }
 
 /// Claude Code's directory for the project at `cwd`: every character but a letter or digit a dash.
