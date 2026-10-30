@@ -159,9 +159,87 @@ fn session_key(session: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use std::collections::BTreeMap;
+
+    use atuin_client::ai_session::HarnessKind;
+    use atuin_common::harnesstools::session::Usage;
+    use prost_types::{FileDescriptorProto, FileDescriptorSet};
+    use rstest::{fixture, rstest};
 
     use super::*;
+
+    /// `threads.proto`, as build.rs compiled it.
+    #[fixture]
+    fn threads_proto() -> FileDescriptorProto {
+        FileDescriptorSet::decode(
+            include_bytes!(concat!(env!("OUT_DIR"), "/hub_service.bin")).as_slice(),
+        )
+        .expect("build.rs writes an encoded descriptor set")
+        .file
+        .into_iter()
+        .find(|file| file.name() == "atuin/api/v1/threads.proto")
+        .expect("hub_service.proto imports threads.proto")
+    }
+
+    /// The proto name of each harness kind: a new variant fails to compile here until it has one.
+    const fn proto_name(kind: HarnessKind) -> &'static str {
+        match kind {
+            HarnessKind::Unknown => "HARNESS_KIND_UNSPECIFIED",
+            HarnessKind::ClaudeCode => "HARNESS_KIND_CLAUDE_CODE",
+            HarnessKind::Codex => "HARNESS_KIND_CODEX",
+            HarnessKind::Copilot => "HARNESS_KIND_COPILOT",
+            HarnessKind::Opencode => "HARNESS_KIND_OPENCODE",
+            HarnessKind::Pi => "HARNESS_KIND_PI",
+            HarnessKind::Omp => "HARNESS_KIND_OMP",
+        }
+    }
+
+    /// `atuin.api.v1.HarnessKind` is extern-pathed to [`HarnessKind`], so its discriminants are the
+    /// wire numbers, and prost decodes any `i32` into the field without checking the proto has it.
+    #[rstest]
+    fn harness_kinds_are_numbered_as_the_proto_numbers_them(threads_proto: FileDescriptorProto) {
+        let proto: BTreeMap<i32, &str> = threads_proto
+            .enum_type
+            .iter()
+            .find(|kind| kind.name() == "HarnessKind")
+            .expect("threads.proto defines HarnessKind")
+            .value
+            .iter()
+            .map(|value| (value.number(), value.name()))
+            .collect();
+
+        let rust: BTreeMap<i32, &str> = (0..=i32::from(u8::MAX))
+            .filter_map(|n| HarnessKind::try_from(n).ok().map(|kind| (n, proto_name(kind))))
+            .collect();
+        assert_eq!(rust, proto);
+    }
+
+    /// `atuin.api.v1.TokenUsage` is extern-pathed to [`Usage`], whose prost tags are written by
+    /// hand.
+    #[rstest]
+    #[case::input(Usage { input: Some(7), ..Usage::default() }, "input")]
+    #[case::output(Usage { output: Some(7), ..Usage::default() }, "output")]
+    #[case::cache_read(Usage { cache_read: Some(7), ..Usage::default() }, "cache_read")]
+    #[case::cache_write(Usage { cache_write: Some(7), ..Usage::default() }, "cache_write")]
+    #[case::reasoning(Usage { reasoning: Some(7), ..Usage::default() }, "reasoning")]
+    fn usage_encodes_each_count_under_its_proto_number(
+        threads_proto: FileDescriptorProto,
+        #[case] usage: Usage,
+        #[case] field: &str,
+    ) {
+        let number = threads_proto
+            .message_type
+            .iter()
+            .find(|message| message.name() == "TokenUsage")
+            .and_then(|message| message.field.iter().find(|f| f.name() == field))
+            .expect("TokenUsage has the field")
+            .number();
+
+        assert_eq!(usage.encode_to_vec(), [
+            u8::try_from(number << 3).expect("tags 1-5 fit a byte"),
+            7
+        ]);
+    }
 
     fn capture(start: String, end: Option<String>) -> CommandCapture {
         CommandCapture {

@@ -18,7 +18,8 @@ hub = ["reqwest"]
 daemon = []
 check-update = []
 octavo = []
-# Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
+# Derive the protobuf enum traits on domain enums the daemon and atuin-octavo extern-path into
+# their codegen.
 proto = ["dep:prost"]
 # Statically link (vendor) OpenSSL for native-tls instead of using the system
 # libssl. Used for portable release artifacts; a no-op on macOS/Windows.

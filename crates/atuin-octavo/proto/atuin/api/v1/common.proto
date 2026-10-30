@@ -9,6 +9,12 @@ message UuidV7 {
   bytes value = 1 [(buf.validate.field).bytes.len = 16];
 }
 
+// The atuin install that captured a record. Any UUID version: installs from before UUIDv7 ids
+// keep the id they had.
+message HostId {
+  bytes value = 1 [(buf.validate.field).bytes.len = 16];
+}
+
 // The machine and account a command ran on.
 message CmdOrigin {
   // The machine's hostname, e.g. `laptop`. Never contains a `:`.
