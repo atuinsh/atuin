@@ -19,7 +19,7 @@ use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, copilot, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, kiro, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
@@ -189,7 +189,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let id = &session.id;
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
-        AnyHarness::Kiro(_) => panic!("Kiro transcripts are never written"),
+        AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
         AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
         AnyHarness::Pi(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
@@ -205,8 +205,9 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
-            AnyHarness::Kiro(_) => panic!("Kiro transcripts are never written"),
-            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
+            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Kiro(_) => {
+                assert!(uuid(id), "{id}");
+            }
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -317,7 +318,6 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             continue;
         }
         let answered: Vec<String> = match target {
-            AnyHarness::Kiro(_) => panic!("Kiro transcripts are never written"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
@@ -328,8 +328,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
                     ids(r, true)
                 })
                 .collect(),
-            // A line per call, then its output's.
-            AnyHarness::Codex(_) => {
+            // A row per call, then its result's.
+            AnyHarness::Codex(_) | AnyHarness::Kiro(_) => {
                 assert_eq!(m.content.len(), 1, "{m:?}");
                 ids(&rows[n + 1], true)
             }
@@ -346,27 +346,13 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     assert_eq!(s.model, None);
 }
 
-/// Kiro's transcripts are never written: a continuation into Kiro is refused before anything is
-/// minted, whatever the source.
-#[rstest]
-#[tokio::test]
-async fn a_continuation_into_kiro_is_refused(
-    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] source: AnyHarness,
-) {
-    let original = recorded(source).await;
-    assert_eq!(
-        continue_in(source, &original, Some(ATUIN_ID), KIRO).unwrap_err(),
-        ContinueError::Unwritable("kiro")
-    );
-}
-
 /// Every source into every other target: fresh ids in the target's format, calls carried over
 /// as calls (or notes, those it can't carry), and a conversation of the shape every API takes.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
     #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -416,7 +402,15 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let root = dir.path();
     let id = SessionId::from(session.id.clone());
     match target {
-        AnyHarness::Kiro(_) => panic!("Kiro transcripts are never written"),
+        AnyHarness::Kiro(_) => {
+            let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
+            let sessions = root.join("sessions");
+            assert_eq!(kiro::session::locate(&sessions, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                KiroSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            // The header's title row is the session's, no row of the continuation.
+            rows_of(&lines).into_iter().filter(|r| !r.source_id.starts_with("syn-")).collect()
+        }
         AnyHarness::Copilot(_) => {
             let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(copilot::session::locate(root, &session.id), Some(path.clone()));
@@ -515,7 +509,7 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
     #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;

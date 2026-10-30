@@ -46,11 +46,6 @@ impl Harness for Kiro {
         &["kiro-cli"]
     }
 
-    /// Until the write side is wired through (continuations, forks, sync).
-    fn writes_transcripts(&self) -> bool {
-        false
-    }
-
     /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         hooks::install(&kiro_home(), &std::env::current_exe()?).await

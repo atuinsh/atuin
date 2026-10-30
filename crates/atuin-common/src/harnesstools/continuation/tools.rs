@@ -91,6 +91,7 @@ impl Canonical {
                 | "execute_bash"
                 | "execute_pwsh"
                 | "read"
+                | "read_file"
                 | "view"
                 | "write"
                 | "create"
@@ -127,7 +128,8 @@ impl Canonical {
                 }
                 Self::Shell { command }
             }
-            "read" => Self::Read {
+            // Kiro's `read_file` takes the same `offset` and `limit`, `null` for a whole file.
+            "read" | "read_file" => Self::Read {
                 path: path()?,
                 offset: input.get("offset").filter(|v| v.is_number()).cloned(),
                 limit: input.get("limit").filter(|v| v.is_number()).cloned(),
@@ -183,7 +185,7 @@ impl Canonical {
 
     /// This call as `target`'s own tool, when it has one that does the same: its name and input.
     fn render(&self, target: AnyHarness, cwd: &Path) -> Option<(&'static str, Value)> {
-        use AnyHarness::{ClaudeCode, Codex, Copilot, Opencode, Pi};
+        use AnyHarness::{ClaudeCode, Codex, Copilot, Kiro, Opencode, Pi};
 
         let mut input = Map::new();
         let mut put = |key: &str, value: Option<Value>| {
@@ -203,6 +205,7 @@ impl Canonical {
                 put("command", Some(json!(command)));
                 match target {
                     ClaudeCode(_) => "Bash",
+                    Kiro(_) => "execute_bash",
                     _ => "bash",
                 }
             }
@@ -242,8 +245,17 @@ impl Canonical {
                 put("limit", limit.clone());
                 match target {
                     ClaudeCode(_) => "Read",
+                    Kiro(_) => "read_file",
                     _ => "read",
                 }
+            }
+            // Kiro's `fs_write`, `str_replace`, `grep_search` and `file_search` take input atuin
+            // hasn't seen: such a call stays the tool it was, which the model reads like any other.
+            (
+                Self::Write { .. } | Self::Edit { .. } | Self::Grep { .. } | Self::Glob { .. },
+                Kiro(_),
+            ) => {
+                return None;
             }
             (Self::Write { path, content }, Copilot(_)) => {
                 put("path", Some(json!(path)));
@@ -511,6 +523,18 @@ pub(super) fn carry(
             |(name, input)| (name.to_owned(), input),
         );
     let id = ids.mint(&call.id);
+    // Kiro's shell tool reports its output with the command's exit code, which capture didn't
+    // keep: a command that failed is given 1, so the model still reads it as failed.
+    let output = if matches!(target, AnyHarness::Kiro(_)) && name == "execute_bash" {
+        let code = if result.error {
+            1
+        } else {
+            0
+        };
+        format!("Output:\n{}\n\n\nExit Code: {code}", output_text(result))
+    } else {
+        output_text(result)
+    };
     let call = ToolUse {
         id: id.clone(),
         name,
@@ -518,7 +542,7 @@ pub(super) fn carry(
     };
     let result = ToolResult {
         call: id,
-        output: Value::String(output_text(result)),
+        output: Value::String(output),
         error: result.error,
     };
     (call, result)
@@ -529,7 +553,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::harnesstools::continuation::tests::{CLAUDE, CODEX, COPILOT, OPENCODE, PI};
+    use crate::harnesstools::continuation::tests::{CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI};
 
     /// Copilot as a target, for a case whose source must stay Claude Code (its name shows in
     /// a call kept foreign).
@@ -589,6 +613,12 @@ mod tests {
     #[case::copilot_edit_to_claude("edit", json!({"path": "/a.rs", "old_str": "a", "new_str": "b"}), CLAUDE, "Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"}))]
     #[case::replace_all_kept_foreign_by_copilot("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}), COPILOT, "claude-code_Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}))]
     #[case::grep_kept_foreign_by_copilot("Grep", json!({"pattern": "fn main"}), CLAUDE_TO_COPILOT, "claude-code_Grep", json!({"pattern": "fn main"}))]
+    #[case::claude_to_kiro("Bash", json!({"command": "ls", "description": "list"}), KIRO, "execute_bash", json!({"command": "ls"}))]
+    #[case::read_to_kiro("Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}), KIRO, "read_file", json!({"path": "/a.rs", "offset": 10, "limit": 5}))]
+    #[case::kiro_read_to_claude("read_file", json!({"path": "/a.rs", "offset": null, "limit": null}), CLAUDE, "Read", json!({"file_path": "/a.rs"}))]
+    #[case::edit_kept_foreign_by_kiro("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}), KIRO, "Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}))]
+    #[case::write_kept_foreign_by_kiro("create", json!({"path": "/a.rs", "file_text": "x"}), KIRO, "create", json!({"path": "/a.rs", "file_text": "x"}))]
+    #[case::grep_kept_foreign_by_kiro("Grep", json!({"pattern": "fn main"}), KIRO, "Grep", json!({"pattern": "fn main"}))]
     fn calls_translate(
         #[case] name: &str,
         #[case] input: Value,
@@ -611,6 +641,38 @@ mod tests {
             error: false,
         };
         assert_eq!(output_text(&result), want);
+    }
+
+    /// Kiro's shell tool reports its output under `Output:` with the command's exit code, which
+    /// a result carried into Kiro gets too: 0, or 1 for a call that failed.
+    #[rstest]
+    #[case::ok(false, "Output:\n3 passed\n\n\nExit Code: 0")]
+    #[case::failed(true, "Output:\n3 passed\n\n\nExit Code: 1")]
+    fn a_shell_result_for_kiro_reports_an_exit_code(#[case] error: bool, #[case] want: &str) {
+        let call = ToolUse {
+            id: ToolCallId::from("call_1".to_owned()),
+            name: "Bash".to_owned(),
+            input: json!({"command": "cargo test"}),
+        };
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: json!("3 passed"),
+            error,
+        };
+        let (ran_in, cwd) = (Path::new("/work"), Path::new("/work"));
+        let (_, carried) =
+            carry(CLAUDE, KIRO, &call, &result, ran_in, cwd, &mut CallIds::default());
+        assert_eq!(carried.output, json!(want));
+        assert_eq!(carried.error, error);
+        // A read's output is as it was.
+        let read = ToolUse {
+            id: ToolCallId::from("call_2".to_owned()),
+            name: "Read".to_owned(),
+            input: json!({"file_path": "/a.rs"}),
+        };
+        let (_, carried) =
+            carry(CLAUDE, KIRO, &read, &result, ran_in, cwd, &mut CallIds::default());
+        assert_eq!(carried.output, json!("3 passed"));
     }
 
     #[rstest]
