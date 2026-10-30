@@ -1475,14 +1475,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn next_row<S>(messages: &mut S) -> (Checkpoint, KiroMessage)
-    where
-        S: Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Unpin,
-    {
-        next_row_for(messages, "a row", 5).await
-    }
-
-    /// [`next_row`], saying what the row is for when it doesn't come within `secs`.
+    /// The next row, saying what it is for when it doesn't come within `secs`.
     async fn next_row_for<S>(messages: &mut S, what: &str, secs: u64) -> (Checkpoint, KiroMessage)
     where
         S: Stream<Item = Result<(Checkpoint, KiroMessage), MessageError>> + Unpin,
