@@ -1569,7 +1569,25 @@ mod tests {
         let (_, b) = next_row_for(&mut messages, "the rename to B", 15).await;
         assert_eq!(b.title(), Some(TitleChange::new(TitleSource::Named, "B")));
         std::fs::write(&header, renamed("Get Unix Time In Nanoseconds")).unwrap();
-        let (_, a) = next_row_for(&mut messages, "the rename back", 15).await;
+        let written = std::fs::metadata(&header).unwrap().modified().unwrap();
+        let (_, a) =
+            match tokio::time::timeout(std::time::Duration::from_secs(15), messages.next()).await {
+                Ok(row) => row.unwrap().unwrap(),
+                // What the header looks like now, and what a fresh look at it says, for a platform
+                // where the rename back never shows (Windows CI).
+                Err(_) => {
+                    let now = std::fs::metadata(&header).unwrap();
+                    let mut fresh = HeaderWatch::new(header.clone());
+                    panic!(
+                        "the rename back: no row within 15s; header written at {written:?}, now \
+                         {:?} and {} bytes, a fresh refresh says {:?}, content {:?}",
+                        now.modified().unwrap(),
+                        now.len(),
+                        fresh.refresh().map(|(title, _)| title),
+                        std::fs::read_to_string(&header).unwrap(),
+                    );
+                }
+            };
         assert_eq!(
             a.title(),
             Some(TitleChange::new(TitleSource::Named, "Get Unix Time In Nanoseconds"))
