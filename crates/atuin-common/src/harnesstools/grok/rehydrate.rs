@@ -271,20 +271,13 @@ struct Piece {
 fn update_envelope(session_id: &str, at: OffsetDateTime, mut update: Value) -> Value {
     let agent_ms = i64::try_from(at.unix_timestamp_nanos() / 1_000_000)
         .unwrap_or_else(|_| at.unix_timestamp().saturating_mul(1_000));
-    match update.get_mut("_meta") {
-        Some(Value::Object(meta)) => {
-            meta.entry("agentTimestampMs").or_insert_with(|| json!(agent_ms));
-        }
-        _ => {
-            update["_meta"] = json!({"agentTimestampMs": agent_ms});
-        }
-    }
     json!({
         "timestamp": at.unix_timestamp(),
         "method": "session/update",
         "params": {
             "sessionId": session_id,
             "update": update,
+            "_meta": {"agentTimestampMs": agent_ms},
         },
     })
 }

@@ -406,9 +406,11 @@ fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
 }
 
 fn event_timestamp(entry: &Value) -> Option<OffsetDateTime> {
-    parse_unix_timestamp(&entry["params"]["update"]["_meta"]["agentTimestampMs"])
+    parse_unix_timestamp(&entry["params"]["_meta"]["agentTimestampMs"])
         .or_else(|| parse_unix_timestamp(&entry["timestamp"]))
 }
+/// When an `updates.jsonl` event happened: Grok Build's milliseconds (`params._meta`), else its
+/// whole seconds.
 
 type FileSignature = Option<(std::time::SystemTime, u64)>;
 
