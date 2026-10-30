@@ -67,10 +67,18 @@
 //! appears, with a checkpoint over its own file, and listed by a scan; Kiro resumes only the
 //! parent.
 //!
-//! **Ids and links.** Row ids are unique within the log. Rows name no parent: the session is
-//! linear, and each row's `executionId` (the turn) is its `turn_id`. Timestamps are not in file
-//! order (a `turn_end` is stamped before the rows written before it); rows are read in file
-//! order.
+//! **Ids and links.** Row ids are unique within the log. Rows name no parent, so the reader names
+//! each row's parent itself: the conversation row before it in file order (a title row, beside
+//! the log, is no one's parent and names none). The database then models the session as a tree,
+//! and two machines going on from one copy as two branches, which one time-ordered line could
+//! never show diverging (see `heads.rs` in atuin-client). A read resumed past a checkpoint names
+//! no parent for its first row, which follows the row before it all the same. Each row's
+//! `executionId` (the turn) is its `turn_id`. Timestamps are not in file order (a `turn_end` is
+//! stamped before the rows written before it); rows are read in file order.
+//!
+//! **Forks.** A session Kiro forked (a rewind, a tangent) or atuin wrote as a fork names the
+//! session it came from in its header (`parentSessionId`); the reader stamps it on every row as
+//! the fork's parent (a subagent's, when `createdReason` says so).
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -180,6 +188,32 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
         session_dir(root, id)?.joined(LOG_FILE)
     };
     path.is_file().then_some(path)
+}
+
+/// The rows of the log at `path`, holding `bytes`, as a read of the whole log yields them (the
+/// header's title row after the first line included), for sync to key as capture does. Blocking;
+/// a line that doesn't parse is skipped, as the readers skip it.
+pub(crate) fn read_log(path: &Path, bytes: &[u8]) -> Vec<KiroMessage> {
+    let mut header = HeaderWatch::new(path.with_file_name(HEADER_FILE));
+    let title = header.refresh();
+    let context = header.context();
+    let mut reading = Reading::default();
+    let mut out = Vec::new();
+    let lines = bytes.split(|b| *b == b'\n').filter(|l| !l.iter().all(u8::is_ascii_whitespace));
+    for (n, line) in lines.enumerate() {
+        let Ok(row) = Row::decode(line) else {
+            continue;
+        };
+        let checkpoint = Checkpoint::new(n as u64 + 1, line);
+        out.extend(reading.absorb(checkpoint, row, &context).into_iter().map(|(_, m)| m));
+        if n == 0
+            && let Some((title, at)) = title.clone()
+        {
+            out.push(title_row(title, at, 0, None));
+        }
+    }
+    out.extend(reading.finish().into_iter().map(|(_, m)| m));
+    out
 }
 
 impl Sessions for KiroSessions {
@@ -651,7 +685,9 @@ impl Row {
 struct Context {
     cwd: Option<PathBuf>,
     model: Option<String>,
-    parent: Option<SessionId>,
+    /// The session this one was forked from (`parentSessionId`) or works for (a subagent's
+    /// parent), and which.
+    parent: Option<(SessionId, ParentKind)>,
 }
 
 /// What the reader carries from one row to the ones after it.
@@ -660,6 +696,8 @@ struct Reading {
     /// A turn's assistant rows since the last row that wasn't one, held for the turn's stop
     /// reason (see the module docs), each with its own line's checkpoint.
     held: Vec<(Checkpoint, KiroMessage)>,
+    /// The id of the last conversation row, which the next names as its parent.
+    last: Option<String>,
 }
 
 impl Reading {
@@ -675,9 +713,10 @@ impl Reading {
             self.stamp(stop_reason(row.str("stopReason")));
             return self.release();
         }
-        let Some(message) = KiroMessage::of(row, context) else {
+        let Some(mut message) = KiroMessage::of(row, context) else {
             return Vec::new();
         };
+        message.parent_row = std::mem::replace(&mut self.last, message.row.id.clone());
         let mut out = match message.role() {
             Role::Assistant => {
                 self.held.push((checkpoint, message));
@@ -758,7 +797,8 @@ fn title_row(
         },
         cwd: None,
         model: None,
-        parent,
+        parent: parent.map(|parent| (parent, ParentKind::Subagent)),
+        parent_row: None,
         stop_reason: None,
         title: Some(title),
         at: at.map(OffsetDateTime::from),
@@ -808,10 +848,11 @@ impl Beside {
     }
 
     fn context(&self) -> Context {
-        Context {
-            parent: self.spawn.as_ref().map(|spawn| spawn.parent.clone()),
-            ..self.header.context()
+        let mut context = self.header.context();
+        if let Some(spawn) = &self.spawn {
+            context.parent = Some((spawn.parent.clone(), ParentKind::Subagent));
         }
+        context
     }
 }
 
@@ -883,11 +924,20 @@ struct Header {
 impl Header {
     fn parse(text: &str) -> serde_json::Result<Self> {
         let header: serde_json::Value = serde_json::from_str(text)?;
+        // Kiro sets `parentSessionId` on a fork (a rewind, a tangent) and on a session it ran
+        // for another (`createdReason`); a session atuin forks names its original there too.
+        let parent = header["parentSessionId"].as_str().map(|parent| {
+            let kind = match header["createdReason"].as_str() {
+                Some("subagent") => ParentKind::Subagent,
+                _ => ParentKind::Fork,
+            };
+            (SessionId::from(parent.to_owned()), kind)
+        });
         Ok(Self {
             context: Context {
                 cwd: header["workspacePaths"][0].as_str().map(PathBuf::from),
                 model: header["modelId"].as_str().map(str::to_owned),
-                parent: None,
+                parent,
             },
             title: header["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_owned),
             user_titled: header["titleSetByUser"].as_bool() == Some(true),
@@ -963,8 +1013,10 @@ pub struct KiroMessage {
     cwd: Option<PathBuf>,
     /// The model the header names, on the model's rows.
     model: Option<String>,
-    /// On a subagent's rows, the session that spawned it.
-    parent: Option<SessionId>,
+    /// The session this one was forked from or works for, as the header or its spawn says.
+    parent: Option<(SessionId, ParentKind)>,
+    /// The conversation row before this one in the log (see the module docs).
+    parent_row: Option<String>,
     /// On a turn's last reply, from its `turn_end` (or `ToolUse`, before a tool's result).
     stop_reason: Option<StopReason>,
     /// On a title row ([`TITLE_ROW`]), the session's title from the header.
@@ -988,6 +1040,7 @@ impl KiroMessage {
             cwd: context.cwd.clone(),
             model: context.model.clone(),
             parent: context.parent.clone(),
+            parent_row: None,
             row,
             stop_reason: None,
             title: None,
@@ -1039,6 +1092,18 @@ impl Message for KiroMessage {
             "agent_note" | "system" | "error" => Role::System,
             other => Role::Other(other.to_owned()),
         }
+    }
+
+    fn parent_id(&self) -> Option<MessageId> {
+        self.parent_row.clone().map(MessageId::from)
+    }
+
+    fn parent_session(&self) -> Option<SessionId> {
+        self.parent.as_ref().map(|(session, _)| session.clone())
+    }
+
+    fn parent_kind(&self) -> Option<ParentKind> {
+        self.parent.as_ref().map(|(_, kind)| *kind)
     }
 
     fn timestamp(&self) -> Option<OffsetDateTime> {
@@ -1117,14 +1182,6 @@ impl Message for KiroMessage {
 
     fn title(&self) -> Option<TitleChange> {
         self.title.clone()
-    }
-
-    fn parent_session(&self) -> Option<SessionId> {
-        self.parent.clone()
-    }
-
-    fn parent_kind(&self) -> Option<ParentKind> {
-        self.parent.as_ref().map(|_| ParentKind::Subagent)
     }
 }
 
@@ -1775,6 +1832,59 @@ mod tests {
             rows.iter().partition(|m| m.models_row());
         assert!(models.iter().all(|m| m.model().as_deref() == Some("auto")), "the model's rows");
         assert!(rest.iter().all(|m| m.model().is_none()));
+    }
+
+    /// Each row names the conversation row before it as its parent, title rows aside, so two
+    /// machines going on from one copy make two branches.
+    #[rstest]
+    #[tokio::test]
+    async fn rows_name_the_row_before_them() {
+        let root = root_with(RESUMED_ID, RESUMED, Some(RESUMED_HEADER));
+        let messages = read_all(root.path(), RESUMED_ID).await;
+        let rows: Vec<_> = messages.iter().filter(|m| m.title().is_none()).collect();
+        assert_eq!(rows[0].parent_id(), None, "the first row is the root");
+        for pair in rows.windows(2) {
+            assert_eq!(pair[1].parent_id(), pair[0].id(), "{:?}", pair[1].id());
+        }
+        let title = messages.iter().find(|m| m.title().is_some()).unwrap();
+        assert_eq!(title.parent_id(), None);
+        assert!(!rows.iter().any(|m| m.parent_id() == title.id()), "a title row is no parent");
+    }
+
+    /// The header names the session this one was forked from (`parentSessionId`), as Kiro's
+    /// rewinds and tangents do and as atuin's forks do, or works for (`createdReason`).
+    #[rstest]
+    #[case::none(r#"{"workspacePaths": ["/w"]}"#, None)]
+    #[case::fork(r#"{"parentSessionId": "sess_p"}"#, Some(("sess_p", ParentKind::Fork)))]
+    #[case::rewind(r#"{"parentSessionId": "sess_p", "createdReason": "rewind"}"#, Some(("sess_p", ParentKind::Fork)))]
+    #[case::subagent(r#"{"parentSessionId": "sess_p", "createdReason": "subagent"}"#, Some(("sess_p", ParentKind::Subagent)))]
+    fn the_header_names_the_sessions_parent(
+        #[case] json: &str,
+        #[case] want: Option<(&str, ParentKind)>,
+    ) {
+        let context = Header::parse(json).unwrap().context;
+        let message =
+            KiroMessage::of(row(json!({"type": "user", "content": "hi"})), &context).unwrap();
+        let found =
+            message.parent_session().map(|s| (s.to_string(), message.parent_kind().unwrap()));
+        assert_eq!(found, want.map(|(id, kind)| (id.to_owned(), kind)));
+    }
+
+    /// The whole log read at once, for sync, yields what a read of it does: every row, linked
+    /// the same, and the header's title after the first line.
+    #[rstest]
+    #[tokio::test]
+    async fn the_log_read_at_once_is_what_a_read_yields() {
+        let root = root_with(RESUMED_ID, RESUMED, Some(RESUMED_HEADER));
+        let path = locate(root.path(), RESUMED_ID).unwrap();
+        let at_once = read_log(&path, &std::fs::read(&path).unwrap());
+        let read = read_all(root.path(), RESUMED_ID).await;
+        let ids = |messages: &[KiroMessage]| -> Vec<(Option<MessageId>, Option<MessageId>)> {
+            messages.iter().map(|m| (m.id(), m.parent_id())).collect()
+        };
+        assert_eq!(ids(&at_once), ids(&read));
+        assert_eq!(at_once[1].title(), read[1].title());
+        assert!(at_once.iter().all(|m| m.cwd().is_some() || m.title().is_some()));
     }
 
     /// The header's title is a row of its own, read with the log's first line so the session is

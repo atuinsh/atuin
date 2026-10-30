@@ -25,7 +25,9 @@
 //!   between is interleaving: the session parts where that host left off, and the rows other
 //!   hosts wrote since are on none of its paths. (A side holding only tool rows still makes no
 //!   branch of its own; see below.)
-//! - Kiro rows name no parent and capture links none: linear, in time order.
+//! - **Kiro** rows name the row before them since the reader learnt to, as Copilot's do, and
+//!   those captured before it did follow on from the row before them the same way. Its title
+//!   rows (`syn-`) are no node.
 //! - Anything else is linear, in time order.
 //!
 //! A row whose parent is not stored (a line capture keeps no row of, or one not synced yet)
@@ -114,7 +116,7 @@ impl Model {
                 chained: false,
                 beside: true,
             },
-            HarnessKind::Copilot => Self::Tree {
+            HarnessKind::Copilot | HarnessKind::Kiro => Self::Tree {
                 chained: true,
                 beside: true,
             },
@@ -123,7 +125,7 @@ impl Model {
                 beside: false,
             },
             HarnessKind::Opencode => Self::Interleaving,
-            HarnessKind::Kiro | HarnessKind::Unknown => Self::Linear,
+            HarnessKind::Unknown => Self::Linear,
         }
     }
 }
