@@ -127,20 +127,27 @@ pub(crate) fn rehydrate_into(
     let bucket = workspace_hash(&session.cwd);
     let dir = root.joined(&bucket).joined(&session.id);
     std::fs::create_dir_all(&dir)?;
-    let taken = |e: std::io::Error, path: &Path| {
+    // The log first, never over one that is there: it is the transcript, and the only file a
+    // retry may find and call complete. The header is written over whatever a write that failed
+    // after the log left, and a write that fails after the log takes the log with it, so a retry
+    // starts over rather than resuming a session with no conversation.
+    let path = dir.join(LOG_FILE);
+    crate::fs::write_new(&path, log(session).as_bytes()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
-            RehydrateError::AlreadyExists(path.to_path_buf())
+            RehydrateError::AlreadyExists(path.clone())
         } else {
             e.into()
         }
-    };
-    // The header first: the reader stamps its directory on every row of the log.
-    let header_path = dir.join(HEADER_FILE);
-    crate::fs::write_new(&header_path, header(session).as_bytes())
-        .map_err(|e| taken(e, &header_path))?;
-    let path = dir.join(LOG_FILE);
-    crate::fs::write_new(&path, log(session).as_bytes()).map_err(|e| taken(e, &path))?;
-    index_add(home, &bucket, &session.id, session.started_at)?;
+    })?;
+    if let Err(e) = std::fs::write(dir.join(HEADER_FILE), header(session)) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e.into());
+    }
+    // Kiro finds a session its index misses by scanning, so a line that can't be written costs
+    // the resume nothing but the scan.
+    if let Err(e) = index_add(home, &bucket, &session.id, session.started_at) {
+        tracing::warn!(path = %path.display(), %e, "couldn't add a Kiro session to its index");
+    }
     Ok(path)
 }
 

@@ -175,20 +175,22 @@ pub(super) fn append_to(
 }
 
 /// Bump the header's `lastModifiedAt` beside the log at `log`, as Kiro does after writing rows;
-/// a header that can't be read is left alone (the reader copes without one).
+/// a header that can't be read is left alone (the reader copes without one), and so is one that
+/// changed since it was read: a Kiro that opened the session meanwhile owns it, status and title
+/// included.
 fn touch_header(log: &Path) {
     let path = log.with_file_name(HEADER_FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = std::fs::read(&path) else {
         return;
     };
-    let Ok(mut header) = serde_json::from_str::<Value>(&text) else {
+    let Ok(mut header) = serde_json::from_slice::<Value>(&text) else {
         return;
     };
     header["lastModifiedAt"] = Value::String(rehydrate::timestamp(time::OffsetDateTime::now_utc()));
     let Ok(bytes) = serde_json::to_vec_pretty(&header) else {
         return;
     };
-    if let Err(e) = crate::fs::replace(&path, &bytes, |_| true) {
+    if let Err(e) = crate::fs::replace(&path, &bytes, |now| now == text.as_slice()) {
         tracing::warn!(path = %path.display(), %e, "couldn't bump a Kiro header's lastModifiedAt");
     }
 }
@@ -281,14 +283,17 @@ pub(super) fn replace_to(
 
 /// The lines of the log `bytes` a switch to a branch that leaves it at the row `from` keeps: all
 /// up to and including `from`'s, and the bookkeeping right after it (its turn's end, Kiro's own
-/// rows) up to the next row of the conversation. Rows the reader keys on their content (a
+/// rows) up to the next row of the conversation. A compaction's tombstone goes with the summary
+/// after it, which is a row of the conversation the branch left: kept alone, it would hide the
+/// shared history with nothing standing in for it. Rows the reader keys on their content (a
 /// title's) are no line of the log, and are no `from`.
 fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
     let (mut past, mut dropped) = (false, false);
     kept_lines(bytes, |line| {
         let line = serde_json::from_slice::<Value>(line).ok()?;
         if past {
-            dropped |= rehydrate::conversation(&line["payload"]);
+            let payload = &line["payload"];
+            dropped |= rehydrate::conversation(payload) || payload["type"] == "tombstone";
             return Some(!dropped);
         }
         if line["id"].as_str()? == from {
@@ -573,6 +578,38 @@ mod tests {
         ));
     }
 
+    /// A branch leaving the log right before a compaction takes the compaction's tombstone with
+    /// its summary: kept alone, the tombstone would hide the shared history with nothing left to
+    /// stand in for it.
+    #[rstest]
+    fn switching_before_a_compaction_drops_its_tombstone() {
+        let home = tempfile::tempdir().unwrap();
+        let mut original = rows(&["u1", "a1"], None);
+        let mut summary = row("s1", Role::System, 2);
+        summary.content = vec![Content::Summary("the first thing was done".to_owned())];
+        summary.parent_source_id = Some("a1".to_owned());
+        original.push(summary);
+        original.extend(rows(&["u2", "a2"], Some("s1")).into_iter().map(|mut r| {
+            r.timestamp += time::Duration::seconds(5);
+            r
+        }));
+        let path = written(home.path(), original);
+        assert!(kinds(&path).iter().any(|k| k == "tombstone"), "{:?}", kinds(&path));
+        let base = read_tip(&path).unwrap();
+        let mut branch = rows(&["u1", "a1"], None);
+        branch.extend(rows(&["u3", "a3"], Some("a1")).into_iter().map(|mut r| {
+            r.timestamp += time::Duration::seconds(10);
+            r
+        }));
+        let backups = home.path().join("backups");
+        let out = replace_to(SESSION, &base, &branch, None, &backups).unwrap();
+        assert_eq!(out.appended, ["u3", "a3"]);
+        assert_eq!(read_back(&path), ["u1", "a1", "u3", "a3"]);
+        let kinds = kinds(&path);
+        assert!(!kinds.iter().any(|k| k == "tombstone"), "{kinds:?}");
+        assert_eq!(kinds[3], "turn_end", "the shared turn keeps its end: {kinds:?}");
+    }
+
     /// A session directory whose log last changed an hour ago, with `header` beside it, written
     /// just now.
     fn session(header: Option<&str>) -> tempfile::TempDir {
@@ -673,7 +710,9 @@ mod tests {
         let works = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let probe_dir = "/tmp/kiro-play";
-        let header = HEADER.replace(probe_dir, works.path().to_str().unwrap());
+        // As JSON holds it: a Windows path's backslashes escaped.
+        let quoted = serde_json::to_string(works.path().to_str().unwrap()).unwrap();
+        let header = HEADER.replace(probe_dir, quoted.trim_matches('"'));
         assert_ne!(header, HEADER);
         std::fs::write(dir.path().join(HEADER_FILE), header).unwrap();
         let live = |cwd: Option<&Path>, procs: &Processes| liveness(dir.path(), PROBE, cwd, procs);

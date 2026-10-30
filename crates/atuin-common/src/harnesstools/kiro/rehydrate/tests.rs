@@ -288,6 +288,38 @@ async fn a_session_already_there_is_not_written_over(home: TempDir) {
     assert!(matches!(rehydrate_into(home.path(), &escaping), Err(RehydrateError::Other(_))));
 }
 
+/// A write that failed after the log left a header behind: the next write finishes the session
+/// rather than taking the header for a session already there. A write that fails on the header
+/// takes its log with it, so a retry starts over, and nothing resumes with no conversation.
+#[rstest]
+#[tokio::test]
+async fn a_partial_write_is_finished_or_cleaned_up(home: TempDir) {
+    let session = restore(home.path(), captured(RESUMED, RESUMED_HEADER).await);
+    let dir = home.path().join("sessions").joined(workspace_hash(home.path())).joined(ID);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(HEADER_FILE), r#"{"id": "stale"}"#).unwrap();
+    let path = rehydrate_into(home.path(), &session).unwrap();
+    assert_eq!(path, dir.join(LOG_FILE));
+    let header: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join(HEADER_FILE)).unwrap()).unwrap();
+    assert_eq!(header["id"], ID, "the stale header was written over");
+    assert!(!read_back(ID, &path).await.is_empty());
+
+    // The header can't be written (a directory stands in its way): the log goes too.
+    let other = RehydrateSession {
+        id: "sess_other".to_owned(),
+        ..session
+    };
+    let dir = dir.with_file_name("sess_other");
+    std::fs::create_dir_all(dir.join(HEADER_FILE)).unwrap();
+    let err = rehydrate_into(home.path(), &other).unwrap_err();
+    assert!(!matches!(err, RehydrateError::AlreadyExists(_)), "{err:?}");
+    assert!(!dir.join(LOG_FILE).exists(), "the log was left behind");
+    assert!(locate(&home.path().join("sessions"), "sess_other").is_none());
+    std::fs::remove_dir(dir.join(HEADER_FILE)).unwrap();
+    assert!(rehydrate_into(home.path(), &other).is_ok(), "the retry starts over");
+}
+
 /// A fork names the session it was forked from in its header, out of the model's sight, and
 /// every row read back names it as the fork's parent.
 #[rstest]
