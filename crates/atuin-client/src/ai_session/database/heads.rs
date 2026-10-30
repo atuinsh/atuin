@@ -25,6 +25,7 @@
 //!   between is interleaving: the session parts where that host left off, and the rows other
 //!   hosts wrote since are on none of its paths. (A side holding only tool rows still makes no
 //!   branch of its own; see below.)
+//! - Kiro rows name no parent and capture links none: linear, in time order.
 //! - Anything else is linear, in time order.
 //!
 //! A row whose parent is not stored (a line capture keeps no row of, or one not synced yet)
@@ -122,7 +123,7 @@ impl Model {
                 beside: false,
             },
             HarnessKind::Opencode => Self::Interleaving,
-            HarnessKind::Unknown => Self::Linear,
+            HarnessKind::Kiro | HarnessKind::Unknown => Self::Linear,
         }
     }
 }

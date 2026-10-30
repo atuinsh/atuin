@@ -225,6 +225,7 @@ mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::copilot::session::CopilotSessions;
+    use atuin_common::harnesstools::kiro::session::KiroSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_common::harnesstools::session::ParentKind;
     use atuin_domain::record::HostId;
@@ -495,6 +496,47 @@ mod tests {
         assert_eq!(subagent.title.as_deref(), Some("count-lines"));
         assert_eq!(subagent.parent.as_ref(), Some(&handle));
         assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
+    }
+
+    /// A Kiro session's title, directory and model live in the header beside its log: import
+    /// carries them onto the session, and reads the rows the log holds.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_a_kiro_sessions_header_and_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
+        let dir = root.path().join("c15e787aea4828dd").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("messages.jsonl"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/resumed.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("session.json"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/resumed.session.json"),
+        )
+        .unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            KiroSessions::builder().root(root.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Kiro, sessions)
+            .collect()
+            .await;
+        assert_eq!(sum_new(&progress), 19 + 1, "the conversation rows and the title");
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Kiro,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("Read README and Run Probe Command"));
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/kiro-play")));
+        assert_eq!(session.git_branch, None);
     }
 
     #[cfg(unix)]
