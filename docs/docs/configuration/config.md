@@ -108,6 +108,24 @@ SQLite opens as written.
     atuin config set daemon.autostart true
     ```
 
+### Unknown settings
+
+Atuin prints a warning when `config.toml` contains a key or table it doesn't
+recognize. The warning names the config file and each unknown key, without
+the setting's value. Atuin still loads the rest of the file and ignores those
+settings.
+
+A misspelled key keeps its default. `sync_address` selects the sync server.
+Writing `sync_url` instead leaves `sync_address` at `https://api.atuin.sh`.
+
+`scroll_exits` belongs in the `[keys]` table, as `keys.scroll_exits`. The same
+key at the root of the file is ignored.
+
+`extra_headers` accepts any header name you define. Those names aren't
+unknown keys.
+
+Atuin prints this warning each time it loads configuration.
+
 ### `dialect`
 
 Default: `us`
