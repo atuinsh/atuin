@@ -12,9 +12,9 @@
 # devenv up -d     # Postgres, for atuin-server's integration tests
 # ci-clippy        # each ci-* script is a .buildkite/pipeline.yml step's commands
 #
-# The shell is a sandbox: ATUIN_HOME, ATUIN_CONFIG_DIR, the XDG directories and
-# the daemon socket point under .devenv/state/atuin/, with a config.toml that
-# never syncs. A `cargo run -- …`, a dev daemon or the e2e suite cannot reach
+# The shell is a sandbox: ATUIN_HOME, ATUIN_CONFIG_DIR and the XDG directories
+# point under .devenv/state/atuin/, with a config.toml that never syncs and has
+# a daemon socket of its own. A `cargo run -- …`, a dev daemon or the e2e suite cannot reach
 # your own history, config, sync account or launchd agent. `atuin-dev-reset`
 # wipes it; `atuin-real <command>` runs one command against your real profile.
 #
@@ -109,22 +109,33 @@ let
     };
 
   sandbox = "${config.devenv.state}/atuin";
+  # Short, and apart from the default ($TMPDIR/atuin-$UID/atuin.sock), which every profile of the
+  # user shares. In config.toml rather than ATUIN_DAEMON__SOCKET_PATH, which would reach every
+  # test that reads the environment.
+  socketPath = "${config.env.DEVENV_RUNTIME}/atuin.sock";
   profile = "${sandbox}/home";
 
   # Creates what is missing; a reset deletes first.
   seedSandbox = pkgs.writeShellScript "atuin-dev-seed" ''
     set -euo pipefail
     mkdir -p "$ATUIN_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
-    mkdir -p -m 700 "$(dirname "$ATUIN_DAEMON__SOCKET_PATH")"
+    # Atuin leaves a configured socket's directory to whoever configured it.
+    mkdir -p -m 700 ${lib.escapeShellArg (dirOf socketPath)}
     if [ ! -e "$ATUIN_HOME/config.toml" ]; then
       cat >"$ATUIN_HOME/config.toml" <<'EOF'
     # Atuin's devenv sandbox profile (devenv.nix); `atuin-dev-reset` recreates it.
-    # Nothing here reaches your account: sync is off, and the address is a local
-    # `atuin server`.
+    # Nothing here reaches your account: sync is off, the address is a local
+    # `atuin server`, and the daemon has a socket of its own.
     auto_sync = false
     update_check = false
     sync_address = "http://127.0.0.1:8888"
+
+    [daemon]
+    socket_path = "${socketPath}"
     EOF
+    elif ! grep -q '^socket_path = "${socketPath}"$' "$ATUIN_HOME/config.toml"; then
+      echo "warning: $ATUIN_HOME/config.toml doesn't set the sandbox's daemon socket, so a dev" >&2
+      echo "atuin there may use your real daemon's. atuin-dev-reset recreates it." >&2
     fi
   '';
 
@@ -182,8 +193,6 @@ in
     XDG_CONFIG_HOME = "${sandbox}/xdg/config";
     XDG_DATA_HOME = "${sandbox}/xdg/data";
     XDG_CACHE_HOME = "${sandbox}/xdg/cache";
-    # Short, and apart from the real daemon's default socket.
-    ATUIN_DAEMON__SOCKET_PATH = "${config.env.DEVENV_RUNTIME}/atuin.sock";
     # devenv's Postgres by its socket, which only that server can answer: with it stopped, the
     # tests find no Postgres rather than whichever one has the port.
     ATUIN_DB_URI = "postgres://atuin:pass@localhost:${toString config.env.PGPORT}/atuin?host=${config.env.PGHOST}";
@@ -227,7 +236,7 @@ in
             fi
           done
         fi
-        rm -rf ${lib.escapeShellArg sandbox} "$ATUIN_DAEMON__SOCKET_PATH"
+        rm -rf ${lib.escapeShellArg sandbox} ${lib.escapeShellArg socketPath}
         ${seedSandbox}
         echo "sandbox reset: ${sandbox}"
       '';
@@ -239,7 +248,7 @@ in
           echo "usage: atuin-real <command> [args…]   e.g. atuin-real target/debug/atuin stats" >&2
           exit 2
         fi
-        exec env -u ATUIN_HOME -u ATUIN_CONFIG_DIR -u ATUIN_DAEMON__SOCKET_PATH \
+        exec env -u ATUIN_HOME -u ATUIN_CONFIG_DIR \
           -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME "$@"
       '';
     };
@@ -259,8 +268,8 @@ in
     ci-test = ciScript ''
       # Extra arguments go to nextest: `ci-test -p atuin-common`.
       # The tests run as on a CI agent: no ATUIN_* variables but CI's, in a fresh HOME. Some
-      # tests read the real environment, and fail under the sandbox's ATUIN_HOME or socket path
-      # (or one of your own). The fresh HOME and TMPDIR stand in for the sandbox: a test that
+      # tests read the real environment, and fail under the sandbox's ATUIN_HOME or an ATUIN_*
+      # setting of your own. The fresh HOME and TMPDIR stand in for the sandbox: a test that
       # reaches for ~/.atuin or the default socket ($TMPDIR/atuin-$UID) finds neither your
       # profile nor your daemon. ATUIN_CONFIG_DIR stays set, so no test touches your launchd
       # agent.
@@ -361,7 +370,7 @@ in
     echo ""
     echo "atuin devenv: Rust $(rustc --version | cut -d' ' -f2), rustfmt nightly-${nightlyDate}, MSRV ${msrv}"
     echo "  sandbox  : $ATUIN_HOME (atuin-dev-reset wipes it; atuin-real <cmd> uses your real profile)"
-    echo "  daemon   : $ATUIN_DAEMON__SOCKET_PATH"
+    echo "  daemon   : ${socketPath}"
     echo "  postgres : $ATUIN_DB_URI (devenv up -d)"
     echo "  CI steps : ci-check ci-clippy ci-test ci-fmt ci-deny ci-docs ci-vale ci-codespell ci-shellcheck ci-msrv"
     echo ""

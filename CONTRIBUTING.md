@@ -72,9 +72,9 @@ Each `ci-*` script runs one pipeline step's commands, step for step: `ci-fmt`, `
 a CI agent does, in a fresh `HOME` with only CI's `ATUIN_*` variables.
 
 The shell is a sandbox. It sets `ATUIN_HOME`, `ATUIN_CONFIG_DIR`, `XDG_CONFIG_HOME`,
-`XDG_DATA_HOME`, `XDG_CACHE_HOME` and `ATUIN_DAEMON__SOCKET_PATH` to paths under
-`.devenv/state/atuin/` and devenv's runtime directory, with a `config.toml` whose sync is off and
-whose sync address is a local server. So `cargo run -- …`, a dev daemon and the e2e suite cannot
+`XDG_DATA_HOME` and `XDG_CACHE_HOME` to paths under `.devenv/state/atuin/`, with a `config.toml`
+whose sync is off, whose sync address is a local server, and whose `daemon.socket_path` is in
+devenv's runtime directory. So `cargo run -- …`, a dev daemon and the e2e suite cannot
 read or write your own history, config or sync account, and a dev `atuin daemon start` never
 touches your launchd agent. `atuin-dev-reset` wipes the sandbox (stopping a dev daemon in it).
 
