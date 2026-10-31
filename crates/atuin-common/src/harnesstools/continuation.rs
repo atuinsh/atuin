@@ -142,6 +142,7 @@ fn label(harness: AnyHarness) -> &'static str {
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
         AnyHarness::Copilot(_) => "Copilot",
+        AnyHarness::Grok(_) => "Grok Build",
         AnyHarness::Opencode(_) => "opencode",
         AnyHarness::Pi(pi) => match pi.flavour() {
             Flavour::Pi => "Pi",
@@ -360,9 +361,9 @@ fn continue_at(
         rows.push(at, Role::Assistant, vec![note], Some(StopReason::EndTurn));
     }
     let mut rows = rows.rows;
-    // Only Claude Code and Pi keep a tree; opencode reads a row's parent as the message it
-    // answers, which it finds on its own.
-    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_)) {
+    // Only Claude Code, Grok Build and Pi keep a tree; opencode reads a row's parent as the
+    // message it answers, which it finds on its own.
+    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_)) {
         for message in &mut rows {
             message.parent_source_id = None;
         }
@@ -461,7 +462,10 @@ impl Rows {
         let calling = Some(StopReason::ToolUse);
         match self.target {
             // Copilot answers each call with a result event of its own, as pi does.
-            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => {
+            AnyHarness::ClaudeCode(_)
+            | AnyHarness::Pi(_)
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Grok(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -787,12 +791,14 @@ impl Ids {
         }
     }
 
-    /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's and Pi's
-    /// time-ordered), or an opencode `ses_` id, which sort newest first.
+    /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's, Grok Build's and
+    /// Pi's time-ordered), or an opencode `ses_` id, which sort newest first.
     fn session(&self) -> String {
         match self.target {
             AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
-            AnyHarness::Codex(_) | AnyHarness::Pi(_) => Uuid::now_v7().to_string(),
+            AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
+                Uuid::now_v7().to_string()
+            }
             AnyHarness::Opencode(_) => {
                 opencode::rehydrate::mint_session(self.now, &Uuid::new_v4().to_string())
             }
@@ -808,7 +814,9 @@ impl Ids {
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
+                AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Grok(_) => {
+                    Uuid::new_v4().to_string()
+                }
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

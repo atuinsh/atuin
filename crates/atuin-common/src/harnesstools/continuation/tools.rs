@@ -88,11 +88,14 @@ impl Canonical {
                 | "shell_command"
                 | "exec_command"
                 | "local_shell"
+                | "run_terminal_command"
                 | "read"
+                | "read_file"
                 | "view"
                 | "write"
                 | "create"
                 | "edit"
+                | "search_replace"
                 | "grep"
                 | "glob"
                 | "find"
@@ -101,9 +104,14 @@ impl Canonical {
             return None;
         }
         let input = object(input)?;
-        let path = || string(&input, &["file_path", "filePath", "path"]);
+        let path = || string(&input, &["file_path", "filePath", "target_file", "path"]);
         Some(match kind.as_str() {
-            "bash" | "shell" | "shell_command" | "exec_command" | "local_shell" => {
+            "bash"
+            | "shell"
+            | "shell_command"
+            | "exec_command"
+            | "local_shell"
+            | "run_terminal_command" => {
                 let (command, workdir) = if name == "local_shell" {
                     (command(input.get("command")), string(&input, &["working_directory"]))
                 } else {
@@ -124,7 +132,7 @@ impl Canonical {
                 }
                 Self::Shell { command }
             }
-            "read" => Self::Read {
+            "read" | "read_file" => Self::Read {
                 path: path()?,
                 offset: input.get("offset").filter(|v| v.is_number()).cloned(),
                 limit: input.get("limit").filter(|v| v.is_number()).cloned(),
@@ -146,7 +154,7 @@ impl Canonical {
                 path: path()?,
                 content: string(&input, &["content", "file_text"])?,
             },
-            "edit" => {
+            "edit" | "search_replace" => {
                 // pi's edit takes its replacements as `edits`; only one is an edit the others make.
                 let one = match input.get("edits") {
                     Some(Value::Array(edits)) => match edits.as_slice() {
@@ -180,7 +188,7 @@ impl Canonical {
 
     /// This call as `target`'s own tool, when it has one that does the same: its name and input.
     fn render(&self, target: AnyHarness, cwd: &Path) -> Option<(&'static str, Value)> {
-        use AnyHarness::{ClaudeCode, Codex, Copilot, Opencode, Pi};
+        use AnyHarness::{ClaudeCode, Codex, Copilot, Grok, Opencode, Pi};
 
         let mut input = Map::new();
         let mut put = |key: &str, value: Option<Value>| {
@@ -200,6 +208,7 @@ impl Canonical {
                 put("command", Some(json!(command)));
                 match target {
                     ClaudeCode(_) => "Bash",
+                    Grok(_) => "run_terminal_command",
                     _ => "bash",
                 }
             }
@@ -234,11 +243,16 @@ impl Canonical {
                 },
                 _,
             ) => {
-                put(path_key(target), Some(json!(path)));
+                let key = match target {
+                    Grok(_) => "target_file",
+                    _ => path_key(target),
+                };
+                put(key, Some(json!(path)));
                 put("offset", offset.clone());
                 put("limit", limit.clone());
                 match target {
                     ClaudeCode(_) => "Read",
+                    Grok(_) => "read_file",
                     _ => "read",
                 }
             }
@@ -268,7 +282,7 @@ impl Canonical {
             ) => {
                 put(path_key(target), Some(json!(path)));
                 let (old_key, new_key, all_key) = match target {
-                    ClaudeCode(_) => ("old_string", "new_string", "replace_all"),
+                    ClaudeCode(_) | Grok(_) => ("old_string", "new_string", "replace_all"),
                     Opencode(_) => ("oldString", "newString", "replaceAll"),
                     Copilot(_) => ("old_str", "new_str", ""),
                     _ => ("oldText", "newText", ""),
@@ -278,6 +292,7 @@ impl Canonical {
                 put(all_key, all.then_some(json!(true)));
                 match target {
                     ClaudeCode(_) => "Edit",
+                    Grok(_) => "search_replace",
                     _ => "edit",
                 }
             }
@@ -321,7 +336,7 @@ impl Canonical {
 /// The key a file tool of `target` names its file by.
 const fn path_key(target: AnyHarness) -> &'static str {
     match target {
-        AnyHarness::ClaudeCode(_) => "file_path",
+        AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) => "file_path",
         AnyHarness::Opencode(_) => "filePath",
         AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => "path",
     }
@@ -417,6 +432,22 @@ fn native(target: AnyHarness, name: &str) -> bool {
             "web_search",
             "image_generation",
             "tool_search",
+        ],
+        AnyHarness::Grok(_) => &[
+            "run_terminal_command",
+            "read_file",
+            "write",
+            "search_replace",
+            "hashline_edit",
+            "delete_file",
+            "grep",
+            "glob",
+            "list_dir",
+            "spawn_subagent",
+            "todo_write",
+            "web_search",
+            "web_fetch",
+            "lsp",
         ],
         AnyHarness::Opencode(_) => &[
             "bash",

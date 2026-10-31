@@ -191,6 +191,7 @@ mod tests {
             HarnessKind::Opencode => "HARNESS_KIND_OPENCODE",
             HarnessKind::Pi => "HARNESS_KIND_PI",
             HarnessKind::Omp => "HARNESS_KIND_OMP",
+            HarnessKind::Grok => "HARNESS_KIND_GROK",
         }
     }
 

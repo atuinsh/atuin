@@ -25,6 +25,7 @@ pub enum HarnessKind {
     Opencode = 4,
     Pi = 5,
     Omp = 6,
+    Grok = 7,
 }
 
 impl From<&AnyHarness> for HarnessKind {
@@ -33,6 +34,7 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Copilot(_) => Self::Copilot,
+            AnyHarness::Grok(_) => Self::Grok,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -47,11 +49,12 @@ impl HarnessKind {
     /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{ccode, codex, copilot, opencode, pi};
+        use atuin_common::harnesstools::{ccode, codex, copilot, grok, opencode, pi};
         match self {
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
+            Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
@@ -659,6 +662,8 @@ mod tests {
     #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
     #[case::continued_from_omp(HarnessKind::Pi, Some(HarnessKind::Omp), None, RecordVersion::V3)]
     #[case::with_a_provider(HarnessKind::Omp, None, Some("openai-codex"), RecordVersion::V3)]
+    #[case::grok(HarnessKind::Grok, None, None, RecordVersion::V4)]
+    #[case::continued_from_grok(HarnessKind::Pi, Some(HarnessKind::Grok), None, RecordVersion::V4)]
     fn omp_messages_are_v3(
         #[case] harness: HarnessKind,
         #[case] parent: Option<HarnessKind>,
@@ -684,7 +689,7 @@ mod tests {
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v4".to_owned());
+        let version = RecordVersion::Other("v5".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }

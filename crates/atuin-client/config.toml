@@ -371,6 +371,7 @@ enter_accept = true
 [threads.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"
+# grok = "grok --resume {id}"
 # opencode = "opencode --session {id}"
 # pi = "pi --session {id}"
 

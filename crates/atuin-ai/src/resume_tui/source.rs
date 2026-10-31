@@ -328,6 +328,7 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::ClaudeCode => "CC",
         HarnessKind::Codex => "CX",
+        HarnessKind::Grok => "GK",
         HarnessKind::Opencode => "OC",
         HarnessKind::Pi => "PI",
         HarnessKind::Omp => "OM",
@@ -341,6 +342,7 @@ pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
     match harness {
         HarnessKind::ClaudeCode => Some("claude"),
         HarnessKind::Codex => Some("codex"),
+        HarnessKind::Grok => Some("grok"),
         HarnessKind::Opencode => Some("opencode"),
         HarnessKind::Pi => Some("pi"),
         HarnessKind::Omp => Some("omp"),
@@ -354,6 +356,7 @@ pub fn harness_label(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::ClaudeCode => "Claude Code",
         HarnessKind::Codex => "Codex",
+        HarnessKind::Grok => "Grok Build",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "Pi",
         HarnessKind::Omp => "omp",

@@ -42,6 +42,7 @@ impl Caller<'_> {
         match self.client? {
             "claude-code" => Some(HarnessKind::ClaudeCode),
             "codex-mcp-client" => Some(HarnessKind::Codex),
+            "grok" | "grok-cli" | "grok-build" => Some(HarnessKind::Grok),
             "opencode" => Some(HarnessKind::Opencode),
             _ => None,
         }
@@ -82,8 +83,13 @@ impl Caller<'_> {
     }
 
     fn env_session(&self) -> Option<HarnessSession> {
-        let harness = self.harness().filter(|h| *h == HarnessKind::ClaudeCode)?;
-        let id = env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|id| !id.is_empty())?;
+        let harness = self.harness()?;
+        let var = match harness {
+            HarnessKind::ClaudeCode => "CLAUDE_CODE_SESSION_ID",
+            HarnessKind::Grok => "GROK_SESSION_ID",
+            _ => return None,
+        };
+        let id = env::var(var).ok().filter(|id| !id.is_empty())?;
         Some(HarnessSession {
             harness,
             session: NativeSessionId::from(id),
@@ -219,6 +225,7 @@ mod tests {
     #[rstest]
     #[case::claude("claude-code", Some(HarnessKind::ClaudeCode))]
     #[case::codex("codex-mcp-client", Some(HarnessKind::Codex))]
+    #[case::grok("grok-cli", Some(HarnessKind::Grok))]
     #[case::opencode("opencode", Some(HarnessKind::Opencode))]
     #[case::cursor("cursor-vscode", None)]
     fn maps_client_names_to_harnesses(#[case] name: &str, #[case] want: Option<HarnessKind>) {

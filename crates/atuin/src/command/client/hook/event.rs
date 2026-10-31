@@ -266,6 +266,42 @@ mod tests {
             transcript: Some("/w/.codex/sessions/2026/10/09/rollout-x.jsonl".into()),
         })
     )]
+    // Grok Build names its shell tool `run_terminal_command` and reports `exit_code` in snake_case.
+    #[case::grok_pre_tool_use(
+        json!({
+            "hookEventName": "pre_tool_use",
+            "hook_event_name": "PreToolUse",
+            "toolName": "run_terminal_command",
+            "tool_name": "run_terminal_command",
+            "toolInput": {"command": "cargo test", "description": "Run workspace tests"},
+            "tool_input": {"command": "cargo test", "description": "Run workspace tests"},
+            "toolUseId": "call_ok_1",
+            "tool_use_id": "call_ok_1",
+            "session_id": "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9",
+            "cwd": "/w"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("cargo test"),
+            intent: Some("Run workspace tests".into()),
+            tool_use_id: "call_ok_1".into(),
+        })
+    )]
+    #[case::grok_post_tool_use_nonzero_exit(
+        json!({
+            "hookEventName": "post_tool_use",
+            "hook_event_name": "PostToolUse",
+            "toolName": "run_terminal_command",
+            "tool_name": "run_terminal_command",
+            "tool_response": {"type": "Bash", "exit_code": 7, "output_for_prompt": "exit: 7\n"},
+            "tool_use_id": "call_fail_2",
+            "transcript_path": "/w/.grok/sessions/%2Fw/01a18221/updates.jsonl"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "call_fail_2".into(),
+            exit: Some(7),
+            transcript: Some("/w/.grok/sessions/%2Fw/01a18221/updates.jsonl".into()),
+        })
+    )]
     // Non-Bash tools are never recorded.
     #[case::non_bash_tool_skipped(
         json!({
@@ -547,7 +583,10 @@ mod tests {
         /// Any tool other than Bash is skipped, whatever the event or fields.
         #[test]
         fn non_bash_tool_is_always_skipped(
-            tool_name in r"[^\p{Cc}]+".prop_filter("must not be Bash", |s| s.as_str() != "Bash"),
+            tool_name in r"[^\p{Cc}]+".prop_filter(
+                "must not be a shell tool",
+                |s| !matches!(s.as_str(), "Bash" | "run_terminal_command"),
+            ),
             event in proptest::sample::select(vec![
                 "PreToolUse", "PostToolUse", "PostToolUseFailure", "Frobnicate",
             ]),

@@ -119,6 +119,9 @@ pub enum HarnessArg {
     ClaudeCode,
     Codex,
     Copilot,
+    #[value(alias = "grok-build")]
+    #[serde(alias = "grok-build")]
+    Grok,
     Opencode,
     Pi,
     Omp,
@@ -130,6 +133,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::ClaudeCode => Self::ClaudeCode,
             HarnessArg::Codex => Self::Codex,
             HarnessArg::Copilot => Self::Copilot,
+            HarnessArg::Grok => Self::Grok,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
             HarnessArg::Omp => Self::Omp,
@@ -988,7 +992,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
     match harness {
         HarnessKind::ClaudeCode => Ansi::Magenta,
         HarnessKind::Codex => Ansi::Green,
-        HarnessKind::Copilot => Ansi::Blue,
+        HarnessKind::Copilot | HarnessKind::Grok => Ansi::Blue,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
         HarnessKind::Omp => Ansi::Red,
@@ -1060,6 +1064,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::ClaudeCode => "claude-code",
         HarnessKind::Codex => "codex",
         HarnessKind::Copilot => "copilot",
+        HarnessKind::Grok => "grok",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",
@@ -1409,6 +1414,7 @@ mod tests {
     #[case(HarnessKind::ClaudeCode)]
     #[case(HarnessKind::Codex)]
     #[case(HarnessKind::Copilot)]
+    #[case(HarnessKind::Grok)]
     #[case(HarnessKind::Opencode)]
     #[case(HarnessKind::Pi)]
     #[case(HarnessKind::Omp)]
