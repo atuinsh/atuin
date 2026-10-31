@@ -1091,6 +1091,7 @@ pub struct Settings {
     pub prefers_reduced_motion: bool,
     pub store_failed: bool,
     pub no_mouse: bool,
+    pub keyboard_enhancement: bool,
 
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
     pub history_filter: RegexSet,
@@ -1681,6 +1682,7 @@ impl Settings {
                 atuin_common::env::var_os("NO_MOTION").is_some(),
             )?
             .set_default("no_mouse", false)?
+            .set_default("keyboard_enhancement", true)?
             .set_default("pty_proxy.enabled", false)?;
         #[cfg(feature = "octavo")]
         let builder = builder
@@ -2098,6 +2100,32 @@ mod tests {
     fn default_addresses_parse() {
         assert_eq!(super::DEFAULT_SYNC_URL.host_str(), Some("api.atuin.sh"));
         assert_eq!(super::DEFAULT_HUB_URL.host_str(), Some("hub.atuin.sh"));
+    }
+
+    #[rstest]
+    fn keyboard_enhancement_defaults_and_overrides() -> Result<()> {
+        let default: Settings = Settings::builder()?.build()?.try_deserialize()?;
+        assert!(default.keyboard_enhancement);
+
+        let enabled: Settings = Settings::builder()?
+            .set_override("keyboard_enhancement", true)?
+            .build()?
+            .try_deserialize()?;
+        assert!(enabled.keyboard_enhancement);
+
+        let disabled: Settings = Settings::builder()?
+            .set_override("keyboard_enhancement", false)?
+            .build()?
+            .try_deserialize()?;
+        assert!(!disabled.keyboard_enhancement);
+
+        let invalid = Settings::builder()?
+            .set_override("keyboard_enhancement", "invalid")?
+            .build()?
+            .try_deserialize::<Settings>();
+        assert!(invalid.is_err());
+
+        Ok(())
     }
 
     #[rstest]
