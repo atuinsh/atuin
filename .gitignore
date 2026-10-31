@@ -29,3 +29,7 @@ test-behavior.sh
 test-results/
 
 /crates/atuin/wix/License.rtf
+
+# devenv (devenv.nix): per-checkout state, including the Atuin sandbox profile.
+/.devenv/
+/devenv.local.nix
