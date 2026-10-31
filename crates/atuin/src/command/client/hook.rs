@@ -1,11 +1,12 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
+use atuin_common::path::AbsPathBuf;
 use atuin_common::path::PathBufExt as _;
 use atuin_common::userio;
 use clap::{Parser, Subcommand};
@@ -27,6 +28,13 @@ enum Action {
     Install {
         #[arg(value_name = "AGENT", help = fl!("arg-hook-install-agent"))]
         agent: String,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = fl!("arg-hook-install-executable")
+        )]
+        executable: Option<PathBuf>,
     },
 }
 
@@ -44,7 +52,9 @@ impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
         match (self.action, self.agent) {
-            (Some(Action::Install { agent }), None) => install(&agent).await,
+            (Some(Action::Install { agent, executable }), None) => {
+                install(&agent, executable.as_deref()).await
+            }
             (None, Some(agent)) => handle(&agent, settings).await,
             (None, None) => {
                 bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
@@ -71,10 +81,27 @@ fn show_reload_hint(harness_name: &str) {
     }
 }
 
-async fn install(agent_name: &str) -> Result<()> {
+async fn install(agent_name: &str, executable: Option<&Path>) -> Result<()> {
     let harness = AnyHarness::from_name(agent_name)?;
 
-    match harness.install_hooks().await {
+    // Hooks embed the binary by absolute path. The running binary may live in a
+    // version-manager directory that an upgrade removes, so allow a stable path.
+    let executable = match executable {
+        Some(path) => {
+            // Installed hooks are recognised (and, for Codex, trusted) by the `atuin` file name,
+            // so a renamed binary would never run.
+            let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            let named_atuin =
+                ["atuin", "atuin.exe"].iter().any(|n| file_name.eq_ignore_ascii_case(n));
+            if !named_atuin {
+                bail!("--executable must point to a binary named `atuin`");
+            }
+            PathBuf::from(AbsPathBuf::from_current_dir(path)?)
+        }
+        None => atuin_common::os::process::current_exe(),
+    };
+
+    match harness.install_hooks(&executable).await {
         Ok(path) => {
             userio::log::info!(
                 "hook-installed",
@@ -180,7 +207,33 @@ mod tests {
         let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
 
         match (cmd.action, cmd.agent) {
-            (Some(Action::Install { agent }), None) => assert_eq!(agent, agent_name),
+            (Some(Action::Install { agent, executable }), None) => {
+                assert_eq!(agent, agent_name);
+                assert!(executable.is_none());
+            }
+            other => panic!("unexpected parsed command: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn parse_hook_install_executable_command() {
+        let cmd = Cmd::try_parse_from([
+            "hook",
+            "install",
+            "claude-code",
+            "--executable",
+            "/usr/bin/atuin",
+        ])
+        .unwrap();
+
+        match (cmd.action, cmd.agent) {
+            (Some(Action::Install { agent, executable }), None) => {
+                assert_eq!(agent, "claude-code");
+                assert_eq!(
+                    executable.map(|path| path.to_string_lossy().into_owned()).as_deref(),
+                    Some("/usr/bin/atuin")
+                );
+            }
             other => panic!("unexpected parsed command: {other:?}"),
         }
     }

@@ -1,6 +1,6 @@
 //! Tools for interacting and operating on different AI harnesses.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use enum_dispatch::enum_dispatch;
 
@@ -46,8 +46,11 @@ pub trait Harness: std::fmt::Debug {
     }
 
     /// Install this harness's hooks on the current user's machine, returning the path written.
+    ///
+    /// `executable` is the atuin binary the hooks should invoke. Command hooks embed it by
+    /// absolute path; plugin hooks ignore it and resolve `atuin` on the user's `PATH` instead.
     #[allow(async_fn_in_trait)]
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError>;
 
     /// How this harness itself reopens `target`: its own resume command, and whether that has to
     /// run from the session's directory. `Err` for a session the harness cannot reopen.

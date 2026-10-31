@@ -15,14 +15,17 @@ const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFai
 /// Merge atuin's command hooks into a Claude-Code-style JSON hook config at `config_path`, leaving
 /// the user's existing keys, values, and ordering intact.
 ///
-/// The hooks invoke the running executable by absolute path, since harnesses do not necessarily
-/// run them with the user's shell `PATH`.
+/// The hooks invoke `executable` by absolute path, since harnesses do not necessarily run them with
+/// the user's shell `PATH`. Callers normally resolve this to the running binary, but may pass a
+/// stable path instead: a version-manager install directory disappears on upgrade and takes the
+/// hook with it.
 pub async fn install(
     config_path: &Path,
     matcher: &str,
     harness: &str,
+    executable: &Path,
 ) -> Result<(), InstallHookError> {
-    install_in(config_path, matcher, harness, Value::Object(Map::new())).await
+    install_in(config_path, matcher, harness, executable, Value::Object(Map::new())).await
 }
 
 /// [`install`], into `skeleton` when there is no config at `config_path` yet: what the harness
@@ -31,9 +34,10 @@ pub async fn install_in(
     config_path: &Path,
     matcher: &str,
     harness: &str,
+    executable: &Path,
     skeleton: Value,
 ) -> Result<(), InstallHookError> {
-    let hook_command = hook_command(&std::env::current_exe()?, harness)?;
+    let hook_command = hook_command(executable, harness)?;
 
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -261,5 +265,17 @@ mod tests {
     #[case::different_harness("atuin hook claude-code", false)]
     fn recognizes_only_atuin_executables(#[case] command: &str, #[case] expected: bool) {
         assert_eq!(invokes_atuin_hook(command, "codex"), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn install_writes_the_requested_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("hooks.json");
+
+        install(&config_path, "^Bash$", "codex", Path::new("/opt/atuin/bin/atuin")).await.unwrap();
+
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(written.contains("/opt/atuin/bin/atuin hook codex"));
     }
 }

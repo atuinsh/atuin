@@ -4,7 +4,7 @@
 //! Copilot's log format is undocumented and the CLI closed: what the reader and writer know of
 //! it was verified against Copilot CLI 1.0.104 (see their module docs).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -39,9 +39,16 @@ impl Harness for Copilot {
     /// takes Claude Code's entries and sends Claude Code's payload (`hook_event_name`,
     /// `tool_name` `Bash`, `tool_input.command`), so atuin's hook reads it as Claude Code's
     /// (verified against Copilot CLI 1.0.104).
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         let config_path = copilot_home().joined("hooks").joined("atuin.json");
-        json_hooks::install_in(&config_path, "^Bash$", self.name(), json!({"version": 1})).await?;
+        json_hooks::install_in(
+            &config_path,
+            "^Bash$",
+            self.name(),
+            executable,
+            json!({"version": 1}),
+        )
+        .await?;
         Ok(config_path)
     }
 

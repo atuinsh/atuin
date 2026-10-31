@@ -80,7 +80,7 @@ impl Harness for Pi {
     }
 
     /// Install the hooks on the current active user's machine
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, _executable: &Path) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");
         const PLUGIN_NAME: &str = "atuin.ts";
 
