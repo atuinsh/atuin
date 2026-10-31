@@ -159,9 +159,6 @@ fn session_key(session: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use atuin_client::ai_session::HarnessKind;
     use atuin_common::harnesstools::session::Usage;
     use prost_types::{FileDescriptorProto, FileDescriptorSet};
     use rstest::{fixture, rstest};
@@ -179,39 +176,6 @@ mod tests {
         .into_iter()
         .find(|file| file.name() == "atuin/api/v1/threads.proto")
         .expect("hub_service.proto imports threads.proto")
-    }
-
-    /// The proto name of each harness kind: a new variant fails to compile here until it has one.
-    const fn proto_name(kind: HarnessKind) -> &'static str {
-        match kind {
-            HarnessKind::Unknown => "HARNESS_KIND_UNSPECIFIED",
-            HarnessKind::ClaudeCode => "HARNESS_KIND_CLAUDE_CODE",
-            HarnessKind::Codex => "HARNESS_KIND_CODEX",
-            HarnessKind::Copilot => "HARNESS_KIND_COPILOT",
-            HarnessKind::Opencode => "HARNESS_KIND_OPENCODE",
-            HarnessKind::Pi => "HARNESS_KIND_PI",
-            HarnessKind::Omp => "HARNESS_KIND_OMP",
-        }
-    }
-
-    /// `atuin.api.v1.HarnessKind` is extern-pathed to [`HarnessKind`], so its discriminants are the
-    /// wire numbers, and prost decodes any `i32` into the field without checking the proto has it.
-    #[rstest]
-    fn harness_kinds_are_numbered_as_the_proto_numbers_them(threads_proto: FileDescriptorProto) {
-        let proto: BTreeMap<i32, &str> = threads_proto
-            .enum_type
-            .iter()
-            .find(|kind| kind.name() == "HarnessKind")
-            .expect("threads.proto defines HarnessKind")
-            .value
-            .iter()
-            .map(|value| (value.number(), value.name()))
-            .collect();
-
-        let rust: BTreeMap<i32, &str> = (0..=i32::from(u8::MAX))
-            .filter_map(|n| HarnessKind::try_from(n).ok().map(|kind| (n, proto_name(kind))))
-            .collect();
-        assert_eq!(rust, proto);
     }
 
     /// `atuin.api.v1.TokenUsage` is extern-pathed to [`Usage`], whose prost tags are written by

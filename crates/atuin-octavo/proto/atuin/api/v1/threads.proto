@@ -6,25 +6,17 @@ import "atuin/api/v1/common.proto";
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
-// The agent harnesses atuin captures threads from, numbered as atuin's own harness kinds. Never
-// renumber a value.
-enum HarnessKind {
-  HARNESS_KIND_UNSPECIFIED = 0;
-  HARNESS_KIND_CLAUDE_CODE = 1;
-  HARNESS_KIND_CODEX = 2;
-  HARNESS_KIND_COPILOT = 3;
-  HARNESS_KIND_OPENCODE = 4;
-  HARNESS_KIND_PI = 5;
-  HARNESS_KIND_OMP = 6;
-}
-
 // A session as its harness names it: the identity of a thread.
 message HarnessSession {
-  // Logically required; the hub rejects `HARNESS_KIND_UNSPECIFIED`.
-  HarnessKind harness = 1 [
-    (buf.validate.field).required = true,
-    (buf.validate.field).enum.defined_only = true
-  ];
+  reserved 1;
+
+  // The agent harness the session ran in, by the name atuin gives it, e.g. `claude-code`, `codex`
+  // or `pi`. The hub stores any name of this form, so a harness atuin adds needs no hub change.
+  string harness = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 32
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+  }];
   // The harness's id for the session, e.g. a Claude Code session UUID or an opencode `ses_...`.
   string session_id = 2 [(buf.validate.field).string = {
     min_len: 1
@@ -32,7 +24,8 @@ message HarnessSession {
   }];
 }
 
-// How a thread relates to the thread its harness named as its parent.
+// How a thread relates to the thread its harness named as its parent. The hub stores a kind it
+// doesn't know as unspecified.
 enum ThreadParentKind {
   THREAD_PARENT_KIND_UNSPECIFIED = 0;
   // Spawned by its parent to do part of its work.
@@ -223,15 +216,16 @@ message ThreadMessage {
 message CapturedThreadMessage {
   // Logically required.
   HarnessSession thread = 1 [(buf.validate.field).required = true];
-  // Atuin's id for the thread, as this install minted it. Installs may mint different ones for
-  // one thread; the hub keeps the least.
-  UuidV7 atuin_id = 2 [(buf.validate.field).required = true];
+  // The id this install minted for the thread, beside the harness's own `thread.session_id`.
+  // Installs may mint different ones for one thread; the hub keeps the least.
+  UuidV7 client_session_id = 2 [(buf.validate.field).required = true];
   // The thread `thread` came from, if its harness named one. May be of another harness; `thread`
   // itself is rejected.
   HarnessSession parent = 3;
   // How `thread` relates to `parent`; `THREAD_PARENT_KIND_UNSPECIFIED` when the harness did not
-  // say. Any other kind is rejected while `parent` is unset.
-  ThreadParentKind parent_kind = 4 [(buf.validate.field).enum.defined_only = true];
+  // say. The hub stores a kind it doesn't know as unspecified, and rejects any other while `parent`
+  // is unset.
+  ThreadParentKind parent_kind = 4;
   // The thread's title when the line was captured. The newest line's title, or its absence, is
   // the thread's.
   optional string thread_title = 5 [(buf.validate.field).string.max_bytes = 1024];
@@ -243,14 +237,14 @@ message CapturedThreadMessage {
 message Thread {
   // The harness session the thread is.
   HarnessSession session = 1;
-  // The least `CapturedThreadMessage.atuin_id` any install sent for the thread.
-  UuidV7 atuin_id = 2;
+  // The least `CapturedThreadMessage.client_session_id` any install sent for the thread.
+  UuidV7 client_session_id = 2;
   // The thread `session` came from, if its harness named one. May be of another harness.
   HarnessSession parent = 3;
   // How `session` relates to `parent`; `THREAD_PARENT_KIND_UNSPECIFIED` when no message said.
   ThreadParentKind parent_kind = 4;
-  // The parent's atuin id; unset while the parent is not stored.
-  UuidV7 parent_atuin_id = 5;
+  // The parent's `client_session_id`; unset while the parent is not stored.
+  UuidV7 parent_client_session_id = 5;
   // The newest message's `thread_title`, if it had one.
   optional string title = 6;
   // When the earliest message was written.
