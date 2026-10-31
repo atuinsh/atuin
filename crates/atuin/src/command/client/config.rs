@@ -117,9 +117,7 @@ impl GetCmd {
                 dump_table(table, prefix, &mut vec![key.to_string()])?;
             }
             Some(item) => {
-                let val = item.to_string();
-                let val = val.trim().trim_matches('"');
-                println!("{prefix}{val}");
+                println!("{prefix}{}", format_config_value(item));
             }
             None => {
                 println!("{prefix}(not set in config file)");
@@ -563,7 +561,7 @@ impl PrintCmd {
                         &mut vec![key.clone()],
                     )?;
                 } else {
-                    println!("{}", current.to_string().trim().trim_matches('"'));
+                    println!("{}", format_config_value(current));
                 }
             } else {
                 println!("key not found");
@@ -574,6 +572,10 @@ impl PrintCmd {
 
         Ok(())
     }
+}
+
+fn format_config_value(value: &Item) -> String {
+    value.as_str().map_or_else(|| value.to_string().trim().to_owned(), str::to_owned)
 }
 
 fn dump_table(table: &dyn TableLike, prefix: &str, stack: &mut Vec<String>) -> Result<()> {
@@ -760,6 +762,19 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::plain_string(r#""fuzzy""#, "fuzzy")]
+    #[case::backslashes(r#""C:\\Users\\alice""#, r"C:\Users\alice")]
+    #[case::embedded_quotes(r#""say \"hello\"""#, r#"say "hello""#)]
+    #[case::literal_string(r"'C:\Users\alice'", r"C:\Users\alice")]
+    #[case::whitespace(r#""  value  ""#, "  value  ")]
+    #[case::array(r#"["a", "b"]"#, r#"["a", "b"]"#)]
+    fn config_value_output(#[case] input: &str, #[case] expected: &str) {
+        let doc = format!("value = {input}").parse::<Document<_>>().unwrap();
+
+        assert_eq!(format_config_value(&doc["value"]), expected);
+    }
 
     /// Call [`update_config`] with a single key.
     fn set(input: &str, key: &str, value: Value) -> String {
