@@ -348,6 +348,7 @@ impl ActiveService {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::env::MockEnv;
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
@@ -366,6 +367,10 @@ mod tests {
         #[case] claimed: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
+        // Without `ATUIN_HOME`, whatever the process exports: with it, a socket the pidfile
+        // doesn't name is another profile's and refused outright, never waited on.
+        let env = MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
         let socket = dir.path().join("atuin.sock");
         let mut settings = Settings::default();
         settings.daemon.pidfile_path =

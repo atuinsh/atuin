@@ -1691,8 +1691,14 @@ impl Settings {
     }
 
     /// The `ATUIN_*` environment variables, as a config source.
+    ///
+    /// `config` reads the process environment itself, past `atuin_common::env`, so a test's mock
+    /// environment is handed to it as the source instead.
     fn environment() -> Environment {
-        Environment::with_prefix("atuin").prefix_separator("_").separator("__")
+        Environment::with_prefix("atuin")
+            .prefix_separator("_")
+            .separator("__")
+            .source(atuin_common::env::mocked_vars().map(|vars| vars.into_iter().collect()))
     }
 
     /// Layers a config file over `builder`, with `env` on top of it again so that environment
@@ -2165,8 +2171,7 @@ mod tests {
 
     #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
-        use std::path::PathBuf;
-
+        let _env = config_env::default();
         let custom_dir = PathBuf::from("/custom/data/dir");
         let builder = Settings::builder_with_data_dir(&custom_dir)?;
         let config = builder.build()?;
@@ -2193,6 +2198,36 @@ mod tests {
         assert_eq!(daemon_pidfile_path, custom_dir.join("atuin-daemon.pid").to_str().unwrap());
         assert!(!daemon_autostart);
 
+        Ok(())
+    }
+
+    /// The builder takes `ATUIN_*` overrides, and `ATUIN_HOME`, from the environment a test mocks,
+    /// not from the process: whatever a developer's shell exports, the mock decides.
+    #[rstest]
+    #[case::exported_in_the_mock(true)]
+    #[case::unset_in_the_mock(false)]
+    fn the_builder_reads_the_mocked_environment(
+        config_env: MockEnv,
+        #[case] exported: bool,
+    ) -> Result<()> {
+        let stray = std::env::current_dir()?.joined("stray");
+        if exported {
+            config_env.set("ATUIN_DAEMON__SOCKET_PATH", stray.join("atuin.sock"));
+            config_env.set("ATUIN_HOME", stray.join("home"));
+        }
+
+        let config = Settings::builder_with_data_dir(Path::new("/custom/data/dir"))?.build()?;
+        let socket_path: Option<PathBuf> = config.get("daemon.socket_path")?;
+        let logs_dir: PathBuf = config.get("logs.dir")?;
+
+        let home = std::env::current_dir()?.joined("home");
+        if exported {
+            assert_eq!(socket_path, Some(stray.join("atuin.sock")));
+            assert_eq!(logs_dir, stray.join("home").joined("logs"));
+        } else {
+            assert_eq!(socket_path, None);
+            assert_eq!(logs_dir, home.joined(".atuin").joined("logs"));
+        }
         Ok(())
     }
 
