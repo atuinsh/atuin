@@ -1,0 +1,15 @@
+id: 042743ec-b9ca-4159-bd76-822c0de1f84f
+cwd: /tmp/copilot-play
+git_root: /tmp/copilot-play
+branch: main
+client_name: github/cli
+name: CopilotTestRun
+user_named: true
+summary_count: 1
+fork_count: 0
+created_at: 2026-10-27T23:35:17.499Z
+updated_at: 2026-10-27T23:35:54.820Z
+remote_steerable: false
+mc_task_id: c5b74fa0-de6c-4ce3-9e49-3eabb5ed68ba
+mc_session_id: 042743ec-b9ca-4159-bd76-822c0de1f84f
+mc_last_event_id: 33a67e0c-a31a-4921-8348-eb173e0887a3

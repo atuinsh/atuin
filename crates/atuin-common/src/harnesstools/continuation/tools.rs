@@ -89,7 +89,9 @@ impl Canonical {
                 | "exec_command"
                 | "local_shell"
                 | "read"
+                | "view"
                 | "write"
+                | "create"
                 | "edit"
                 | "grep"
                 | "glob"
@@ -127,9 +129,22 @@ impl Canonical {
                 offset: input.get("offset").filter(|v| v.is_number()).cloned(),
                 limit: input.get("limit").filter(|v| v.is_number()).cloned(),
             },
-            "write" => Self::Write {
+            // Copilot's `view` reads a range of lines, `[first, last]`, 1-based.
+            "view" => {
+                let range = input.get("view_range").and_then(Value::as_array);
+                let line = |n: usize| range.and_then(|r| r.get(n)?.as_u64());
+                let (first, last) = (line(0), line(1));
+                Self::Read {
+                    path: path()?,
+                    offset: first.map(|n| json!(n)),
+                    limit: first
+                        .zip(last)
+                        .map(|(first, last)| json!(last.saturating_sub(first) + 1)),
+                }
+            }
+            "write" | "create" => Self::Write {
                 path: path()?,
-                content: string(&input, &["content"])?,
+                content: string(&input, &["content", "file_text"])?,
             },
             "edit" => {
                 // pi's edit takes its replacements as `edits`; only one is an edit the others make.
@@ -142,8 +157,8 @@ impl Canonical {
                 };
                 Self::Edit {
                     path: path()?,
-                    old: string(&one, &["old_string", "oldString", "oldText"])?,
-                    new: string(&one, &["new_string", "newString", "newText"])?,
+                    old: string(&one, &["old_string", "oldString", "oldText", "old_str"])?,
+                    new: string(&one, &["new_string", "newString", "newText", "new_str"])?,
                     all: ["replace_all", "replaceAll"]
                         .iter()
                         .any(|k| one.get(*k).and_then(Value::as_bool) == Some(true)),
@@ -165,7 +180,7 @@ impl Canonical {
 
     /// This call as `target`'s own tool, when it has one that does the same: its name and input.
     fn render(&self, target: AnyHarness, cwd: &Path) -> Option<(&'static str, Value)> {
-        use AnyHarness::{ClaudeCode, Codex, Opencode, Pi};
+        use AnyHarness::{ClaudeCode, Codex, Copilot, Opencode, Pi};
 
         let mut input = Map::new();
         let mut put = |key: &str, value: Option<Value>| {
@@ -188,6 +203,29 @@ impl Canonical {
                     _ => "bash",
                 }
             }
+            // Copilot's `view` reads a range of lines, `[first, last]`, 1-based: a read of
+            // `limit` lines from `offset`, or the whole file. A read bounded at one end only
+            // has no faithful range, so it stays the tool it was.
+            (
+                Self::Read {
+                    path,
+                    offset,
+                    limit,
+                },
+                Copilot(_),
+            ) => {
+                put("path", Some(json!(path)));
+                let first = offset.as_ref().and_then(Value::as_u64);
+                let count = limit.as_ref().and_then(Value::as_u64);
+                match (first, count) {
+                    (Some(first), Some(count)) => {
+                        put("view_range", Some(json!([first, first + count.saturating_sub(1)])));
+                    }
+                    (None, None) => {}
+                    _ => return None,
+                }
+                "view"
+            }
             (
                 Self::Read {
                     path,
@@ -204,6 +242,11 @@ impl Canonical {
                     _ => "read",
                 }
             }
+            (Self::Write { path, content }, Copilot(_)) => {
+                put("path", Some(json!(path)));
+                put("file_text", Some(json!(content)));
+                "create"
+            }
             (Self::Write { path, content }, _) => {
                 put(path_key(target), Some(json!(path)));
                 put("content", Some(json!(content)));
@@ -212,8 +255,8 @@ impl Canonical {
                     _ => "write",
                 }
             }
-            // pi's edit replaces one occurrence only.
-            (Self::Edit { all: true, .. }, Pi(_)) => return None,
+            // pi's and Copilot's edits replace one occurrence only.
+            (Self::Edit { all: true, .. }, Pi(_) | Copilot(_)) => return None,
             (
                 Self::Edit {
                     path,
@@ -227,6 +270,7 @@ impl Canonical {
                 let (old_key, new_key, all_key) = match target {
                     ClaudeCode(_) => ("old_string", "new_string", "replace_all"),
                     Opencode(_) => ("oldString", "newString", "replaceAll"),
+                    Copilot(_) => ("old_str", "new_str", ""),
                     _ => ("oldText", "newText", ""),
                 };
                 put(old_key, Some(json!(old)));
@@ -237,6 +281,9 @@ impl Canonical {
                     _ => "edit",
                 }
             }
+            // Copilot's searches (`rg`, `glob`) take input atuin hasn't seen: a search stays
+            // the tool it was, which the model reads like any other.
+            (Self::Grep { .. } | Self::Glob { .. }, Copilot(_)) => return None,
             (
                 Self::Grep {
                     pattern,
@@ -276,7 +323,7 @@ const fn path_key(target: AnyHarness) -> &'static str {
     match target {
         AnyHarness::ClaudeCode(_) => "file_path",
         AnyHarness::Opencode(_) => "filePath",
-        AnyHarness::Codex(_) | AnyHarness::Pi(_) => "path",
+        AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => "path",
     }
 }
 
@@ -387,6 +434,28 @@ fn native(target: AnyHarness, name: &str) -> bool {
             "patch",
         ],
         AnyHarness::Pi(_) => &["bash", "read", "write", "edit", "grep", "find", "ls"],
+        // What Copilot CLI 1.0.104 offers the model, its agent-management tools aside.
+        AnyHarness::Copilot(_) => &[
+            "bash",
+            "read_bash",
+            "write_bash",
+            "stop_bash",
+            "list_bash",
+            "view",
+            "edit",
+            "create",
+            "apply_patch",
+            "glob",
+            "grep",
+            "rg",
+            "task",
+            "web_fetch",
+            "ask_user",
+            "skill",
+            "sql",
+            "store_memory",
+            "vote_memory",
+        ],
     };
     names.contains(&name.to_ascii_lowercase().as_str())
 }
@@ -435,7 +504,11 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::harnesstools::continuation::tests::{CLAUDE, CODEX, OPENCODE, PI};
+    use crate::harnesstools::continuation::tests::{CLAUDE, CODEX, COPILOT, OPENCODE, PI};
+
+    /// Copilot as a target, for a case whose source must stay Claude Code (its name shows in
+    /// a call kept foreign).
+    const CLAUDE_TO_COPILOT: AnyHarness = COPILOT;
 
     fn carried(source_name: &str, input: Value, target: AnyHarness) -> (String, Value) {
         let call = ToolUse {
@@ -478,6 +551,19 @@ mod tests {
     #[case::mcp("mcp__atuin__ai_session_read", json!({"id": "x"}), OPENCODE, "mcp__atuin__ai_session_read", json!({"id": "x"}))]
     #[case::patch_freeform("apply_patch", json!("*** Begin Patch\n*** End Patch"), CLAUDE, "apply_patch", json!({"input": "*** Begin Patch\n*** End Patch"}))]
     #[case::odd_name("atuin.history:search", json!({}), CLAUDE, "atuin_history_search", json!({}))]
+    #[case::claude_to_copilot("Bash", json!({"command": "ls"}), COPILOT, "bash", json!({"command": "ls"}))]
+    #[case::read_to_copilot("Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}), COPILOT, "view", json!({"path": "/a.rs", "view_range": [10, 14]}))]
+    #[case::whole_read_to_copilot("Read", json!({"file_path": "/a.rs"}), COPILOT, "view", json!({"path": "/a.rs"}))]
+    #[case::read_from_an_offset_kept_foreign_by_copilot("Read", json!({"file_path": "/a.rs", "offset": 10}), COPILOT, "Read", json!({"file_path": "/a.rs", "offset": 10}))]
+    #[case::read_of_a_limit_kept_foreign_by_copilot("Read", json!({"file_path": "/a.rs", "limit": 5}), COPILOT, "Read", json!({"file_path": "/a.rs", "limit": 5}))]
+    #[case::whole_read_to_copilot("Read", json!({"file_path": "/a.rs"}), COPILOT, "view", json!({"path": "/a.rs"}))]
+    #[case::copilot_view_to_claude("view", json!({"path": "/a.rs", "view_range": [10, 14]}), CLAUDE, "Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}))]
+    #[case::write_to_copilot("Write", json!({"file_path": "/a.rs", "content": "x"}), COPILOT, "create", json!({"path": "/a.rs", "file_text": "x"}))]
+    #[case::copilot_create_to_pi("create", json!({"path": "/a.rs", "file_text": "x"}), PI, "write", json!({"path": "/a.rs", "content": "x"}))]
+    #[case::edit_to_copilot("Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"}), COPILOT, "edit", json!({"path": "/a.rs", "old_str": "a", "new_str": "b"}))]
+    #[case::copilot_edit_to_claude("edit", json!({"path": "/a.rs", "old_str": "a", "new_str": "b"}), CLAUDE, "Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"}))]
+    #[case::replace_all_kept_foreign_by_copilot("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}), COPILOT, "claude-code_Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}))]
+    #[case::grep_kept_foreign_by_copilot("Grep", json!({"pattern": "fn main"}), CLAUDE_TO_COPILOT, "claude-code_Grep", json!({"pattern": "fn main"}))]
     fn calls_translate(
         #[case] name: &str,
         #[case] input: Value,

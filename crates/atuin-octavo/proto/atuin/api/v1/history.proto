@@ -82,4 +82,6 @@ message HistoryFilter {
   optional string shell = 9;
   // Only entries that started at or after this time.
   google.protobuf.Timestamp started_after = 10;
+  // Only entries that started before this time.
+  google.protobuf.Timestamp started_before = 11;
 }

@@ -47,6 +47,8 @@ pub async fn start_server(path: &str) -> (url::Url, oneshot::Sender<()>, JoinHan
             db_password_file: None,
         },
         metrics: atuin_server::settings::Metrics::default(),
+        trusted_proxies: Vec::new(),
+        trusted_proxy_header: ServerSettings::DEFAULT_TRUSTED_PROXY_HEADER,
         fake_version: None,
     };
 

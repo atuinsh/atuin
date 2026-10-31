@@ -141,6 +141,7 @@ fn label(harness: AnyHarness) -> &'static str {
     match harness {
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
+        AnyHarness::Copilot(_) => "Copilot",
         AnyHarness::Opencode(_) => "opencode",
         AnyHarness::Pi(pi) => match pi.flavour() {
             Flavour::Pi => "Pi",
@@ -459,7 +460,8 @@ impl Rows {
         }
         let calling = Some(StopReason::ToolUse);
         match self.target {
-            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) => {
+            // Copilot answers each call with a result event of its own, as pi does.
+            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -785,11 +787,11 @@ impl Ids {
         }
     }
 
-    /// A new session's id: a UUID (Claude Code's random, Codex's and Pi's time-ordered), or an
-    /// opencode `ses_` id, which sort newest first.
+    /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's and Pi's
+    /// time-ordered), or an opencode `ses_` id, which sort newest first.
     fn session(&self) -> String {
         match self.target {
-            AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
             AnyHarness::Codex(_) | AnyHarness::Pi(_) => Uuid::now_v7().to_string(),
             AnyHarness::Opencode(_) => {
                 opencode::rehydrate::mint_session(self.now, &Uuid::new_v4().to_string())
@@ -797,7 +799,8 @@ impl Ids {
         }
     }
 
-    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code; for Codex, a
+    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code, an event id for
+    /// Copilot; for Codex, a
     /// content-keyed `syn-` id, which its writer leaves off the line as Codex itself does for a
     /// message it names no id; an opencode `prt_` part id, in time order (rows of one message,
     /// the marker and the first prompt, are read in id order); a pi entry id (8 hex digits,
@@ -805,7 +808,7 @@ impl Ids {
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+                AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

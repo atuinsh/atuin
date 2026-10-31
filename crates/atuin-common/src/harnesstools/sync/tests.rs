@@ -38,17 +38,19 @@ fn base() -> LocalTip {
 }
 
 #[rstest]
-#[case::from_the_tip(vec![row("d", Some("b")), row("e", Some("d"))], Links::Parents, None)]
-#[case::from_a_row_merged_into_it(vec![row("d", Some("c"))], Links::Parents, None)]
-#[case::from_an_older_line(vec![row("d", Some("a"))], Links::Parents, Some("Unsupported"))]
-#[case::from_nothing(vec![row("d", None)], Links::Parents, Some("Unsupported"))]
+#[case::from_the_tip(vec![row("d", Some("b")), row("e", Some("d"))], Links::Parents { chained: false }, None)]
+#[case::from_a_row_merged_into_it(vec![row("d", Some("c"))], Links::Parents { chained: false }, None)]
+#[case::from_an_older_line(vec![row("d", Some("a"))], Links::Parents { chained: false }, Some("Unsupported"))]
+#[case::from_nothing(vec![row("d", None)], Links::Parents { chained: false }, Some("Unsupported"))]
 #[case::chained_from_nothing(vec![row("d", None), row("e", None)], Links::Chained, None)]
+#[case::chained_parents_from_nothing(vec![row("d", None), row("e", None)], Links::Parents { chained: true }, None)]
+#[case::chained_parents_from_an_older_line(vec![row("d", Some("a"))], Links::Parents { chained: true }, Some("Unsupported"))]
 #[case::chained_from_an_older_line(vec![row("d", Some("a"))], Links::Chained, Some("Unsupported"))]
 #[case::in_order(vec![row("d", Some("zz"))], Links::Linear, None)]
-#[case::an_id_held(vec![row("a", Some("b"))], Links::Parents, Some("IdTaken"))]
-#[case::an_id_twice(vec![row("d", Some("b")), row("d", Some("d"))], Links::Parents, Some("IdTaken"))]
-#[case::beside_the_tree(vec![row("syn-1", None), row("d", Some("b"))], Links::Parents, None)]
-#[case::beside_the_tree_after_a_row(vec![row("d", Some("b")), row("syn-1", None)], Links::Parents,
+#[case::an_id_held(vec![row("a", Some("b"))], Links::Parents { chained: false }, Some("IdTaken"))]
+#[case::an_id_twice(vec![row("d", Some("b")), row("d", Some("d"))], Links::Parents { chained: false }, Some("IdTaken"))]
+#[case::beside_the_tree(vec![row("syn-1", None), row("d", Some("b"))], Links::Parents { chained: false }, None)]
+#[case::beside_the_tree_after_a_row(vec![row("d", Some("b")), row("syn-1", None)], Links::Parents { chained: false },
     None)]
 fn only_rows_continuing_the_tip_fast_forward(
     #[case] lines: Vec<RehydrateMessage>,
@@ -157,15 +159,16 @@ fn backups_never_overwrite_each_other() {
 /// ids, which go with a branch without being on it) say nothing of where it leaves, held or not;
 /// Codex's content-keyed rows are on its tree like any other.
 #[rstest]
-#[case::after_the_tip(&["a", "b", "d"], Links::Parents, Ok((2, "b")))]
-#[case::merged_into_a_line(&["a", "b", "c", "d"], Links::Parents, Ok((3, "b")))]
-#[case::shares_nothing(&["x", "y"], Links::Parents, Err("shares nothing"))]
-#[case::holds_rows_past_it(&["a", "x", "b"], Links::Parents, Err("past where it leaves"))]
-#[case::beside_the_tree_not_held(&["a", "syn-t", "b", "d"], Links::Parents, Ok((3, "b")))]
-#[case::beside_the_tree_after_it(&["a", "b", "syn-t", "d"], Links::Parents, Ok((2, "b")))]
-#[case::beside_the_tree_first(&["syn-p", "a", "b", "d"], Links::Parents, Ok((3, "b")))]
-#[case::only_beside_the_tree(&["syn-p", "x"], Links::Parents, Err("shares nothing"))]
+#[case::after_the_tip(&["a", "b", "d"], Links::Parents { chained: false }, Ok((2, "b")))]
+#[case::merged_into_a_line(&["a", "b", "c", "d"], Links::Parents { chained: false }, Ok((3, "b")))]
+#[case::shares_nothing(&["x", "y"], Links::Parents { chained: false }, Err("shares nothing"))]
+#[case::holds_rows_past_it(&["a", "x", "b"], Links::Parents { chained: false }, Err("past where it leaves"))]
+#[case::beside_the_tree_not_held(&["a", "syn-t", "b", "d"], Links::Parents { chained: false }, Ok((3, "b")))]
+#[case::beside_the_tree_after_it(&["a", "b", "syn-t", "d"], Links::Parents { chained: false }, Ok((2, "b")))]
+#[case::beside_the_tree_first(&["syn-p", "a", "b", "d"], Links::Parents { chained: false }, Ok((3, "b")))]
+#[case::only_beside_the_tree(&["syn-p", "x"], Links::Parents { chained: false }, Err("shares nothing"))]
 #[case::codex_content_keyed(&["a", "syn-t", "b"], Links::Chained, Err("past where it leaves"))]
+#[case::chained_parents_beside_the_tree(&["a", "syn-t", "b", "d"], Links::Parents { chained: true }, Ok((3, "b")))]
 fn a_branch_leaves_a_transcript_where_it_stops_holding_it(
     #[case] branch: &[&str],
     #[case] links: Links,
@@ -196,7 +199,7 @@ fn a_switch_writes_the_rows_past_the_branch_point_the_copy_kept_none_of() {
         known_source_ids: ["a", "b", "syn-mine"].map(str::to_owned).into(),
         ..base()
     };
-    let written = past(&branch, 2, &kept, Links::Parents);
+    let written = past(&branch, 2, &kept, Links::Parents { chained: false });
     let ids: Vec<(&str, Option<&str>)> =
         written.iter().map(|m| (m.source_id.as_str(), m.parent_source_id.as_deref())).collect();
     assert_eq!(ids, [("syn-t", Some("b")), ("d", Some("b")), ("syn-u", Some("d"))]);

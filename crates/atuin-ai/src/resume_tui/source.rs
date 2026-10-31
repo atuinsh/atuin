@@ -344,7 +344,8 @@ pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
         HarnessKind::Opencode => Some("opencode"),
         HarnessKind::Pi => Some("pi"),
         HarnessKind::Omp => Some("omp"),
-        HarnessKind::Copilot | HarnessKind::Unknown => None,
+        HarnessKind::Copilot => Some("copilot"),
+        HarnessKind::Unknown => None,
     }
 }
 

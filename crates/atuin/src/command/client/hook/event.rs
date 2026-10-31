@@ -56,26 +56,29 @@ impl From<WireHookEvent> for Option<HookEvent> {
     ///
     /// We **don't** care about:
     ///   - Non-`Bash` tool invocations.
-    ///   - Tool invocations which are missing a `tool_use_id`.
+    ///   - Tool invocations which are missing a `tool_use_id`, unless the session and the
+    ///     command can stand in for it ([`correlation_key`]).
+    ///   - Commands started in the background (Copilot's `mode: async`): their end says only
+    ///     that they started, so recording one would give it the wrong exit and duration.
     fn from(wire: WireHookEvent) -> Self {
         if matches!(wire.tool_name, WireToolName::Other) {
             return None;
         }
 
+        let (command, intent) = match wire.tool_input {
+            Some(input) if input.is_background() => return None,
+            Some(input) => (input.command, input.description),
+            None => (None, None),
+        };
         // Present but empty is as good as missing: a start could never be
         // matched to its end.
-        if wire.tool_use_id.is_empty() {
-            return None;
-        }
-        let tool_use_id = wire.tool_use_id;
+        let tool_use_id = match wire.tool_use_id.filter(|id| !id.is_empty()) {
+            Some(id) => id,
+            None => correlation_key(wire.session_id.as_deref()?, command.as_deref()?),
+        };
 
         match wire.hook_event_name {
             HookEventName::PreToolUse => {
-                let (command, intent) = match wire.tool_input {
-                    Some(input) => (input.command, input.description),
-                    None => (None, None),
-                };
-
                 // A missing or empty command has nothing to record.
                 let command = command.filter(|command| !command.is_empty())?;
 
@@ -87,7 +90,10 @@ impl From<WireHookEvent> for Option<HookEvent> {
             }
             HookEventName::PostToolUse => Some(HookEvent::End {
                 tool_use_id,
-                exit: wire.tool_response.and_then(|response| response.exit_code()),
+                exit: wire
+                    .tool_response
+                    .and_then(|response| response.exit_code())
+                    .or_else(|| wire.tool_result.and_then(|result| result.exit_code())),
                 transcript: wire.transcript_path,
             }),
             // Failed: with the exit code its error starts with (`Exit code 2`), else 1.
@@ -102,6 +108,13 @@ impl From<WireHookEvent> for Option<HookEvent> {
 }
 
 /// The exit code a Claude Code failure's `error` starts with (`Exit code <n>`), if it does.
+/// What stands in for a `tool_use_id` an agent (Copilot) doesn't send: the session and the
+/// command, which both the start and the end of a call carry. Two identical commands running at
+/// once in one session share a key, and the second to end closes the first's entry.
+fn correlation_key(session_id: &str, command: &str) -> String {
+    format!("{session_id}-{:016x}", xxhash_rust::xxh3::xxh3_64(command.as_bytes()))
+}
+
 fn failure_exit_code(error: &str) -> Option<i64> {
     error.lines().next()?.strip_prefix("Exit code ")?.trim().parse().ok()
 }
@@ -138,6 +151,20 @@ mod tests {
 
     fn non_nul(s: &str) -> NonNulStr {
         NonNulStr::new(s.to_owned()).unwrap()
+    }
+
+    /// The key the Copilot cases below correlate by.
+    fn copilot_key(command: &str) -> String {
+        correlation_key("25e51fe0-710a-4dfe-973e-caf8e2629ad7", command)
+    }
+
+    #[rstest]
+    fn the_correlation_key_is_the_session_and_the_commands_hash() {
+        let key = copilot_key("echo probe-hello; false");
+        assert!(key.starts_with("25e51fe0-710a-4dfe-973e-caf8e2629ad7-"), "{key}");
+        assert_eq!(key.len(), 36 + 1 + 16, "{key}");
+        assert_ne!(copilot_key("a"), copilot_key("b"));
+        assert_ne!(correlation_key("s", "a"), correlation_key("t", "a"));
     }
 
     #[rstest]
@@ -249,7 +276,7 @@ mod tests {
         }),
         None
     )]
-    // A missing tool_use_id can't be correlated start↔end → skip.
+    // A missing tool_use_id can't be correlated start↔end without a session → skip.
     #[case::missing_tool_use_id_skipped(
         json!({
             "hook_event_name": "PreToolUse",
@@ -257,6 +284,67 @@ mod tests {
             "tool_input": {"command": "echo hi"}
         }),
         None
+    )]
+    // Copilot CLI 1.0.104 sends no tool_use_id: the session and the command correlate the
+    // start with the end, which carries the command again and the exit code in the output.
+    #[case::copilot_pre_tool_use(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "timestamp": "2026-10-27T18:25:31.292Z",
+            "cwd": "/tmp/copilot-play",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo probe-hello; false", "description": "Run probe echo command"}
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("echo probe-hello; false"),
+            intent: Some("Run probe echo command".into()),
+            tool_use_id: copilot_key("echo probe-hello; false"),
+        })
+    )]
+    #[case::copilot_post_tool_use(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "timestamp": "2026-10-27T18:25:31.430Z",
+            "cwd": "/tmp/copilot-play",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo probe-hello; false", "description": "Run probe echo command"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "probe-hello\n<shellId: 0 completed with exit code 1>"}
+        }),
+        Some(HookEvent::End { tool_use_id: copilot_key("echo probe-hello; false"), exit: Some(1), transcript: None })
+    )]
+    // A command Copilot started in the background (`mode: async`) is never recorded: its end
+    // comes when it starts. A real payload, Copilot CLI 1.0.104.
+    #[case::copilot_background_start_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Background sleep then echo", "mode": "async"}
+        }),
+        None
+    )]
+    #[case::copilot_background_end_skipped(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Background sleep then echo", "mode": "async"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "<command started in background with shellId: 1>"}
+        }),
+        None
+    )]
+    // A failing command is a `PostToolUse` too, its exit code in the trailer alone.
+    #[case::copilot_failed_command(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "exit 3", "description": "Run exit 3"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "\n<shellId: 0 completed with exit code 3>"}
+        }),
+        Some(HookEvent::End { tool_use_id: copilot_key("exit 3"), exit: Some(3), transcript: None })
     )]
     // An empty tool_use_id is treated the same as missing.
     #[case::empty_tool_use_id_skipped(

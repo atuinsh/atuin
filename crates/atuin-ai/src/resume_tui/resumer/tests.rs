@@ -447,8 +447,8 @@ async fn a_harness_not_installed_here_says_so(dirs: Dirs) {
 async fn unsupported_sessions_and_subagents_are_not_resumable(dirs: Dirs) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert_eq!(resumer.plan(&copilot).await.unwrap_err(), NotResumable::Unsupported("Copilot"));
+    let unknown = row(HarnessKind::Unknown, "u-1", &dirs.here, false);
+    assert_eq!(resumer.plan(&unknown).await.unwrap_err(), NotResumable::Unsupported("unknown"));
 
     // A Claude Code subagent is refused by the harness before anything is looked up.
     let subagent = row(HarnessKind::ClaudeCode, "agent-a1b2", &dirs.here, true);
@@ -632,7 +632,8 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
 #[tokio::test]
 async fn an_empty_session_is_not_continued(
     dirs: Dirs,
-    #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)] target: HarnessKind,
+    #[values(HarnessKind::Codex, HarnessKind::Copilot, HarnessKind::Opencode, HarnessKind::Pi)]
+    target: HarnessKind,
 ) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
@@ -650,7 +651,13 @@ async fn an_empty_session_is_not_continued(
 #[tokio::test]
 async fn an_empty_session_is_not_forked(
     dirs: Dirs,
-    #[values(HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)]
+    #[values(
+        HarnessKind::ClaudeCode,
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
     harness: HarnessKind,
 ) {
     let machine = FakeMachine::default();
@@ -695,6 +702,7 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
+        HarnessKind::Copilot,
         HarnessKind::Pi,
         HarnessKind::Omp
     ]);
@@ -706,9 +714,6 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
         resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode, None).await.unwrap_err();
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
-
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert!(resumer.continue_targets(&copilot).is_empty());
 }
 
 #[rstest]
@@ -851,8 +856,6 @@ async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
     resumer.fork(&Worked, &session, from).await.unwrap();
     assert_eq!(machine.written.lock()[1].messages.len(), 2, "up to the tip");
 
-    let copilot = row(HarnessKind::Copilot, "cp", &dirs.elsewhere, false);
-    assert!(!resumer.can_fork(&copilot));
     let missing = FakeMachine {
         missing_programs: vec!["claude"],
         ..FakeMachine::default()

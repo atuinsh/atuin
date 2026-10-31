@@ -241,6 +241,47 @@ fn codex_heads(
     assert_eq!(analysis.diverged(), diverged);
 }
 
+/// Copilot rows name the row before them in their lane; those captured before the reader
+/// linked them (none) follow on from their host's row before them, as Codex's do, so the old
+/// history of a session two hosts went on with stays on both branches. Its title rows (`syn-`)
+/// are no node: they go with the branch of the host's row before them.
+#[rstest]
+#[case::old_rows_then_two_hosts(
+    &[("p0", None, 1, 0, Prompt), ("r0", None, 1, 1, Reply), ("syn-title", None, 1, 2, Title),
+      ("p1", Some("r0"), 2, 10, Prompt), ("r1", Some("p1"), 2, 11, Reply),
+      ("q1", Some("r0"), 1, 20, Prompt), ("s1", Some("q1"), 1, 21, Reply)],
+    &[("s1", 4), ("r1", 4)],
+    true,
+    "s1",
+    &["p0", "r0", "syn-title", "q1", "s1"]
+)]
+#[case::old_rows_follow_their_host(
+    &[("p0", None, 1, 0, Prompt), ("r0", None, 1, 1, Reply),
+      ("p1", None, 2, 10, Prompt), ("q1", None, 1, 20, Prompt)],
+    &[("q1", 3), ("p1", 3)],
+    true,
+    "q1",
+    &["p0", "r0", "q1"]
+)]
+fn copilot_heads(
+    #[case] rows: &[Row<'static>],
+    #[case] heads: &[(&str, u64)],
+    #[case] diverged: bool,
+    #[case] head: &str,
+    #[case] branch: &[&str],
+) {
+    let analysis = analyse(HarnessKind::Copilot, rows);
+    let want: Vec<(String, u64)> = heads.iter().map(|&(id, n)| (id.to_owned(), n)).collect();
+    assert_eq!(tips(&analysis), want);
+    assert_eq!(analysis.diverged(), diverged);
+    let rows: Vec<_> = analysis
+        .rows_for(&SourceId::from(head.to_owned()))
+        .iter()
+        .map(|m| m.source_id.to_string())
+        .collect();
+    assert_eq!(rows, branch);
+}
+
 /// opencode is linear: one host carrying on from another continues it, a host coming back after
 /// another's rows is interleaving, parting where it left off. Rows are `r0`, `r1`, ... in time
 /// order, given as (host, kind); the path checked is the newest head's.

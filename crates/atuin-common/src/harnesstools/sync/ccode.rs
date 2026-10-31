@@ -536,7 +536,7 @@ fn extend(
     lines: &[RehydrateMessage],
     taken: Option<&HashSet<String>>,
 ) -> Result<(Vec<Value>, Vec<String>), SyncError> {
-    check_segment(lines, base, taken, Links::Parents)?;
+    check_segment(lines, base, taken, Links::Parents { chained: false })?;
 
     let cwd = working_dir(current).or_else(|| lines.iter().find_map(|m| m.cwd.clone()));
     let session = RehydrateSession {
@@ -608,10 +608,10 @@ pub(super) fn replace_to(
     if Stamp::of(&current) != base.stamp {
         return Err(SyncError::Changed);
     }
-    let (shared, from) = branch_point(base, branch, Links::Parents)?;
+    let (shared, from) = branch_point(base, branch, Links::Parents { chained: false })?;
     let kept = shared_lines(&current, &from);
     let continuing = continuing_from(tip_of(path, &kept), &from)?;
-    let rest = past(branch, shared, &continuing, Links::Parents);
+    let rest = past(branch, shared, &continuing, Links::Parents { chained: false });
     let (lines, appended) = extend(session_id, &kept, &continuing, &rest, taken)?;
     let out = joined(&kept, &lines);
     let written = tip_of(path, &out);

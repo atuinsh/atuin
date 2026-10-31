@@ -22,7 +22,9 @@ use uuid::Uuid;
 use super::history::History;
 use super::ordering;
 use super::settings::{Dialect, FilterMode, SearchMode, Settings};
-use crate::history::{AuthorKind, AuthorPattern, HistoryId, HistoryStats, KNOWN_AGENTS};
+use crate::history::{
+    AuthorKind, AuthorPattern, CommandRuns, HistoryId, HistoryStats, KNOWN_AGENTS,
+};
 
 #[derive(Clone)]
 pub struct Context {
@@ -981,6 +983,42 @@ impl Sqlite {
         Ok(res.into_iter().map(|r| (r.history, r.count)).collect())
     }
 
+    /// Every command in history run by one of `authors`, with how often and when it ran.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn command_runs(
+        &self,
+        authors: OrFilter<&[AuthorPattern]>,
+    ) -> Result<Vec<CommandRuns>> {
+        let mut sql = SqlBuilder::select_from("history");
+        sql.fields(&[
+            "command",
+            "count(*)",
+            "sum(exit != 0 AND exit != -1)",
+            "min(timestamp)",
+            "max(timestamp)",
+            "cwd",
+        ])
+        .and_where_is_null("deleted_at")
+        .group_by("command");
+        apply_author_filter(&mut sql, authors);
+        let sql = sql.sql().expect("bug in command runs query. please report");
+
+        let rows: Vec<(String, u32, u32, i64, i64, String)> =
+            db::query_as(sqlx::AssertSqlSafe(sql)).fetch_all(self.sqlite.pool()).await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(command, runs, failures, first, last, cwd)| CommandRuns {
+                command,
+                runs,
+                failures,
+                first: OffsetDateTime::from_unix_nanos_i64(first),
+                last: OffsetDateTime::from_unix_nanos_i64(last),
+                cwd,
+            })
+            .collect())
+    }
+
     #[must_use]
     pub fn all_paged(&self, page_size: usize, include_deleted: bool) -> Paged {
         Paged::new(self.clone(), page_size, include_deleted)
@@ -1342,8 +1380,10 @@ mod test {
 
     use rstest::{fixture, rstest};
     use time::format_description::well_known::Rfc3339;
+    use time::macros::datetime;
 
     use super::*;
+    use crate::history::all_user_author_filter;
     use crate::settings::test_local_timeout;
 
     /// `ATUIN_SESSION` comes from the environment: a stray value whose version nibble reads as a
@@ -1634,6 +1674,56 @@ mod test {
         let loaded = db.load_active(std::iter::empty::<HistoryId>()).await.unwrap();
 
         assert!(loaded.is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn command_runs_aggregate_live_rows_per_command_by_author(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let run = |command: &str, timestamp: OffsetDateTime, exit: i64| -> History {
+            let mut history: History =
+                History::capture().timestamp(timestamp).command(command).cwd("/srv").build().into();
+            history.exit = exit;
+            history
+        };
+        let mut deleted = run("svn up", datetime!(2019-01-01 0:00 UTC), 0);
+        deleted.deleted_at = Some(datetime!(2019-01-02 0:00 UTC));
+        let mut by_agent = run("svn up", datetime!(2025-01-01 0:00 UTC), 0);
+        by_agent.author_kind = Some(AuthorKind::Agent);
+        db.save_bulk([
+            &deleted,
+            &by_agent,
+            &run("svn up", datetime!(2020-03-01 0:00 UTC), 0),
+            &run("svn up", datetime!(2023-06-01 0:00 UTC), 1),
+            &run("ls", datetime!(2026-10-29 0:00 UTC), -1),
+        ])
+        .await
+        .unwrap();
+
+        let mut runs = db.command_runs(all_user_author_filter()).await.unwrap();
+        runs.sort_by(|a, b| a.command.cmp(&b.command));
+
+        assert_eq!(runs, [
+            CommandRuns {
+                command: "ls".to_owned(),
+                runs: 1,
+                failures: 0,
+                first: datetime!(2026-10-29 0:00 UTC),
+                last: datetime!(2026-10-29 0:00 UTC),
+                cwd: "/srv".to_owned(),
+            },
+            CommandRuns {
+                command: "svn up".to_owned(),
+                runs: 2,
+                failures: 1,
+                first: datetime!(2020-03-01 0:00 UTC),
+                last: datetime!(2023-06-01 0:00 UTC),
+                cwd: "/srv".to_owned(),
+            },
+        ]);
     }
 
     #[rstest]

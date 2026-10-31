@@ -56,7 +56,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use clap::Args;
 use eyre::{Result, bail};
 
-use super::session::one_line;
+use super::session::{HarnessArg, one_line};
 use crate::resume_tui::catchup::{self, CatchUp, Held};
 use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
@@ -95,7 +95,7 @@ pub struct Cmd {
     /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
     /// several machines needs `--branch`.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
-    continue_in: Option<ContinueIn>,
+    continue_in: Option<HarnessArg>,
 
     /// Fork the thread QUERY names (by id, or a unique id prefix): it is written out as a new
     /// session of the same agent, with the same history, and resumed. The original is left as
@@ -139,28 +139,6 @@ pub struct Cmd {
     /// Report the result on stderr for the shell widget.
     #[arg(long, hide = true)]
     shell_widget: bool,
-}
-
-/// A harness to continue a session in (`--in`).
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-enum ContinueIn {
-    Claude,
-    Codex,
-    Opencode,
-    Pi,
-    Omp,
-}
-
-impl ContinueIn {
-    fn kind(self) -> HarnessKind {
-        match self {
-            Self::Claude => HarnessKind::ClaudeCode,
-            Self::Codex => HarnessKind::Codex,
-            Self::Opencode => HarnessKind::Opencode,
-            Self::Pi => HarnessKind::Pi,
-            Self::Omp => HarnessKind::Omp,
-        }
-    }
 }
 
 /// Where the result goes.
@@ -653,15 +631,16 @@ async fn continue_plan(
     source: &dyn SessionSource,
     resumer: &dyn Resumer,
     query: &str,
-    into: ContinueIn,
+    into: HarnessArg,
     branch: Option<&str>,
     here: &str,
 ) -> Result<(ResumePlan, String)> {
+    let into = HarnessKind::from(into);
     let Some((row, redirected)) = direct_target(source, query).await? else {
         bail!("`--in` continues the thread an id names: no single thread has the id {query:?}");
     };
     let kind = row.handle.harness;
-    if into.kind() == kind {
+    if into == kind {
         let resumed = direct_plan(source, resumer, &row, Direct::CatchUp, branch, here).await?;
         let (plan, said) = resumed.map_err(|why| {
             eyre::eyre!("{}", escaped(&format!("can't resume {}: {why}", row.handle.session)))
@@ -691,7 +670,7 @@ async fn continue_plan(
             None
         }
     };
-    let continued = resumer.continue_in(source, &row, into.kind(), head.as_ref()).await;
+    let continued = resumer.continue_in(source, &row, into, head.as_ref()).await;
     let continued = continued.map_err(|why| {
         eyre::eyre!("{}", escaped(&format!("can't continue {}: {why}", row.handle.session)))
     })?;
@@ -1057,7 +1036,7 @@ mod tests {
 
         let resumer = FakeResumer::default();
         let (plan, status) =
-            continue_plan(&source, &resumer, query, ContinueIn::Codex, None, fake::THIS_HOST_ID)
+            continue_plan(&source, &resumer, query, HarnessArg::Codex, None, fake::THIS_HOST_ID)
                 .await
                 .unwrap();
         assert_eq!(plan.args[1], format!("continued-{target}"));
@@ -1129,7 +1108,7 @@ mod tests {
             &source,
             &resumer,
             "7f3c9a12",
-            ContinueIn::Codex,
+            HarnessArg::Codex,
             None,
             fake::THIS_HOST_ID,
         )
@@ -1140,14 +1119,23 @@ mod tests {
         assert_eq!(status, "continuing in Codex: 42 tool calls become notes");
 
         let err =
-            continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi, None, fake::THIS_HOST_ID)
+            continue_plan(&source, &resumer, "fix flaky", HarnessArg::Pi, None, fake::THIS_HOST_ID)
                 .await
                 .unwrap_err();
         assert!(err.to_string().contains("no single thread has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
-        assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
+        assert_eq!(cli.cmd.continue_in, Some(HarnessArg::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+    }
+
+    /// `--in` takes the harness names the listings show, and `claude` for `claude-code`.
+    #[rstest]
+    #[case::listed("claude-code")]
+    #[case::synonym("claude")]
+    fn in_takes_claude_code_by_both_names(#[case] name: &str) {
+        let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", name]).unwrap();
+        assert_eq!(cli.cmd.continue_in, Some(HarnessArg::ClaudeCode));
     }
 
     /// An agent's error keeps its lines, each without control characters.
@@ -1179,7 +1167,7 @@ mod tests {
         let resumer = FakeResumer::default();
         let here = fake::THIS_HOST_ID;
         let continued =
-            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Pi, branch, here).await;
+            continue_plan(&source, &resumer, "7f3c9a12", HarnessArg::Pi, branch, here).await;
         match want {
             Ok(head) => {
                 continued.unwrap();
@@ -1205,7 +1193,7 @@ mod tests {
         let resumer = FakeResumer::default();
         let here = fake::THIS_HOST_ID;
         let (plan, status) =
-            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Claude, None, here)
+            continue_plan(&source, &resumer, "7f3c9a12", HarnessArg::ClaudeCode, None, here)
                 .await
                 .unwrap();
         let row = direct_match(&source, "7f3c9a12").await.unwrap().unwrap();

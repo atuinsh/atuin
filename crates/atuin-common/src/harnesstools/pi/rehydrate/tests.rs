@@ -111,7 +111,7 @@ async fn a_session_reads_back_as_it_was_captured(sessions: TempDir, #[case] json
     let synced = testing::synced_as(captured(jsonl), true);
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", &cwd, synced);
     let dir = sessions.path().join("--here--");
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), &dir, &session).unwrap();
+    let path = rehydrate_into(Flavour::Pi, sessions.path(), &dir, &session, None).unwrap();
     assert_eq!(path.parent(), Some(dir.as_path()));
     assert_eq!(locate(sessions.path(), &session.id), Some(path.clone()));
 
@@ -177,7 +177,8 @@ fn entries_are_linked_named_and_compacted(sessions: TempDir) {
         })]),
         message("c1", Some("r1"), Role::System, vec![Content::Summary("so far".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     let by_id = |id: &str| lines.iter().find(|l| l["id"] == id).cloned().unwrap();
 
@@ -209,7 +210,8 @@ fn the_tree_is_relinked_whatever_the_order(sessions: TempDir) {
         message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
         message("a1", Some("x1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
     assert_eq!(parent("a0"), "u1");
@@ -227,7 +229,8 @@ fn a_parent_cycle_hangs_from_the_entry_before(sessions: TempDir) {
         message("x1", Some("u2"), Role::Other("label".to_owned()), vec![]),
         message("u2", Some("a1"), Role::User, vec![Content::Text("again".to_owned())]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -246,7 +249,8 @@ fn a_cycle_closed_by_clock_skew_is_cut(sessions: TempDir) {
         message("c", Some("d"), Role::User, vec![Content::Text("cycle".to_owned())]),
         message("d", Some("c"), Role::Other("label".to_owned()), vec![]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     let parent = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["parentId"].clone();
 
@@ -261,9 +265,9 @@ fn never_overwrites_a_session(sessions: TempDir) {
     let messages = vec![message("u1", None, Role::User, vec![Content::Text("hi".to_owned())])];
     let s = session("s-once", sessions.path(), messages);
     let path =
-        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("a"), &s).unwrap();
-    let err =
-        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("b"), &s).unwrap_err();
+        rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("a"), &s, None).unwrap();
+    let err = rehydrate_into(Flavour::Pi, sessions.path(), &sessions.path().join("b"), &s, None)
+        .unwrap_err();
     assert!(matches!(&err, RehydrateError::AlreadyExists(p) if *p == path), "{err:?}");
     assert!(!sessions.path().join("b").exists());
 }
@@ -288,7 +292,7 @@ fn a_bang_command_is_a_bash_execution(
             error: true,
         }),
     ])]);
-    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session, None).unwrap();
     let entry = lines(&path).into_iter().find(|e| e["type"] == "message").unwrap();
     assert_eq!(entry["message"]["role"], role);
     assert_eq!(entry["message"][key], "echo hi");
@@ -358,7 +362,8 @@ async fn synced_calls_come_back_as_notes_the_api_takes(sessions: TempDir, #[case
         }
     }
     let session = session("0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000", sessions.path(), synced.clone());
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let written = lines(&path);
     assert_the_api_takes(&written);
     assert!(!written.iter().any(|l| l["message"]["content"].to_string().contains("toolCall")));
@@ -405,7 +410,8 @@ fn output_not_captured_says_so(sessions: TempDir) {
             error: false,
         })]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     assert_the_api_takes(&lines);
     assert_eq!(lines[1]["message"]["output"], UNCAPTURED_OUTPUT);
@@ -453,7 +459,8 @@ fn an_edits_result_gets_its_details_back(sessions: TempDir) {
             Content::Patch(patch.clone()),
         ]),
     ]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let lines = lines(&path);
     let result = lines.iter().find(|l| l["id"] == "r1").unwrap();
     assert_eq!(
@@ -480,7 +487,8 @@ fn a_reply_names_its_provider(
     reply.model = Some(model.to_owned());
     reply.provider = provider.map(str::to_owned);
     let session = session("s-provider", sessions.path(), vec![reply]);
-    let path = rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session).unwrap();
+    let path =
+        rehydrate_into(Flavour::Pi, sessions.path(), sessions.path(), &session, None).unwrap();
     let reply = lines(&path).into_iter().find(|l| l["id"] == "a1").unwrap();
     assert_eq!(reply["message"]["provider"].as_str(), want);
 }
@@ -495,7 +503,7 @@ fn an_omp_session_starts_with_its_title_slot(
     let session = session("s-slot", sessions.path(), vec![message("u1", None, Role::User, vec![
         Content::Text("hi".to_owned()),
     ])]);
-    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session).unwrap();
+    let path = rehydrate_into(flavour, sessions.path(), sessions.path(), &session, None).unwrap();
     let body = std::fs::read_to_string(&path).unwrap();
     let first = body.split_inclusive('\n').next().unwrap();
     let first_type = serde_json::from_str::<serde_json::Value>(first).unwrap()["type"].clone();
@@ -506,4 +514,91 @@ fn an_omp_session_starts_with_its_title_slot(
             assert_eq!(locate(sessions.path(), "s-slot"), Some(path));
         }
     }
+}
+
+/// A new file opens on the agent's configured default model, in the agent's own `model_change`
+/// shape, and the first entry hangs from it: omp won't open a session whose turns name no model
+/// it can use unless a `model_change` on the path does.
+#[rstest]
+fn a_new_file_opens_on_the_agents_default_model(
+    sessions: TempDir,
+    #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+) {
+    let agent = tempfile::tempdir().unwrap();
+    match flavour {
+        Flavour::Pi => std::fs::write(
+            agent.path().join("settings.json"),
+            r#"{"defaultProvider": "openai-codex", "defaultModel": "gpt-5.6-luna"}"#,
+        )
+        .unwrap(),
+        Flavour::Omp => std::fs::write(
+            agent.path().join("config.yml"),
+            "setupVersion: 2\nmodelRoles:\n  default: openai-codex/gpt-5.6-luna\n  smol: x/y\n",
+        )
+        .unwrap(),
+    }
+    let start = StartModel::configured_in(flavour, agent.path()).unwrap();
+    assert_eq!((start.provider.as_str(), start.id.as_str()), ("openai-codex", "gpt-5.6-luna"));
+
+    let session = session("s-start", sessions.path(), vec![
+        message("u1", None, Role::User, vec![Content::Text("hi".to_owned())]),
+        message("a1", Some("u1"), Role::Assistant, vec![Content::Text("hello".to_owned())]),
+    ]);
+    let path =
+        rehydrate_into(flavour, sessions.path(), sessions.path(), &session, Some(&start)).unwrap();
+    let lines = lines(&path);
+    let opening = lines.iter().find(|l| l["type"] == "model_change").unwrap();
+    assert_eq!(opening["parentId"], serde_json::Value::Null);
+    match flavour {
+        Flavour::Pi => assert_eq!(
+            (opening["provider"].as_str(), opening["modelId"].as_str()),
+            (Some("openai-codex"), Some("gpt-5.6-luna"))
+        ),
+        Flavour::Omp => assert_eq!(opening["model"].as_str(), Some("openai-codex/gpt-5.6-luna")),
+    }
+    let first = lines.iter().find(|l| l["id"] == "u1").unwrap();
+    assert_eq!(first["parentId"], opening["id"]);
+    assert_eq!(lines.iter().find(|l| l["id"] == "a1").unwrap()["parentId"], "u1");
+}
+
+/// Without a configured default there is nothing to open on, and rows appended to a file never
+/// open it again.
+#[rstest]
+fn no_opening_model_without_a_default_or_on_an_append(sessions: TempDir) {
+    let agent = tempfile::tempdir().unwrap();
+    assert_eq!(StartModel::configured_in(Flavour::Pi, agent.path()), None);
+    assert_eq!(StartModel::configured_in(Flavour::Omp, agent.path()), None);
+    std::fs::write(agent.path().join("settings.json"), r#"{"defaultProvider": "openai"}"#).unwrap();
+    assert_eq!(StartModel::configured_in(Flavour::Pi, agent.path()), None);
+
+    let start = StartModel {
+        flavour: Flavour::Pi,
+        provider: "openai".to_owned(),
+        id: "gpt-5.6-luna".to_owned(),
+    };
+    let session =
+        session("s-append", sessions.path(), vec![message("u2", Some("u1"), Role::User, vec![
+            Content::Text("more".to_owned()),
+        ])]);
+    let appended = super::lines(
+        &session,
+        &Continuing {
+            after: Some("u1"),
+            kept_from: None,
+        },
+        false,
+        Some(&start),
+    );
+    assert!(appended.iter().all(|l| l["type"] != "model_change"), "{appended:?}");
+    assert_eq!(appended[0]["parentId"], "u1");
+}
+
+#[rstest]
+#[case::plain("modelRoles:\n  default: a/b\n", Some("a/b"))]
+#[case::quoted("modelRoles:\n  default: \"a/b\"\n", Some("a/b"))]
+#[case::comment("modelRoles:\n  default: a/b # the one\n", Some("a/b"))]
+#[case::other_block("retry:\n  default: a/b\nmodelRoles:\n  smol: c/d\n", None)]
+#[case::missing("setupVersion: 2\n", None)]
+fn omp_config_names_its_default_model(#[case] yaml: &str, #[case] want: Option<&str>) {
+    assert_eq!(yaml_model_role_default(yaml).as_deref(), want);
 }

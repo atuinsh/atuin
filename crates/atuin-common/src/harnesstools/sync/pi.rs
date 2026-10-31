@@ -330,7 +330,7 @@ fn extend(
     {
         return Err(SyncError::IdTaken(clash.source_id.clone()));
     }
-    check_segment(lines, base, taken, Links::Parents)?;
+    check_segment(lines, base, taken, Links::Parents { chained: false })?;
     let tip = base.tip_source_id.as_deref();
     let kept_from = file.kept_from(tip);
     let session = RehydrateSession {
@@ -348,7 +348,7 @@ fn extend(
         after: tip,
         kept_from: kept_from.as_deref(),
     };
-    Ok(rehydrate::lines(&session, &continuing, false))
+    Ok(rehydrate::lines(&session, &continuing, false, None))
 }
 
 /// [`SessionSync::replace`] of the file `base` read, once the session is known to be idle.
@@ -374,10 +374,10 @@ pub(super) fn replace_to(
     if let Some(why) = file.unswitchable() {
         return Err(SyncError::Unsupported(why));
     }
-    let (shared, from) = branch_point(base, branch, Links::Parents)?;
+    let (shared, from) = branch_point(base, branch, Links::Parents { chained: false })?;
     let kept = File::parse(shared_entries(&file.bytes, &from), file.modified, path.parent());
     let continuing = continuing_from(kept.local_tip(path), &from)?;
-    let rest = past(branch, shared, &continuing, Links::Parents);
+    let rest = past(branch, shared, &continuing, Links::Parents { chained: false });
     let lines = extend(&kept, &continuing, &rest, taken)?;
     let mut out = kept.bytes;
     for line in &lines {

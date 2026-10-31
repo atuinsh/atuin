@@ -25,6 +25,18 @@ pub async fn install(
     harness: &str,
     executable: &Path,
 ) -> Result<(), InstallHookError> {
+    install_in(config_path, matcher, harness, executable, Value::Object(Map::new())).await
+}
+
+/// [`install`], into `skeleton` when there is no config at `config_path` yet: what the harness
+/// wants around the hooks (Copilot's `"version": 1`).
+pub async fn install_in(
+    config_path: &Path,
+    matcher: &str,
+    harness: &str,
+    executable: &Path,
+    skeleton: Value,
+) -> Result<(), InstallHookError> {
     let hook_command = hook_command(executable, harness)?;
 
     if let Some(parent) = config_path.parent() {
@@ -33,7 +45,7 @@ pub async fn install(
 
     let mut root: Value = match tokio::fs::read_to_string(config_path).await {
         Ok(content) => serde_json::from_str(&content)?,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => skeleton,
         Err(err) => return Err(err.into()),
     };
 

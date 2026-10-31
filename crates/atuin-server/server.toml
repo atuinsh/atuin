@@ -22,6 +22,14 @@
 ## Webhook to be called when user registers on the servers
 # register_webhook_username = ""
 
+## Reverse proxies whose client address header is trusted when logging the
+## client address. Requests from any other peer are logged with the peer's own
+## address. Accepts CIDR networks or bare addresses.
+# trusted_proxies = ["172.18.0.0/16"]
+
+## The header those proxies report the client address in
+# trusted_proxy_header = "X-Forwarded-For"
+
 # [metrics]
 # enable = false
 # host = 127.0.0.1

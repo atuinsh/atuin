@@ -10,17 +10,20 @@ use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::ccode::session::{CcodeMessage, CcodeSession};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::codex::session::CodexSession;
+use crate::harnesstools::copilot::Copilot;
+use crate::harnesstools::copilot::session::CopilotSession;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
+pub const COPILOT: AnyHarness = AnyHarness::Copilot(Copilot);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 /// The original's atuin id, as the picker passes it.
@@ -84,6 +87,19 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 /// A real session recorded by `source`, as its harness wrote it.
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
+        AnyHarness::Copilot(_) => {
+            let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
+            let lines: Vec<_> = CopilotSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("copilot/task-and-edit.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
         AnyHarness::ClaudeCode(_) => {
             let text = std::fs::read_to_string(fixture("ccode/session1.jsonl")).unwrap();
             let lines: Vec<CcodeMessage> =
@@ -157,7 +173,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let id = &session.id;
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
-        AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
+        AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
         AnyHarness::Pi(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
         AnyHarness::Opencode(_) => {
@@ -172,7 +188,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
-            AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
+            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -286,7 +302,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
-            AnyHarness::Pi(_) => rows[n + 1..=n + called.len()]
+            AnyHarness::Pi(_) | AnyHarness::Copilot(_) => rows[n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);
@@ -316,8 +332,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -367,6 +383,14 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let root = dir.path();
     let id = SessionId::from(session.id.clone());
     match target {
+        AnyHarness::Copilot(_) => {
+            let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
+            assert_eq!(copilot::session::locate(root, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                CopilotSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            // The sidecar's title row is the session's, no row of the continuation.
+            rows_of(&lines).into_iter().filter(|r| !r.source_id.starts_with("atuin-")).collect()
+        }
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(ccode::session::locate(root, &session.id), Some(path.clone()));
@@ -388,6 +412,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
                 root,
                 &root.join("sessions"),
                 session,
+                None,
             )
             .unwrap();
             assert_eq!(pi::session::locate(root, &session.id), Some(path.clone()));
@@ -455,8 +480,8 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -781,7 +806,7 @@ fn a_pasted_marker_is_no_link(#[case] paste: fn(&str) -> String) {
 /// merely quotes a marker keeps it.
 #[rstest]
 fn a_continuations_marker_is_not_carried_on(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
 ) {
     let old = marker_text(CLAUDE, "4bd6b5bd-7d34-4a39-a2d6-2e6f6a6c0b1d", Some(ATUIN_ID));
     let original = session_of("orig", vec![
@@ -816,7 +841,7 @@ fn a_continuations_marker_is_not_carried_on(
 #[case::only_blank(vec![msg(Role::User, vec![text("  ")], 1)])]
 fn an_empty_session_is_not_continued(
     #[case] messages: Vec<RehydrateMessage>,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] target: AnyHarness,
 ) {
     let original = session_of("orig", messages);
     let err = continue_in(CODEX, &original, Some(ATUIN_ID), target).unwrap_err();

@@ -5093,6 +5093,29 @@ mod tests {
         assert!(db.rehydrate_session(&missing, here).await.unwrap().is_none());
     }
 
+    /// A continuation from a machine whose clock is behind is stored before the rows it follows;
+    /// the transcript still has it after them (see `rehydrate::parent_order`).
+    #[rstest]
+    #[tokio::test]
+    async fn a_continuation_from_a_slow_clock_follows_its_parent() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let prompt = message_with(&s, 10, Role::User, vec![text("first")]);
+        let mut reply = message_with(&s, 11, Role::Assistant, vec![text("reply")]);
+        reply.parent_source_id = Some(SourceId::from("source-10".to_owned()));
+        let mut later_prompt = message_with(&s, 2, Role::User, vec![text("go on")]);
+        later_prompt.parent_source_id = Some(SourceId::from("source-11".to_owned()));
+        let mut later_reply = message_with(&s, 3, Role::Assistant, vec![text("went on")]);
+        later_reply.parent_source_id = Some(SourceId::from("source-2".to_owned()));
+        for m in [&prompt, &reply, &later_prompt, &later_reply] {
+            db.append(m).await.unwrap();
+        }
+
+        let session = db.rehydrate_session(&s, "/local".into()).await.unwrap().unwrap();
+        let ids: Vec<&str> = session.messages.iter().map(|m| m.source_id.as_str()).collect();
+        assert_eq!(ids, ["source-10", "source-11", "source-2", "source-3"]);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_summary_is_reply_text() {

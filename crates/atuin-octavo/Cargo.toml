@@ -12,8 +12,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["sqlite"] }
+# The `proto` features derive the prost traits the extern paths in build.rs map onto.
+atuin-client = { workspace = true, features = ["proto"] }
+atuin-common = { workspace = true, features = ["ai", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 eyre = { workspace = true }
 futures = { workspace = true }

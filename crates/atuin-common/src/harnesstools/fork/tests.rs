@@ -8,13 +8,14 @@ use super::*;
 use crate::harnesstools::ccode::session::CcodeSession;
 use crate::harnesstools::codex::session::CodexSession;
 use crate::harnesstools::continuation::tests::{
-    CLAUDE, CODEX, OPENCODE, PI, pool, recorded, rows_of,
+    CLAUDE, CODEX, COPILOT, OPENCODE, PI, pool, recorded, rows_of,
 };
 use crate::harnesstools::continuation::{fork_marker_text, linked_from_message};
+use crate::harnesstools::copilot::session::CopilotSession;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, database, opencode_import};
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::session::{Content, Message, ParentKind, Role, Session, SessionId};
-use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, opencode, pi};
 
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
@@ -57,6 +58,12 @@ async fn written(
 ) -> (Vec<RehydrateMessage>, Vec<(String, ParentKind)>) {
     let id = SessionId::from(session.id.clone());
     match harness {
+        AnyHarness::Copilot(_) => {
+            let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
+            let lines: Vec<_> =
+                CopilotSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            (rows_of(&lines), links(&session.id, &lines))
+        }
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =
@@ -75,6 +82,7 @@ async fn written(
                 root,
                 &root.join("sessions"),
                 session,
+                None,
             )
             .unwrap();
             let lines: Vec<_> =
@@ -127,7 +135,7 @@ fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] harness: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, OPENCODE, PI)] harness: AnyHarness,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let original = recorded(harness).await;

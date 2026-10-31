@@ -1,5 +1,4 @@
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use futures::{Stream, StreamExt};
@@ -10,10 +9,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
-use crate::dirs::home_dir;
-use crate::env::var_nonempty;
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
-use crate::harnesstools::ccode::Ccode;
+use crate::harnesstools::ccode::{Ccode, config_dir};
 use crate::harnesstools::resume;
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
@@ -21,7 +18,8 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Change, Checkpoint, FilePatch, Hunk, Listener, Message, MessageError, Observable, Patch,
-    RuntimeError, Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
+    RuntimeError, Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after,
+    scan_sessions,
 };
 use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
@@ -45,10 +43,7 @@ impl CcodeSessions {
 /// Claude Code's projects directory: `$CLAUDE_CONFIG_DIR/projects`, else
 /// `~/.claude/projects`.
 pub(crate) fn default_root() -> PathBuf {
-    var_nonempty("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().joined(".claude"))
-        .joined("projects")
+    config_dir().joined("projects")
 }
 
 /// The transcript of session `id` under the projects directory `root`:
@@ -236,34 +231,9 @@ impl CcodeSession {
         self.pool.run(move || spawner_in(&meta)).await.ok().flatten()
     }
 
-    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
-    /// was taken after, else the transcript's start.
+    /// The byte offset to read from (see [`checkpoint_offset`]).
     async fn start(&self, from: Checkpoint) -> u64 {
-        let path = self.path.clone();
-        let found = self
-            .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
-            .await
-            .map_err(io::Error::other)
-            .and_then(|found| found);
-        match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
-            Ok(_) => {
-                tracing::debug!(
-                    path = %self.path.display(),
-                    "the checkpoint no longer names its line; reading from the start"
-                );
-                0
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    "failed to read the line a checkpoint names; reading from the start"
-                );
-                0
-            }
-        }
+        checkpoint_offset(&self.path, &self.pool, from).await
     }
 }
 

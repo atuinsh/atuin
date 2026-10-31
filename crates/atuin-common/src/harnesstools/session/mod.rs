@@ -184,6 +184,37 @@ pub(crate) async fn modified_after(
     modified.ok().map(drop)
 }
 
+/// The byte offset a read of the transcript at `path` resumes from for `from`: its position, if
+/// the line ending there is still the one `from` was taken after, else the transcript's start.
+pub(crate) async fn checkpoint_offset(path: &Path, pool: &BlockingPool, from: Checkpoint) -> u64 {
+    let at = path.to_path_buf();
+    let found = pool
+        .run(move || {
+            std::fs::File::open(at).and_then(|file| crate::io::Line::ending_at(&file, from.at))
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|found| found);
+    match found {
+        Ok(Some(line)) if from.names(&line.bytes) => from.at,
+        Ok(_) => {
+            tracing::debug!(
+                path = %path.display(),
+                "the checkpoint no longer names its line; reading from the start"
+            );
+            0
+        }
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                path = %path.display(),
+                "failed to read the line a checkpoint names; reading from the start"
+            );
+            0
+        }
+    }
+}
+
 pub trait Listener {
     type Session: Session;
 
@@ -493,6 +524,7 @@ pub mod any;
 
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::copilot::session::CopilotMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
@@ -501,6 +533,7 @@ use crate::harnesstools::pi::session::PiMessage;
 pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
+    Copilot(CopilotMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
 }

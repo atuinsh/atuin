@@ -72,6 +72,7 @@ pub struct AiSessionResume {
     pub opencode: Option<String>,
     pub pi: Option<String>,
     pub omp: Option<String>,
+    pub copilot: Option<String>,
 }
 
 impl AiSessionResume {
@@ -84,7 +85,8 @@ impl AiSessionResume {
             HarnessKind::Opencode => self.opencode.as_deref(),
             HarnessKind::Pi => self.pi.as_deref(),
             HarnessKind::Omp => self.omp.as_deref(),
-            HarnessKind::Copilot | HarnessKind::Unknown => None,
+            HarnessKind::Copilot => self.copilot.as_deref(),
+            HarnessKind::Unknown => None,
         }
     }
 }

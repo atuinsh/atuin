@@ -3,7 +3,7 @@ use atuin_common::userio;
 
 use crate::{SHA, VERSION};
 
-pub fn run(settings: &Settings) {
+pub async fn run(settings: &Settings) {
     let config_file = atuin_common::dirs::config_path("config.toml");
     let sever_config = atuin_common::dirs::config_path("server.toml");
 
@@ -27,7 +27,13 @@ pub fn run(settings: &Settings) {
 
     let general_info = format!("Version info:\nversion: {VERSION}\ncommit:  {SHA}");
 
-    let print_out = format!("{config_paths}\n\n{env_vars}\n{general_info}");
+    let host_id = match settings.host_id().await {
+        Ok(id) => id.0.as_simple().to_string(),
+        Err(err) => format!("unknown ({err})"),
+    };
+
+    let print_out =
+        format!("{config_paths}\n\n{env_vars}\n{general_info}\n\nHost info:\nhost id: {host_id}");
 
     println!("{print_out}");
 
