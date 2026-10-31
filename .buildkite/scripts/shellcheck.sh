@@ -5,7 +5,9 @@
 # separately with SHELLCHECK_OPTS from the environment.
 set -uo pipefail
 
-excludes=(! -path '*./.git/*' ! -path '*.go' ! -path '*/mvnw')
+# .devenv/ holds the generated shell scripts of a devenv checkout (devenv.nix);
+# a CI checkout has none.
+excludes=(! -path '*./.git/*' ! -path './.devenv/*' ! -path '*.go' ! -path '*/mvnw')
 files=()
 while IFS= read -r -d '' file; do
   files+=("$file")

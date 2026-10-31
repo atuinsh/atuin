@@ -1,6 +1,8 @@
 [codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = .git*,*.lock,.codespellrc,CODE_OF_CONDUCT.md,CONTRIBUTORS,./vendor/axoasset,./crates/atuin-octavo/proto/buf
+# target, .devenv and the Vale style packages (the Packages line of .vale.ini,
+# fetched by `vale sync`) exist only in a checkout that has built or linted.
+skip = .git*,target,.devenv,*.lock,.codespellrc,CODE_OF_CONDUCT.md,CONTRIBUTORS,./vendor/axoasset,./crates/atuin-octavo/proto/buf,./.vale/styles/Microsoft,./.vale/styles/proselint,./.vale/styles/alex,./.vale/styles/write-good
 check-hidden = true
 # ignore-regex = 
 ignore-words-list = crate,ratatui,inbetween,iterm,fo,brunch,ser,writet,wronly,checkin
