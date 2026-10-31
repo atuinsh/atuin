@@ -327,7 +327,7 @@ async fn run_non_interactive(
         ..filter_options
     };
 
-    let filter_mode = settings.default_filter_mode(context.git_root.is_some());
+    let filter_mode = settings.default_filter_mode(context.vcs_root.is_some());
 
     let results = db
         .search(

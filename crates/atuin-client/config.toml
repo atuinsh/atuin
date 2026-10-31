@@ -46,7 +46,7 @@
 # filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: true).
+## in any directory within a repository tree, Git or Jujutsu (default: true).
 ##
 ## To use workspace mode by default when available, set filter_mode to
 ## "workspace" or leave it unspecified and set search.filters to include
