@@ -107,13 +107,14 @@ enum Error {
 
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let (cols, rows) = terminal::size()?;
+    let (pixel_width, pixel_height) = terminal_pixel_size();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width,
+            pixel_height,
         })
         .map_err(|e| Error::OpenPty(e.into()))?;
 
@@ -374,11 +375,12 @@ fn spawn_resize_handler(
     tokio::spawn(async move {
         while signals.recv().await.is_some() {
             if let Ok((cols, rows)) = terminal::size() {
+                let (pixel_width, pixel_height) = terminal_pixel_size();
                 let _ = master.resize(PtySize {
                     rows,
                     cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    pixel_width,
+                    pixel_height,
                 });
                 let _ = resize_tx.send(Msg::Resize { rows, cols }).await;
             }
@@ -386,6 +388,17 @@ fn spawn_resize_handler(
     });
 
     Ok(())
+}
+
+/// The outer terminal's pixel dimensions, or `(0, 0)` if they're unavailable (e.g. the
+/// controlling terminal doesn't report them, or stdout isn't a terminal).
+///
+/// [`terminal::size`] only reports rows/columns, so this queries `TIOCGWINSZ` directly to also
+/// get `ws_xpixel`/`ws_ypixel`.
+fn terminal_pixel_size() -> (u16, u16) {
+    rustix::termios::tcgetwinsize(rustix::stdio::stdout())
+        .map(|winsize| (winsize.xpixel, winsize.ypixel))
+        .unwrap_or((0, 0))
 }
 
 fn process_exit_code(code: u32) -> i32 {
