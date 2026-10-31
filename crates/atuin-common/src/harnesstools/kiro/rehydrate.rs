@@ -43,8 +43,11 @@
 //! captured `turn_id` where they have one (a restored Kiro session keeps its own), else one
 //! derived from the row. What the format (or the capture) can't carry is left out:
 //!
-//! - **Reasoning.** Capture keeps it only as a marker; Kiro keeps the model's reasoning behind a
-//!   `reasoningSignature` only it can read back, and resumes a log without any.
+//! - **Reasoning** is written as Kiro's own redacted row (`Reasoning`, content `...`, no
+//!   signature: Kiro resumed one in the probe), under the row's id: capture keeps reasoning only
+//!   as a marker, Kiro keeps the model's reasoning behind a `reasoningSignature` only it can read
+//!   back, and Kiro ends every turn on such a row after the last reply, so a copy written back
+//!   reads as the native log does, its tip included.
 //! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy
 //!   withheld it) become a note in their turn's text ([`tool_note`]), their result dropped, and
 //!   the run of assistant rows the results stood between is merged into its last row
@@ -58,7 +61,10 @@
 //!   each, the first under the row's id. Such rows read back as several. Rows a writer of its own
 //!   makes for Kiro (a continuation's) hold one call or result each.
 //! - **Usage and the model.** Kiro bills credits, not tokens, and names the model in the header
-//!   alone (`modelId`): the session's, else `auto`.
+//!   alone (`modelId`): the session's, else `auto`. The header's `agentMode` is the user's default
+//!   profile (`chat.defaultAgent` in `settings/cli.json`, else `vibe`): the Kiro TUI reopens a
+//!   session in the profile its header names, whatever `--agent` says, and a profile not the
+//!   user's asks approval for every write and command.
 //! - **Rows with nothing to write** (a reader's title rows, attachments) are skipped: the title
 //!   is the header's, which Kiro keeps.
 //!
@@ -94,12 +100,30 @@ use crate::path::PathBufExt as _;
 /// The header's `schemaVersion`, the one Kiro CLI 2.36.0 writes and the only one it opens.
 const SCHEMA_VERSION: &str = "1.0.0";
 
-/// The agent profile a written session says it runs under (`agentMode`): Kiro's default.
+/// The agent profile a written session says it runs under (`agentMode`) when the user set no
+/// default: Kiro's own.
 const AGENT_MODE: &str = "vibe";
+
+/// The user's default agent profile, as `kiro-cli agent set-default` records it
+/// (`chat.defaultAgent` in `<home>/settings/cli.json`), else [`AGENT_MODE`].
+pub(crate) fn default_agent(home: &Path) -> String {
+    std::fs::read_to_string(home.join("settings").joined("cli.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|settings| {
+            settings["chat.defaultAgent"].as_str().map(str::trim).map(str::to_owned)
+        })
+        .filter(|agent| !agent.is_empty())
+        .unwrap_or_else(|| AGENT_MODE.to_owned())
+}
 
 /// The `status` a written `tool_call` carries: the one Kiro keeps the call under when it
 /// replays the log (see the module docs).
 const CALL_STATUS: &str = "completed";
+
+/// What Kiro writes for the model's reasoning when it can't be shown, and the reader reads as a
+/// marker that the model reasoned.
+const REDACTED: &str = "...";
 
 /// Write `session` under Kiro's home (`$KIRO_HOME`, else `~/.kiro`, where [`Harness::locate`]
 /// looks).
@@ -139,7 +163,7 @@ pub(crate) fn rehydrate_into(
             e.into()
         }
     })?;
-    if let Err(e) = std::fs::write(dir.join(HEADER_FILE), header(session)) {
+    if let Err(e) = std::fs::write(dir.join(HEADER_FILE), header(session, &default_agent(home))) {
         let _ = std::fs::remove_file(&path);
         return Err(e.into());
     }
@@ -186,9 +210,9 @@ fn index_add(home: &Path, bucket: &str, id: &str, at: OffsetDateTime) -> std::io
     writeln!(file, "{line}")
 }
 
-/// The header beside the log, as Kiro writes one: the session's directory, title, model and
-/// status, and for a fork the session it was forked from.
-pub(crate) fn header(session: &RehydrateSession) -> String {
+/// The header beside the log, as Kiro writes one: the session's directory, title, model, the
+/// profile `agent` it opens under, and status, and for a fork the session it was forked from.
+pub(crate) fn header(session: &RehydrateSession, agent: &str) -> String {
     let at = timestamp(session.started_at);
     let last = session.messages.iter().map(|m| m.timestamp).max().unwrap_or(session.started_at);
     let mut header = json!({
@@ -196,7 +220,7 @@ pub(crate) fn header(session: &RehydrateSession) -> String {
         "dataModelVersion": 1,
         "id": session.id,
         "title": session.title.as_deref().map(str::trim).unwrap_or_default(),
-        "agentMode": AGENT_MODE,
+        "agentMode": agent,
         "workspacePaths": [session.cwd],
         "rootPaths": [session.cwd],
         "createdAt": at,
@@ -427,8 +451,8 @@ impl Writer {
     }
 
     /// A reply: its text as a `Say`, each call a `tool_call`, and any result the row holds (a
-    /// tool the API ran itself, which Claude Code keeps on the reply) a `tool_result`. Nothing
-    /// for a reply of reasoning or an error alone.
+    /// tool the API ran itself, which Claude Code keeps on the reply) a `tool_result`; one of
+    /// reasoning alone is Kiro's redacted `Reasoning` row. Nothing for an error alone.
     fn reply(&mut self, m: &RehydrateMessage) {
         let text = joined_text(&m.content);
         let calls: Vec<&ToolUse> = m
@@ -441,6 +465,17 @@ impl Writer {
             .collect();
         let results = Self::results(m);
         if text.is_none() && calls.is_empty() && results.is_empty() {
+            let reasoned = m
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::Reasoning(_) | Content::ReasoningSummary { .. }));
+            if reasoned {
+                let execution = self.turn(m);
+                let mut row =
+                    json!({"type": "assistant", "content": REDACTED, "operationType": "Reasoning"});
+                extend(&mut row, &json!({"executionId": execution, "turnId": execution}));
+                self.row(m.source_id.clone(), m.timestamp, row);
+            }
             return;
         }
         let execution = self.turn(m);

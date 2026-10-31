@@ -340,7 +340,9 @@ A session written back out from sync, or continued in another agent, resumes in
 the directory the session ran in when that exists here. Otherwise, when you're
 in a checkout of a repository with the same name, it resumes in the same place
 in that checkout (or at its root), and otherwise in the current directory. The
-picker says which.
+picker says which. A Kiro session Atuin writes opens in Kiro's default agent
+profile (`kiro-cli agent set-default`, else `vibe`): Kiro resumes a session in
+the profile its header names, whatever `--agent` says.
 
 In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, ++f++ moves to the
 fork, a digit picks that line, and ++esc++ goes back to the list. ++enter++ does what the key that

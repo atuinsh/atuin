@@ -13,7 +13,7 @@ use crate::harnesstools::continuation::{continued_from_message, marker_text};
 use crate::harnesstools::kiro::session::{KiroMessage, KiroSession};
 use crate::harnesstools::rehydrate::{ForkOf, MERGED_FIELD, is_uncaptured, testing};
 use crate::harnesstools::session::{
-    Message, ParentKind, Session, SessionId, TitleChange, TitleSource, ToolCallId,
+    Message, MessageId, ParentKind, Session, SessionId, TitleChange, TitleSource, ToolCallId,
 };
 use crate::sync::BlockingPool;
 
@@ -106,7 +106,7 @@ fn result(id: &str, output: &str, error: bool) -> Content {
 }
 
 /// What the log can carry of each row, by the rules in the module docs: `None` for a row with
-/// nothing left.
+/// nothing left; reasoning as the marker Kiro's redacted row reads back as.
 fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
     messages
         .iter()
@@ -115,9 +115,13 @@ fn carried(messages: &[RehydrateMessage]) -> Vec<(String, Role, Vec<Content>)> {
             let content: Vec<Content> = m
                 .content
                 .iter()
-                .filter(|c| !matches!(c, Content::Reasoning(_) | Content::ReasoningSummary { .. }))
                 .filter(|c| !matches!(c, Content::Text(t) if t.is_empty()))
-                .cloned()
+                .map(|c| match c {
+                    Content::Reasoning(_) | Content::ReasoningSummary { .. } => {
+                        Content::ReasoningSummary { tokens: None }
+                    }
+                    other => other.clone(),
+                })
                 .collect();
             (!content.is_empty()).then(|| (m.source_id.clone(), m.role.clone(), content))
         })
@@ -181,10 +185,13 @@ async fn a_session_reads_back_as_it_was_captured(
         .messages
         .iter()
         .filter(|m| m.role == Role::Assistant)
-        .filter(|m| !m.content.iter().all(|c| matches!(c, Content::ReasoningSummary { .. })))
         .map(|m| (m.turn_id.clone(), m.stop_reason.clone()))
         .collect();
     assert_eq!(turns, wanted);
+    // Kiro ends a turn on a reasoning marker after the reply: the copy's tip is the native log's.
+    let last = read.iter().rev().find(|m| m.title().is_none()).unwrap();
+    assert_eq!(last.content(), [Content::ReasoningSummary { tokens: None }]);
+    assert_eq!(last.id(), session.messages.last().map(|m| MessageId::from(m.source_id.clone())));
     assert!(read.iter().all(|m| m.cwd().as_deref() == Some(cwd.as_path()) || m.title().is_some()));
     assert!(
         read.iter()
@@ -223,6 +230,33 @@ async fn the_header_names_the_session_and_the_index_lists_it(home: TempDir) {
     assert_eq!(line["op"], "add");
     assert_eq!(line["sessionPath"], format!("{bucket}/{ID}"));
     assert_eq!(line["at"], 0);
+}
+
+/// The header opens the session under the user's default profile, as `kiro-cli agent
+/// set-default` records it, else Kiro's own: the TUI reopens a session in the profile its header
+/// names, and one not the user's asks approval for every call.
+#[rstest]
+#[case::unset(None, AGENT_MODE)]
+#[case::set(Some(r#"{"chat.defaultAgent": "probe", "chat.agentEngine": "v3"}"#), "probe")]
+#[case::blank(Some(r#"{"chat.defaultAgent": " "}"#), AGENT_MODE)]
+#[case::malformed(Some("{"), AGENT_MODE)]
+#[tokio::test]
+async fn the_header_opens_under_the_users_default_profile(
+    home: TempDir,
+    #[case] settings: Option<&str>,
+    #[case] want: &str,
+) {
+    if let Some(settings) = settings {
+        std::fs::create_dir_all(home.path().join("settings")).unwrap();
+        std::fs::write(home.path().join("settings").joined("cli.json"), settings).unwrap();
+    }
+    assert_eq!(default_agent(home.path()), want);
+    let session = restore(home.path(), captured(RESUMED, RESUMED_HEADER).await);
+    let path = rehydrate_into(home.path(), &session).unwrap();
+    let header: Value =
+        serde_json::from_str(&std::fs::read_to_string(path.with_file_name(HEADER_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(header["agentMode"], want);
 }
 
 /// The bucket is Kiro's: the hash of the directory with no trailing slash, and on Windows of
