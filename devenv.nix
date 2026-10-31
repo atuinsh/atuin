@@ -256,11 +256,6 @@ in
     '';
     ci-test = ciScript ''
       # Extra arguments go to nextest: `ci-test -p atuin-common`.
-      if ! pg_isready -q -h "$PGHOST" -p "$PGPORT"; then
-        echo "Postgres is not running: \`devenv up -d\` starts it. Without it, skip atuin-server's" >&2
-        echo "integration tests with \`ci-test -E 'not package(atuin-server)'\`." >&2
-        exit 1
-      fi
       # The tests run as on a CI agent: no ATUIN_* variables but CI's, in a fresh HOME. Some
       # tests read the real environment, and fail under the sandbox's ATUIN_HOME or socket path
       # (or one of your own). The fresh HOME and TMPDIR stand in for the sandbox: a test that
@@ -278,6 +273,41 @@ in
       rm -rf "$HOME" "$TMPDIR"
       mkdir -p "$HOME" "$TMPDIR"
       export NEXTEST_PROFILE=ci ATUIN_E2E_REQUIRE_SHELLS=1
+
+      # Whether the nextest arguments select any of atuin-server's integration tests, the ones
+      # that need Postgres. A package selection settles it; a filterset is left to nextest, which
+      # alone knows what `not package(atuin-server)` or `rdeps(…)` match.
+      needs_postgres() {
+        local packages=() excludes=() filters=()
+        while [ $# -gt 0 ]; do
+          case $1 in
+            -p | --package) packages+=("$2") && shift ;;
+            -p*) packages+=("''${1#-p}") ;;
+            --package=*) packages+=("''${1#*=}") ;;
+            --exclude) excludes+=("$2") && shift ;;
+            --exclude=*) excludes+=("''${1#*=}") ;;
+            -E | --filterset | --filter-expr) filters+=(-E "$2") && shift ;;
+            -E*) filters+=(-E "''${1#-E}") ;;
+            --filterset=* | --filter-expr=*) filters+=(-E "''${1#*=}") ;;
+          esac
+          shift
+        done
+        if [ ''${#packages[@]} -gt 0 ]; then
+          [[ " ''${packages[*]} " == *" atuin-server "* ]] || return 1
+        elif [[ " ''${excludes[*]} " == *" atuin-server "* ]]; then
+          return 1
+        fi
+        [ ''${#filters[@]} -eq 0 ] ||
+          [ -n "$(cargo nextest list -p atuin-server --tests "''${filters[@]}" --message-format oneline)" ]
+      }
+      if ! pg_isready -q -h "$PGHOST" -p "$PGPORT"; then
+        if needs_postgres "$@"; then
+          echo "Postgres is not running: \`devenv up -d\` starts it. Without it, skip atuin-server's" >&2
+          echo "integration tests with \`ci-test -E 'not package(atuin-server)'\`." >&2
+          exit 1
+        fi
+        echo "Postgres is not running; going on, since this run has none of atuin-server's integration tests." >&2
+      fi
       section ":test_tube: cargo nextest" cargo nextest run --lib --bins --tests "$@"
     '';
     ci-fmt = ciScript ''
