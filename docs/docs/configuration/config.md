@@ -234,6 +234,19 @@ or `py`.
 !!! warning "Bar not supported in daemon-fuzzy"
     The "daemon-fuzzy" search mode doesn't currently support the bar character operator.
 
+### `smart_sort`
+
+Default: `false`
+
+By default, interactive search results are ordered by the active
+[search mode](#search-mode). With `smart_sort` enabled, the results are
+re-sorted so that commands starting with your query come first, then commands
+containing it, with a slight preference for more recently run commands.
+
+```toml
+smart_sort = false
+```
+
 ### `filter_mode`
 
 Default: `global`
