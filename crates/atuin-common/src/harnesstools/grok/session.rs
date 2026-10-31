@@ -1717,6 +1717,8 @@ mod tests {
         BlockingPool::new(NonZeroUsize::MIN)
     }
 
+    /// Unix paths: Windows reads `/` as its own separator, `\`.
+    #[cfg(unix)]
     #[rstest]
     #[case("/tmp/work", "%2Ftmp%2Fwork")]
     #[case("/Users/alice/my repo+1", "%2FUsers%2Falice%2Fmy%20repo%2B1")]

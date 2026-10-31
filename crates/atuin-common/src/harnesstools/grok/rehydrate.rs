@@ -75,7 +75,11 @@ pub(crate) fn rehydrate_into(
     // Two restores of the session take turns, and the second finds the first's transcript. A
     // directory with no transcript is a restore that stopped before it finished: what it wrote
     // is written again.
-    let lock = std::fs::File::create(sdir.join(RESTORE_LOCK))?;
+    let lock = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(sdir.join(RESTORE_LOCK))?;
     lock.lock()?;
     let transcript_path = sdir.join(TRANSCRIPT_FILE);
     if transcript_path.exists() {
