@@ -25,8 +25,8 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::session::{
-    AtuinSidecar, SIDECAR_FILE, SUMMARY_FILE, TRANSCRIPT_FILE, UPDATES_FILE, default_root,
-    encode_cwd, inferred_tool_error, line_key, locate, meta_id,
+    ATUIN_PATCH, AtuinSidecar, SIDECAR_FILE, SUMMARY_FILE, TRANSCRIPT_FILE, UPDATES_FILE,
+    default_root, encode_cwd, inferred_tool_error, line_key, locate, meta_id,
 };
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, merge_uncaptured_runs,
@@ -36,6 +36,9 @@ use crate::harnesstools::session::{
     Content, FilePatch, Patch, Role, ToolCallId, ToolResult, ToolUse,
 };
 use crate::path::PathBufExt as _;
+
+/// Held by a restore of a session while it writes the session's files (see [`rehydrate_into`]).
+const RESTORE_LOCK: &str = ".atuin.restore.lock";
 
 /// Rendered files for a full restore or incremental append/switch.
 #[derive(Debug, Default)]
@@ -68,17 +71,16 @@ pub(crate) fn rehydrate_into(
         return Err(RehydrateError::AlreadyExists(existing));
     }
     let sdir = root.join(encode_cwd(&session.cwd)).joined(&session.id);
-    // A directory with no transcript is a restore that stopped before it finished: what it wrote
-    // is written again.
-    let unfinished = sdir.is_dir();
     std::fs::create_dir_all(&sdir)?;
-    let write = |path: &Path, bytes: &[u8]| {
-        if unfinished {
-            std::fs::write(path, bytes)
-        } else {
-            crate::fs::write_new(path, bytes)
-        }
-    };
+    // Two restores of the session take turns, and the second finds the first's transcript. A
+    // directory with no transcript is a restore that stopped before it finished: what it wrote
+    // is written again.
+    let lock = std::fs::File::create(sdir.join(RESTORE_LOCK))?;
+    lock.lock()?;
+    let transcript_path = sdir.join(TRANSCRIPT_FILE);
+    if transcript_path.exists() {
+        return Err(RehydrateError::AlreadyExists(transcript_path));
+    }
 
     let mut prev_gk = None;
     let meta = meta_id(&session.id);
@@ -86,8 +88,11 @@ pub(crate) fn rehydrate_into(
     let body = join_jsonl(&rendered.chat_lines);
     let updates_body = join_jsonl(&rendered.update_lines);
     let summary = summary_json(session, grok_home, rendered.chat_lines.len());
+    let summary_bytes = serde_json::to_vec_pretty(&summary)
+        .map_err(|err| RehydrateError::Other(err.to_string()))?;
+    let sidecar_bytes = serde_json::to_vec_pretty(&rendered.sidecar)
+        .map_err(|err| RehydrateError::Other(err.to_string()))?;
 
-    let transcript_path = sdir.join(TRANSCRIPT_FILE);
     let summary_path = sdir.join(SUMMARY_FILE);
     let updates_path = sdir.join(UPDATES_FILE);
     let sidecar_path = sdir.joined(SIDECAR_FILE);
@@ -95,52 +100,22 @@ pub(crate) fn rehydrate_into(
     // Publish `.atuin.json`, `updates.jsonl`, and `summary.json` BEFORE `chat_history.jsonl` so a
     // running capture watcher never reads transcript lines before their ID mappings and metadata
     // are on disk.
-    if !rendered.sidecar.is_empty() {
-        let sidecar_bytes = serde_json::to_vec_pretty(&rendered.sidecar)
-            .map_err(|err| RehydrateError::Other(err.to_string()))?;
-        write(&sidecar_path, &sidecar_bytes).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                RehydrateError::AlreadyExists(sidecar_path.clone())
-            } else {
-                err.into()
-            }
-        })?;
+    let written = (|| {
+        if !rendered.sidecar.is_empty() {
+            std::fs::write(&sidecar_path, &sidecar_bytes)?;
+        }
+        if !updates_body.is_empty() {
+            std::fs::write(&updates_path, updates_body.as_bytes())?;
+        }
+        std::fs::write(&summary_path, &summary_bytes)?;
+        crate::fs::write_new(&transcript_path, body.as_bytes())
+    })();
+    if let Err(err) = written {
+        for path in [&sidecar_path, &updates_path, &summary_path] {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(err.into());
     }
-
-    if !updates_body.is_empty()
-        && let Err(err) = write(&updates_path, updates_body.as_bytes())
-    {
-        let _ = std::fs::remove_file(&sidecar_path);
-        return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
-            RehydrateError::AlreadyExists(updates_path)
-        } else {
-            err.into()
-        });
-    }
-
-    let summary_bytes = serde_json::to_vec_pretty(&summary)
-        .map_err(|err| RehydrateError::Other(err.to_string()))?;
-    if let Err(err) = write(&summary_path, &summary_bytes) {
-        let _ = std::fs::remove_file(&sidecar_path);
-        let _ = std::fs::remove_file(&updates_path);
-        return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
-            RehydrateError::AlreadyExists(summary_path)
-        } else {
-            err.into()
-        });
-    }
-
-    if let Err(err) = crate::fs::write_new(&transcript_path, body.as_bytes()) {
-        let _ = std::fs::remove_file(&sidecar_path);
-        let _ = std::fs::remove_file(&updates_path);
-        let _ = std::fs::remove_file(&summary_path);
-        return Err(if err.kind() == std::io::ErrorKind::AlreadyExists {
-            RehydrateError::AlreadyExists(transcript_path)
-        } else {
-            err.into()
-        });
-    }
-
     Ok(transcript_path)
 }
 
@@ -509,6 +484,9 @@ fn render_row_pieces(
                 if !diffs.is_empty() {
                     update["kind"] = json!("edit");
                     update["content"] = json!(diffs);
+                    // Grok Build's diffs leave out what a line kept: the patch itself is kept
+                    // beside them, for a read of this session to give back.
+                    update["_meta"] = json!({ATUIN_PATCH: files});
                     update["locations"] = json!(
                         files.iter().map(|file| json!({"path": file.path})).collect::<Vec<_>>()
                     );
@@ -720,9 +698,11 @@ mod tests {
 
     /// A restored edit shows in Grok Build as its own do: the call's update is an edit of its
     /// file, holding each hunk's lines before and after: whether the diff is on the call's result
-    /// or, captured live, on the turn's reply.
+    /// or, captured live, on the turn's reply. A read of the session (a fork of it, captured as a
+    /// session of its own) gives the patch back whole.
     #[rstest]
-    fn an_edits_result_gets_its_diff_back(#[values(false, true)] on_reply: bool) {
+    #[tokio::test]
+    async fn an_edits_result_gets_its_diff_back(#[values(false, true)] on_reply: bool) {
         let dir = tempfile::tempdir().unwrap();
         let call = ToolCallId::from("c1".to_owned());
         let patch = Patch {
@@ -739,7 +719,7 @@ mod tests {
         } else {
             &mut result
         }
-        .push(Content::Patch(patch));
+        .push(Content::Patch(patch.clone()));
         let session = RehydrateSession {
             id: "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned(),
             title: None,
@@ -800,6 +780,59 @@ mod tests {
                 "_meta": {"old_line": 1, "new_line": 1},
             }])
         );
+
+        let pool = BlockingPool::new(std::num::NonZeroUsize::MIN);
+        let read: Vec<_> = GrokSession::open(SessionId::from(session.id.clone()), path, pool)
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+        let patches: Vec<_> = read
+            .iter()
+            .flat_map(Message::content)
+            .filter_map(|c| match c {
+                Content::Patch(patch) => Some(patch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(patches, [patch]);
+    }
+
+    /// Restores of one session at once take turns: one writes it, and the rest find it written.
+    #[rstest]
+    fn restores_of_one_session_at_once_leave_it_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let session = RehydrateSession {
+            id: "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9".to_owned(),
+            title: None,
+            cwd: PathBuf::from("/work/proj"),
+            original_cwd: None,
+            git_branch: None,
+            model: None,
+            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            messages: vec![sample_msg(
+                "u1",
+                Role::User,
+                vec![Content::Text("hi".to_owned())],
+                1_700_000_010,
+            )],
+            fork_of: None,
+        };
+        let results: Vec<_> = std::thread::scope(|scope| {
+            // Every restore starts before any is waited for.
+            let mut restores = Vec::new();
+            for _ in 0..8 {
+                restores.push(scope.spawn(|| rehydrate_into(&root, dir.path(), &session)));
+            }
+            restores.into_iter().map(|restore| restore.join().unwrap()).collect()
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "{results:?}");
+        assert!(results.iter().all(|r| matches!(r, Ok(_) | Err(RehydrateError::AlreadyExists(_)))));
+        let path = results.into_iter().find_map(Result::ok).unwrap();
+        for file in [SIDECAR_FILE, UPDATES_FILE, SUMMARY_FILE] {
+            assert!(path.with_file_name(file).is_file(), "{file}");
+        }
     }
 
     /// A restore that stopped before writing the transcript left its other files behind: the next

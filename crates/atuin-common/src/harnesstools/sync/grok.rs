@@ -246,36 +246,67 @@ fn write_sidecar(transcript_path: &Path, sidecar: &AtuinSidecar) -> Result<(), S
     Ok(())
 }
 
+/// What `updates.jsonl` held before [`write_updates`], and what it wrote there: what
+/// [`restore_updates`] puts back, and what it checks is still there first.
+struct StagedUpdates {
+    before: Option<Vec<u8>>,
+    after: Vec<u8>,
+}
+
 /// Write `update_lines`, the scrollback of what a catch-up or switch writes, to `updates.jsonl`
-/// beside `transcript_path`: after what it holds, or (`replace`) in its place. What it held is
-/// returned, to put back ([`restore_updates`]) when the transcript can't take the lines.
+/// beside `transcript_path`: after what it holds, or (`replace`) in its place. A catch-up that
+/// stopped before its transcript took the lines left their scrollback there already, and it is
+/// not written again.
 fn write_updates(
     transcript_path: &Path,
     update_lines: &[Value],
     replace: bool,
-) -> Result<Option<Vec<u8>>, SyncError> {
+) -> Result<StagedUpdates, SyncError> {
     let path = transcript_path.with_file_name(UPDATES_FILE);
     let before = std::fs::read(&path).ok();
-    let body = join_jsonl(update_lines);
-    match &before {
-        Some(_) if replace => crate::fs::replace(&path, body.as_bytes(), |_| true)
-            .map_err(|err| SyncError::Other(err.to_string()))?,
-        Some(held) if !update_lines.is_empty() => {
-            append_jsonl(&path, Stamp::of(held), update_lines)?;
+    let body = join_jsonl(update_lines).into_bytes();
+    let after = match &before {
+        Some(_) if replace => {
+            crate::fs::replace(&path, &body, |_| true)
+                .map_err(|err| SyncError::Other(err.to_string()))?;
+            body
         }
-        None if !body.is_empty() => crate::fs::write_new(&path, body.as_bytes())?,
-        _ => {}
-    }
-    Ok(before)
+        Some(held) if !body.is_empty() && !held.ends_with(&body) => {
+            append_jsonl(&path, Stamp::of(held), update_lines)?;
+            let torn = !held.is_empty() && !held.ends_with(b"\n");
+            [
+                &held[..],
+                if torn {
+                    b"\n"
+                } else {
+                    b""
+                },
+                &body,
+            ]
+            .concat()
+        }
+        None if !body.is_empty() => {
+            crate::fs::write_new(&path, &body)?;
+            body
+        }
+        _ => before.clone().unwrap_or_default(),
+    };
+    Ok(StagedUpdates { before, after })
 }
 
-/// Put `updates.jsonl` beside `transcript_path` back as it was, `before` [`write_updates`].
-fn restore_updates(transcript_path: &Path, before: Option<Vec<u8>>) {
+/// Put `updates.jsonl` beside `transcript_path` back as it was before [`write_updates`], unless
+/// Grok Build has written to it since.
+fn restore_updates(transcript_path: &Path, staged: StagedUpdates) {
     let path = transcript_path.with_file_name(UPDATES_FILE);
-    let _ = match before {
-        Some(bytes) => crate::fs::replace(&path, &bytes, |_| true).map_err(drop),
-        None => std::fs::remove_file(&path).map_err(drop),
-    };
+    match staged.before {
+        Some(bytes) => {
+            let _ = crate::fs::replace(&path, &bytes, |now| now == staged.after);
+        }
+        None if std::fs::read(&path).is_ok_and(|now| now == staged.after) => {
+            let _ = std::fs::remove_file(&path);
+        }
+        None => {}
+    }
 }
 
 /// Bring `summary.json` beside `transcript_path` up to the rows a catch-up or switch wrote.
@@ -813,5 +844,54 @@ mod tests {
         let next = row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002);
         assert!(append_to(ID, &tip, &[next], None).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// A catch-up that stopped between writing its scrollback and the transcript, tried again,
+    /// writes the scrollback once.
+    #[rstest]
+    fn a_catch_up_tried_again_writes_its_scrollback_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seed_session(&dir.path().join("sessions"), dir.path(), vec![row(
+            "u1",
+            None,
+            Role::User,
+            "first",
+            1_700_000_001,
+        )]);
+        let updates = path.with_file_name(UPDATES_FILE);
+        let before = std::fs::read(&path).unwrap();
+        let next = row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002);
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        append_to(ID, &tip, std::slice::from_ref(&next), None).unwrap();
+        let scrollback = std::fs::read(&updates).unwrap();
+
+        // Stopped before the transcript took the reply: its scrollback and ids are written.
+        std::fs::write(&path, &before).unwrap();
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        append_to(ID, &tip, &[next], None).unwrap();
+        assert_eq!(std::fs::read(&updates).unwrap(), scrollback);
+    }
+
+    /// A catch-up whose transcript can't take its lines takes back the scrollback it wrote, and
+    /// only that: not what Grok Build wrote since.
+    #[rstest]
+    fn taking_back_scrollback_keeps_what_grok_wrote_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chat_history.jsonl");
+        let updates = path.with_file_name(UPDATES_FILE);
+        std::fs::write(&updates, "{\"old\":1}\n").unwrap();
+
+        let staged = write_updates(&path, &[json!({"ours": 1})], false).unwrap();
+        restore_updates(&path, staged);
+        assert_eq!(std::fs::read_to_string(&updates).unwrap(), "{\"old\":1}\n");
+
+        let staged = write_updates(&path, &[json!({"ours": 1})], false).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(&updates).unwrap();
+        std::io::Write::write_all(&mut file, b"{\"grok\":1}\n").unwrap();
+        restore_updates(&path, staged);
+        assert_eq!(
+            std::fs::read_to_string(&updates).unwrap(),
+            "{\"old\":1}\n{\"ours\":1}\n{\"grok\":1}\n"
+        );
     }
 }

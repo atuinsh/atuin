@@ -54,6 +54,10 @@ const COMPACTIONS_DIR: &str = "compaction_requests";
 const TURN_END_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 const TURN_END_POLLS: u32 = 20;
 
+/// Where in a restored edit's `updates.jsonl` event Atuin keeps its patch's files (Grok Build's
+/// own diffs leave out what an edited line kept).
+pub(crate) const ATUIN_PATCH: &str = "atuinPatch";
+
 /// `synthetic_reason` of the lines a compaction writes in place of the conversation it replaced:
 /// the `<user_info>` preamble, then the summary.
 const COMPACTION: &str = "compaction_meta";
@@ -406,6 +410,12 @@ pub(crate) struct UpdateTimes {
     pub replies: HashMap<u64, OffsetDateTime>,
     /// When each compaction happened (`compaction_checkpoint`), in order.
     pub compactions: Vec<OffsetDateTime>,
+    /// The files each call changed, by call id, where Atuin restored the session and kept them
+    /// ([`ATUIN_PATCH`]).
+    pub patches: HashMap<String, Vec<FilePatch>>,
+    /// Where each edit found what it replaced, as Grok Build recorded it (the first of its
+    /// `details`), by call id: what a replay of the edit is checked against.
+    pub edited_at: HashMap<String, Value>,
 }
 
 fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
@@ -474,6 +484,14 @@ pub(crate) fn read_update_times_beside(transcript_path: &Path) -> UpdateTimes {
                 if let Some(call_id) = update["toolCallId"].as_str().filter(|s| !s.is_empty()) {
                     times.call_starts.entry(call_id.to_owned()).or_insert(ts);
                     times.call_ends.insert(call_id.to_owned(), ts);
+                    if let Ok(files) = serde_json::from_value(update["_meta"][ATUIN_PATCH].clone())
+                    {
+                        times.patches.insert(call_id.to_owned(), files);
+                    }
+                    let detail = &update["content"][0]["_meta"]["details"][0];
+                    if detail.is_object() {
+                        times.edited_at.insert(call_id.to_owned(), detail.clone());
+                    }
                 }
             }
             "compaction_checkpoint" => times.compactions.push(ts),
@@ -650,6 +668,23 @@ fn spawned_by(transcript_path: &Path, created_at: Option<OffsetDateTime>) -> Opt
                 .map(|parent| SessionId::from(parent.to_owned()))
         })
     })
+}
+
+/// Whether edit `call` (its `input`) finds in `before` what Grok Build recorded it replaced (`at`):
+/// a write the file's whole content, an edit its text at the line and after the text Grok Build
+/// saw there.
+fn found_as_recorded(before: &str, call: &GrokToolCall, input: &Value, at: &Value) -> bool {
+    let recorded = |name: &str| at[name].as_str().unwrap_or_default();
+    if call.name == "write" {
+        return before == recorded("old_string");
+    }
+    let Some(at_byte) = input["old_string"].as_str().and_then(|old| before.find(old)) else {
+        return false;
+    };
+    let ahead = &before[..at_byte];
+    let line = ahead.matches('\n').count() + 1;
+    at["old_line"].as_u64() == u64::try_from(line).ok()
+        && ahead.ends_with(&format!("{}{}", recorded("context_before"), recorded("line_prefix")))
 }
 
 /// Deterministic id for session `session_id`'s metadata header row (`atuin-meta-<session>`).
@@ -950,6 +985,12 @@ impl ReaderState {
             Some(edited) => edited.clone(),
             None => files.get(&key)?.clone(),
         };
+        // Something else (a shell command) changed the file since: the replay isn't the edit.
+        if let Some(at) = self.times.edited_at.get(&call.id)
+            && !found_as_recorded(before.as_deref().unwrap_or_default(), call, &input, at)
+        {
+            return None;
+        }
         let after = if call.name == "write" {
             input["content"].as_str()?.to_owned()
         } else {
@@ -1015,7 +1056,15 @@ impl ReaderState {
         {
             self.edits.insert(call.id.clone(), call.clone());
         }
-        if let Some(call) = msg.tool_call_id.as_ref().and_then(|id| self.edits.remove(id))
+        if let Some(id) = &msg.tool_call_id
+            && let Some(files) = self.times.patches.get(id)
+        {
+            self.edits.remove(id);
+            msg.patches.push(Patch {
+                call: ToolCallId::from(id.clone()),
+                files: files.clone(),
+            });
+        } else if let Some(call) = msg.tool_call_id.as_ref().and_then(|id| self.edits.remove(id))
             && !inferred_tool_error(&msg.content)
         {
             if self.prompt.is_some_and(|prompt| self.snapshots.contains_key(&prompt)) {
@@ -1868,6 +1917,76 @@ mod tests {
             error: true,
             ..
         })]));
+    }
+
+    /// A file a shell command changed between two edits holds what neither edit's replay would
+    /// give: the second edit, which Grok Build recorded finding its text elsewhere, gets no diff.
+    #[rstest]
+    #[tokio::test]
+    async fn an_edit_after_a_command_changed_its_file_gets_no_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18ef1-1f2f-77e0-b359-261d9ad4a2ef";
+        let sdir = dir.path().join(sid);
+        std::fs::create_dir_all(&sdir).unwrap();
+        std::fs::write(
+            sdir.join(SUMMARY_FILE),
+            json!({"info": {"id": sid, "cwd": "/w"}, "created_at": "2026-10-30T22:32:09Z"})
+                .to_string(),
+        )
+        .unwrap();
+        let jsonl = |lines: &[Value]| lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+        let snapshot = json!({"prompt_index": 0, "file_snapshots": {
+            "f.py": {"path": "f.py", "content": "a = 1\nb = 2\n"},
+        }});
+        std::fs::write(sdir.join(REWINDS_FILE), jsonl(&[snapshot])).unwrap();
+        let edit = |id: &str, old: &str, new: &str| {
+            json!({"type": "assistant", "content": "", "tool_calls": [{"id": id, "name": "search_replace",
+                "arguments": json!({"file_path": "f.py", "old_string": old, "new_string": new}).to_string()}]})
+        };
+        let result = |id: &str| json!({"type": "tool_result", "tool_call_id": id, "content": "The file f.py has been updated successfully."});
+        let recorded = |id: &str, line: u64, before: &str| {
+            json!({"timestamp": 1_793_399_537, "params": {"update": {"sessionUpdate": "tool_call_update", "toolCallId": id,
+            "status": "completed", "content": [{"type": "diff", "_meta": {"details": [
+                {"old_line": line, "context_before": before, "line_prefix": ""},
+            ]}}]}}})
+        };
+        std::fs::write(
+            sdir.join(UPDATES_FILE),
+            // The formatter put a line above both: Grok Build found `b = 2` on line 3.
+            jsonl(&[recorded("e1", 1, ""), recorded("e2", 3, "a = 10\n")]),
+        )
+        .unwrap();
+        let path = sdir.join(TRANSCRIPT_FILE);
+        std::fs::write(
+            &path,
+            jsonl(&[
+                json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nbump\n</user_query>"}], "prompt_index": 0}),
+                edit("e1", "a = 1", "a = 10"),
+                result("e1"),
+                json!({"type": "assistant", "content": "", "tool_calls": [{"id": "s1", "name": "run_terminal_command",
+                    "arguments": json!({"command": "fmt f.py"}).to_string()}]}),
+                json!({"type": "tool_result", "tool_call_id": "s1", "content": "formatted"}),
+                edit("e2", "b = 2", "b = 20"),
+                result("e2"),
+                json!({"type": "assistant", "content": "done"}),
+            ]),
+        )
+        .unwrap();
+
+        let msgs: Vec<_> = GrokSession::open(SessionId::from(sid.to_owned()), path, pool())
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+        let patched: Vec<_> = msgs
+            .iter()
+            .flat_map(Message::content)
+            .filter_map(|c| match c {
+                Content::Patch(patch) => Some(patch.call.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(patched, ["e1"]);
     }
 
     /// Grok Build writes a turn's usage and file snapshots once the turn ends, after the reply:
