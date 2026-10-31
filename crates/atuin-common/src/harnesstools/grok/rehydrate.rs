@@ -37,8 +37,20 @@ use crate::harnesstools::session::{
 };
 use crate::path::PathBufExt as _;
 
-/// Held by a restore of a session while it writes the session's files (see [`rehydrate_into`]).
-const RESTORE_LOCK: &str = ".atuin.restore.lock";
+/// Held while Atuin writes a session's files: a restore, catch-up or switch of it waits for
+/// another's to finish, and reads what that wrote.
+const SESSION_LOCK: &str = ".atuin.lock";
+
+/// Take the lock on the session in `session_dir` ([`SESSION_LOCK`]), held until it is dropped.
+pub(crate) fn lock(session_dir: &Path) -> std::io::Result<std::fs::File> {
+    let lock = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(session_dir.join(SESSION_LOCK))?;
+    lock.lock()?;
+    Ok(lock)
+}
 
 /// Rendered files for a full restore or incremental append/switch.
 #[derive(Debug, Default)]
@@ -75,12 +87,7 @@ pub(crate) fn rehydrate_into(
     // Two restores of the session take turns, and the second finds the first's transcript. A
     // directory with no transcript is a restore that stopped before it finished: what it wrote
     // is written again.
-    let lock = std::fs::File::options()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(sdir.join(RESTORE_LOCK))?;
-    lock.lock()?;
+    let _lock = lock(&sdir)?;
     let transcript_path = sdir.join(TRANSCRIPT_FILE);
     if transcript_path.exists() {
         return Err(RehydrateError::AlreadyExists(transcript_path));

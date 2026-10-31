@@ -21,7 +21,7 @@ use crate::harnesstools::grok::session::{
     title_id,
 };
 use crate::harnesstools::rehydrate::RehydrateMessage;
-use crate::harnesstools::session::Message as _;
+use crate::harnesstools::session::{Content, Message as _, Role};
 
 impl SessionSync for Grok {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
@@ -339,6 +339,7 @@ pub(super) fn append_to(
     taken: Option<&HashSet<String>>,
 ) -> Result<AppendOutcome, SyncError> {
     let path = &base.native_path;
+    let _lock = rehydrate::lock(path.parent().unwrap_or(path))?;
     let file = Transcript::read(path, id)?;
     if Stamp::of(&file.bytes) != base.stamp {
         return Err(SyncError::Changed);
@@ -389,13 +390,14 @@ pub(super) fn replace_to(
     if branch.is_empty() {
         return Err(SyncError::Unsupported("the branch has no rows"));
     }
+    let _lock = rehydrate::lock(path.parent().unwrap_or(path))?;
     let file = Transcript::read(path, id)?;
     if Stamp::of(&file.bytes) != base.stamp {
         return Err(SyncError::Changed);
     }
     let (shared, from) = branch_point(base, branch, Links::Chained)?;
     let kept_bytes = shared_lines(&file.bytes, &file.sidecar, id, &from);
-    let kept = Transcript::parse(
+    let mut kept = Transcript::parse(
         kept_bytes,
         file.modified,
         id,
@@ -404,6 +406,19 @@ pub(super) fn replace_to(
     );
     let continuing = continuing_from(kept.local_tip(path), &from)?;
     let rest = past(branch, shared, &continuing, Links::Chained);
+    // The scrollback numbers the branch's prompts from its first, and so do the lines written
+    // past those kept: a compaction leaves the kept ones no number to go on from.
+    let first = rest
+        .first()
+        .and_then(|r| branch.iter().position(|m| m.source_id == r.source_id))
+        .unwrap_or(branch.len());
+    let prompts = branch[..first].iter().filter(|m| {
+        m.role == Role::User
+            && m.content
+                .iter()
+                .any(|c| matches!(c, Content::Text(t) | Content::Summary(t) if !t.is_empty()))
+    });
+    kept.prompt_count = u64::try_from(prompts.count()).unwrap_or(u64::MAX);
     let rendered = extend(id, &kept, &continuing, &rest, taken)?;
 
     let mut out = kept.bytes;
@@ -496,7 +511,6 @@ mod tests {
 
     use super::*;
     use crate::harnesstools::rehydrate::RehydrateSession;
-    use crate::harnesstools::session::{Content, Role};
 
     const ID: &str = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
 
@@ -751,6 +765,69 @@ mod tests {
         }
     }
 
+    /// A switch past a compaction both branches hold numbers the prompts it writes as the
+    /// scrollback it writes does, from the branch's first: capture times a prompt by its number.
+    #[rstest]
+    fn a_switch_past_a_compaction_numbers_its_prompts_as_its_scrollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let history = vec![
+            row("u1", None, Role::User, "first", 1_700_000_001),
+            row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002),
+            row("u2", Some("a1"), Role::User, "second", 1_700_000_003),
+            row("a2", Some("u2"), Role::Assistant, "reply two", 1_700_000_004),
+        ];
+        let path = seed_session(&root, dir.path(), history.clone());
+        let written: Vec<Value> = jsonl_lines(&std::fs::read(&path).unwrap())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        let requests = path.with_file_name("compaction_requests");
+        std::fs::create_dir_all(&requests).unwrap();
+        std::fs::write(
+            requests.join("r1.json"),
+            json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": written}).to_string(),
+        )
+        .unwrap();
+        let compacted = [
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nsecond\n</user_query>"}]}),
+            json!({"type": "user", "content": [{"type": "text", "text": "This session is being continued."}], "synthetic_reason": "compaction_meta"}),
+        ];
+        std::fs::write(&path, join_jsonl(&compacted)).unwrap();
+        let file = Transcript::read(&path, ID).unwrap();
+        let (replayed, summary) = (file.line_ids[0].clone(), file.line_ids[1].clone());
+        let tip = file.tip(&path);
+        let local = row("u3", Some(&summary), Role::User, "here", 1_700_000_005);
+        append_to(ID, &tip, &[local], None).unwrap();
+
+        let mut branch = history;
+        branch.push(RehydrateMessage {
+            role: Role::System,
+            ..row(&replayed, Some("a2"), Role::System, "second", 1_700_000_004)
+        });
+        branch.push(RehydrateMessage {
+            content: vec![Content::Summary("This session is being continued.".to_owned())],
+            ..row(&summary, Some(&replayed), Role::System, "", 1_700_000_004)
+        });
+        branch.push(row("r3", Some(&summary), Role::User, "there", 1_700_000_006));
+        let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+        replace_to(ID, &tip, &branch, None, &dir.path().join("backups")).unwrap();
+
+        let prompt_of =
+            |line: &Value| line["content"][0]["text"].as_str().unwrap_or("").contains("there");
+        let lines: Vec<Value> = jsonl_lines(&std::fs::read(&path).unwrap())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        let written = lines.iter().find(|line| prompt_of(line)).unwrap()["prompt_index"].clone();
+        let updates = std::fs::read(path.with_file_name(UPDATES_FILE)).unwrap();
+        let scrollback = jsonl_lines(&updates)
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .map(|line| line["params"]["update"].clone())
+            .find(|update| update["content"]["text"].as_str().is_some_and(|t| t.contains("there")))
+            .unwrap()["_meta"]["promptIndex"]
+            .clone();
+        assert_eq!((written, scrollback), (json!(2), json!(2)));
+    }
+
     /// A line with nothing to key it by goes with the lines around it: a switch past it keeps it.
     #[rstest]
     fn a_switch_keeps_an_unkeyed_line_of_the_shared_history() {
@@ -844,6 +921,38 @@ mod tests {
         let next = row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002);
         assert!(append_to(ID, &tip, &[next], None).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// Catch-ups of one session at once take turns: one writes it, the rest find it changed and
+    /// leave what it wrote, its ids among it.
+    #[rstest]
+    fn catch_ups_of_one_session_at_once_keep_the_ids_one_wrote() {
+        // The race is lost only now and then: run it often enough to lose it.
+        for _ in 0..10 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = seed_session(&dir.path().join("sessions"), dir.path(), vec![row(
+                "u1",
+                None,
+                Role::User,
+                "first",
+                1_700_000_001,
+            )]);
+            let tip = Transcript::read(&path, ID).unwrap().tip(&path);
+            let next = row("a1", Some("u1"), Role::Assistant, "reply", 1_700_000_002);
+            let results: Vec<_> = std::thread::scope(|scope| {
+                // Every catch-up starts before any is waited for.
+                let mut catch_ups = Vec::new();
+                for _ in 0..8 {
+                    catch_ups.push(
+                        scope.spawn(|| append_to(ID, &tip, std::slice::from_ref(&next), None)),
+                    );
+                }
+                catch_ups.into_iter().map(|catch_up| catch_up.join().unwrap()).collect()
+            });
+            assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1, "{results:?}");
+            let ids = AtuinSidecar::read_beside(&path).ids;
+            assert!(ids.values().any(|v| v == "a1"), "a1 lost from {ids:?}");
+        }
     }
 
     /// A catch-up that stopped between writing its scrollback and the transcript, tried again,
