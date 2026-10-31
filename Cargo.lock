@@ -263,7 +263,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "ansi-to-tui",
  "arboard",
@@ -308,6 +308,7 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "proptest",
+ "rand 0.8.7",
  "ratatui",
  "regex",
  "rpassword",
@@ -345,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "arboard",
  "async-stream",
@@ -413,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -481,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "async-stream",
  "atuin-vt100",
@@ -559,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "async-stream",
  "atuin-client",
@@ -618,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -653,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -671,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -684,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -705,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-octavo"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -734,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -759,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -787,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.24.3"
+version = "18.24.4"
 dependencies = [
  "argon2",
  "async-trait",
@@ -803,6 +804,7 @@ dependencies = [
  "fs-err",
  "futures-util",
  "i18n-embed",
+ "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
  "percent-encoding",
@@ -3200,6 +3202,9 @@ name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "is_terminal_polyfill"

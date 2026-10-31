@@ -48,6 +48,8 @@ impl SyncServer {
                 db_password_file: None,
             },
             metrics: atuin_server::settings::Metrics::default(),
+            trusted_proxies: Vec::new(),
+            trusted_proxy_header: atuin_server::Settings::DEFAULT_TRUSTED_PROXY_HEADER,
             fake_version: None,
         };
         let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();

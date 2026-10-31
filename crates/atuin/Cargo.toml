@@ -92,7 +92,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.24.3", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.24.4", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -129,6 +129,7 @@ norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
+rand = { workspace = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
 rpassword = { workspace = true }

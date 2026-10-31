@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.4
+
+### Bug Fixes
+
+- *(ai-session)* Keep the objective of an opencode /goal ([#4599](https://github.com/atuinsh/atuin/issues/4599))
+- *(hooks)* Honour CLAUDE_CONFIG_DIR when installing Claude Code hooks ([#4597](https://github.com/atuinsh/atuin/issues/4597))
+- *(threads)* Open pi and omp sessions on the agent's default model ([#4598](https://github.com/atuinsh/atuin/issues/4598))
+- *(threads)* Take `claude` and `claude-code` alike wherever a harness is named ([#4602](https://github.com/atuinsh/atuin/issues/4602))
+- *(threads)* Restore a non-diverged session with no row before its parent ([#4604](https://github.com/atuinsh/atuin/issues/4604))
+
+
+### Features
+
+- *(cli)* Spooky atuin ([#4605](https://github.com/atuinsh/atuin/issues/4605))
+- *(threads)* Capture, search and resume GitHub Copilot CLI sessions ([#4567](https://github.com/atuinsh/atuin/issues/4567))
+- *(threads)* Capture Copilot subagents as child sessions ([#4568](https://github.com/atuinsh/atuin/issues/4568))
+- *(threads)* Write Copilot sessions: restore, catch up, switch, fork, continue ([#4580](https://github.com/atuinsh/atuin/issues/4580))
+- *(threads)* Name the recording host in threads JSON and atuin info ([#4600](https://github.com/atuinsh/atuin/issues/4600))
+- *(server)* Add support for X-Forwarded-For ([#4595](https://github.com/atuinsh/atuin/issues/4595))
+
 ## 18.24.3
 
 ### Bug Fixes
