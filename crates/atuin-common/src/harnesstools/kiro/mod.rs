@@ -1,9 +1,8 @@
-//! Kiro CLI (`kiro-cli`): reading its sessions, installing its hooks and resuming.
+//! Kiro CLI (`kiro-cli`): reading its sessions, writing them back out, installing its hooks and
+//! resuming.
 //!
-//! Read-only: atuin reads Kiro's sessions but never writes them, so a session is restored,
-//! caught up, switched, forked or continued into Kiro by nothing here
-//! ([`Harness::writes_transcripts`]); a Kiro copy on this machine resumes as it is. What the
-//! reader knows of the format was verified against Kiro CLI 2.36.0 (see the session module).
+//! Kiro's log format is undocumented: what the reader and writer know of it was verified against
+//! Kiro CLI 2.36.0 (see their module docs).
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -15,6 +14,7 @@ use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 
 pub mod hooks;
+pub mod rehydrate;
 pub mod session;
 
 /// Kiro's home directory: `$KIRO_HOME` where Kiro itself honours it, else `~/.kiro`.
@@ -46,10 +46,6 @@ impl Harness for Kiro {
         &["kiro-cli"]
     }
 
-    fn writes_transcripts(&self) -> bool {
-        false
-    }
-
     /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         hooks::install(&kiro_home(), &std::env::current_exe()?).await
@@ -74,8 +70,8 @@ impl Harness for Kiro {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        Err(RehydrateError::Unsupported("Kiro"))
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+        rehydrate::rehydrate(session).await
     }
 }
 
@@ -107,24 +103,6 @@ mod tests {
             let harness = super::super::AnyHarness::from_name(name).unwrap();
             assert_eq!(harness.name(), "kiro", "{name}");
         }
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn never_writes_a_transcript() {
-        assert!(!Kiro.writes_transcripts());
-        let session = RehydrateSession {
-            id: "sess_x".to_owned(),
-            title: None,
-            cwd: PathBuf::from("/work"),
-            original_cwd: None,
-            git_branch: None,
-            model: None,
-            started_at: time::OffsetDateTime::UNIX_EPOCH,
-            messages: Vec::new(),
-            fork_of: None,
-        };
-        assert!(matches!(Kiro.rehydrate(&session).await, Err(RehydrateError::Unsupported("Kiro"))));
     }
 
     /// Kiro's own rule: `KIRO_HOME` must be absolute, below a root, and not the home directory

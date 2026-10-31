@@ -47,14 +47,6 @@ pub trait Harness: std::fmt::Debug {
         &[]
     }
 
-    /// Whether atuin writes this harness's transcripts: restoring a session here
-    /// ([`Self::rehydrate`]), catching a copy up or switching its branch (`SessionSync`), and
-    /// forking or continuing a session into it. A harness atuin only reads (Kiro, until its write
-    /// side lands) says no, and every writer refuses it up front.
-    fn writes_transcripts(&self) -> bool {
-        true
-    }
-
     /// Install this harness's hooks on the current user's machine, returning the path written.
     #[allow(async_fn_in_trait)]
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;

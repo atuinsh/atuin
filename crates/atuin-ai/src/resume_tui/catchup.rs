@@ -82,8 +82,9 @@ pub enum Why {
 /// nothing [substantive](is_substantive) past where it leaves the line, and no summary standing in
 /// for the conversation, which the model is given as context) is no branch of its own, and is
 /// fast-forwarded from where it leaves it, as the agent would go on from there. Only for a harness
-/// whose rows name the row they follow (Claude Code, pi), where the rows appended hang from that
-/// row; any other reads its transcript in order, twig and all.
+/// whose rows name the row they follow (Claude Code, pi, Kiro, whose turns end on a reasoning
+/// marker a copy written elsewhere may lack), where the rows appended hang from that row; any
+/// other reads its transcript in order, twig and all.
 pub fn classify(
     analysis: &Analysis,
     harness: HarnessKind,
@@ -114,7 +115,10 @@ pub fn classify(
     }
     let path = analysis.path_to(head);
     let shared = path.iter().zip(&mine).take_while(|(a, b)| a.source_id == b.source_id).count();
-    let linked = matches!(harness, HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp);
+    let linked = matches!(
+        harness,
+        HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp | HarnessKind::Kiro
+    );
     let twig = linked && !mine[shared..].iter().any(|m| carries_conversation(m));
     let rest = &path[shared..];
     let holds_none = !rest.iter().any(|m| tip.known_source_ids.contains(m.source_id.as_ref()));

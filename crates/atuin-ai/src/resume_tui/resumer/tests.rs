@@ -286,56 +286,6 @@ async fn a_session_on_disk_resumes_directly(dirs: Dirs) {
     assert_eq!(resume.plan.cwd.as_deref(), Some(dirs.elsewhere.as_path()));
 }
 
-/// A Kiro copy here resumes as it is: atuin never writes Kiro's transcripts, so there is no
-/// catching it up, whatever the copy reads as (here, not at all) and whatever sync holds.
-#[rstest]
-#[tokio::test]
-async fn a_kiro_copy_resumes_as_it_is_without_catching_up(dirs: Dirs) {
-    let machine = FakeMachine {
-        found: HashMap::from([("sess_k1".to_owned(), PathBuf::from("/t/sess_k1/messages.jsonl"))]),
-        tip_error: Some("Kiro sessions can't be written here"),
-        ..FakeMachine::default()
-    };
-    let session = row(HarnessKind::Kiro, "sess_k1", &dirs.elsewhere, false);
-    let resumer = resumer(&dirs, &machine);
-    let resume = resumer.plan(&session).await.unwrap();
-    assert!(!resume.catch_up, "{resume:?}");
-    assert_eq!(resume.plan.program, "kiro-cli");
-    assert_eq!(resume.plan.args, ["chat", "--resume-id", "sess_k1"]);
-
-    let source = fake::FakeSource::from_rows(vec![session.clone()])
-        .with_synced(&session.handle, fake::synced_rows(true));
-    let caught = resumer.catch_up(&source, &session, None).await.unwrap();
-    assert!(
-        matches!(&caught, CatchUp::Ready { plan, status: None } if plan.program == "kiro-cli"),
-        "{caught:?}"
-    );
-    assert!(machine.appended.lock().is_empty());
-}
-
-/// A Kiro session that isn't here can't be restored, forked, or continued into (atuin never
-/// writes Kiro's transcripts): each is refused up front, with nothing written, and Kiro is never
-/// offered as a continuation target.
-#[rstest]
-#[tokio::test]
-async fn a_kiro_session_not_here_is_not_resumable(dirs: Dirs) {
-    let machine = FakeMachine::default();
-    let resumer = resumer(&dirs, &machine);
-    let remote = row(HarnessKind::Kiro, "sess_k2", &dirs.elsewhere, true);
-    let err = resumer.plan(&remote).await.unwrap_err();
-    assert_eq!(err, NotResumable::Unwritable("kiro"));
-    assert!(!resumer.can_fork(&remote));
-    let err = resumer.fork(&Synced, &remote, ForkFrom::default()).await.unwrap_err();
-    assert_eq!(err, NotResumable::Unwritable("kiro"));
-    assert!(machine.written.lock().is_empty());
-
-    let claude = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
-    assert!(!resumer.continue_targets(&claude).contains(&HarnessKind::Kiro));
-    let err = resumer.continue_in(&Worked, &claude, HarnessKind::Kiro, None).await.unwrap_err();
-    assert_eq!(err, NotResumable::Unwritable("kiro"));
-    assert!(machine.written.lock().is_empty());
-}
-
 /// Reading a copy can move it (a rollout Codex compressed, made plain again): a `{path}` template
 /// names where it is now.
 #[rstest]
@@ -682,7 +632,13 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
 #[tokio::test]
 async fn an_empty_session_is_not_continued(
     dirs: Dirs,
-    #[values(HarnessKind::Codex, HarnessKind::Copilot, HarnessKind::Opencode, HarnessKind::Pi)]
+    #[values(
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Kiro,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
     target: HarnessKind,
 ) {
     let machine = FakeMachine::default();
@@ -705,6 +661,7 @@ async fn an_empty_session_is_not_forked(
         HarnessKind::ClaudeCode,
         HarnessKind::Codex,
         HarnessKind::Copilot,
+        HarnessKind::Kiro,
         HarnessKind::Opencode,
         HarnessKind::Pi
     )]
@@ -753,6 +710,7 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
         HarnessKind::Copilot,
+        HarnessKind::Kiro,
         HarnessKind::Pi,
         HarnessKind::Omp
     ]);

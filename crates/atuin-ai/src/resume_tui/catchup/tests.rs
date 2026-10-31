@@ -80,6 +80,26 @@ async fn a_twig_off_the_heads_line_fast_forwards(
     assert_eq!(summary(&step), want);
 }
 
+/// Kiro ends a turn on a reasoning marker after its last reply; a copy restored elsewhere from
+/// capture that kept no such row goes on from the reply, so the native copy's tip is a twig off
+/// the line the other machine went on with: it fast-forwards from the reply, as any agent whose
+/// rows name the row before them does. One that reads its log in order would keep the twig.
+#[rstest]
+#[case::kiro(HarnessKind::Kiro, "ff:c,d@b")]
+#[case::in_order(HarnessKind::Codex, "Diverged")]
+#[tokio::test]
+async fn a_trailing_reasoning_marker_is_a_twig(#[case] harness: HarnessKind, #[case] want: &str) {
+    let mut rows = rows(false);
+    let mut marker = synced_row(&handle(), ("t", Some("b"), 1, 1, false));
+    marker.role = Role::Assistant;
+    marker.content = vec![Content::ReasoningSummary { tokens: None }];
+    rows.push(marker);
+    let analysis = analysis(rows).await;
+    let head = SourceId::from("d".to_owned());
+    let step = classify(&analysis, harness, &head, &tip(&["a", "b", "t"], Some("t")));
+    assert_eq!(summary(&step), want);
+}
+
 /// Each head is offered with what this copy lacks of it, and when it was last written.
 #[rstest]
 #[tokio::test]
