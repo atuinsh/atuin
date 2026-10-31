@@ -1,5 +1,6 @@
 //! Utilities for reading environment variables.
 
+use std::collections::HashMap;
 use std::env::VarError;
 use std::ffi::{OsStr, OsString};
 
@@ -50,6 +51,19 @@ pub fn var_abspath(name: &str) -> Option<AbsPathBuf> {
         .ok()
 }
 
+/// The variables of the current thread's mock environment, if one is installed.
+///
+/// For a reader that takes the whole environment from the process itself, such as
+/// `config::Environment`: given this as its source, a mock governs it as it does [`var`]. `None`,
+/// as always outside tests, leaves it reading the process.
+#[must_use]
+pub fn mocked_vars() -> Option<HashMap<String, String>> {
+    #[cfg(any(test, feature = "test-utils"))]
+    return mock::vars();
+    #[cfg(not(any(test, feature = "test-utils")))]
+    None
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockEnv;
 
@@ -73,6 +87,20 @@ pub(crate) mod mock {
 
     pub(super) fn get_os(key: &OsStr) -> Option<Option<OsString>> {
         MOCK.with_borrow(|mock| mock.as_ref().map(|vars| vars.get(key).cloned()))
+    }
+
+    /// The mock's variables, leaving out any whose name or value isn't Unicode: a source map holds
+    /// strings, and `config::Environment` skips such names anyway.
+    pub(super) fn vars() -> Option<HashMap<String, String>> {
+        MOCK.with_borrow(|mock| {
+            mock.as_ref().map(|vars| {
+                vars.iter()
+                    .filter_map(|(key, value)| {
+                        Some((key.to_str()?.to_owned(), value.to_str()?.to_owned()))
+                    })
+                    .collect()
+            })
+        })
     }
 
     pub(super) fn get(key: &OsStr) -> Option<Result<String, VarError>> {
