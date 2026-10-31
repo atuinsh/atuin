@@ -87,8 +87,18 @@ async fn install(agent_name: &str, executable: Option<&Path>) -> Result<()> {
     // Hooks embed the binary by absolute path. The running binary may live in a
     // version-manager directory that an upgrade removes, so allow a stable path.
     let executable = match executable {
-        Some(path) => PathBuf::from(AbsPathBuf::from_current_dir(path)?),
-        None => std::env::current_exe()?,
+        Some(path) => {
+            // Installed hooks are recognised (and, for Codex, trusted) by the `atuin` file name,
+            // so a renamed binary would never run.
+            let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            let named_atuin =
+                ["atuin", "atuin.exe"].iter().any(|n| file_name.eq_ignore_ascii_case(n));
+            if !named_atuin {
+                bail!("--executable must point to a binary named `atuin`");
+            }
+            PathBuf::from(AbsPathBuf::from_current_dir(path)?)
+        }
+        None => atuin_common::os::process::current_exe(),
     };
 
     match harness.install_hooks(&executable).await {

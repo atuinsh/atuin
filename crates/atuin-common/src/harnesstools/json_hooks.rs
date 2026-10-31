@@ -267,6 +267,7 @@ mod tests {
         assert_eq!(invokes_atuin_hook(command, "codex"), expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn install_writes_the_requested_executable() {
         let dir = tempfile::tempdir().unwrap();
