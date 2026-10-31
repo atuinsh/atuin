@@ -215,14 +215,15 @@ in
       description = "Wipe the Atuin sandbox under .devenv/state/atuin (stopping a dev daemon in it) and recreate it";
       exec = ''
         set -euo pipefail
-        pidfile="$ATUIN_HOME/data/atuin-daemon.pid"
-        if [ -f "$pidfile" ]; then
-          # The pidfile starts with the pid; the daemon's details follow.
-          pid=$(head -n1 "$pidfile" | tr -dc '0-9')
-          if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "stopping the sandbox daemon (pid $pid)"
-            kill "$pid"
-          fi
+        # atuin stops the daemon, not a kill of the pidfile's PID: after a crash that PID may be
+        # another process's, and atuin signals only a process that still holds the pidfile.
+        if [ -e "$ATUIN_HOME/data/atuin-daemon.pid" ]; then
+          for atuin in "$DEVENV_ROOT/target/debug/atuin" "$DEVENV_ROOT/target/release/atuin" "$(command -v atuin || true)"; do
+            if [ -x "$atuin" ]; then
+              "$atuin" daemon stop || echo "atuin daemon stop failed; removing the sandbox anyway" >&2
+              break
+            fi
+          done
         fi
         rm -rf ${lib.escapeShellArg sandbox} "$ATUIN_DAEMON__SOCKET_PATH"
         ${seedSandbox}
