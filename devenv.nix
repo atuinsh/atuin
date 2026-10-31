@@ -184,15 +184,18 @@ in
     XDG_CACHE_HOME = "${sandbox}/xdg/cache";
     # Short, and apart from the real daemon's default socket.
     ATUIN_DAEMON__SOCKET_PATH = "${config.env.DEVENV_RUNTIME}/atuin.sock";
-    ATUIN_DB_URI = "postgres://atuin:pass@127.0.0.1:${toString config.env.PGPORT}/atuin";
+    # devenv's Postgres by its socket, which only that server can answer: with it stopped, the
+    # tests find no Postgres rather than whichever one has the port.
+    ATUIN_DB_URI = "postgres://atuin:pass@localhost:${toString config.env.PGPORT}/atuin?host=${config.env.PGHOST}";
     ATUIN_E2E_BLESH = "${pkgs.blesh}/share/blesh/ble.sh";
   };
 
   services.postgres = {
     enable = true;
     package = pkgs.postgresql_18;
-    listen_addresses = "127.0.0.1";
-    port = 5432;
+    # No TCP: a socket in devenv's runtime directory can't collide with, or be mistaken for, a
+    # Postgres of the contributor's own.
+    listen_addresses = "";
     initialDatabases = [
       {
         name = "atuin";
@@ -200,13 +203,12 @@ in
         pass = "pass";
       }
     ];
-    # The atuin role needs its password over TCP, as in CI's Postgres image: a test of
-    # `db_password_file` fails on a server that would let it in without one. Everyone else is
-    # trusted, for devenv's own readiness probe and for psql.
+    # The atuin role needs its password, as in CI's Postgres image: a test of `db_password_file`
+    # fails on a server that would let it in without one. Everyone else is trusted, for devenv's
+    # own readiness probe and for psql.
     hbaConf = ''
-      local all all              trust
-      host  all atuin 127.0.0.1/32 scram-sha-256
-      host  all all   127.0.0.1/32 trust
+      local all atuin scram-sha-256
+      local all all   trust
     '';
   };
 

@@ -57,12 +57,14 @@ These variable exports can be added in a local `.envrc` file, read by [direnv](h
 `nix develop` shell is a minimal one, kept for packaging: it has the Rust toolchain and the build
 inputs, but not CI's tools, the `ci-*` scripts or the sandbox below.
 
-With devenv installed, `devenv shell` gives you what CI runs, at CI's versions: the toolchain from `rust-toolchain.toml` with clippy, rust-src and
-rust-analyzer, the nightly rustfmt the format check uses (as the shell's `rustfmt`, so `cargo fmt`
-and your editor format the way CI checks), cargo-nextest, cargo-deny, Vale with the styles
-`.vale.ini` pins, codespell and shellcheck. `devenv up -d` starts a Postgres for `atuin-server`'s
-integration tests; `ATUIN_DB_URI` points at it. Every version comes from where CI pins it
-(`rust-toolchain.toml`, `Cargo.toml`'s `rust-version`, `.buildkite/`), so the two cannot drift.
+With devenv installed, `devenv shell` gives you what CI runs, at CI's versions: the toolchain from
+`rust-toolchain.toml` with clippy, rust-src and rust-analyzer, the nightly rustfmt the format check
+uses (as the shell's `rustfmt`, so `cargo fmt` and your editor format the way CI checks),
+cargo-nextest, cargo-deny, Vale with the styles `.vale.ini` pins, codespell and shellcheck.
+`devenv up -d` starts a Postgres for `atuin-server`'s integration tests; `ATUIN_DB_URI` points at
+its socket, so the tests never reach a Postgres of your own, and `ci-test` treats it being stopped
+as having no Postgres. Every version comes from where CI pins it (`rust-toolchain.toml`,
+`Cargo.toml`'s `rust-version`, `.buildkite/`), so the two cannot drift.
 
 Each `ci-*` script runs one pipeline step's commands, step for step: `ci-fmt`, `ci-clippy`,
 `ci-check`, `ci-test` (extra arguments go to nextest, so `ci-test -p atuin-common`), `ci-deny`,
