@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
-use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubToken, UserId};
+use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubSession, UserId};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
 use engine::UploadEngine;
@@ -62,7 +62,7 @@ impl OctavoClient for ActiveOctavoClient {
             return;
         }
         // Read now, so the command goes to whoever was logged in as it finished.
-        let Some(token) = self.uploader.token(&settings).await else {
+        let Some(session) = self.uploader.session(&settings).await else {
             return;
         };
 
@@ -70,7 +70,7 @@ impl OctavoClient for ActiveOctavoClient {
         // the upload is in flight loses only that entry's upload.
         tokio::spawn(Arc::clone(&self.uploader).upload_or_queue(
             settings,
-            token,
+            session,
             history.clone(),
             record_id,
         ));
@@ -82,21 +82,21 @@ impl OctavoClient for ActiveOctavoClient {
             return;
         }
         // Read now, so the output goes to whoever was logged in as it was captured.
-        let Some(token) = self.uploader.token(&settings).await else {
+        let Some(session) = self.uploader.session(&settings).await else {
             return;
         };
 
-        self.uploader.queue_for(settings, token, Queued::Output(id)).await;
+        self.uploader.enqueue(session.user_id(), Queued::Output(id)).await;
     }
 
     async fn delete_history(&self, ids: &[HistoryId]) {
         let settings = self.uploader.handle.settings().await.clone();
         // Read now, so the deletions go to whoever was logged in when the entries were deleted.
-        let Some(token) = self.uploader.token(&settings).await else {
+        let Some(session) = self.uploader.session(&settings).await else {
             return;
         };
 
-        self.uploader.queue_for(settings, token, Queued::Deletions(ids.to_vec())).await;
+        self.uploader.enqueue(session.user_id(), Queued::Deletions(ids.to_vec())).await;
     }
 }
 
@@ -132,18 +132,18 @@ impl DirectUploader {
     async fn upload_or_queue(
         self: Arc<Self>,
         settings: Arc<Settings>,
-        token: HubToken,
+        session: HubSession,
         history: History,
         record_id: RecordId,
     ) {
         let id = history.id;
-        let login = match self.hub.login_as(token, &settings).await {
+        let login = match self.hub.login_as(session, &settings) {
             Ok(login) => login,
             Err(err) => {
                 tracing::warn!(
                     ?err,
                     %id,
-                    "failed to learn whose hub token this is; not uploading this history entry"
+                    "failed to log in to octavo; not uploading this history entry"
                 );
                 return;
             }
@@ -186,46 +186,8 @@ impl DirectUploader {
         }
     }
 
-    /// Queues `work` for `token`'s user before returning, so it outlives the daemon.
-    ///
-    /// That needs the token's user, known once the daemon has reached the hub since the login;
-    /// until then a detached task asks the hub first.
-    async fn queue_for(self: &Arc<Self>, settings: Arc<Settings>, token: HubToken, work: Queued) {
-        match self.hub.user_of(&token, &settings).await {
-            Ok(Some(user)) => self.enqueue(&user, work).await,
-            Ok(None) => {
-                tokio::spawn(Arc::clone(self).learn_user_and_queue(settings, token, work));
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    %work,
-                    "failed to read the hub login; not queueing for octavo"
-                );
-            }
-        }
-    }
-
-    /// Learns whose `token` is from the hub, then queues `work` for them.
-    async fn learn_user_and_queue(
-        self: Arc<Self>,
-        settings: Arc<Settings>,
-        token: HubToken,
-        work: Queued,
-    ) {
-        match self.hub.login_as(token, &settings).await {
-            Ok(login) => self.enqueue(login.user_id(), work).await,
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    %work,
-                    "failed to learn whose hub token this is; not queueing for octavo"
-                );
-            }
-        }
-    }
-
-    /// Queues `user`'s `work` for the engine to send, and wakes it.
+    /// Queues `user`'s `work` for the engine to send before returning, so it outlives the daemon,
+    /// and wakes the engine.
     async fn enqueue(&self, user: &UserId, work: Queued) {
         let queued = match &work {
             // Octavo never stored an entry whose id isn't a UUIDv7.
@@ -247,11 +209,18 @@ impl DirectUploader {
         self.wake.notify_one();
     }
 
-    /// The hub token logged in now, or `None` with Octavo left alone when there's none to use.
-    async fn token(&self, settings: &Settings) -> Option<HubToken> {
-        match self.hub.token(settings).await {
-            Ok(token) => Some(token),
+    /// The hub session logged in now, or `None` with Octavo left alone when there's none to use.
+    async fn session(&self, settings: &Settings) -> Option<HubSession> {
+        match self.hub.session(settings).await {
+            Ok(session) => Some(session),
             Err(HubCallError::NotLoggedIn) => None,
+            Err(HubCallError::UnknownUser) => {
+                // A session saved before atuin stored its user. Until the engine learns the user,
+                // Octavo gets nothing: work queued under no user could reach whoever logs in next.
+                tracing::debug!("the hub login's user is not known yet; leaving octavo alone");
+                self.wake.notify_one();
+                None
+            }
             Err(err) => {
                 tracing::warn!(?err, "failed to read the hub session; leaving octavo alone");
                 None

@@ -123,6 +123,7 @@ pub async fn register(
     Ok(Json(RegisterResponse {
         session: token,
         auth: Some("cli".into()),
+        user_id: None,
     }))
 }
 
@@ -228,5 +229,6 @@ pub async fn login(
     Ok(Json(LoginResponse {
         session: session.token,
         auth: Some("cli".into()),
+        user_id: None,
     }))
 }

@@ -42,13 +42,20 @@ pub struct HubAuthSession {
     pub hub_address: Url,
 }
 
+/// A hub session a login just got: its token, and the id of the user it logs in when the hub said.
+#[derive(Debug, Clone)]
+pub struct NewHubSession {
+    pub token: SecretString,
+    pub user_id: Option<String>,
+}
+
 /// The result of polling for hub auth completion
 #[derive(Debug, Clone)]
 pub enum HubAuthStatus {
     /// Still waiting for user authorization
     Pending,
-    /// Authorization complete, contains the session token
-    Complete(SecretString),
+    /// Authorization complete, with the new session
+    Complete(NewHubSession),
     /// Authorization failed with an error
     Failed(String),
 }
@@ -132,7 +139,10 @@ impl HubAuthSession {
             Ok(response) => {
                 if let Some(token) = response.token {
                     debug!("Authentication complete, received token");
-                    Ok(HubAuthStatus::Complete(token))
+                    Ok(HubAuthStatus::Complete(NewHubSession {
+                        token,
+                        user_id: response.user_id,
+                    }))
                 } else if let Some(error) = response.error {
                     debug!("Authentication failed: {}", error);
                     Ok(HubAuthStatus::Failed(error))
@@ -193,7 +203,7 @@ impl HubAuthSession {
         timeout: Duration,
         poll_interval: Duration,
         waiting_message: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<NewHubSession> {
         debug!("Polling for Hub authentication completion...");
 
         let spinner = ProgressBar::new_spinner();
@@ -205,7 +215,7 @@ impl HubAuthSession {
             .retry(
                 || async move {
                     match self.poll().await {
-                        Ok(HubAuthStatus::Complete(token)) => ControlFlow::Break(Ok(token)),
+                        Ok(HubAuthStatus::Complete(session)) => ControlFlow::Break(Ok(session)),
                         Ok(HubAuthStatus::Failed(error)) => {
                             ControlFlow::Break(Err(eyre::eyre!("Authentication failed: {error}")))
                         }
@@ -247,12 +257,17 @@ fn browser_launcher(is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
     }
 }
 
-/// Save a hub session token
+/// Save a hub session
 ///
-/// This saves the token to the meta store so it can be used for subsequent Hub API calls.
+/// This saves the session to the meta store so it can be used for subsequent Hub API calls.
 /// Note: This is separate from the sync session token.
-pub async fn save_session(token: &SecretString, settings: &Settings) -> Result<()> {
-    settings.meta_store().await?.save_hub_session(token).await.context("Failed to save hub session")
+pub async fn save_session(session: &NewHubSession, settings: &Settings) -> Result<()> {
+    settings
+        .meta_store()
+        .await?
+        .save_hub_session(&session.token, session.user_id.as_deref())
+        .await
+        .context("Failed to save hub session")
 }
 
 /// Delete the hub session token (logout from Hub)

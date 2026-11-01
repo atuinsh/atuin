@@ -33,7 +33,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
             url = session.auth_url.to_string()
         );
 
-        let token = session
+        let new_session = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
@@ -41,7 +41,7 @@ pub async fn run(settings: &Settings) -> Result<()> {
             )
             .await?;
 
-        atuin_client::hub::save_session(&token, settings).await?;
+        atuin_client::hub::save_session(&new_session, settings).await?;
         userio::log::info!("link-hub-complete");
     }
 

@@ -70,13 +70,17 @@ impl Cmd {
                 let response = client.register(username, email, password).await?;
 
                 match response {
-                    AuthResponse::Success { session, auth_type } => {
+                    AuthResponse::Success {
+                        session,
+                        auth_type,
+                        user_id,
+                    } => {
                         let meta = settings.meta_store().await?;
                         let is_hub_token = auth_type.as_deref() == Some("hub")
                             || atuin_client::meta::is_hub_token(&session);
 
                         if is_hub_token {
-                            meta.save_hub_session(&session).await?;
+                            meta.save_hub_session(&session, user_id.as_deref()).await?;
                         } else {
                             meta.save_session(&session).await?;
                             userio::log::info!("account-not-migrated-note");

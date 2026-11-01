@@ -105,11 +105,15 @@ impl Cmd {
 
             let mut totp_code = self.totp_code.clone();
 
-            let (session, auth_type) = loop {
+            let (session, auth_type, user_id) = loop {
                 let response = client.login(username, &password, totp_code.as_ref()).await?;
 
                 match response {
-                    AuthResponse::Success { session, auth_type } => break (session, auth_type),
+                    AuthResponse::Success {
+                        session,
+                        auth_type,
+                        user_id,
+                    } => break (session, auth_type, user_id),
                     AuthResponse::TwoFactorRequired => {
                         let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
                             bail!(fl!("login-totp-required"));
@@ -124,7 +128,7 @@ impl Cmd {
                 auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
             if is_hub_token {
-                meta.save_hub_session(&session).await?;
+                meta.save_hub_session(&session, user_id.as_deref()).await?;
             } else {
                 meta.save_session(&session).await?;
                 userio::log::info!("account-not-migrated-note");
@@ -196,7 +200,7 @@ impl Cmd {
         }
         println!("{}", session.auth_url);
 
-        let token = session
+        let new_session = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
@@ -206,7 +210,7 @@ impl Cmd {
 
         userio::log::info!("login-hub-saving-session");
 
-        atuin_client::hub::save_session(&token, settings).await?;
+        atuin_client::hub::save_session(&new_session, settings).await?;
 
         Ok(())
     }

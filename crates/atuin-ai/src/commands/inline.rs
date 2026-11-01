@@ -141,7 +141,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
     }
     println!("{}", session.auth_url);
 
-    let token = session
+    let new_session = session
         .wait_for_completion(
             atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
             atuin_client::hub::DEFAULT_POLL_INTERVAL,
@@ -150,7 +150,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         .await?;
 
     info!("Authentication complete, saving session token");
-    atuin_client::hub::save_session(&token, settings).await?;
+    atuin_client::hub::save_session(&new_session, settings).await?;
 
     if let Ok(meta) = settings.meta_store().await
         && let Ok(Some(cli_token)) = meta.session_token().await
@@ -163,7 +163,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         }
     }
 
-    Ok(token)
+    Ok(new_session.token)
 }
 
 // ───────────────────────────────────────────────────────────────────

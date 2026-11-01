@@ -43,6 +43,8 @@ pub enum HubCallError {
     HistoryNotStored(#[source] tonic::Status),
     #[error("Octavo needs a hub login; run `atuin login`")]
     NotLoggedIn,
+    #[error("the hub login was saved without its user, which the next upload pass learns")]
+    UnknownUser,
     #[error("failed to read the hub login: {0:#}")]
     Meta(eyre::Report),
     #[error(transparent)]
@@ -65,6 +67,7 @@ impl HubCallError {
             Self::Convert(_) | Self::Id(_) | Self::RecordId(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
+            | Self::UnknownUser
             | Self::Meta(_)
             | Self::Connect(_)
             | Self::SelfHostedHub(_)
@@ -107,45 +110,22 @@ impl HubClient {
         })
     }
 
-    /// The hub token logged in now, so work done for this moment's user later still goes to them
-    /// after another login.
-    pub async fn token(&self, settings: &Settings) -> Result<HubToken, HubCallError> {
-        // The hub session belongs to whichever hub is logged in, and a self-hosted hub's token
-        // must never reach Atuin's.
-        let hub = settings.hub_endpoint();
-        if hub != *DEFAULT_HUB_URL {
-            return Err(HubCallError::SelfHostedHub(hub));
-        }
-
-        let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
-            return Err(HubCallError::NotLoggedIn);
-        };
-        Ok(HubToken(token))
+    /// The hub session logged in now, so work done for this moment's user later still goes to them
+    /// after another login. Never calls the hub.
+    ///
+    /// Fails with [`HubCallError::UnknownUser`] for a session saved without its user, by a login
+    /// from before atuin stored it, until [`Self::login`] learns whose it is.
+    pub async fn session(&self, settings: &Settings) -> Result<HubSession, HubCallError> {
+        let token = Self::token(settings).await?;
+        let user_id = Self::known_user(&token, settings).await?.ok_or(HubCallError::UnknownUser)?;
+        Ok(HubSession { token, user_id })
     }
 
-    /// Logs in with the hub token logged in now.
+    /// Logs in with the hub session logged in now. For a session saved without its user, asks the
+    /// hub whose it is, and remembers the answer for as long as it's the hub session.
     pub async fn login(&self, settings: &Settings) -> Result<HubLogin, HubCallError> {
-        let token = self.token(settings).await?;
-        self.login_as(token, settings).await
-    }
-
-    /// Logs in with `token`, asking the hub whose it is the first time it's used, and remembering
-    /// the answer for as long as it's the hub session.
-    pub async fn login_as(
-        &self,
-        HubToken(token): HubToken,
-        settings: &Settings,
-    ) -> Result<HubLogin, HubCallError> {
-        let mut authorization =
-            MetadataValue::try_from(format!("Bearer {}", token.expose_secret()))
-                .map_err(HubCallError::InvalidToken)?;
-        authorization.set_sensitive(true);
-        let caller = Caller {
-            service: self.service.clone(),
-            authorization,
-            timeout: settings.network_timeout,
-        };
-
+        let token = Self::token(settings).await?;
+        let caller = self.caller(&token, settings)?;
         let user_id = match Self::known_user(&token, settings).await? {
             Some(id) => id,
             None => {
@@ -164,14 +144,42 @@ impl HubClient {
         Ok(HubLogin { caller, user_id })
     }
 
-    /// The user `token` belongs to, if a login with it already learned that while it's been the
-    /// hub session. Never calls the hub.
-    pub async fn user_of(
+    /// Logs in as `session`, without calling the hub.
+    pub fn login_as(
         &self,
-        HubToken(token): &HubToken,
+        session: HubSession,
         settings: &Settings,
-    ) -> Result<Option<UserId>, HubCallError> {
-        Self::known_user(token, settings).await
+    ) -> Result<HubLogin, HubCallError> {
+        Ok(HubLogin {
+            caller: self.caller(&session.token, settings)?,
+            user_id: session.user_id,
+        })
+    }
+
+    fn caller(&self, token: &SecretString, settings: &Settings) -> Result<Caller, HubCallError> {
+        let mut authorization =
+            MetadataValue::try_from(format!("Bearer {}", token.expose_secret()))
+                .map_err(HubCallError::InvalidToken)?;
+        authorization.set_sensitive(true);
+        Ok(Caller {
+            service: self.service.clone(),
+            authorization,
+            timeout: settings.network_timeout,
+        })
+    }
+
+    async fn token(settings: &Settings) -> Result<SecretString, HubCallError> {
+        // The hub session belongs to whichever hub is logged in, and a self-hosted hub's token
+        // must never reach Atuin's.
+        let hub = settings.hub_endpoint();
+        if hub != *DEFAULT_HUB_URL {
+            return Err(HubCallError::SelfHostedHub(hub));
+        }
+
+        let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
+            return Err(HubCallError::NotLoggedIn);
+        };
+        Ok(token)
     }
 
     async fn known_user(
@@ -184,9 +192,19 @@ impl HubClient {
     }
 }
 
-/// A hub token, as the hub session held it when [`HubClient::token`] read it.
+/// The hub session as [`HubClient::session`] read it: its token, and the user it logs in.
 #[derive(Debug)]
-pub struct HubToken(SecretString);
+pub struct HubSession {
+    token: SecretString,
+    user_id: UserId,
+}
+
+impl HubSession {
+    #[must_use]
+    pub fn user_id(&self) -> &UserId {
+        &self.user_id
+    }
+}
 
 /// The hub, as the user a hub token belongs to.
 #[derive(Debug)]
@@ -337,8 +355,8 @@ mod tests {
             ..Settings::default()
         };
 
-        let token = HubClient::new(&settings).unwrap().token(&settings).await;
+        let session = HubClient::new(&settings).unwrap().session(&settings).await;
 
-        assert!(matches!(token, Err(HubCallError::SelfHostedHub(_))));
+        assert!(matches!(session, Err(HubCallError::SelfHostedHub(_))));
     }
 }
