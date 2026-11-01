@@ -79,6 +79,18 @@ service HubService {
   // user has no such thread.
   rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
 
+  // Stream the calling user's thread: what is stored of it, then each change as it is stored.
+  //
+  // Sends the thread's `Thread`, a `child` for each stored thread naming it as their parent, and
+  // its messages in transcript order, then `caught_up`. From then on, sends each of its messages as
+  // it is stored, its `Thread` again after each store that changes it, and a `child` for each
+  // thread first stored naming it as their parent. A message stored during the catch-up is sent
+  // once, in the catch-up or after it, so one stored with an earlier timestamp can come after
+  // `caught_up`: place each by timestamp, then by id. Sends a heartbeat after every 25 seconds
+  // without a message. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such
+  // thread, or once the thread is deleted.
+  rpc WatchThread(WatchThreadRequest) returns (stream WatchThreadResponse);
+
   // Delete the calling user's thread with this handle, with its messages, and keep it from being
   // stored again.
   //
@@ -230,6 +242,44 @@ message ListThreadMessagesResponse {
   // Opaque. Empty on the last page.
   string next_page_token = 2;
 }
+
+message WatchThreadRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+}
+
+// One message on a `WatchThread` stream.
+message WatchThreadResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // The thread as it stands.
+    Thread thread = 1;
+    // One of the thread's messages.
+    ThreadMessage message = 2;
+    // A thread naming this one as its parent, which `WatchThread` can follow in turn.
+    WatchThreadChild child = 3;
+    // Everything stored before the call has been sent.
+    WatchThreadCaughtUp caught_up = 4;
+    // Shows the stream is still open.
+    WatchThreadHeartbeat heartbeat = 5;
+  }
+}
+
+// A thread naming the watched thread as its parent.
+message WatchThreadChild {
+  // The harness session the child is.
+  HarnessSession session = 1;
+  // How the child relates to the watched thread; `THREAD_PARENT_KIND_UNSPECIFIED` when no message
+  // said.
+  ThreadParentKind kind = 2;
+}
+
+// Sent once everything stored before a `WatchThread` call has been.
+message WatchThreadCaughtUp {}
+
+// Sent to show a `WatchThread` stream is still open.
+message WatchThreadHeartbeat {}
 
 message DeleteThreadRequest {
   // Logically required.
