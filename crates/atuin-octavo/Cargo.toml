@@ -24,6 +24,8 @@ native-tls = { workspace = true, features = ["alpn"] }
 prost = { workspace = true }
 prost-types = { workspace = true }
 secrecy = { workspace = true }
+# Strips NUL out of tool payloads before they are encoded: Octavo refuses NUL in JSON strings.
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
@@ -35,6 +37,7 @@ xxhash-rust = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 
 [build-dependencies]

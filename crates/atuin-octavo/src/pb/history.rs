@@ -1,51 +1,13 @@
-mod codegen {
-    #![allow(clippy::must_use_candidate, clippy::derive_partial_eq_without_eq)]
-    tonic::include_proto!("atuin.api.v1");
-}
-
 use std::time::{Duration, SystemTime};
 
 use atuin_client::history::{CommandCapture, History as DomainHistory, HistoryId};
 use atuin_common::string::NonNulStr;
-use atuin_domain::record::{CmdOrigin as DomainCmdOrigin, RecordId};
-pub use codegen::*;
+use atuin_domain::record::CmdOrigin as DomainCmdOrigin;
 use prost::Message;
 use thiserror::Error;
-use uuid::{Uuid, Version};
 use xxhash_rust::xxh3::xxh3_128;
 
-#[derive(Debug, Error)]
-#[error("history id {0} is not a UUIDv7, so Octavo can't store it")]
-pub struct NotUuidV7(pub HistoryId);
-
-impl TryFrom<HistoryId> for UuidV7 {
-    type Error = NotUuidV7;
-
-    fn try_from(id: HistoryId) -> Result<Self, Self::Error> {
-        let bytes = id.into_bytes();
-        if Uuid::from_bytes(bytes).get_version() != Some(Version::SortRand) {
-            return Err(NotUuidV7(id));
-        }
-
-        Ok(Self {
-            value: bytes.to_vec(),
-        })
-    }
-}
-
-impl From<RecordId> for UuidV7 {
-    fn from(id: RecordId) -> Self {
-        id.0.into()
-    }
-}
-
-impl From<Uuid> for UuidV7 {
-    fn from(uuid: Uuid) -> Self {
-        Self {
-            value: uuid.into_bytes().to_vec(),
-        }
-    }
-}
+use super::{Author, AuthorKind, CmdOrigin, History, HistoryOutput, NotUuidV7};
 
 impl From<&DomainCmdOrigin> for CmdOrigin {
     fn from(origin: &DomainCmdOrigin) -> Self {
@@ -62,8 +24,8 @@ const MAX_HISTORY_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Error)]
 pub enum HistoryConversionError {
-    #[error(transparent)]
-    Id(#[from] NotUuidV7),
+    #[error("history {0}")]
+    Id(#[from] NotUuidV7<HistoryId>),
     #[error("exit code {0} does not fit in 32 bits")]
     ExitOutOfRange(i64),
     #[error("invalid duration: {0}")]
@@ -159,51 +121,9 @@ fn session_key(session: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use atuin_common::harnesstools::session::Usage;
-    use prost_types::{FileDescriptorProto, FileDescriptorSet};
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     use super::*;
-
-    /// `threads.proto`, as build.rs compiled it.
-    #[fixture]
-    fn threads_proto() -> FileDescriptorProto {
-        FileDescriptorSet::decode(
-            include_bytes!(concat!(env!("OUT_DIR"), "/hub_service.bin")).as_slice(),
-        )
-        .expect("build.rs writes an encoded descriptor set")
-        .file
-        .into_iter()
-        .find(|file| file.name() == "atuin/api/v1/threads.proto")
-        .expect("hub_service.proto imports threads.proto")
-    }
-
-    /// `atuin.api.v1.TokenUsage` is extern-pathed to [`Usage`], whose prost tags are written by
-    /// hand.
-    #[rstest]
-    #[case::input(Usage { input: Some(7), ..Usage::default() }, "input")]
-    #[case::output(Usage { output: Some(7), ..Usage::default() }, "output")]
-    #[case::cache_read(Usage { cache_read: Some(7), ..Usage::default() }, "cache_read")]
-    #[case::cache_write(Usage { cache_write: Some(7), ..Usage::default() }, "cache_write")]
-    #[case::reasoning(Usage { reasoning: Some(7), ..Usage::default() }, "reasoning")]
-    fn usage_encodes_each_count_under_its_proto_number(
-        threads_proto: FileDescriptorProto,
-        #[case] usage: Usage,
-        #[case] field: &str,
-    ) {
-        let number = threads_proto
-            .message_type
-            .iter()
-            .find(|message| message.name() == "TokenUsage")
-            .and_then(|message| message.field.iter().find(|f| f.name() == field))
-            .expect("TokenUsage has the field")
-            .number();
-
-        assert_eq!(usage.encode_to_vec(), [
-            u8::try_from(number << 3).expect("tags 1-5 fit a byte"),
-            7
-        ]);
-    }
 
     fn capture(start: String, end: Option<String>) -> CommandCapture {
         CommandCapture {

@@ -33,8 +33,10 @@ pub enum ConnectError {
 pub enum HubCallError {
     #[error(transparent)]
     Convert(#[from] HistoryConversionError),
-    #[error(transparent)]
-    Id(#[from] NotUuidV7),
+    #[error("history {0}")]
+    Id(#[from] NotUuidV7<HistoryId>),
+    #[error("record {0}")]
+    RecordId(#[from] NotUuidV7<RecordId>),
     #[error(transparent)]
     OutputTooLarge(#[from] OutputTooLarge),
     #[error("the hub has not stored the history entry yet")]
@@ -60,7 +62,7 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Convert(_) | Self::Id(_) | Self::OutputTooLarge(_) => true,
+            Self::Convert(_) | Self::Id(_) | Self::RecordId(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::Meta(_)
@@ -204,7 +206,7 @@ impl HubLogin {
         record_id: Option<RecordId>,
     ) -> Result<(), HubCallError> {
         let mut history = pb::History::try_from(history)?;
-        history.record_id = record_id.map(pb::UuidV7::from);
+        history.record_id = record_id.map(pb::UuidV7::try_from).transpose()?;
         let request = self.caller.request(pb::InsertHistoryRequest {
             history: Some(history),
         });
@@ -246,6 +248,19 @@ impl HubLogin {
         });
 
         self.caller.service.clone().delete_history(request).await.map_err(HubCallError::Hub)?;
+        Ok(())
+    }
+
+    /// Stores `batch`'s messages, all or none.
+    pub async fn upload_thread_messages(&self, batch: pb::ThreadBatch) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::InsertThreadMessagesRequest::from(batch));
+
+        self.caller
+            .service
+            .clone()
+            .insert_thread_messages(request)
+            .await
+            .map_err(HubCallError::Hub)?;
         Ok(())
     }
 }

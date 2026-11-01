@@ -55,7 +55,7 @@ const DAY_MILLIS: f64 = 86_400_000.0;
 
 /// The most a row stores of each usage count: far past any model call, and small enough that a
 /// session's totals, adding up millions of calls, never overflow.
-const MAX_ROW_TOKENS: u64 = 1 << 40;
+pub const MAX_ROW_TOKENS: u64 = 1 << 40;
 
 /// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
 const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
