@@ -58,9 +58,11 @@ service HubService {
   //
   // A thread keeps one message per `source_id`, the first stored, so a client can repeat a request
   // or send messages another install already sent. Messages of a thread the user deleted are
-  // accepted and dropped. Fails with `INVALID_ARGUMENT` (`INVALID_THREAD_MESSAGES`), naming the
-  // first field at fault and storing none of the request, and with `RESOURCE_EXHAUSTED` when the
-  // request body, gRPC framing included, is over 10 MiB.
+  // accepted and dropped, and so are those of a thread naming a deleted thread as its parent,
+  // which is deleted from then on, along with any threads already stored under it. Fails with
+  // `INVALID_ARGUMENT` (`INVALID_THREAD_MESSAGES`), naming the first field at fault and storing
+  // none of the request, and with `RESOURCE_EXHAUSTED` when the request body, gRPC framing
+  // included, is over 10 MiB.
   rpc InsertThreadMessages(InsertThreadMessagesRequest) returns (InsertThreadMessagesResponse);
 
   // Return one page of the calling user's threads that match the filter, the most recently active
@@ -91,12 +93,12 @@ service HubService {
   // thread, or once the thread is deleted.
   rpc WatchThread(WatchThreadRequest) returns (stream WatchThreadResponse);
 
-  // Delete the calling user's thread with this handle, with its messages, and keep it from being
-  // stored again.
+  // Delete the calling user's thread with this handle and every thread descended from it, with
+  // their messages, and keep them from being stored again, along with any thread later naming one
+  // of them as its parent.
   //
   // A handle that names no stored thread is still remembered as deleted, so a client can repeat a
-  // deletion, or send it before the upload it races. Deletes only the named thread: list the
-  // threads naming it as their parent to delete those too.
+  // deletion, or send it before the upload it races.
   rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
 
   // Identify the user the call's token logs in.
