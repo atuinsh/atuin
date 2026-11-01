@@ -14,9 +14,15 @@ message History {
   // The identifier of the record if available.
   UuidV7 record_id = 2;
   // The command string that was ran.
-  string command = 3 [(buf.validate.field).required = true];
+  string command = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.not_contains = "\x00"
+  ];
   // The working directory the command ran in.
-  string cwd = 4 [(buf.validate.field).required = true];
+  string cwd = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.not_contains = "\x00"
+  ];
   // The exit code of the shell command.
   int32 exit = 5;
   // When the command started.
@@ -25,26 +31,35 @@ message History {
   google.protobuf.Duration duration = 7 [(buf.validate.field).duration.gte = {}];
   // The terminal session the command ran in, as the client names it. Unique per user, and empty
   // when the client doesn't know it.
-  string session = 8 [(buf.validate.field).string.max_bytes = 128];
+  string session = 8 [(buf.validate.field).string = {
+    max_bytes: 128
+    not_contains: "\x00"
+  }];
   // The machine and account the command ran on.
   CmdOrigin cmd_origin = 9 [(buf.validate.field).required = true];
   // Who decided to run the command.
   Author author = 10 [(buf.validate.field).required = true];
   // Why the command was run, if whatever ran it said so.
-  optional string intent = 11;
+  optional string intent = 11 [(buf.validate.field).string.not_contains = "\x00"];
   // The shell that ran the command, e.g. `zsh`, if known.
-  optional string shell = 12;
+  optional string shell = 12 [(buf.validate.field).string.not_contains = "\x00"];
 }
 
 // What a finished command printed, as its terminal showed it once it finished.
 message HistoryOutput {
+  option (buf.validate.message).cel = {
+    id: "history_output.size"
+    message: "start and end together hold at most 1 MiB"
+    expression: "size(bytes(this.start)) + (has(this.end) ? size(bytes(this.end)) : 0) <= 1048576"
+  };
+
   // All of the rendered output, or its start when `end` is set. Carries SGR escapes and no other
   // control characters but `\n`. `start` and `end` together hold at most 1 MiB.
-  string start = 1;
+  string start = 1 [(buf.validate.field).string.not_contains = "\x00"];
   // The end of output too long to keep whole; what came between `start` and `end` was dropped.
-  optional string end = 2;
+  optional string end = 2 [(buf.validate.field).string.not_contains = "\x00"];
   // The bytes the terminal received from the command, before rendering.
-  uint64 observed_bytes = 3;
+  uint64 observed_bytes = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
   // The terminal's size when the command finished.
   uint32 terminal_width = 4 [(buf.validate.field).uint32 = {
     gt: 0
@@ -61,11 +76,20 @@ message HistoryOutput {
 // Unset fields match any entry.
 message HistoryFilter {
   // Every term must appear in the command, ignoring case.
-  repeated string terms = 1 [(buf.validate.field).repeated.max_items = 16];
+  repeated string terms = 1 [(buf.validate.field).repeated = {
+    max_items: 16
+    items: {
+      string: {
+        min_len: 1
+        max_bytes: 256
+        not_contains: "\x00"
+      }
+    }
+  }];
   // The machine the command ran on, as `CmdOrigin.host` gives it.
-  optional string host = 2;
+  optional string host = 2 [(buf.validate.field).string.not_contains = "\x00"];
   // The working directory the command ran in.
-  optional string cwd = 3;
+  optional string cwd = 3 [(buf.validate.field).string.not_contains = "\x00"];
   oneof exit {
     // True matches commands that exited 0, false matches commands that did not.
     bool succeeded = 4;
@@ -73,13 +97,16 @@ message HistoryFilter {
     int32 exit_code = 5;
   }
   // The name of the author, as `Author.name` gives it.
-  optional string author = 6;
+  optional string author = 6 [(buf.validate.field).string.not_contains = "\x00"];
   // Whether a person or an agent decided to run the command.
-  optional AuthorKind author_kind = 7 [(buf.validate.field).enum.defined_only = true];
+  optional AuthorKind author_kind = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
   // The terminal session the command ran in, as `History.session` gives it.
-  optional string session = 8;
+  optional string session = 8 [(buf.validate.field).string.not_contains = "\x00"];
   // The shell that ran the command, as `History.shell` gives it.
-  optional string shell = 9;
+  optional string shell = 9 [(buf.validate.field).string.not_contains = "\x00"];
   // Only entries that started at or after this time.
   google.protobuf.Timestamp started_after = 10;
   // Only entries that started before this time.

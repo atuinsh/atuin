@@ -21,6 +21,7 @@ message HarnessSession {
   string session_id = 2 [(buf.validate.field).string = {
     min_len: 1
     max_bytes: 512
+    not_contains: "\x00"
   }];
 }
 
@@ -56,7 +57,7 @@ message ContentBlock {
     option (buf.validate.oneof).required = true;
 
     // Text the person or the model wrote.
-    string text = 1;
+    string text = 1 [(buf.validate.field).string.not_contains = "\x00"];
     // The model asked to run a tool.
     ToolCall tool_call = 2;
     // A tool answered.
@@ -65,9 +66,9 @@ message ContentBlock {
     ReasoningSummary reasoning_summary = 5;
     // A model-written summary standing in for earlier conversation: a compaction or an abandoned
     // branch.
-    string summary = 7;
+    string summary = 7 [(buf.validate.field).string.not_contains = "\x00"];
     // Why a model call failed or was aborted, as the harness reported it.
-    string failure = 8;
+    string failure = 8 [(buf.validate.field).string.not_contains = "\x00"];
     // The changes a tool call made to files.
     Patch patch = 9;
   }
@@ -80,19 +81,28 @@ message ContentBlock {
   // The model's request to run a tool.
   message ToolCall {
     // The call's id, which its result names.
-    string id = 1 [(buf.validate.field).string.max_bytes = 512];
+    string id = 1 [(buf.validate.field).string = {
+      max_bytes: 512
+      not_contains: "\x00"
+    }];
     // e.g. `Bash`.
-    string name = 2 [(buf.validate.field).string.max_bytes = 256];
+    string name = 2 [(buf.validate.field).string = {
+      max_bytes: 256
+      not_contains: "\x00"
+    }];
     // The arguments, as JSON; unset when the capture kept none.
-    optional string input = 3;
+    optional string input = 3 [(buf.validate.field).string.not_contains = "\x00"];
   }
 
   // What a tool handed back.
   message ToolResult {
     // The `ToolCall.id` this answers.
-    string call_id = 1 [(buf.validate.field).string.max_bytes = 512];
+    string call_id = 1 [(buf.validate.field).string = {
+      max_bytes: 512
+      not_contains: "\x00"
+    }];
     // The output, as JSON; unset when the capture kept none.
-    optional string output = 2;
+    optional string output = 2 [(buf.validate.field).string.not_contains = "\x00"];
     // Whether the tool reported a failure.
     bool is_error = 3;
   }
@@ -105,20 +115,23 @@ message ContentBlock {
   // What a tool call changed, file by file in the order its harness listed them.
   message Patch {
     // The `ToolCall.id` of the call that made the changes.
-    string call_id = 1 [(buf.validate.field).string.max_bytes = 512];
+    string call_id = 1 [(buf.validate.field).string = {
+      max_bytes: 512
+      not_contains: "\x00"
+    }];
     repeated FilePatch files = 2;
   }
 
   message FilePatch {
     // The file, as the harness named it: absolute, or relative to the session's directory.
-    string path = 1;
+    string path = 1 [(buf.validate.field).string.not_contains = "\x00"];
     // Logically required; the hub rejects `CHANGE_UNSPECIFIED`.
     Change change = 2 [
       (buf.validate.field).required = true,
       (buf.validate.field).enum.defined_only = true
     ];
     // Where an update moved the file to, if it did.
-    optional string moved_to = 3;
+    optional string moved_to = 3 [(buf.validate.field).string.not_contains = "\x00"];
     repeated Hunk hunks = 4;
 
     enum Change {
@@ -136,12 +149,23 @@ message ContentBlock {
     uint64 old_lines = 2;
     uint64 new_start = 3;
     uint64 new_lines = 4;
-    repeated string lines = 5;
+    repeated string lines = 5 [(buf.validate.field).repeated.items.string.not_contains = "\x00"];
   }
 }
 
 // One line of a thread, as the atuin install that captured it recorded it.
 message ThreadMessage {
+  option (buf.validate.message).cel = {
+    id: "thread_message.role_label"
+    message: "role_label is set exactly when role is ROLE_OTHER"
+    expression: "has(this.role_label) == (this.role == 5)"
+  };
+  option (buf.validate.message).cel = {
+    id: "thread_message.stop_reason_label"
+    message: "stop_reason_label is set exactly when stop_reason is STOP_REASON_OTHER"
+    expression: "has(this.stop_reason_label) == (this.stop_reason == 8)"
+  };
+
   // The id of the record the client stored the line in. Unique per user.
   UuidV7 id = 1 [(buf.validate.field).required = true];
   // The harness's id for the line, unique within its thread: a thread keeps one line per
@@ -149,9 +173,13 @@ message ThreadMessage {
   string source_id = 2 [(buf.validate.field).string = {
     min_len: 1
     max_bytes: 512
+    not_contains: "\x00"
   }];
   // The `source_id` of the line this one follows, if any.
-  optional string parent_source_id = 3 [(buf.validate.field).string.max_bytes = 512];
+  optional string parent_source_id = 3 [(buf.validate.field).string = {
+    max_bytes: 512
+    not_contains: "\x00"
+  }];
   // When the line was written.
   google.protobuf.Timestamp timestamp = 4 [(buf.validate.field).required = true];
   // Logically required; the hub rejects `ROLE_UNSPECIFIED`.
@@ -160,27 +188,48 @@ message ThreadMessage {
     (buf.validate.field).enum.defined_only = true
   ];
   // The harness's own role, e.g. Codex's `developer`. Set exactly when `role` is `ROLE_OTHER`.
-  optional string role_label = 6 [(buf.validate.field).string.max_bytes = 128];
+  optional string role_label = 6 [(buf.validate.field).string = {
+    max_bytes: 128
+    not_contains: "\x00"
+  }];
   // In order. Empty for a line kept only for its usage, title or place in the thread. Its strings
   // hold at most 1 MiB together.
   repeated ContentBlock content = 7;
   // The working directory at this line.
-  optional string cwd = 8 [(buf.validate.field).string.max_bytes = 4096];
+  optional string cwd = 8 [(buf.validate.field).string = {
+    max_bytes: 4096
+    not_contains: "\x00"
+  }];
   // The git branch checked out at this line.
-  optional string git_branch = 9 [(buf.validate.field).string.max_bytes = 256];
+  optional string git_branch = 9 [(buf.validate.field).string = {
+    max_bytes: 256
+    not_contains: "\x00"
+  }];
   // The model that wrote the line.
-  optional string model = 10 [(buf.validate.field).string.max_bytes = 256];
+  optional string model = 10 [(buf.validate.field).string = {
+    max_bytes: 256
+    not_contains: "\x00"
+  }];
   // Who served `model`, e.g. `openai-codex`.
-  optional string provider = 11 [(buf.validate.field).string.max_bytes = 256];
+  optional string provider = 11 [(buf.validate.field).string = {
+    max_bytes: 256
+    not_contains: "\x00"
+  }];
   // The tokens of the model call the line came from, as this line reported them: lines of one
   // call repeat or grow the same counts (see `turn_id`).
   TokenUsage usage = 12;
   // Why the model call ended; `STOP_REASON_UNSPECIFIED` when the harness did not say.
   StopReason stop_reason = 13 [(buf.validate.field).enum.defined_only = true];
   // The harness's own stop reason. Set exactly when `stop_reason` is `STOP_REASON_OTHER`.
-  optional string stop_reason_label = 14 [(buf.validate.field).string.max_bytes = 128];
+  optional string stop_reason_label = 14 [(buf.validate.field).string = {
+    max_bytes: 128
+    not_contains: "\x00"
+  }];
   // The model call the line came from, the same on every line of that call.
-  optional string turn_id = 15 [(buf.validate.field).string.max_bytes = 512];
+  optional string turn_id = 15 [(buf.validate.field).string = {
+    max_bytes: 512
+    not_contains: "\x00"
+  }];
   // The atuin install that captured the line.
   HostId host = 16 [(buf.validate.field).required = true];
 
@@ -214,6 +263,19 @@ message ThreadMessage {
 
 // A line as the install that captured it uploads it, with what that install knew of its thread.
 message CapturedThreadMessage {
+  option (buf.validate.message).cel = {
+    id: "captured_thread_message.parent"
+    message: "parent is not the thread itself"
+    expression:
+      "!has(this.parent) || this.parent.harness != this.thread.harness"
+      " || this.parent.session_id != this.thread.session_id"
+  };
+  option (buf.validate.message).cel = {
+    id: "captured_thread_message.parent_kind"
+    message: "a known parent_kind needs a parent"
+    expression: "has(this.parent) || !(this.parent_kind in [1, 2, 3])"
+  };
+
   // Logically required.
   HarnessSession thread = 1 [(buf.validate.field).required = true];
   // The id this install minted for the thread, beside the harness's own `thread.session_id`.
@@ -228,7 +290,10 @@ message CapturedThreadMessage {
   ThreadParentKind parent_kind = 4;
   // The thread's title when the line was captured. The newest line's title, or its absence, is
   // the thread's.
-  optional string thread_title = 5 [(buf.validate.field).string.max_bytes = 1024];
+  optional string thread_title = 5 [(buf.validate.field).string = {
+    max_bytes: 1024
+    not_contains: "\x00"
+  }];
   // Logically required.
   ThreadMessage message = 6 [(buf.validate.field).required = true];
 }
