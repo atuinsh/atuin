@@ -326,6 +326,24 @@ impl SqliteStore {
         Ok(res.into())
     }
 
+    /// The stored records among `ids`, in no particular order: an id not stored is left out.
+    #[instrument(level = "trace", skip_all, fields(ids = ids.len()), err)]
+    pub async fn get_many(
+        &self,
+        ids: &[RecordId],
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+        // One JSON array, so any number of ids is one bind parameter.
+        let ids: Vec<String> = ids.iter().map(|id| id.as_hyphenated().to_string()).collect();
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where id in (select value from json_each(?1))"
+        )))
+        .bind(serde_json::to_string(&ids)?)
+        .fetch_all(self.sqlite.pool())
+        .await?;
+
+        Ok(res.into_iter().map(Into::into).collect())
+    }
+
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         db::query("delete from store where id = ?1")
@@ -701,7 +719,7 @@ mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{
-        DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
+        DecryptedData, Host, HostId, Record, RecordId, RecordSeriesKey, RecordTag, RecordVersion,
     };
     use rstest::{fixture, rstest};
 
@@ -751,6 +769,20 @@ mod tests {
         store.push(&record).await.unwrap();
         let fetched = store.get(record.id).await.expect("failed to fetch record");
         assert_eq!(fetched, record, "records are not equal");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn get_many_leaves_a_missing_id_out(#[future(awt)] store: SqliteStore) {
+        let (first, second) = (record(), record());
+        store.push(&first).await.unwrap();
+        store.push(&second).await.unwrap();
+
+        let mut got = store.get_many(&[second.id, RecordId(uuid_v7()), first.id]).await.unwrap();
+        got.sort_by_key(|record| record.id);
+        let mut want = vec![first, second];
+        want.sort_by_key(|record| record.id);
+        assert_eq!(got, want);
     }
 
     #[rstest]
