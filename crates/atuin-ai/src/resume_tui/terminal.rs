@@ -89,6 +89,7 @@ impl Drop for Events {
 }
 
 /// Stdout, or `/dev/tty` when stdout is captured (`cmd=$(atuin threads resume)`).
+#[whichever::dispatch(whichever::foreign::Write)]
 enum Writer {
     Stdout(io::Stdout),
     #[cfg(unix)]
@@ -108,24 +109,6 @@ impl Writer {
         #[cfg(not(unix))]
         {
             Ok(Self::Stdout(stdout))
-        }
-    }
-}
-
-impl Write for Writer {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Stdout(s) => s.write(buf),
-            #[cfg(unix)]
-            Self::Tty(f) => f.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Stdout(s) => s.flush(),
-            #[cfg(unix)]
-            Self::Tty(f) => f.flush(),
         }
     }
 }
