@@ -5,12 +5,11 @@ pub use active::ActiveOctavoClient;
 use atuin_client::ai_session::Message;
 use atuin_client::history::{History, HistoryId};
 use atuin_domain::record::RecordId;
-use enum_dispatch::enum_dispatch;
 pub use nop::NopOctavoClient;
 
 use super::ThreadUpload;
 
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait)]
 pub trait OctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId);
@@ -19,7 +18,7 @@ pub trait OctavoClient {
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload;
 }
 
-#[enum_dispatch(OctavoClient)]
+#[whichever::dispatch(OctavoClient)]
 #[derive(Debug)]
 pub enum AnyOctavoClient {
     Active(ActiveOctavoClient),

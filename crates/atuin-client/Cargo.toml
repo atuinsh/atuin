@@ -38,7 +38,6 @@ config = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
 easy-cast = { workspace = true }
-enum_dispatch = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
@@ -73,6 +72,7 @@ unicode-normalization = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+whichever = { workspace = true }
 
 # encryption
 rusty_paserk = { workspace = true }

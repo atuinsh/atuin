@@ -2,8 +2,6 @@
 
 use std::path::PathBuf;
 
-use enum_dispatch::enum_dispatch;
-
 pub mod access;
 pub mod ccode;
 pub mod codex;
@@ -33,7 +31,7 @@ use session::any::AnySessions;
 use crate::sync::BlockingPool;
 
 /// Defines a generic harness trait that all implementations need to implement.
-#[enum_dispatch]
+#[whichever::dispatchable]
 pub trait Harness: std::fmt::Debug {
     /// The well-defined name of this harness.
     fn name(&self) -> &'static str;
@@ -82,7 +80,7 @@ pub trait Harness: std::fmt::Debug {
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
 }
 
-#[enum_dispatch(Harness)]
+#[whichever::dispatch(Harness)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
     ClaudeCode(Ccode),

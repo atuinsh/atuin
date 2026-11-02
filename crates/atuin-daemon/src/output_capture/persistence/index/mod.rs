@@ -14,7 +14,6 @@ use atuin_client::history::HistoryId;
 use atuin_common::db::sqlite::fts::TextHighlighter;
 use atuin_common::futures::stream::ChunkedStream;
 use atuin_common::string::highlighted::HighlightedString;
-use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingIndex;
 pub use nop::NopIndex;
@@ -56,7 +55,7 @@ impl HighlightedCapture {
     }
 }
 
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait, reason = "only used within our code; no Send bound needed")]
 pub trait Index {
     /// Index (replacing any prior entry for `id`) the visible text of one capture: the kept `head`
@@ -89,7 +88,7 @@ pub trait Index {
     async fn indexed_ids(&self) -> ChunkedStream<Result<HistoryId, IndexError>>;
 }
 
-#[enum_dispatch(Index)]
+#[whichever::dispatch(Index)]
 #[derive(Debug, Clone)]
 pub enum AnyIndex {
     Sqlite(SqliteIndex),

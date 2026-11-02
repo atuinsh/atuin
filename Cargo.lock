@@ -291,7 +291,6 @@ dependencies = [
  "crossterm",
  "derive_more",
  "easy-cast",
- "enum_dispatch",
  "eyre",
  "frizbee",
  "futures-util",
@@ -340,6 +339,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+ "whichever",
  "windows-sys 0.61.2",
  "xxhash-rust",
 ]
@@ -363,7 +363,6 @@ dependencies = [
  "crossterm",
  "derive_more",
  "easy-cast",
- "enum_dispatch",
  "eventsource-stream",
  "eye_declare",
  "eye_declare_engine",
@@ -408,6 +407,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "uuid",
+ "whichever",
  "xxhash-rust",
  "yaml-rust2",
 ]
@@ -428,7 +428,6 @@ dependencies = [
  "derive_more",
  "dirs 6.0.0",
  "easy-cast",
- "enum_dispatch",
  "eyre",
  "fs-err",
  "futures",
@@ -476,6 +475,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "whichever",
  "wiremock",
  "zstd",
 ]
@@ -494,7 +494,6 @@ dependencies = [
  "derive_more",
  "dirs 6.0.0",
  "easy-cast",
- "enum_dispatch",
  "flume",
  "fs-err",
  "futures",
@@ -551,6 +550,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+ "whichever",
  "windows-sys 0.61.2",
  "xxhash-rust",
  "zeroize",
@@ -574,7 +574,6 @@ dependencies = [
  "dashmap",
  "derive_more",
  "easy-cast",
- "enum_dispatch",
  "eyre",
  "fjall",
  "frizbee",
@@ -614,6 +613,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "whichever",
 ]
 
 [[package]]
@@ -7458,6 +7458,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "whichever"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9b4046af8c8cfc1086cb23f44dc9bc27e8afba7f926ead35249a56a4e5b2422"
+dependencies = [
+ "whichever-macros",
+]
+
+[[package]]
+name = "whichever-macros"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ceae009896b5762ab7032d41ecbdcff33f575fd87eab09f99edcd6d3536c5918"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

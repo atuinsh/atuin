@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 pub use checkpoint::Checkpoint;
-use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
@@ -69,7 +68,7 @@ pub(crate) fn scan_sessions<S>(
     out
 }
 
-#[enum_dispatch]
+#[whichever::dispatchable]
 pub trait Message: Send + 'static {
     fn id(&self) -> Option<MessageId>;
     fn role(&self) -> Role;
@@ -528,7 +527,7 @@ use crate::harnesstools::copilot::session::CopilotMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
-#[enum_dispatch(Message)]
+#[whichever::dispatch(Message)]
 #[derive(Debug, Clone)]
 pub enum AnyMessage {
     Ccode(CcodeMessage),

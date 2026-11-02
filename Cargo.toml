@@ -60,7 +60,6 @@ dirs = "6"
 # https://github.com/kas-gui/easy-cast/pull/52
 # which was released in 0.6.0
 easy-cast = { version = "0.5", features = ["assert_nonzero"] }
-enum_dispatch = "0.3"
 eventsource-stream = "0.2"
 eye_declare = "0.7"
 eye_declare_engine = { version = "0.7", features = ["test-util"] }
@@ -188,6 +187,7 @@ unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
 # Explicitly 1.6 is necessary because the v7 UUID was only added then.
 uuid = { version = "1.6", features = ["v5", "v4", "v7", "serde"] }
+whichever = "0.5.2"
 whoami = "2"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem"] }
 wiremock = "0.6"

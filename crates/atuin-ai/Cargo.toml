@@ -33,7 +33,6 @@ clap = { workspace = true, features = ["derive", "env"] }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
-enum_dispatch = { workspace = true }
 eventsource-stream = { workspace = true }
 eye_declare = { workspace = true }
 eyre = { workspace = true }
@@ -73,6 +72,7 @@ typed-builder = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 uuid = { workspace = true }
+whichever = { workspace = true }
 xxhash-rust = { workspace = true }
 yaml-rust2 = { workspace = true }
 

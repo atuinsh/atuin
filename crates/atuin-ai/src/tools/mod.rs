@@ -10,7 +10,6 @@ use atuin_common::filter::OrFilter;
 use atuin_common::path::PathBufExt as _;
 use atuin_common::time::UtcOffsetExt;
 use easy_cast::Conv;
-use enum_dispatch::enum_dispatch;
 use eyre::Result;
 use serde::Deserialize;
 use strum_macros::{EnumIter, EnumString, IntoStaticStr};
@@ -181,7 +180,7 @@ pub struct ToolPreview {
 
 /// A tool call from the server, with parsed input parameters.
 #[derive(Debug, Clone)]
-#[enum_dispatch(PermissibleToolCall)]
+#[whichever::dispatch(PermissibleToolCall)]
 pub enum ClientToolCall {
     Read(ReadToolCall),
     Edit(EditToolCall),
@@ -254,7 +253,7 @@ impl ClientToolCall {
 }
 
 /// A trait for tool calls that can be checked against permission rules.
-#[enum_dispatch]
+#[whichever::dispatchable]
 pub trait PermissibleToolCall {
     /// Checks if this tool call matches the given permission rule.
     fn matches_rule(&self, rule: &Rule) -> bool;

@@ -47,7 +47,6 @@ crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
 easy-cast = { workspace = true }
-enum_dispatch = { workspace = true }
 flume = { workspace = true }
 glob-match = { workspace = true }
 fs-err = { workspace = true }
@@ -98,6 +97,7 @@ unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
+whichever = { workspace = true }
 # Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
 xxhash-rust = { workspace = true, optional = true }
 zeroize = { workspace = true }

@@ -19,7 +19,6 @@ use atuin_common::encryption::paseto_v4;
 use atuin_domain::caps::CapClient;
 use atuin_kv::database::Database as KvDatabase;
 use atuin_scripts::database::Database as ScriptsDatabase;
-use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
 use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
 
@@ -237,7 +236,7 @@ impl std::fmt::Debug for DaemonHandle {
 ///     }
 /// }
 /// ```
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Component: Send + Sync + Into<AnyComponent> {
     /// Human-readable name for logging and debugging.
@@ -264,7 +263,7 @@ pub trait Component: Send + Sync + Into<AnyComponent> {
 }
 
 /// Static-dispatch enum over the daemon components.
-#[enum_dispatch(Component)]
+#[whichever::dispatch(Component)]
 pub enum AnyComponent {
     Search(SearchComponent),
 }

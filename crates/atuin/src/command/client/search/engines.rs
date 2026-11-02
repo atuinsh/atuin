@@ -3,7 +3,6 @@ use std::sync::Arc;
 use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
 use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::{FilterMode, SearchMode, Settings, Shells};
-use enum_dispatch::enum_dispatch;
 use eyre::Result;
 
 use super::cursor::Cursor;
@@ -59,7 +58,7 @@ impl SearchState {
     }
 }
 
-#[enum_dispatch]
+#[whichever::dispatchable]
 pub trait SearchEngine: Send + Sync + 'static {
     async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>>;
 
@@ -84,24 +83,11 @@ pub trait SearchEngine: Send + Sync + 'static {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize>;
 }
 
-impl<T: SearchEngine> SearchEngine for Box<T> {
-    async fn full_query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
-        T::full_query(self, state, db).await
-    }
-
-    async fn query(&mut self, state: &SearchState, db: &mut Sqlite) -> Result<Vec<History>> {
-        T::query(self, state, db).await
-    }
-
-    fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
-        T::get_highlight_indices(self, command, search_input)
-    }
-}
-
 /// Static-dispatch enum over the search-engine backends.
-#[enum_dispatch(SearchEngine)]
+#[whichever::dispatch(SearchEngine)]
 pub enum AnySearchEngine {
     Db(db::Search),
     #[cfg(feature = "daemon")]
+    #[dispatch(deref)]
     Daemon(Box<daemon::Search>),
 }

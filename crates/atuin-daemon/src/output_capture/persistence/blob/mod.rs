@@ -7,7 +7,6 @@ mod nop;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
-use enum_dispatch::enum_dispatch;
 #[cfg(test)]
 pub use failing::FailingBlobStore;
 pub use fjall::FjallBlobStore;
@@ -38,7 +37,7 @@ pub enum DeleteOutputError {
     Storage(#[source] StorageError),
 }
 
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait BlobStore {
     /// Try to store the [`CommandCapture`] associated with the given [`HistoryId`].
@@ -74,7 +73,7 @@ pub trait BlobStore {
     ) -> Result<Vec<HistoryId>, DeleteOutputError>;
 }
 
-#[enum_dispatch(BlobStore)]
+#[whichever::dispatch(BlobStore)]
 #[derive(Clone, Debug)]
 pub enum AnyBlobStore {
     Fjall(FjallBlobStore),

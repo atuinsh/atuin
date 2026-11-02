@@ -6,7 +6,6 @@ mod subproc;
 use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
-use enum_dispatch::enum_dispatch;
 pub use external::{External, ExternalRestartError};
 pub use launchd::Launchd;
 pub use subproc::{DaemonizeError, Subproc};
@@ -56,7 +55,7 @@ pub enum StopError {
 /// How a service is started and stopped, and where it listens.
 ///
 /// Waiting for one to exit or answer is the same whatever runs it, and is left to the caller.
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait Backend {
     /// Where the services this backend launches listen.
@@ -72,7 +71,7 @@ pub trait Backend {
     async fn evict(&self) -> Result<(), BackendError>;
 }
 
-#[enum_dispatch(Backend)]
+#[whichever::dispatch(Backend)]
 pub enum AnyBackend {
     External(External),
     Launchd(Launchd),

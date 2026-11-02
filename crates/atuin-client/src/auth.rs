@@ -5,7 +5,6 @@ use atuin_domain::api::{
     ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, ChangePasswordRequest, DeleteUserRequest,
     LoginRequest, LoginResponse, RegisterRequest, RegisterResponse,
 };
-use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result, bail};
 use reqwest::header::USER_AGENT;
 use reqwest::{StatusCode, Url};
@@ -48,7 +47,7 @@ pub enum MutateResponse {
 ///
 /// CLI commands use this trait so they don't need to know which backend is
 /// active — they just prompt for input and call these methods.
-#[enum_dispatch]
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait, reason = "only used within our code and we don't need it to be Send")]
 pub trait AuthClient: Send + Sync {
     /// Log in with username + password, optionally providing a TOTP code.
@@ -84,7 +83,7 @@ pub trait AuthClient: Send + Sync {
 }
 
 /// Static-dispatch enum over the two auth backends.
-#[enum_dispatch(AuthClient)]
+#[whichever::dispatch(AuthClient)]
 pub enum AnyAuthClient {
     Legacy(LegacyAuthClient),
     Hub(HubAuthClient),

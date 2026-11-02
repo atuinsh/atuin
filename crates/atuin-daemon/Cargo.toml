@@ -26,7 +26,6 @@ atuin-scripts = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
-enum_dispatch = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 eyre = { workspace = true }
@@ -58,6 +57,7 @@ tower = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+whichever = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 daemonix = { workspace = true }
