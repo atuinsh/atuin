@@ -323,8 +323,10 @@ message Thread {
   google.protobuf.Timestamp last_message_at = 8;
   // The install that captured the earliest message.
   HostId host = 9;
-  // How many messages have content.
+  // How many messages have text: prompts and replies, not tool calls or their results.
   uint64 message_count = 10;
+  // How many messages call a tool.
+  uint64 tool_call_count = 21;
   // The tokens of the thread's model calls, each call counted once.
   TokenUsage usage = 11;
   // The opening prompt: the first text of the earliest user message that has any among the
