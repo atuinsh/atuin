@@ -562,6 +562,16 @@ pub struct Octavo {
     /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
     /// both on.
     pub upload_output: bool,
+    #[serde(rename = "__debug__", default, skip_serializing)]
+    pub debug: OctavoDebug,
+}
+
+/// Settings for pointing Octavo at a hub other than Atuin's, kept out of the docs on purpose.
+#[cfg(feature = "octavo")]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct OctavoDebug {
+    /// The gRPC address Octavo uploads to, honored only while `sync_address` is a self-hosted hub.
+    pub address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2567,6 +2577,21 @@ mod tests {
             .expect("could not read legacy threads settings")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::set(
+        "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::absent("", None)]
+    fn octavo_debug_address_is_read_from_its_hidden_table(
+        #[case] toml: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let settings = parse_settings(toml);
+        assert_eq!(settings.octavo.debug.address, expected.map(|url| Url::parse(url).unwrap()));
     }
 
     #[rstest]

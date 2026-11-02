@@ -11,6 +11,7 @@ use tonic::metadata::errors::InvalidMetadataValue;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Request};
+use tracing::warn;
 use url::Url;
 
 use crate::pb;
@@ -51,6 +52,8 @@ pub enum HubCallError {
     Connect(#[from] ConnectError),
     #[error("Octavo runs only on Atuin's hosted hub, not {0}")]
     SelfHostedHub(Url),
+    #[error("the hub changed to {0} after Octavo connected; restart atuin")]
+    HubChanged(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
@@ -71,6 +74,7 @@ impl HubCallError {
             | Self::Meta(_)
             | Self::Connect(_)
             | Self::SelfHostedHub(_)
+            | Self::HubChanged(_)
             | Self::InvalidToken(_)
             | Self::HistoryNotStored(_)
             | Self::NoUserId => false,
@@ -96,17 +100,62 @@ impl UserId {
     }
 }
 
-/// Atuin's hosted hub, which serves Octavo at `api.atuin.sh`.
+/// Where a [`HubClient`] uploads, decided once when it is built.
+#[derive(Debug, Clone)]
+enum Target {
+    /// Atuin's hosted hub.
+    Official,
+    /// A self-hosted hub, which Octavo refuses: there is nowhere to upload to.
+    SelfHosted,
+    /// The `octavo.__debug__.address` of a self-hosted hub.
+    Debug(Url),
+}
+
+impl Target {
+    fn of(settings: &Settings) -> Self {
+        if settings.hub_endpoint() == *DEFAULT_HUB_URL {
+            return Self::Official;
+        }
+        match &settings.octavo.debug.address {
+            Some(address) => Self::Debug(address.clone()),
+            None => Self::SelfHosted,
+        }
+    }
+
+    fn address(&self) -> &Url {
+        match self {
+            Self::Official | Self::SelfHosted => &DEFAULT_SYNC_URL,
+            Self::Debug(address) => address,
+        }
+    }
+}
+
+/// The hub Octavo uploads to: Atuin's hosted hub at `api.atuin.sh`, or the debug address of a
+/// self-hosted hub.
+///
+/// The hub and address are fixed when it is built, so a settings reload that points at another
+/// hub fails with [`HubCallError::HubChanged`] until atuin restarts.
 #[derive(Debug, Clone)]
 pub struct HubClient {
     service: HubServiceClient<Channel>,
+    hub: Url,
+    target: Target,
 }
 
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
-        let channel = connect(&DEFAULT_SYNC_URL, settings.network_connect_timeout)?;
+        let target = Target::of(settings);
+        if settings.octavo.debug.address.is_some() && matches!(target, Target::Official) {
+            warn!(
+                "octavo.__debug__.address is honored only while sync_address is a self-hosted hub \
+                 (sync_protocol = \"hub\"); uploading to Atuin's hub"
+            );
+        }
+        let channel = connect(target.address(), settings.network_connect_timeout)?;
         Ok(Self {
             service: HubServiceClient::new(channel),
+            hub: settings.hub_endpoint(),
+            target,
         })
     }
 
@@ -116,7 +165,7 @@ impl HubClient {
     /// Fails with [`HubCallError::UnknownUser`] for a session saved without its user, by a login
     /// from before atuin stored it, until [`Self::login`] learns whose it is.
     pub async fn session(&self, settings: &Settings) -> Result<HubSession, HubCallError> {
-        let token = Self::token(settings).await?;
+        let token = self.token(settings).await?;
         let user_id = Self::known_user(&token, settings).await?.ok_or(HubCallError::UnknownUser)?;
         Ok(HubSession { token, user_id })
     }
@@ -124,7 +173,7 @@ impl HubClient {
     /// Logs in with the hub session logged in now. For a session saved without its user, asks the
     /// hub whose it is, and remembers the answer for as long as it's the hub session.
     pub async fn login(&self, settings: &Settings) -> Result<HubLogin, HubCallError> {
-        let token = Self::token(settings).await?;
+        let token = self.token(settings).await?;
         let caller = self.caller(&token, settings)?;
         let user_id = match Self::known_user(&token, settings).await? {
             Some(id) => id,
@@ -168,12 +217,16 @@ impl HubClient {
         })
     }
 
-    async fn token(settings: &Settings) -> Result<SecretString, HubCallError> {
-        // The hub session belongs to whichever hub is logged in, and a self-hosted hub's token
-        // must never reach Atuin's.
-        let hub = settings.hub_endpoint();
-        if hub != *DEFAULT_HUB_URL {
-            return Err(HubCallError::SelfHostedHub(hub));
+    async fn token(&self, settings: &Settings) -> Result<SecretString, HubCallError> {
+        // The channel was dialed for `self.hub` and cannot change, so a token for any other hub
+        // must not be sent down it. A self-hosted hub's session is only assumed to be the one
+        // that logged in at the debug address: the session slot is not keyed by hub.
+        let now = settings.hub_endpoint();
+        if now != self.hub {
+            return Err(HubCallError::HubChanged(now));
+        }
+        if matches!(self.target, Target::SelfHosted) {
+            return Err(HubCallError::SelfHostedHub(now));
         }
 
         let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
@@ -340,22 +393,106 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::settings::{Settings, SyncProtocol};
+    use atuin_client::settings::{
+        DEFAULT_SYNC_URL, DbLocation, Octavo, OctavoDebug, Settings, SyncProtocol,
+    };
+    use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
     use url::Url;
 
     use super::{HubCallError, HubClient};
 
+    const OFFICIAL: &str = "https://api.atuin.sh";
+    const SELF_HOSTED: &str = "http://localhost:4000";
+    const DEBUG: &str = "http://127.0.0.1:50052";
+
+    fn settings(sync_address: &str, debug_address: Option<&str>) -> Settings {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let mut settings = Settings {
+            sync_address: Url::parse(sync_address).unwrap(),
+            sync_protocol: SyncProtocol::Hub,
+            data_dir: AbsPathBuf::new(&dir).unwrap(),
+            octavo: Octavo {
+                debug: OctavoDebug {
+                    address: debug_address.map(|url| Url::parse(url).unwrap()),
+                },
+                ..Octavo::default()
+            },
+            ..Settings::default()
+        };
+        settings.meta.db_path = DbLocation::File(AbsPathBuf::new(dir.join("meta.db")).unwrap());
+        settings
+    }
+
+    #[rstest]
+    #[case::official_without_debug(OFFICIAL, None, DEFAULT_SYNC_URL.as_str())]
+    #[case::official_ignores_debug(OFFICIAL, Some(DEBUG), DEFAULT_SYNC_URL.as_str())]
+    #[case::self_hosted_with_debug(SELF_HOSTED, Some(DEBUG), "http://127.0.0.1:50052/")]
+    #[tokio::test]
+    async fn dials_the_debug_address_only_for_a_self_hosted_hub(
+        #[case] sync_address: &str,
+        #[case] debug_address: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let settings = settings(sync_address, debug_address);
+
+        let client = HubClient::new(&settings).unwrap();
+
+        assert_eq!(client.target.address().as_str(), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn self_hosted_hub_with_debug_address_passes_the_hub_check() {
+        let settings = settings(SELF_HOSTED, Some(DEBUG));
+
+        let session = HubClient::new(&settings).unwrap().session(&settings).await;
+
+        assert!(matches!(session, Err(HubCallError::NotLoggedIn)));
+    }
+
     #[rstest]
     #[tokio::test]
     async fn self_hosted_hub_token_stays_home() {
-        let settings = Settings {
-            sync_address: Url::parse("http://localhost:4000").unwrap(),
-            sync_protocol: SyncProtocol::Hub,
-            ..Settings::default()
-        };
+        let settings = settings(SELF_HOSTED, None);
 
         let session = HubClient::new(&settings).unwrap().session(&settings).await;
+
+        assert!(matches!(session, Err(HubCallError::SelfHostedHub(_))));
+    }
+
+    #[rstest]
+    #[case::official_to_self_hosted_debug(OFFICIAL, None, SELF_HOSTED, Some(DEBUG))]
+    #[case::debug_to_official(SELF_HOSTED, Some(DEBUG), OFFICIAL, None)]
+    #[case::debug_to_other_self_hosted(
+        SELF_HOSTED,
+        Some(DEBUG),
+        "http://localhost:5000",
+        Some(DEBUG)
+    )]
+    #[tokio::test]
+    async fn a_reload_to_another_hub_is_refused_as_transient(
+        #[case] built_sync: &str,
+        #[case] built_debug: Option<&str>,
+        #[case] reloaded_sync: &str,
+        #[case] reloaded_debug: Option<&str>,
+    ) {
+        let client = HubClient::new(&settings(built_sync, built_debug)).unwrap();
+        let reloaded = settings(reloaded_sync, reloaded_debug);
+
+        let error = client.session(&reloaded).await.unwrap_err();
+
+        assert!(matches!(error, HubCallError::HubChanged(_)));
+        assert!(!error.is_permanent());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_debug_address_added_by_a_reload_does_not_lift_the_self_hosted_refusal() {
+        let client = HubClient::new(&settings(SELF_HOSTED, None)).unwrap();
+        let reloaded = settings(SELF_HOSTED, Some(DEBUG));
+
+        let session = client.session(&reloaded).await;
 
         assert!(matches!(session, Err(HubCallError::SelfHostedHub(_))));
     }

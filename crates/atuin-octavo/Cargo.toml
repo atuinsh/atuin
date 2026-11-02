@@ -13,7 +13,7 @@ version.workspace = true
 
 [dependencies]
 # The `proto` features derive the prost traits the extern paths in build.rs map onto.
-atuin-client = { workspace = true, features = ["proto"] }
+atuin-client = { workspace = true, features = ["octavo", "proto"] }
 atuin-common = { workspace = true, features = ["ai", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 eyre = { workspace = true }
@@ -30,6 +30,7 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
