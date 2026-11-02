@@ -128,12 +128,12 @@ service HubService {
   // Identify the user the call's token logs in.
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
 
-  // Share one of the calling user's threads with anyone who holds the share's link, under the
-  // request's id.
+  // Share the request's target, which the calling user owns, with anyone who holds the share's
+  // link, under the request's id.
   //
   // Fails with `ALREADY_EXISTS` (`SHARE_ALREADY_EXISTS`) when a share has this id, so a client can
   // repeat a creation it did not hear back from, and with `NOT_FOUND` (`SHARE_TARGET_NOT_FOUND`)
-  // when the user has no such thread.
+  // when the user owns nothing the target names.
   rpc CreateShare(CreateShareRequest) returns (CreateShareResponse);
 
   // The share the request names, if the caller may open it: with its link token, or as its owner.
@@ -445,8 +445,11 @@ message GetShareResponse {
 }
 
 message ListSharesRequest {
-  // Only the shares of this thread, as `Thread.id` gives it; unset lists every share.
-  UuidV7 thread = 1;
+  reserved 1;
+  reserved "thread";
+
+  // Only the shares of this target; unset lists every share.
+  ShareTarget target = 4;
   // The most shares to return in one page. At most 200; larger values are rejected. 0 means 50.
   uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
   // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
