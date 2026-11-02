@@ -28,7 +28,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::harnesstools::AnyHarness;
 use crate::harnesstools::rehydrate::{MERGED_FIELD, RehydrateMessage};
 use crate::harnesstools::session::synthetic::{SYNTHETIC, content_hash, synthetic_id};
 use crate::harnesstools::session::{Message, SessionId};
@@ -208,6 +207,7 @@ fn pid_note(pid: Option<u32>) -> String {
 }
 
 /// The harness side of fast-forwarding a session (see the module docs).
+#[whichever::dispatchable]
 pub trait SessionSync {
     /// What this machine's native copy of session `id` holds; `None` when it has none.
     #[allow(async_fn_in_trait)]
@@ -268,61 +268,6 @@ pub trait SessionSync {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError>;
-}
-
-impl SessionSync for AnyHarness {
-    async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.local_tip(id).await,
-            Self::Codex(h) => h.local_tip(id).await,
-            Self::Copilot(h) => h.local_tip(id).await,
-            Self::Opencode(h) => h.local_tip(id).await,
-            Self::Pi(h) => h.local_tip(id).await,
-        }
-    }
-
-    async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        match self {
-            Self::ClaudeCode(h) => h.is_live(id, cwd).await,
-            Self::Codex(h) => h.is_live(id, cwd).await,
-            Self::Copilot(h) => h.is_live(id, cwd).await,
-            Self::Opencode(h) => h.is_live(id, cwd).await,
-            Self::Pi(h) => h.is_live(id, cwd).await,
-        }
-    }
-
-    async fn append(
-        &self,
-        id: &str,
-        base: &LocalTip,
-        lines: &[RehydrateMessage],
-        options: &AppendOptions<'_>,
-    ) -> Result<AppendOutcome, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.append(id, base, lines, options).await,
-            Self::Codex(h) => h.append(id, base, lines, options).await,
-            Self::Copilot(h) => h.append(id, base, lines, options).await,
-            Self::Opencode(h) => h.append(id, base, lines, options).await,
-            Self::Pi(h) => h.append(id, base, lines, options).await,
-        }
-    }
-
-    async fn replace(
-        &self,
-        id: &str,
-        base: &LocalTip,
-        branch: &[RehydrateMessage],
-        options: &AppendOptions<'_>,
-        backups: &Path,
-    ) -> Result<ReplaceOutcome, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Codex(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Copilot(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Opencode(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Pi(h) => h.replace(id, base, branch, options, backups).await,
-        }
-    }
 }
 
 /// Refuse to write under a harness that is, or may be, writing the session itself.

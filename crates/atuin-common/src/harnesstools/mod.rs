@@ -1,6 +1,6 @@
 //! Tools for interacting and operating on different AI harnesses.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod access;
 pub mod ccode;
@@ -23,10 +23,14 @@ use codex::Codex;
 use copilot::Copilot;
 use opencode::Opencode;
 use pi::Pi;
-use rehydrate::{RehydrateError, RehydrateSession};
+use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
 use resume::{ResumeError, ResumePlan, ResumeTarget};
 use session::Observable;
 use session::any::AnySessions;
+// `SessionSync`'s signature types, which its dispatch on `AnyHarness` names here.
+use sync::{
+    AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync, SyncError,
+};
 
 use crate::sync::BlockingPool;
 
@@ -81,6 +85,7 @@ pub trait Harness: std::fmt::Debug {
 }
 
 #[whichever::dispatch(Harness)]
+#[whichever::dispatch(SessionSync)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
     ClaudeCode(Ccode),
