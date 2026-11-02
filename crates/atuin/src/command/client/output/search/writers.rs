@@ -34,6 +34,7 @@ struct Hit<'a> {
     ctx: &'a RenderCtx<'a>,
 }
 
+#[whichever::dispatchable]
 #[allow(async_fn_in_trait)] // private trait, only ever awaited directly -- no Send bound needed
 pub(super) trait MatchRenderer {
     /// Render an entire stream of matches, owning all framing between and around them: the blank
@@ -264,26 +265,11 @@ fn json_io_error(err: serde_json::Error) -> io::Error {
     err.io_error_kind().map_or_else(|| io::Error::other(err), io::Error::from)
 }
 
+#[whichever::dispatch(MatchRenderer)]
 pub(super) enum Writer {
     Plain(PlainWriter),
     Pretty(PrettyWriter),
     Json(JsonWriter),
-}
-
-impl Writer {
-    /// Dispatch [`MatchRenderer::write_stream`] to the active writer.
-    pub(super) async fn write_stream<S: Stream<Item = HistoryMatch> + Send>(
-        &self,
-        out: &mut (dyn Write + Send),
-        ctx: &RenderCtx<'_>,
-        stream: S,
-    ) -> io::Result<()> {
-        match self {
-            Self::Plain(w) => w.write_stream(out, ctx, stream).await,
-            Self::Pretty(w) => w.write_stream(out, ctx, stream).await,
-            Self::Json(w) => w.write_stream(out, ctx, stream).await,
-        }
-    }
 }
 
 struct HorizontalRule(usize);

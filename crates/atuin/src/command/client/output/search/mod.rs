@@ -19,7 +19,9 @@ use tracing::debug;
 
 mod writers;
 
-use writers::{HistoryMatch, JsonWriter, PlainWriter, PrettyWriter, RenderCtx, Writer};
+use writers::{
+    HistoryMatch, JsonWriter, MatchRenderer, PlainWriter, PrettyWriter, RenderCtx, Writer,
+};
 
 use crate::command::client::daemon;
 use crate::i18n::fl;
