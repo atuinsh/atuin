@@ -316,25 +316,55 @@ fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> 
         });
     }
 
-    // Fall back to the first of these found in PATH. Order mirrors Debian's
-    // `sensible-editor` (part of `sensible-utils`), which tries nano/nano-tiny
-    // before vi specifically so an unconfigured user doesn't land in a modal
-    // editor they may not know how to exit. Anyone who actually prefers vim
-    // over nano is exactly the kind of user who's almost certainly already
-    // set $VISUAL/$EDITOR, so this ordering only affects the
-    // nothing-configured-at-all case.
     let cwd = std::env::current_dir().unwrap_or_default();
     let path = atuin_common::env::var_os("PATH");
-    for name in ["nano", "nano-tiny", "vim", "vi"] {
-        if let Some(program) = resolve_in_path(name, path.as_deref(), &cwd) {
-            return Ok(EditorCommand {
-                program,
-                args: Vec::new(),
-            });
-        }
-    }
+    fallback_editor(path.as_deref(), &cwd)
+}
 
-    Err(VisualEditorError::NotFound)
+/// Editors probed, in order, when nothing is configured (see
+/// [`fallback_editor`]).
+///
+/// The order mirrors Debian's `sensible-editor` (part of `sensible-utils`),
+/// which tries nano/nano-tiny before vi specifically so an unconfigured user
+/// doesn't land in a modal editor they may not know how to exit. Anyone who
+/// actually prefers vim over nano is exactly the kind of user who's almost
+/// certainly already set `$VISUAL`/`$EDITOR`, so this ordering only affects
+/// the nothing-configured-at-all case.
+///
+/// On Windows, Notepad closes the list. It's last rather than first so the
+/// shell environment never has to be detected: under Git Bash (where
+/// Notepad would be an odd choice) Git for Windows ships vim, so an earlier
+/// entry wins; under PowerShell or cmd on a vanilla machine none of the
+/// others exist, so Notepad beats a "no editor found" error. Under WSL atuin
+/// is a Linux binary, so Notepad is never a candidate there. `which`
+/// resolves the bare name through `PATHEXT` to `notepad.exe` in System32 (or
+/// the Store app's execution alias). Like any GUI editor it works because
+/// `Command::status` waits on the process handle, not on a console -- with
+/// one known hole: Windows 11's tabbed Notepad, when a window is already
+/// open, hands the file to that instance and exits at once, so the edit
+/// comes back unchanged. That's a Notepad setting ("Open files in: a new
+/// window"), nothing a launcher can fix.
+#[cfg(not(windows))]
+const FALLBACK_EDITORS: [&str; 4] = ["nano", "nano-tiny", "vim", "vi"];
+#[cfg(windows)]
+const FALLBACK_EDITORS: [&str; 5] = ["nano", "nano-tiny", "vim", "vi", "notepad"];
+
+/// Resolves the first of [`FALLBACK_EDITORS`] found on `paths` (raw
+/// `$PATH`-format list, relative to `cwd`), or [`VisualEditorError::NotFound`]
+/// if none is. Takes the search path explicitly so tests can inject a
+/// controlled one instead of the live `$PATH`.
+fn fallback_editor(
+    paths: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> std::result::Result<EditorCommand, VisualEditorError> {
+    FALLBACK_EDITORS
+        .iter()
+        .find_map(|name| resolve_in_path(name, paths, cwd))
+        .map(|program| EditorCommand {
+            program,
+            args: Vec::new(),
+        })
+        .ok_or(VisualEditorError::NotFound)
 }
 
 /// Proof that the TUI's [`Terminal`] has been torn down, so the tty is free for
@@ -3526,14 +3556,13 @@ mod tests {
         assert_eq!(parts, expected);
     }
 
-    /// An absolute path bypasses `$PATH`/cwd in `which` entirely (verified by
-    /// reading its source), so this exercises `parse_editor_var`'s real
-    /// resolution wiring — not just the split-and-fall-back-when-missing
-    /// path above — without touching the live `$PATH`.
-    #[rstest]
-    fn parse_editor_var_resolves_existing_absolute_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let program_path = dir.path().join("my-fake-editor");
+    /// Creates an executable file named `name` in `dir` and returns its path.
+    /// On unix that's a mode-0755 shell script; on Windows a file is
+    /// "executable" by extension alone, so `name` must carry one that
+    /// `which` recognizes (see [`fake_editor_on_path`]) unless the test
+    /// bypasses `$PATH` lookup altogether.
+    fn fake_executable(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let program_path = dir.join(name);
         std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
         #[cfg(unix)]
         {
@@ -3541,6 +3570,31 @@ mod tests {
             std::fs::set_permissions(&program_path, std::fs::Permissions::from_mode(0o755))
                 .unwrap();
         }
+        program_path
+    }
+
+    /// [`fake_executable`] named so an extension-less `$PATH` lookup for
+    /// `name` finds it on the current host. On Windows, `which` treats a
+    /// query with no extension as executable only if it's a real PE binary
+    /// (checked via `GetBinaryTypeW`) -- a plain text file needs a recognized
+    /// extension (trusted outright, no content check) to be found at all.
+    /// The query itself stays extension-less either way, matching how we
+    /// actually call this (e.g. "vim", "nano"); `which` appends PATHEXT
+    /// candidates itself.
+    fn fake_editor_on_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        #[cfg(windows)]
+        let name = &format!("{name}.cmd");
+        fake_executable(dir, name)
+    }
+
+    /// An absolute path bypasses `$PATH`/cwd in `which` entirely (verified by
+    /// reading its source), so this exercises `parse_editor_var`'s real
+    /// resolution wiring — not just the split-and-fall-back-when-missing
+    /// path above — without touching the live `$PATH`.
+    #[rstest]
+    fn parse_editor_var_resolves_existing_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_path = fake_executable(dir.path(), "my-fake-editor");
 
         let val = format!("{} --wait", program_path.display());
         let editor = super::parse_editor_var(val).unwrap();
@@ -3551,27 +3605,39 @@ mod tests {
     #[rstest]
     fn resolve_in_path_finds_executable_on_path() {
         let dir = tempfile::tempdir().unwrap();
-        // On Windows, `which` treats a query with no extension as executable
-        // only if it's a real PE binary (checked via GetBinaryTypeW) -- a
-        // plain text file needs a recognized extension (trusted outright, no
-        // content check) to be found at all. The query itself stays
-        // extension-less either way, matching how we actually call this
-        // (e.g. "vim", "nano"); `which` appends PATHEXT candidates itself.
-        #[cfg(windows)]
-        let program_path = dir.path().join("my-fake-editor.cmd");
-        #[cfg(not(windows))]
-        let program_path = dir.path().join("my-fake-editor");
-        std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&program_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        let program_path = fake_editor_on_path(dir.path(), "my-fake-editor");
 
         let cwd = std::env::current_dir().unwrap();
         let resolved = super::resolve_in_path("my-fake-editor", Some(dir.path().as_os_str()), &cwd);
         assert_eq!(resolved, Some(program_path));
+    }
+
+    /// The promise: with nothing configured, a console editor on `$PATH` is
+    /// preferred over Notepad on every platform, and Notepad is a candidate
+    /// only on Windows -- a `notepad` on a Linux `$PATH` (WSL interop puts
+    /// System32 there) must never be picked. Both arms run on every host:
+    /// the fake `notepad` is planted regardless, and the expectation flips
+    /// on `cfg(windows)`.
+    #[rstest]
+    #[case::vim_beats_notepad(&["vim", "notepad"], Some("vim"))]
+    #[case::notepad_only(&["notepad"], if cfg!(windows) { Some("notepad") } else { None })]
+    #[case::empty_path(&[], None)]
+    fn fallback_editor_cases(#[case] on_path: &[&str], #[case] expected: Option<&str>) {
+        let dir = tempfile::tempdir().unwrap();
+        let planted: std::collections::HashMap<&str, std::path::PathBuf> =
+            on_path.iter().map(|name| (*name, fake_editor_on_path(dir.path(), name))).collect();
+
+        let cwd = std::env::current_dir().unwrap();
+        let result = super::fallback_editor(Some(dir.path().as_os_str()), &cwd);
+
+        match expected {
+            Some(name) => {
+                let editor = result.unwrap();
+                assert_eq!(editor.program, planted[name]);
+                assert!(editor.args.is_empty());
+            }
+            None => assert!(matches!(result, Err(super::VisualEditorError::NotFound))),
+        }
     }
 
     #[rstest]
