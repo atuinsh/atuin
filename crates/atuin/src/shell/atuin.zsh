@@ -295,7 +295,10 @@ zle -N atuin-ai-resume-viins _atuin_ai_resume_viins
 zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
 
-(ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
+# `&!` (background and disown), not `( … & )`: zsh 5.9.2 no longer takes the terminal back from a
+# finished foreground subshell whose process group lives on, so a following command in a
+# `zsh -i -c` or `#!/bin/zsh -i` script runs in the background and TUIs fail on the tty.
+ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &!
 
 if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
     # We're running in an old pty-proxy that expects OSC 133 markers. The outer
