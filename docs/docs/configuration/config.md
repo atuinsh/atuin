@@ -293,10 +293,12 @@ inline_height_shell_up_key_binding = 10
 Default: `true`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
-activated when you're in a git repository.
+activated when you're in a Git or Jujutsu repository.
 
-With workspace filtering enabled, Atuin will filter for commands executed in any directory
-within a git repository tree.
+With workspace filtering enabled, Atuin filters commands executed in any directory
+within the repository tree. A plain Git worktree searches history under the main
+repository root. A Jujutsu workspace searches history under its own root, even when
+colocated with a Git worktree.
 
 Filter modes can still be toggled via ctrl-r.
 
@@ -706,7 +708,7 @@ prefers_reduced_motion = false
 
 ### `filters`
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 

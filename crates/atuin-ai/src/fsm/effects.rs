@@ -15,7 +15,7 @@ use crate::tools::ClientToolCall;
 /// Where to write a permission rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionTarget {
-    /// Project-level: `<git_root_or_cwd>/.atuin/permissions.ai.toml`
+    /// Project-level: `<repo_root_or_cwd>/.atuin/permissions.ai.toml`
     Project,
     /// Global: `~/.atuin/permissions.ai.toml`
     Global,

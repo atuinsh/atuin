@@ -218,11 +218,11 @@ fn tool_definitions() -> Vec<Tool> {
                 },
                 "description": "Optional search scope; the first entry is used and \
                     the default is 'global' (all history). 'workspace' limits to \
-                    commands run inside the current git repository, 'directory' to \
-                    the exact current working directory, 'host' to this machine, \
-                    'session' to the shell session that launched this server \
-                    (errors when it was not launched from a shell). Start global \
-                    and narrow only if results are noisy.",
+                    commands run inside the current repository, git or Jujutsu, \
+                    'directory' to the exact current working directory, 'host' to \
+                    this machine, 'session' to the shell session that launched this \
+                    server (errors when it was not launched from a shell). Start \
+                    global and narrow only if results are noisy.",
             },
             "limit": {
                 "type": "integer",

@@ -403,8 +403,51 @@ impl From<Context> for RpcSearchContext {
             cwd: context.cwd,
             hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
-            git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
+            vcs_root: context.vcs_root.map(|path| path.to_string_lossy().to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use std::path::PathBuf;
+
+    use atuin_domain::record::CmdOrigin;
+    use rstest::rstest;
+
+    use crate::client::{
+        Context, FilterMode, OrFilter, RpcFilterMode, SearchParams, SearchRequest,
+    };
+
+    #[rstest]
+    #[case::no_repository(None)]
+    #[case::repository(Some("/work/repo"))]
+    #[case::unicode_repository(Some("/work/répo"))]
+    fn search_request_preserves_vcs_context(#[case] root: Option<&str>) {
+        let request = SearchRequest::from(SearchParams {
+            query: "cargo build".to_string(),
+            query_id: 42,
+            filter_mode: FilterMode::Workspace,
+            context: Some(Context {
+                session: "session".to_string(),
+                cwd: "/work/repo/sub".to_string(),
+                cmd_origin: CmdOrigin::try_from("host:user").unwrap(),
+                host_id: "host-id".to_string(),
+                vcs_root: root.map(PathBuf::from),
+            }),
+            shells: OrFilter::default(),
+        });
+
+        assert_eq!(request.query, "cargo build");
+        assert_eq!(request.query_id, 42);
+        assert_eq!(request.filter_mode, i32::from(RpcFilterMode::Workspace));
+        assert!(request.shells.is_empty());
+        let context = request.context.unwrap();
+        assert_eq!(context.session_id, "session");
+        assert_eq!(context.cwd, "/work/repo/sub");
+        assert_eq!(context.hostname, "host:user");
+        assert_eq!(context.host_id, "host-id");
+        assert_eq!(context.vcs_root.as_deref(), root);
     }
 }
 
