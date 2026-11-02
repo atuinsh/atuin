@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+// Something a user lets anyone holding its link read.
+message Share {
+  // Client-generated and unique. Not a secret: it names the share in its link, which opens it only
+  // with the link's token.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Logically required.
+  ShareOwner owner = 2 [(buf.validate.field).required = true];
+  // What it shares. Logically required.
+  ShareTarget target = 3 [(buf.validate.field).required = true];
+  // When it was shared.
+  google.protobuf.Timestamp create_time = 4;
+  // Set only for its owner, who alone may rotate its link or delete it.
+  ShareManagement management = 5;
+}
+
+// The user who shared a share.
+message ShareOwner {
+  // Their username now, which they can change.
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// What only a share's owner sees of it.
+message ShareManagement {
+  // Opens the share, with its id, to anyone, signed in or not. A secret: whoever the owner hands it
+  // to can read the share.
+  string link_token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// A share to open.
+message ShareRef {
+  // The share, as `Share.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // The share's link token, as `ShareManagement.link_token` gives it. Only its owner may leave it
+  // out.
+  optional string link_token = 2;
+}
+
+// What a share lets its readers read.
+message ShareTarget {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    // One thread and its subagents.
+    SharedThread thread = 1;
+  }
+}
+
+// One of the owner's threads, its messages as they are stored, and every thread spawned from it
+// as a subagent (`THREAD_PARENT_KIND_SUBAGENT`), and from those in turn. Its forks and
+// continuations are not shared.
+message SharedThread {
+  // The thread, as `Thread.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
