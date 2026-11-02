@@ -208,6 +208,7 @@ impl TryFrom<(&str, &serde_json::Value)> for ClientToolCall {
     }
 }
 
+#[whichever::dispatch]
 impl ClientToolCall {
     pub(crate) fn descriptor(&self) -> &'static descriptor::ToolDescriptor {
         match self {
@@ -240,15 +241,9 @@ impl ClientToolCall {
 
     /// The resolved file path for this tool call, if it's a file-based tool.
     /// Used to build scoped permission rules like `Write(/abs/path/to/file)`.
+    #[dispatch(Read, Edit, Write, call = resolved_path, with = Some)]
     pub(crate) fn resolved_file_path(&self) -> Option<PathBuf> {
-        match self {
-            Self::Read(tool) => Some(tool.resolved_path()),
-            Self::Edit(tool) => Some(tool.resolved_path()),
-            Self::Write(tool) => Some(tool.resolved_path()),
-            Self::Shell(_) | Self::AtuinHistory(_) | Self::AtuinOutput(_) | Self::LoadSkill(_) => {
-                None
-            }
-        }
+        None
     }
 }
 
