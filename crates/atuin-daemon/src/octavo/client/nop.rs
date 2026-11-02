@@ -1,3 +1,4 @@
+use atuin_client::ai_session::Message;
 use atuin_client::history::{History, HistoryId};
 use atuin_domain::record::RecordId;
 
@@ -12,4 +13,6 @@ impl OctavoClient for NopOctavoClient {
     async fn push_output(&self, _id: HistoryId) {}
 
     async fn delete_history(&self, _ids: &[HistoryId]) {}
+
+    async fn push_thread_messages(&self, _messages: &[Message]) {}
 }

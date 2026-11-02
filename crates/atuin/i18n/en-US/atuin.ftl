@@ -156,12 +156,14 @@ value-config-feature-octavo = Use Octavo, once it is enabled for your account on
 value-config-feature-threads = Capture your AI coding agents' threads, to search and resume them
 config-enable-octavo-not-logged-in = You are not logged in to the hub, so it cannot say whether Octavo is enabled for your account. Run 'atuin login' first.
 config-enable-octavo-not-enabled = Octavo is not enabled for your account on { $address }.
-config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history.
+config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history, and the threads Atuin captures from your coding agents.
 config-enable-octavo-disclaimer = Unlike Atuin Sync, Octavo is not end-to-end encrypted, but your data is encrypted in transit and at rest. It's yours, and you can delete it at any time.
 config-enable-octavo-declined = Octavo was not enabled.
 config-enable-octavo-backfill = Also upload the { $count } entries already in your history, not just new commands.
 config-enable-octavo-backfilled = Queued { $count } history entries for upload.
 config-enable-octavo-backfill-old = { $count } entries recorded before Atuin v14 were left out: Octavo only takes the history ids Atuin has used since.
+config-enable-octavo-threads-backfill = Also upload the { $count } thread messages Atuin has already captured, not just new ones.
+config-enable-octavo-threads-backfilled = Queued { $count } thread messages for upload.
 
 threads-offer = Enable threads?
 threads-offer-description = Atuin records your coding agents' threads (Claude Code, Codex, opencode and Pi), so you can search them and resume them here or on another machine. They're encrypted and synced like your history.

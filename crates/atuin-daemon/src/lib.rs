@@ -129,14 +129,19 @@ pub async fn boot(
             }
         },
     };
+    let records = AiSessionStore::builder()
+        .store(handle.store().clone())
+        .host_id(host_id)
+        .key(handle.encryption_key().clone())
+        .build();
+    // Before capture, which tells it of each row it captures.
+    #[cfg(feature = "octavo")]
+    let octavo = Arc::new(
+        octavo::Octavo::open(&settings, handle.clone(), output_capture.store(), records.clone())
+            .await,
+    );
     let ai_session_capture = Arc::new(match &ai_session_db {
         Some(db) => {
-            let records = AiSessionStore::builder()
-                .store(handle.store().clone())
-                .host_id(host_id)
-                .key(handle.encryption_key().clone())
-                .build();
-
             // Reprojects the sidecar from the synced record store in the background, then starts
             // capture. The record store is the source of truth; a sidecar that missed an append
             // (transient error, crash between the two writes, or a lost db file) is repaired there
@@ -149,6 +154,8 @@ pub async fn boot(
                 session_capture::ToolCapture::from_setting(settings.threads.capture_tools),
                 session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
+                #[cfg(feature = "octavo")]
+                octavo.clone(),
             )
         }
         None => AiHarnessSessionCapture::nop().await,
@@ -163,8 +170,6 @@ pub async fn boot(
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    #[cfg(feature = "octavo")]
-    let outputs = output_capture.store();
     let journal = HistoryJournal::new(
         handle.caps().clone(),
         history_store,
@@ -173,8 +178,7 @@ pub async fn boot(
         output_capture,
     );
     #[cfg(feature = "octavo")]
-    let journal =
-        journal.with_octavo(octavo::Octavo::open(&settings, handle.clone(), outputs).await);
+    let journal = journal.with_octavo(octavo);
     let journal = Arc::new(journal);
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     let ai_session_service =

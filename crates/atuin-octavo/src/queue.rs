@@ -391,6 +391,17 @@ impl UploadQueue {
         Ok(())
     }
 
+    /// Drops `user`'s backfills whose bound isn't fixed yet.
+    ///
+    /// A fixed backfill stays: all it walks was captured before the user asked for it.
+    pub async fn drop_unfixed_thread_backfills(&self, user: &UserId) -> Result<(), QueueError> {
+        db::query("DELETE FROM thread_backfills WHERE user_id = ?1 AND until_idx IS NULL")
+            .bind(user.as_str())
+            .execute(self.db.pool())
+            .await?;
+        Ok(())
+    }
+
     /// `user`'s backfills, done or not, in host order.
     pub async fn thread_backfills(&self, user: &UserId) -> Result<Vec<ThreadBackfill>, QueueError> {
         let backfills = db::query_as(
@@ -472,6 +483,7 @@ fn stored_idx(idx: RecordIdx) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
     use std::time::Duration;
 
     use atuin_common::utils::uuid_v7;
@@ -668,29 +680,46 @@ mod tests {
         );
     }
 
+    /// What settles a backfill whose bound isn't fixed.
+    enum Settle {
+        /// [`UploadQueue::fix_thread_backfills`], at a tail of 4.
+        Fix,
+        /// [`UploadQueue::drop_unfixed_thread_backfills`].
+        Drop,
+    }
+
     #[rstest]
+    #[case::fix(Settle::Fix, Some(5))]
+    #[case::drop(Settle::Drop, None)]
     #[tokio::test]
-    async fn fix_thread_backfills_bounds_only_unfixed_backfills(#[future(awt)] queue: TempQueue) {
+    async fn settling_touches_only_unfixed_backfills(
+        #[future(awt)] queue: TempQueue,
+        #[case] settle: Settle,
+        #[case] unfixed_until: Option<RecordIdx>,
+    ) {
         let user = UserId::new("alice");
         let (fixed, unfixed) = (HostId(uuid_v7()), HostId(uuid_v7()));
         queue.queue.request_thread_backfill(&user, [fixed]).await.expect("request");
         queue.queue.fix_thread_backfills(&user, [(fixed, 9)]).await.expect("fix");
         queue.queue.request_thread_backfill(&user, [unfixed]).await.expect("request");
 
-        queue.queue.fix_thread_backfills(&user, [(fixed, 20), (unfixed, 4)]).await.expect("fix");
+        let settled = match settle {
+            Settle::Fix => {
+                queue.queue.fix_thread_backfills(&user, [(fixed, 20), (unfixed, 4)]).await
+            }
+            Settle::Drop => queue.queue.drop_unfixed_thread_backfills(&user).await,
+        };
 
-        assert_eq!(queue.queue.thread_backfills(&user).await.expect("read"), [
-            ThreadBackfill {
-                host_id: fixed,
-                next_idx: 0,
-                until_idx: Some(10),
-            },
-            ThreadBackfill {
-                host_id: unfixed,
-                next_idx: 0,
-                until_idx: Some(5),
-            },
-        ]);
+        settled.expect("settle");
+        let backfill = |host_id, until_idx| ThreadBackfill {
+            host_id,
+            next_idx: 0,
+            until_idx,
+        };
+        let want: Vec<_> = iter::once(backfill(fixed, Some(10)))
+            .chain(unfixed_until.map(|until| backfill(unfixed, Some(until))))
+            .collect();
+        assert_eq!(queue.queue.thread_backfills(&user).await.expect("read"), want);
     }
 
     #[rstest]

@@ -2,6 +2,7 @@ mod client;
 
 use std::sync::Arc;
 
+use atuin_client::ai_session::{AiSessionStore, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
@@ -16,10 +17,13 @@ pub struct Octavo {
 }
 
 impl Octavo {
+    /// Opens the client for `settings`, reading queued outputs from `outputs` and queued thread
+    /// messages from `records`.
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
+        records: AiSessionStore,
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
@@ -27,7 +31,7 @@ impl Octavo {
             return Self::nop();
         }
 
-        match client::ActiveOctavoClient::open(settings, handle, outputs).await {
+        match client::ActiveOctavoClient::open(settings, handle, outputs, records).await {
             Ok(client) => Self {
                 client: client.into(),
             },
@@ -56,5 +60,11 @@ impl Octavo {
 
     pub async fn delete_history(&self, ids: &[HistoryId]) {
         self.client.delete_history(ids).await;
+    }
+
+    /// Queues the upload of `messages`, captured on this host, which go once their records are
+    /// stored.
+    pub async fn push_thread_messages(&self, messages: &[Message]) {
+        self.client.push_thread_messages(messages).await;
     }
 }

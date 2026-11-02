@@ -3,6 +3,7 @@ mod engine;
 use std::fmt;
 use std::sync::Arc;
 
+use atuin_client::ai_session::{AiSessionStore, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
@@ -36,12 +37,19 @@ impl ActiveOctavoClient {
         settings: &Settings,
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
+        records: AiSessionStore,
     ) -> Result<Self, OpenActiveOctavoClientError> {
         let queue = UploadQueue::open(settings.octavo_queue_path()).await?;
         let hub = HubClient::new(settings)?;
         let wake = Arc::new(Notify::new());
-        let engine =
-            UploadEngine::spawn(queue.clone(), hub.clone(), handle.clone(), outputs, wake.clone());
+        let engine = UploadEngine::spawn(
+            queue.clone(),
+            hub.clone(),
+            handle.clone(),
+            outputs,
+            records,
+            wake.clone(),
+        );
 
         Ok(Self {
             uploader: Arc::new(DirectUploader {
@@ -98,6 +106,20 @@ impl OctavoClient for ActiveOctavoClient {
 
         self.uploader.enqueue(session.user_id(), Queued::Deletions(ids.to_vec())).await;
     }
+
+    async fn push_thread_messages(&self, messages: &[Message]) {
+        let settings = self.uploader.handle.settings().await.clone();
+        if !settings.octavo.enabled {
+            return;
+        }
+        // Read now, so the messages go to whoever was logged in as they were captured.
+        let Some(session) = self.uploader.session(&settings).await else {
+            return;
+        };
+
+        let ids = messages.iter().map(|message| message.id).collect();
+        self.uploader.enqueue(session.user_id(), Queued::ThreadMessages(ids)).await;
+    }
 }
 
 /// Work for the engine to send, queued under the user a hub token belongs to.
@@ -105,6 +127,7 @@ impl OctavoClient for ActiveOctavoClient {
 enum Queued {
     Deletions(Vec<HistoryId>),
     Output(HistoryId),
+    ThreadMessages(Vec<RecordId>),
 }
 
 impl fmt::Display for Queued {
@@ -112,6 +135,7 @@ impl fmt::Display for Queued {
         match self {
             Self::Deletions(ids) => write!(f, "{} deletions", ids.len()),
             Self::Output(id) => write!(f, "the output of {id}"),
+            Self::ThreadMessages(ids) => write!(f, "{} thread messages", ids.len()),
         }
     }
 }
@@ -200,6 +224,9 @@ impl DirectUploader {
                 .await
                 .map(drop),
             Queued::Output(id) => self.queue.push_output(user, *id).await,
+            Queued::ThreadMessages(ids) => {
+                self.queue.push_thread_messages(user, ids.iter().copied()).await.map(drop)
+            }
         };
         if let Err(err) = queued {
             tracing::warn!(?err, %work, "failed to queue for octavo; it will not reach it");

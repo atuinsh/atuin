@@ -2,11 +2,15 @@ use std::sync::Arc;
 
 #[cfg(feature = "octavo")]
 use atuin_client::history::HistoryId;
+#[cfg(feature = "octavo")]
+use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::string::StrExt;
 use atuin_common::userio;
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
+#[cfg(feature = "octavo")]
+use atuin_domain::record::{HostId, RecordTag};
 #[cfg(feature = "octavo")]
 use atuin_octavo::hub::{HubCallError, HubClient, UserId};
 #[cfg(feature = "octavo")]
@@ -387,6 +391,38 @@ struct OctavoOnboarding {
     user: UserId,
     backfill: Vec<HistoryId>,
     old: usize,
+    /// The threads to upload, if the user asked to.
+    threads: Option<StoredThreads>,
+}
+
+/// The thread records in the record store: every `ai-session` series.
+#[cfg(feature = "octavo")]
+struct StoredThreads {
+    hosts: Vec<HostId>,
+    /// How many records the series hold together.
+    messages: u64,
+}
+
+#[cfg(feature = "octavo")]
+impl StoredThreads {
+    /// The thread records `settings`' record store holds, or `None` when it holds none.
+    async fn read(settings: &Settings) -> Result<Option<Self>> {
+        let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
+        let messages = store.len_tag(&RecordTag::AiSession).await?;
+        if messages == 0 {
+            return Ok(None);
+        }
+
+        let hosts = store
+            .status()
+            .await?
+            .hosts
+            .into_iter()
+            .filter(|(_, tails)| tails.contains_key(&RecordTag::AiSession))
+            .map(|(host, _)| host)
+            .collect();
+        Ok(Some(Self { hosts, messages }))
+    }
 }
 
 #[cfg(feature = "octavo")]
@@ -402,13 +438,21 @@ impl OctavoOnboarding {
         if self.old > 0 {
             userio::log::info!("config-enable-octavo-backfill-old", count = self.old);
         }
+        // The daemon walks each series up to its tail as of when it sees Octavo on.
+        if let Some(StoredThreads { hosts, messages }) = self.threads {
+            self.queue.request_thread_backfill(&self.user, hosts).await.wrap_err(
+                "failed to queue your threads for upload; run `atuin config enable octavo` again \
+                 to retry",
+            )?;
+            userio::log::info!("config-enable-octavo-threads-backfilled", count = messages);
+        }
 
         Ok(())
     }
 }
 
-/// Asks the user to enable Octavo, and whether to upload the history they already have; `None`
-/// if they decline.
+/// Asks the user to enable Octavo, and whether to upload the history and threads they already
+/// have; `None` if they decline.
 #[cfg(feature = "octavo")]
 async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboarding>> {
     let login = match HubClient::new(settings)?.login(settings).await {
@@ -454,16 +498,37 @@ async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboard
         (Vec::new(), 0)
     };
 
+    let threads = match StoredThreads::read(settings).await? {
+        Some(threads) => super::setup::prompt(
+            "threads backfill",
+            &fl!("config-enable-octavo-threads-backfill", count = threads.messages),
+            None,
+            super::setup::DefaultAnswer::No,
+        )?
+        .then_some(threads),
+        None => None,
+    };
+
     // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
     let queue = UploadQueue::open(settings.octavo_queue_path())
         .await
         .wrap_err("failed to open Octavo's upload queue")?;
+    // An unfixed backfill from an earlier yes would be fixed at the tail on the daemon's next pass
+    // with Octavo on, taking threads captured while Octavo was off. Dropped before the config
+    // turns Octavo on, so that pass can't come first.
+    if threads.is_none() {
+        queue.drop_unfixed_thread_backfills(login.user_id()).await.wrap_err(
+            "failed to cancel an earlier upload of your threads; run `atuin config enable octavo` \
+             again to retry",
+        )?;
+    }
 
     Ok(Some(OctavoOnboarding {
         queue,
         user: login.user_id().clone(),
         backfill,
         old,
+        threads,
     }))
 }
 

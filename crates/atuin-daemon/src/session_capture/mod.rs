@@ -38,6 +38,9 @@ use tokio_stream::wrappers::BroadcastStream;
 pub use tools::ToolCapture;
 use tracing::Instrument as _;
 
+#[cfg(feature = "octavo")]
+use crate::octavo::Octavo;
+
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
@@ -105,6 +108,9 @@ pub(crate) struct Sink {
     unsafe_calls: Arc<parking_lot::Mutex<UnsafeCalls>>,
     /// Where capture last moved this host's watermark (see [`AiSessionStore::advance_past_capture`]).
     capture_mark: Arc<parking_lot::Mutex<Option<CaptureMark>>>,
+    /// Hears of every row this host captures, live or imported.
+    #[cfg(feature = "octavo")]
+    octavo: Arc<Octavo>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -132,6 +138,8 @@ impl Sink {
             policy: Arc::default(),
             unsafe_calls: Arc::default(),
             capture_mark: Arc::default(),
+            #[cfg(feature = "octavo")]
+            octavo: Arc::new(Octavo::nop()),
             #[cfg(test)]
             hooks: None,
         }
@@ -440,6 +448,11 @@ impl Sink {
             Some(known) => known,
             None => CaptureMark::Unknown(self.sidecar.projection_generation().await?),
         };
+        // Queued before the push: a daemon that dies between the two leaves an id that the engine
+        // expires, never a stored record that Octavo doesn't hear of. Rows a failed push left for
+        // `repair` are queued already too.
+        #[cfg(feature = "octavo")]
+        self.octavo.push_thread_messages(&new).await;
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -870,6 +883,7 @@ impl AiHarnessSessionCapture {
         tools: ToolCapture,
         policy: CapturePolicy,
         pool: BlockingPool,
+        #[cfg(feature = "octavo")] octavo: Arc<Octavo>,
     ) -> Self {
         Self::open_with(
             records,
@@ -878,11 +892,17 @@ impl AiHarnessSessionCapture {
             tools,
             policy,
             pool,
+            #[cfg(feature = "octavo")]
+            octavo,
             #[cfg(test)]
             None,
         )
     }
 
+    #[cfg_attr(
+        all(test, feature = "octavo"),
+        expect(clippy::too_many_arguments, reason = "`open`'s arguments, and the test hooks")
+    )]
     fn open_with(
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
@@ -890,11 +910,16 @@ impl AiHarnessSessionCapture {
         tools: ToolCapture,
         policy: CapturePolicy,
         pool: BlockingPool,
+        #[cfg(feature = "octavo")] octavo: Arc<Octavo>,
         #[cfg(test)] hooks: Option<Arc<dyn hooks::Hooks>>,
     ) -> Self {
         let (state_tx, state) = watch::channel(StoreState::Recovering);
         let mut sink = Sink::with_state(records, sidecar, tools, state.clone());
         sink.policy = Arc::new(policy);
+        #[cfg(feature = "octavo")]
+        {
+            sink.octavo = octavo;
+        }
         #[cfg(test)]
         {
             sink.hooks = hooks;
@@ -2036,6 +2061,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(!capture.ready().await);
         let mut import = Box::pin(capture.import(None));
@@ -2053,6 +2080,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         assert_eq!(charged(&sidecar).await, (100, 42), "recovery projects the stranded record");
@@ -2097,6 +2126,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         // Capture and import hold on this, so the dedup gate sees every persisted message.
         assert!(capture.ready().await);
@@ -2117,6 +2148,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let msg = sample_message();
@@ -2152,6 +2185,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let mut sub = capture.subscribe();
@@ -2205,6 +2240,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let other = records_of(HostId(atuin_common::utils::uuid_v7()));
@@ -2312,6 +2349,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         assert_eq!(capture.list_sessions(&SessionFilter::default()).await.unwrap().len(), 2);
@@ -2366,6 +2405,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
 
@@ -2405,6 +2446,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         capture.rebuild().await.unwrap();
         assert!(capture.is_recovering());
@@ -2491,6 +2534,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
@@ -2540,6 +2585,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         gate.reached().await;
@@ -2584,6 +2631,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         // Startup recovery's replay has replayed; a rebuild empties the sidecar under it.
@@ -2617,6 +2666,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
 
@@ -2662,6 +2713,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let stored = async || store.all_tagged(&RecordTag::AiSession).await.unwrap().len();
@@ -2812,6 +2865,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
         assert!(capture.ready().await);
@@ -2915,6 +2970,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
         if !at_startup {
@@ -2981,6 +3038,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(!capture.ready().await);
         assert!(matches!(capture.sink.append(msg).await, Err(AppendError::Unavailable)));
@@ -3005,6 +3064,8 @@ mod tests {
                 ToolCapture::Names,
                 CapturePolicy::default(),
                 BlockingPool::new(NonZeroUsize::MIN),
+                #[cfg(feature = "octavo")]
+                Arc::new(Octavo::nop()),
             )
         };
 
@@ -3628,6 +3689,8 @@ mod pipeline_tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             hooks,
         );
         assert!(capture.ready().await);
