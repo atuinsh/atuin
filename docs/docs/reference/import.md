@@ -68,7 +68,7 @@ or `$HOME/.local/share/powershell/PSReadLine/ConsoleHost_history.txt`.
 The [replxx](https://github.com/AmokHuginnsson/replxx) importer will read from
 `$HISTFILE` or `$HOME/.histfile`.
 
-## resh
+## `resh`
 
 The [RESH](https://github.com/curusarn/resh) importer will read from `$HISTFILE`
 or `$HOME/.resh_history.json`.

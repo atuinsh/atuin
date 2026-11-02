@@ -1056,6 +1056,10 @@ pub struct Settings {
     /// The sync address for atuin.
     pub sync_address: Url,
 
+    /// An optional file containing the sync address. A direct environment address overrides it.
+    #[serde_as(as = "Option<RelativeTo<ConfigDir>>")]
+    pub sync_address_path: Option<AbsPathBuf>,
+
     /// Sync protocol for authentication. When set to "auto" (default), the protocol
     /// is inferred from sync_address. Set to "hub" to force Hub auth with a custom
     /// sync_address (useful for local development).
@@ -1531,13 +1535,14 @@ impl Settings {
     /// The default of each path setting, for `data_dir`, [escaped](ShellExpanded::escape) as
     /// config.toml would write it. An empty value of a path setting falls back to its default
     /// here, so every path setting needs one.
-    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 14] {
+    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 15] {
         let path = |path: &Path| path.to_str().map(ShellExpanded::escape);
         [
             ("data_dir", path(data_dir)),
             ("db_path", path(&data_dir.join("history.db"))),
             ("record_store_path", path(&data_dir.join("records.db"))),
             ("key_path", path(&data_dir.join("key"))),
+            ("sync_address_path", None),
             ("daemon.socket_path", None),
             ("daemon.pidfile_path", path(&data_dir.join("atuin-daemon.pid"))),
             ("logs.dir", path(&atuin_common::dirs::logs_dir())),
@@ -1871,6 +1876,11 @@ impl Settings {
             .try_fold(Config::builder().add_source(config), |builder, (key, path)| {
                 builder.set_override(key, path.to_string_lossy().into_owned())
             })?
+            .set_override("sync_address", self.sync_address.as_str())?
+            .set_override(
+                "sync_address_path",
+                self.sync_address_path.as_ref().map(|path| path.to_string_lossy().into_owned()),
+            )?
             .build()?;
 
         let value: Value =
@@ -1951,13 +1961,35 @@ impl Settings {
 
     pub fn new() -> Result<Self> {
         let config = Self::build_config()?;
-        let settings: Self =
+        let mut settings: Self =
             config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
+
+        settings.resolve_sync_address(&Self::environment())?;
 
         // Validate UI settings
         settings.ui.validate()?;
 
         Ok(settings)
+    }
+
+    /// Resolve the file after deserialization, retaining a direct environment address override.
+    fn resolve_sync_address(&mut self, environment: &Environment) -> Result<()> {
+        let Some(path) = &self.sync_address_path else {
+            return Ok(());
+        };
+        if config::Source::collect(environment)?.contains_key("sync_address") {
+            return Ok(());
+        }
+
+        let contents = fs_err::read_to_string(path)
+            .wrap_err_with(|| format!("could not read sync_address_path {path:?}"))?;
+        let address = contents.trim();
+        if address.is_empty() || address.contains(['\r', '\n']) {
+            return Err(eyre!("sync_address_path {path:?} must contain a single nonempty URL"));
+        }
+        self.sync_address = Url::parse(address)
+            .wrap_err_with(|| format!("invalid URL in sync_address_path {path:?}"))?;
+        Ok(())
     }
 
     #[must_use]
@@ -2502,6 +2534,139 @@ mod tests {
         .try_deserialize()
         .unwrap();
         assert_eq!(settings.enter_accept, expected);
+    }
+
+    #[fixture]
+    fn sync_config() -> (tempfile::TempDir, MockEnv) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("ATUIN_CONFIG_DIR", dir.path());
+        fs_err::write(dir.path().join("config.toml"), "").unwrap();
+        (dir, env)
+    }
+
+    #[rstest]
+    #[case::plain("https://private.example/sync")]
+    #[case::newline("https://private.example/sync\n")]
+    #[case::crlf("https://private.example/sync\r\n")]
+    #[case::whitespace(" \thttps://private.example/sync \n")]
+    fn sync_address_from_file(
+        sync_config: (tempfile::TempDir, MockEnv),
+        #[case] contents: &str,
+        #[values("address", "~/address", "$ADDRESS_DIR/address")] path: &str,
+    ) -> Result<()> {
+        let (dir, env) = sync_config;
+        env.set("ADDRESS_DIR", dir.path());
+        fs_err::write(dir.path().join("address"), contents)?;
+        fs_err::write(
+            dir.path().join("config.toml"),
+            format!("sync_address = 'https://inline.example'\nsync_address_path = '{path}'\n"),
+        )?;
+        let settings = Settings::new()?;
+        assert_eq!(settings.sync_address.as_str(), "https://private.example/sync");
+        assert_eq!(settings.get_config_value("sync_address")?, settings.sync_address.as_str());
+        assert_eq!(
+            settings.get_config_value("sync_address_path")?,
+            dir.path().join("address").to_string_lossy(),
+        );
+        // Resolved queries use the loaded URL, rather than opening the address file again.
+        fs_err::remove_file(dir.path().join("address"))?;
+        assert_eq!(settings.get_config_value("sync_address")?, settings.sync_address.as_str());
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::default("", "https://api.atuin.sh/")]
+    #[case::inline("sync_address = 'https://inline.example'", "https://inline.example/")]
+    #[case::empty_path("sync_address_path = ''", "https://api.atuin.sh/")]
+    fn sync_address_without_file(
+        sync_config: (tempfile::TempDir, MockEnv),
+        #[case] toml: &str,
+        #[case] expected: &str,
+    ) -> Result<()> {
+        let (dir, _env) = sync_config;
+        fs_err::write(dir.path().join("config.toml"), toml)?;
+        let settings = Settings::new()?;
+        assert_eq!(settings.sync_address.as_str(), expected);
+        assert!(settings.sync_address_path.is_none());
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::missing(None)]
+    #[case::empty(Some(b"".as_slice()))]
+    #[case::whitespace(Some(b" \n".as_slice()))]
+    #[case::malformed(Some(b"private-server".as_slice()))]
+    #[case::multiple_lines(Some(b"https://private.example\nhttps://other.example".as_slice()))]
+    #[case::embedded_newline(Some(b"https://private.\nexample".as_slice()))]
+    #[case::non_utf8(Some(b"\xff".as_slice()))]
+    fn sync_address_file_errors_do_not_fall_back(
+        sync_config: (tempfile::TempDir, MockEnv),
+        #[case] contents: Option<&[u8]>,
+    ) -> Result<()> {
+        let (dir, _env) = sync_config;
+        if let Some(contents) = contents {
+            fs_err::write(dir.path().join("address"), contents)?;
+        }
+        fs_err::write(dir.path().join("config.toml"), "sync_address_path = 'address'")?;
+        let err = format!("{:#}", Settings::new().unwrap_err());
+        assert!(err.contains("sync_address_path"), "{err}");
+        assert!(err.contains("address"), "{err}");
+        assert!(!err.contains("private.example"), "URL contents leaked: {err}");
+        Ok(())
+    }
+
+    #[rstest]
+    fn sync_address_file_cannot_be_a_directory(
+        sync_config: (tempfile::TempDir, MockEnv),
+    ) -> Result<()> {
+        let (dir, _env) = sync_config;
+        fs_err::write(dir.path().join("config.toml"), "sync_address_path = '.'")?;
+        assert!(Settings::new().unwrap_err().to_string().contains("sync_address_path"));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::configured_file(&[], "https://file.example/")]
+    #[case::environment_path(&[("ATUIN_SYNC_ADDRESS_PATH", "other")], "https://other.example/")]
+    #[case::environment_address(&[("ATUIN_SYNC_ADDRESS", "https://env.example")], "https://env.example/")]
+    #[case::both(&[("ATUIN_SYNC_ADDRESS_PATH", "missing"), ("ATUIN_SYNC_ADDRESS", "https://env.example")], "https://env.example/")]
+    #[case::case_insensitive(&[("atuin_sync_address", "https://env.example")], "https://env.example/")]
+    fn sync_address_environment_precedence(
+        sync_config: (tempfile::TempDir, MockEnv),
+        #[case] vars: &[(&str, &str)],
+        #[case] expected: &str,
+    ) -> Result<()> {
+        let (dir, _env) = sync_config;
+        fs_err::write(dir.path().join("address"), "https://file.example")?;
+        fs_err::write(dir.path().join("other"), "https://other.example")?;
+        let environment = Settings::environment().source(Some(
+            vars.iter().map(|(key, value)| ((*key).to_owned(), (*value).to_owned())).collect(),
+        ));
+        let mut settings: Settings = Settings::add_config_file(
+            Settings::builder_with_data_dir(dir.path())?,
+            ConfigFile::from_str(
+                "sync_address = 'https://inline.example'\nsync_address_path = 'address'",
+                FileFormat::Toml,
+            ),
+            environment.clone(),
+        )
+        .build()?
+        .try_deserialize()?;
+        settings.resolve_sync_address(&environment)?;
+        assert_eq!(settings.sync_address.as_str(), expected);
+        Ok(())
+    }
+
+    #[rstest]
+    fn sync_address_validation_does_not_open_files() {
+        assert!(Settings::validate_str("sync_address_path = 'missing'").is_ok());
+        assert!(Settings::validate_str("sync_address_path = []").is_err());
+        assert!(
+            Settings::validate_str("sync_address_path = 'missing'\nsync_address = 'invalid'")
+                .is_err()
+        );
     }
 
     #[rstest]
