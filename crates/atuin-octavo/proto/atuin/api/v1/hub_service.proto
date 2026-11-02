@@ -73,6 +73,11 @@ service HubService {
   // `next_page_token` means there are no more pages.
   rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
 
+  // Return the calling user's thread with this id.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread.
+  rpc GetThread(GetThreadRequest) returns (GetThreadResponse);
+
   // Return one page of the messages of the calling user's thread, in transcript order: by
   // timestamp, then by id.
   //
@@ -229,9 +234,21 @@ message ListThreadsResponse {
   string next_page_token = 2;
 }
 
+message GetThreadRequest {
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+}
+
+message GetThreadResponse {
+  Thread thread = 1;
+}
+
 message ListThreadMessagesRequest {
-  // Logically required.
-  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  reserved 1;
+  reserved "thread";
+
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 4 [(buf.validate.field).required = true];
   // The most messages to return in one page. At most 200; larger values are rejected. 0 means 50.
   uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
   // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
@@ -246,8 +263,11 @@ message ListThreadMessagesResponse {
 }
 
 message WatchThreadRequest {
-  // Logically required.
-  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  reserved 1;
+  reserved "thread";
+
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 2 [(buf.validate.field).required = true];
 }
 
 // One message on a `WatchThread` stream.
@@ -270,6 +290,8 @@ message WatchThreadResponse {
 
 // A thread naming the watched thread as its parent.
 message WatchThreadChild {
+  // The child's `Thread.id`.
+  UuidV7 id = 3;
   // The harness session the child is.
   HarnessSession session = 1;
   // How the child relates to the watched thread; `THREAD_PARENT_KIND_UNSPECIFIED` when no message

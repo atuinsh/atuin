@@ -300,6 +300,9 @@ message CapturedThreadMessage {
 
 // A thread as `ListThreads` lists it: what identifies it, and what its messages say of it.
 message Thread {
+  // The thread's id, which `GetThread`, `ListThreadMessages` and `WatchThread` take. Stable for the
+  // life of the thread.
+  UuidV7 id = 19;
   // The harness session the thread is.
   HarnessSession session = 1;
   // The least `CapturedThreadMessage.client_session_id` any install sent for the thread.
@@ -310,6 +313,8 @@ message Thread {
   ThreadParentKind parent_kind = 4;
   // The parent's `client_session_id`; unset while the parent is not stored.
   UuidV7 parent_client_session_id = 5;
+  // The parent's `id`; unset while the parent is not stored.
+  UuidV7 parent_id = 20;
   // The newest message's `thread_title`, if it had one.
   optional string title = 6;
   // When the earliest message was written.
