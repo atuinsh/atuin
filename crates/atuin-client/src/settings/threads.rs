@@ -69,6 +69,8 @@ pub struct AiSessionResume {
     #[serde(alias = "claude-code", alias = "claude_code")]
     pub claude: Option<String>,
     pub codex: Option<String>,
+    #[serde(alias = "grok-build", alias = "grok_build")]
+    pub grok: Option<String>,
     pub opencode: Option<String>,
     pub pi: Option<String>,
     pub omp: Option<String>,
@@ -82,6 +84,7 @@ impl AiSessionResume {
         match harness {
             HarnessKind::ClaudeCode => self.claude.as_deref(),
             HarnessKind::Codex => self.codex.as_deref(),
+            HarnessKind::Grok => self.grok.as_deref(),
             HarnessKind::Opencode => self.opencode.as_deref(),
             HarnessKind::Pi => self.pi.as_deref(),
             HarnessKind::Omp => self.omp.as_deref(),

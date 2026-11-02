@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -15,6 +15,9 @@ atuin hook install codex
 
 # GitHub Copilot CLI
 atuin hook install copilot
+
+# Grok Build
+atuin hook install grok
 
 # opencode
 atuin hook install opencode
@@ -38,6 +41,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
 | Copilot | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`) |
+| Grok Build | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`) |
 | opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 
@@ -82,7 +86,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -115,6 +119,16 @@ atuin hook install copilot
 This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
 
 Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
+
+### Grok Build
+
+```shell
+atuin hook install grok
+```
+
+This writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
+
+Grok Build also runs hooks from `~/.claude/settings.json` when Claude compatibility is enabled. Inside a Grok Build session, Atuin attributes inherited `atuin hook claude-code` events to `grok`, and skips them when native `grok` hooks are installed too so commands aren't recorded twice.
 
 ### opencode
 

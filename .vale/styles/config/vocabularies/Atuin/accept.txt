@@ -51,6 +51,7 @@ Ghostty
 gitleaks
 glibc
 Grafana
+Grok
 Groq
 histdb
 IDE
@@ -67,6 +68,7 @@ nginx
 npm
 OAuth
 Ollama
+omp
 opencode
 Pacman
 Pinecone

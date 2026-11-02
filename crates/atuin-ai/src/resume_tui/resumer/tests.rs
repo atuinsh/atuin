@@ -703,8 +703,9 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
         HarnessKind::Copilot,
+        HarnessKind::Grok,
         HarnessKind::Pi,
-        HarnessKind::Omp
+        HarnessKind::Omp,
     ]);
 
     let err =

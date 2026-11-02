@@ -22,7 +22,16 @@ pub struct Access {
 }
 
 /// The input keys a file's path is given under.
-const PATH_KEYS: &[&str] = &["file_path", "filePath", "path", "notebook_path", "filename", "file"];
+const PATH_KEYS: &[&str] = &[
+    "file_path",
+    "filePath",
+    "target_file",
+    "target_directory",
+    "path",
+    "notebook_path",
+    "filename",
+    "file",
+];
 const PATHS_KEYS: &[&str] = &["paths", "file_paths", "filePaths", "files"];
 
 impl Access {
@@ -76,6 +85,7 @@ impl Access {
                 | "local_shell"
                 | "container.exec"
                 | "run_terminal_cmd"
+                | "run_terminal_command"
                 | "execute_command"
                 | "run_command"
         ) {
@@ -124,6 +134,9 @@ impl Access {
                 | "write_file"
                 | "edit_file"
                 | "create_file"
+                | "delete_file"
+                | "search_replace"
+                | "hashline_edit"
                 | "str_replace_editor"
                 | "str_replace_based_edit_tool"
                 | "patch"

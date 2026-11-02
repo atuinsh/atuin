@@ -57,6 +57,7 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
     match s.to_ascii_lowercase().as_str() {
         "claude" | "claude-code" | "claudecode" | "cc" => Some(HarnessKind::ClaudeCode),
         "codex" | "cx" => Some(HarnessKind::Codex),
+        "grok" | "grok-build" | "gk" => Some(HarnessKind::Grok),
         "opencode" | "oc" => Some(HarnessKind::Opencode),
         "pi" => Some(HarnessKind::Pi),
         "omp" | "om" => Some(HarnessKind::Omp),
@@ -66,13 +67,14 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
 }
 
 /// The harnesses ctrl-t cycles through, after "all".
-const HARNESS_CYCLE: [HarnessKind; 6] = [
+const HARNESS_CYCLE: [HarnessKind; 7] = [
     HarnessKind::ClaudeCode,
     HarnessKind::Codex,
     HarnessKind::Opencode,
     HarnessKind::Pi,
     HarnessKind::Omp,
     HarnessKind::Copilot,
+    HarnessKind::Grok,
 ];
 
 /// Whitespace-separated words with their byte ranges.
@@ -321,14 +323,16 @@ mod tests {
     #[case("agent:opencode", "agent:pi")]
     #[case("agent:pi", "agent:omp")]
     #[case("agent:omp", "agent:copilot")]
-    #[case("agent:copilot", "")]
-    #[case("a agent:copilot b", "a b")]
-    #[case("flaky agent:copilot", "flaky")]
+    #[case("agent:copilot", "agent:grok")]
+    #[case("agent:grok", "")]
+    #[case("a agent:grok b", "a b")]
+    #[case("flaky agent:grok", "flaky")]
     #[case("agent:codex,pi x", "agent:claude-code x")]
     #[case("agent:vim", "agent:claude-code")]
     #[case("a:claude flaky", "agent:codex flaky")]
     #[case("flaky a:cx", "flaky agent:opencode")]
-    #[case("a:cp", "")]
+    #[case("a:cp", "agent:grok")]
+    #[case("a:gk", "")]
     #[case("a:", "agent:claude-code")]
     #[case("h:codex", "h:codex agent:claude-code")]
     fn alt_a_cycles_the_harness_token(#[case] input: &str, #[case] want: &str) {
@@ -338,7 +342,7 @@ mod tests {
     #[rstest]
     fn alt_a_round_trips() {
         let mut s = String::from("bug");
-        for _ in 0..7 {
+        for _ in 0..=HARNESS_CYCLE.len() {
             s = cycle_harness(&s);
         }
         assert_eq!(s, "bug");

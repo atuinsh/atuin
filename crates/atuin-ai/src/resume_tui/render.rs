@@ -326,7 +326,7 @@ pub fn row_layout(width: u16, shape: RowShape) -> Vec<(Column, u16)> {
 pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
     let meaning = match harness {
         HarnessKind::ClaudeCode => Meaning::AlertWarn,
-        HarnessKind::Codex => Meaning::AlertInfo,
+        HarnessKind::Codex | HarnessKind::Grok => Meaning::AlertInfo,
         HarnessKind::Opencode => Meaning::Guidance,
         HarnessKind::Pi | HarnessKind::Omp => Meaning::Important,
         HarnessKind::Copilot | HarnessKind::Unknown => Meaning::Annotation,

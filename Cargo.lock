@@ -503,6 +503,7 @@ dependencies = [
  "humantime",
  "i18n-embed",
  "i18n-embed-fl",
+ "imara-diff",
  "itertools 0.15.0",
  "libsqlite3-sys",
  "memchr",

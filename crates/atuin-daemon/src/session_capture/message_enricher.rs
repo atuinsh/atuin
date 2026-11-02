@@ -253,15 +253,18 @@ fn build(
             id
         }
     };
-    // Codex lines name no parent: each row follows the row captured before it, so the rows of
-    // two hosts continuing one rollout part where they did (see `AiSessionDatabase::analyse`).
-    // An applied patch's row hangs beside the line rather than on it, so the rows around it link
-    // the same whether it was captured or not (a rollout captured before patches were, read
-    // again): a branch's rows take it from the row it hangs from (`Analysis::rows_for`).
+    // Codex and Grok Build lines name no parent: each row follows the row captured before it, so
+    // the rows of two hosts continuing one transcript part where they did (see
+    // `AiSessionDatabase::analyse`). An applied Codex patch row or a Grok title-change row hangs
+    // beside the chain rather than on it, so the conversational rows around it link the same
+    // regardless of when it arrived.
     let patch_only = !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_)));
-    let parent_source_id = if handle.harness == HarnessKind::Codex && patch_only {
-        state.previous.clone()
-    } else if handle.harness == HarnessKind::Codex {
+    let chained = matches!(handle.harness, HarnessKind::Codex | HarnessKind::Grok);
+    let beside_chain = (handle.harness == HarnessKind::Codex && patch_only)
+        || (handle.harness == HarnessKind::Grok && m.parent_id().is_some());
+    let parent_source_id = if beside_chain {
+        m.parent_id().map(|id| SourceId::from(String::from(id))).or_else(|| state.previous.clone())
+    } else if chained {
         state.previous.replace(source_id.clone())
     } else {
         m.parent_id().map(|id| SourceId::from(String::from(id)))
@@ -1195,5 +1198,204 @@ mod parser_contract {
             HarnessKind::Pi => 2,
             _ => 1,
         }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn grok_rows_chain_across_checkpoint_and_hang_titles_beside_chain() {
+        use std::num::NonZeroUsize;
+
+        use atuin_common::harnesstools::grok::session::GrokSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use atuin_common::path::PathBufExt as _;
+        use atuin_common::sync::BlockingPool;
+        use futures::TryStreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+        let sdir = dir.path().join("%2Fwork").joined(sid);
+        std::fs::create_dir_all(&sdir).unwrap();
+
+        let summary_path = sdir.join("summary.json");
+        std::fs::write(
+            &summary_path,
+            serde_json::json!({
+                "info": {"id": sid, "cwd": "/work"},
+                "generated_title": "Initial title",
+                "created_at": "2026-10-28T10:00:00Z",
+                "updated_at": "2026-10-28T10:00:05Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let path = sdir.join("chat_history.jsonl");
+        let turn1 = format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"type": "system", "content": "You are Grok."}),
+            serde_json::json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nhi\n</user_query>"}], "prompt_index": 0}),
+            serde_json::json!({"type": "assistant", "content": "hello"}),
+        );
+        std::fs::write(&path, &turn1).unwrap();
+
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let session_id = SessionId::from(sid.to_owned());
+        let gs = GrokSession::open(session_id.clone(), path.clone(), pool);
+        let batch1: Vec<_> = gs.clone().messages_from(None).try_collect().await.unwrap();
+        let checkpoint = batch1.last().unwrap().0;
+
+        let mut enricher = MessageEnricher::new(HarnessKind::Grok);
+        let rows1: Vec<Message> = batch1
+            .into_iter()
+            .flat_map(|(_, m)| enricher.capture(&session_id, &AnyMessage::Grok(m)))
+            .collect();
+        // meta + title + user + assistant = 4 rows; system prompt produces no row.
+        assert_eq!(rows1.len(), 4);
+        assert_eq!(rows1[0].source_id.as_ref(), format!("atuin-meta-{sid}"));
+        assert_eq!(rows1[0].parent_source_id, None);
+        assert!(rows1[1].source_id.as_ref().starts_with("atuin-title-"));
+        assert_eq!(rows1[1].parent_source_id, Some(rows1[0].source_id.clone()));
+        assert_eq!(rows1[2].parent_source_id, Some(rows1[0].source_id.clone()));
+        assert_eq!(rows1[3].parent_source_id, Some(rows1[2].source_id.clone()));
+
+        // Simulate daemon restart + checkpointed resume onto a second turn.
+        let turn2 = format!(
+            "{turn1}{}\n",
+            serde_json::json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nnext\n</user_query>"}], "prompt_index": 1}),
+        );
+        std::fs::write(&path, turn2).unwrap();
+
+        let batch2: Vec<_> = gs.messages_from(Some(checkpoint)).try_collect().await.unwrap();
+        let mut resumed_enricher = MessageEnricher::new(HarnessKind::Grok);
+        resumed_enricher.resume(&session_id, None, &[], rows1.last(), &[]);
+        let rows2: Vec<Message> = batch2
+            .into_iter()
+            .flat_map(|(_, m)| resumed_enricher.capture(&session_id, &AnyMessage::Grok(m)))
+            .collect();
+        // Checkpointed restart re-emits the current title idempotently (hanging off session meta)
+        // and chains the new user prompt directly onto `rows1[3]`.
+        assert_eq!(rows2.len(), 2);
+        assert_eq!(rows2[0].source_id, rows1[1].source_id);
+        assert_eq!(rows2[0].parent_source_id, Some(rows1[0].source_id.clone()));
+        assert_eq!(rows2[1].parent_source_id, Some(rows1[3].source_id.clone()));
+    }
+
+    /// A session compacted while capture was stopped goes on from where its conversation was,
+    /// not from its first line, which the compaction's `<user_info>` repeats the same day.
+    #[rstest]
+    #[tokio::test]
+    async fn grok_rows_go_on_from_a_compaction_made_while_capture_was_stopped() {
+        use std::num::NonZeroUsize;
+
+        use atuin_common::harnesstools::grok::session::GrokSession;
+        use atuin_common::harnesstools::session::Session as _;
+        use atuin_common::path::PathBufExt as _;
+        use atuin_common::sync::BlockingPool;
+        use futures::TryStreamExt;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9";
+        let sdir = dir.path().join("%2Fwork").joined(sid);
+        std::fs::create_dir_all(sdir.join("compaction_requests")).unwrap();
+        std::fs::write(
+            sdir.join("summary.json"),
+            json!({"info": {"id": sid, "cwd": "/work"}, "created_at": "2026-10-28T10:00:00Z"})
+                .to_string(),
+        )
+        .unwrap();
+        let info = "<user_info>\nWorkspace Path: /work\n</user_info>";
+        let user =
+            |text: &str| json!({"type": "user", "content": [{"type": "text", "text": text}]});
+        let before = [
+            json!({"type": "system", "content": "You are Grok."}),
+            user(info),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nhi\n</user_query>"}], "prompt_index": 0}),
+            json!({"type": "assistant", "content": "hello"}),
+        ];
+        let lines = |lines: &[serde_json::Value]| -> String {
+            lines.iter().map(|l| format!("{l}\n")).collect()
+        };
+        let path = sdir.join("chat_history.jsonl");
+        std::fs::write(&path, lines(&before)).unwrap();
+
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let session_id = SessionId::from(sid.to_owned());
+        let gs = GrokSession::open(session_id.clone(), path.clone(), pool);
+        let batch1: Vec<_> = gs.clone().messages_from(None).try_collect().await.unwrap();
+        let checkpoint = batch1.last().unwrap().0;
+        let mut enricher = MessageEnricher::new(HarnessKind::Grok);
+        let rows1: Vec<Message> = batch1
+            .into_iter()
+            .flat_map(|(_, m)| enricher.capture(&session_id, &AnyMessage::Grok(m)))
+            .collect();
+
+        // `/compact`: the transcript is replaced, and what it held kept in the request.
+        let mut request = before.to_vec();
+        request.push(user("Your task is to produce a faithful, concise summary"));
+        std::fs::write(
+            sdir.join("compaction_requests").joined("r1.json"),
+            json!({"created_at": "2026-10-28T10:05:00Z", "chat_history": request}).to_string(),
+        )
+        .unwrap();
+        let meta = |text: &str| {
+            let mut line = user(text);
+            line["synthetic_reason"] = json!("compaction_meta");
+            line
+        };
+        let after = [
+            json!({"type": "system", "content": "You are Grok."}),
+            meta(info),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nhi\n</user_query>"}]}),
+            meta("This session is being continued from a previous conversation."),
+            json!({"type": "user", "content": [{"type": "text", "text": "<user_query>\nnext\n</user_query>"}], "prompt_index": 1}),
+        ];
+        std::fs::write(&path, lines(&after)).unwrap();
+
+        let batch2: Vec<_> =
+            gs.clone().messages_from(Some(checkpoint)).try_collect().await.unwrap();
+        let mut resumed = MessageEnricher::new(HarnessKind::Grok);
+        resumed.resume(&session_id, None, &[], rows1.last(), &[]);
+        let stored: std::collections::HashSet<_> =
+            rows1.iter().map(|r| r.source_id.clone()).collect();
+        let new: Vec<Message> = batch2
+            .into_iter()
+            .flat_map(|(_, m)| resumed.capture(&session_id, &AnyMessage::Grok(m)))
+            .filter(|r| !stored.contains(&r.source_id))
+            .collect();
+        // The repeated prompt, the summary and the next prompt, in a line from the reply.
+        assert_eq!(new.len(), 3, "{new:#?}");
+        assert_eq!(new[0].parent_source_id, Some(rows1.last().unwrap().source_id.clone()));
+        assert_eq!(new[1].parent_source_id, Some(new[0].source_id.clone()));
+        assert_eq!(new[2].parent_source_id, Some(new[1].source_id.clone()));
+
+        // Compacted again before another prompt: the same `<user_info>` and prompt are repeated,
+        // and the second summary goes on from the first's line, not from the prompt before it.
+        let after_first = &after[..4];
+        std::fs::write(&path, lines(after_first)).unwrap();
+        // Captured from where it was, which the file no longer has.
+        let second_checkpoint = atuin_common::harnesstools::session::Checkpoint::new(1, b"");
+        let mut request = after_first.to_vec();
+        request.push(user("Your task is to produce a faithful, concise summary"));
+        std::fs::write(
+            sdir.join("compaction_requests").joined("r2.json"),
+            json!({"created_at": "2026-10-28T10:10:00Z", "chat_history": request}).to_string(),
+        )
+        .unwrap();
+        let mut again = after_first.to_vec();
+        again[3] = meta("This session is being continued, a second time.");
+        std::fs::write(&path, lines(&again)).unwrap();
+        let batch3: Vec<_> = gs.messages_from(Some(second_checkpoint)).try_collect().await.unwrap();
+        let mut third = MessageEnricher::new(HarnessKind::Grok);
+        third.resume(&session_id, None, &[], Some(&new[1]), &[]);
+        let stored: std::collections::HashSet<_> =
+            rows1.iter().chain(&new).map(|r| r.source_id.clone()).collect();
+        let newer: Vec<Message> = batch3
+            .into_iter()
+            .flat_map(|(_, m)| third.capture(&session_id, &AnyMessage::Grok(m)))
+            .filter(|r| !stored.contains(&r.source_id))
+            .collect();
+        assert_eq!(newer.len(), 1, "{newer:#?}");
+        assert_eq!(newer[0].parent_source_id, Some(new[1].source_id.clone()));
     }
 }
