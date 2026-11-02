@@ -98,6 +98,18 @@ service HubService {
   // thread, or once the thread is deleted.
   rpc WatchThread(WatchThreadRequest) returns (stream WatchThreadResponse);
 
+  // Stream the calling user's threads that match the filter: the most recently active of them, then
+  // each change as it is stored.
+  //
+  // Sends the first page `ListThreads` would return, a `thread` each, then `caught_up`. From then
+  // on, sends a matching thread's `Thread` after a store changes it or a thread naming it as its
+  // parent is first stored or deleted, past the first page too, at most once a second for each
+  // thread. Sends a `removed` for each of the user's threads deleted, and for each changed so it no
+  // longer matches, whether or not it was sent. A thread changed while the page is read may come
+  // again after `caught_up`, so keep each thread's newest `Thread`, by id.
+  // Sends a heartbeat after every 25 seconds without a message.
+  rpc WatchThreads(WatchThreadsRequest) returns (stream WatchThreadsResponse);
+
   // Delete the calling user's thread with this handle and every thread descended from it, with
   // their messages, and keep them from being stored again, along with any thread later naming one
   // of them as its parent.
@@ -304,6 +316,47 @@ message WatchThreadCaughtUp {}
 
 // Sent to show a `WatchThread` stream is still open.
 message WatchThreadHeartbeat {}
+
+message WatchThreadsRequest {
+  // Which threads to stream.
+  ThreadFilter filter = 1;
+  // The most threads to send before `caught_up`. At most 200; larger values are rejected. 0 means
+  // 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+}
+
+// One message on a `WatchThreads` stream.
+message WatchThreadsResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // A thread that matches the filter, as it stands.
+    Thread thread = 1;
+    // A thread to leave out from now on.
+    WatchThreadsRemoved removed = 2;
+    // The first page has been sent.
+    WatchThreadsCaughtUp caught_up = 3;
+    // Shows the stream is still open.
+    WatchThreadsHeartbeat heartbeat = 4;
+  }
+}
+
+// A thread of the user's that was deleted, or that changed so it no longer matches the filter.
+// Neither is ever undone.
+message WatchThreadsRemoved {
+  // The thread's `Thread.id`.
+  UuidV7 id = 1;
+}
+
+// Sent once the first page of a `WatchThreads` call has been.
+message WatchThreadsCaughtUp {
+  // The `page_token` for `ListThreads` to read the threads after the first page, or empty if there
+  // are none.
+  string next_page_token = 1;
+}
+
+// Sent to show a `WatchThreads` stream is still open.
+message WatchThreadsHeartbeat {}
 
 message DeleteThreadRequest {
   // Logically required.
