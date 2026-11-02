@@ -8,13 +8,15 @@ use atuin_domain::record::RecordId;
 use enum_dispatch::enum_dispatch;
 pub use nop::NopOctavoClient;
 
+use super::ThreadUpload;
+
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait OctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId);
     async fn push_output(&self, id: HistoryId);
     async fn delete_history(&self, ids: &[HistoryId]);
-    async fn push_thread_messages(&self, messages: &[Message]);
+    async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload;
 }
 
 #[enum_dispatch(OctavoClient)]

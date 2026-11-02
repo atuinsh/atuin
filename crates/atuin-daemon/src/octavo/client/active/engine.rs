@@ -7,7 +7,7 @@ use atuin_client::ai_session::{AiSessionStore, Loaded, Message};
 use atuin_client::history::HistoryId;
 use atuin_client::record::decode::map_parallel;
 use atuin_client::settings::Settings;
-use atuin_common::futures::Backoff;
+use atuin_common::futures::{Backoff, Debounce};
 use atuin_domain::record::{HostId, RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, HubLogin};
 use atuin_octavo::pb;
@@ -41,12 +41,13 @@ const BACKOFF: Backoff = Backoff::Exponential {
 /// its record isn't stored: capture queues it just before the push, which may fail.
 const ORPHAN_AFTER: Duration = Duration::from_secs(60 * 60);
 
-/// How long a pass that something woke the engine for waits before it uploads thread messages.
-///
-/// Capture stores a Claude Code reply as a row per block, each waking the engine, so the rows of
-/// one reply go up in one request rather than one each. A row not stored by then goes on the
-/// next pass.
-const COALESCE_WINDOW: Duration = Duration::from_secs(2);
+/// How a woken pass waits for the wakes to stop. Capture stores a Claude Code reply as a row per
+/// block, each waking the engine, so the rows of one reply go up in one request, and rows
+/// captured without a pause still go within a second.
+const DEBOUNCE: Debounce = Debounce {
+    quiet: Duration::from_millis(100),
+    max: Duration::from_secs(1),
+};
 
 /// The most records one pass reads of a backfill: as many as one `InsertThreadMessages` takes.
 const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_MESSAGES.get() as u64;
@@ -116,15 +117,16 @@ impl EngineInner {
 
         let mut woken = false;
         loop {
-            // Only a pass's first attempt waits to coalesce; a retry has waited out its backoff.
-            let mut coalesce = woken;
+            // Only a woken pass waits for quiet; a retry waits out its backoff instead.
+            if woken {
+                DEBOUNCE.settle(|| self.wake.notified()).await;
+            }
             let next = BACKOFF
                 .retry_forever(|| {
                     let engine = &self;
-                    let coalesce = std::mem::take(&mut coalesce);
                     async move {
                         engine
-                            .send_pending(coalesce)
+                            .send_pending()
                             .await
                             .map_or(ControlFlow::Continue(()), ControlFlow::Break)
                     }
@@ -142,10 +144,9 @@ impl EngineInner {
     }
 
     /// Sends the logged-in user's queued deletions, then, while Octavo is on, their queued
-    /// uploads, outputs (while output uploads are on) and thread messages, the last after
-    /// [`COALESCE_WINDOW`] with `coalesce`. What other users queued waits for them to log in
-    /// again.
-    async fn send_pending(&self, coalesce: bool) -> Result<NextPass, RetryLater> {
+    /// uploads, outputs (while output uploads are on) and thread messages. What other users queued
+    /// waits for them to log in again.
+    async fn send_pending(&self) -> Result<NextPass, RetryLater> {
         let settings = self.handle.settings().await.clone();
         let login = match self.hub.login(&settings).await {
             Ok(login) => login,
@@ -171,9 +172,6 @@ impl EngineInner {
         }
 
         self.send_outputs(&login, &settings).await?;
-        if coalesce {
-            tokio::time::sleep(COALESCE_WINDOW).await;
-        }
         self.send_threads(&login).await
     }
 

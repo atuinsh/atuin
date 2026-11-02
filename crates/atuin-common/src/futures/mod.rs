@@ -3,7 +3,10 @@ use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
+mod debounce;
 pub mod stream;
+
+pub use debounce::Debounce;
 
 /// Jitter a delay by up to +/-10%.
 #[must_use]

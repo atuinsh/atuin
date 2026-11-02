@@ -452,7 +452,7 @@ impl Sink {
         // expires, never a stored record that Octavo doesn't hear of. Rows a failed push left for
         // `repair` are queued already too.
         #[cfg(feature = "octavo")]
-        self.octavo.push_thread_messages(&new).await;
+        let upload = self.octavo.queue_thread_messages(&new).await;
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -462,6 +462,8 @@ impl Sink {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
         let pushed = self.records.push_all(&new).await?;
+        #[cfg(feature = "octavo")]
+        upload.start();
         #[cfg(test)]
         if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);

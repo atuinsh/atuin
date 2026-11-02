@@ -16,6 +16,7 @@ use tokio::sync::Notify;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
+use crate::octavo::ThreadUpload;
 use crate::output_capture::OutputStore;
 
 #[derive(Debug, Error)]
@@ -107,18 +108,23 @@ impl OctavoClient for ActiveOctavoClient {
         self.uploader.enqueue(session.user_id(), Queued::Deletions(ids.to_vec())).await;
     }
 
-    async fn push_thread_messages(&self, messages: &[Message]) {
+    async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
         if !settings.octavo.enabled {
-            return;
+            return ThreadUpload::default();
         }
         // Read now, so the messages go to whoever was logged in as they were captured.
         let Some(session) = self.uploader.session(&settings).await else {
-            return;
+            return ThreadUpload::default();
         };
 
         let ids = messages.iter().map(|message| message.id).collect();
-        self.uploader.enqueue(session.user_id(), Queued::ThreadMessages(ids)).await;
+        if !self.uploader.queue(session.user_id(), Queued::ThreadMessages(ids)).await {
+            return ThreadUpload::default();
+        }
+        ThreadUpload {
+            wake: Some(self.uploader.wake.clone()),
+        }
     }
 }
 
@@ -213,6 +219,14 @@ impl DirectUploader {
     /// Queues `user`'s `work` for the engine to send before returning, so it outlives the daemon,
     /// and wakes the engine.
     async fn enqueue(&self, user: &UserId, work: Queued) {
+        if self.queue(user, work).await {
+            self.wake.notify_one();
+        }
+    }
+
+    /// Queues `user`'s `work` for the engine to send before returning, so it outlives the daemon,
+    /// without waking the engine. Whether it was queued: a failure is logged and the work dropped.
+    async fn queue(&self, user: &UserId, work: Queued) -> bool {
         let queued = match &work {
             // Octavo never stored an entry whose id isn't a UUIDv7.
             Queued::Deletions(ids) => self
@@ -230,10 +244,9 @@ impl DirectUploader {
         };
         if let Err(err) = queued {
             tracing::warn!(?err, %work, "failed to queue for octavo; it will not reach it");
-            return;
+            return false;
         }
-
-        self.wake.notify_one();
+        true
     }
 
     /// The hub session logged in now, or `None` with Octavo left alone when there's none to use.

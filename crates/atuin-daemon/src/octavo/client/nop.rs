@@ -3,6 +3,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_domain::record::RecordId;
 
 use super::OctavoClient;
+use crate::octavo::ThreadUpload;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NopOctavoClient;
@@ -14,5 +15,7 @@ impl OctavoClient for NopOctavoClient {
 
     async fn delete_history(&self, _ids: &[HistoryId]) {}
 
-    async fn push_thread_messages(&self, _messages: &[Message]) {}
+    async fn queue_thread_messages(&self, _messages: &[Message]) -> ThreadUpload {
+        ThreadUpload::default()
+    }
 }

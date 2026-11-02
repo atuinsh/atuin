@@ -7,9 +7,27 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
 use client::{AnyOctavoClient, NopOctavoClient, OctavoClient};
+use tokio::sync::Notify;
 
 use crate::daemon::DaemonHandle;
 use crate::output_capture::OutputStore;
+
+/// Thread messages queued for Octavo before capture stores their records: they go once
+/// [`Self::start`] says the records are stored, so no upload reads the queue ahead of them.
+#[must_use = "the queued messages wait for a later upload unless started"]
+#[derive(Debug, Default)]
+pub struct ThreadUpload {
+    wake: Option<Arc<Notify>>,
+}
+
+impl ThreadUpload {
+    /// Starts the upload, the messages' records stored.
+    pub fn start(self) {
+        if let Some(wake) = self.wake {
+            wake.notify_one();
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Octavo {
@@ -62,9 +80,9 @@ impl Octavo {
         self.client.delete_history(ids).await;
     }
 
-    /// Queues the upload of `messages`, captured on this host, which go once their records are
-    /// stored.
-    pub async fn push_thread_messages(&self, messages: &[Message]) {
-        self.client.push_thread_messages(messages).await;
+    /// Queues the upload of `messages`, captured on this host, which goes once their records are
+    /// stored and the returned [`ThreadUpload`] started.
+    pub async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
+        self.client.queue_thread_messages(messages).await
     }
 }
