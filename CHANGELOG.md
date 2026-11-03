@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [unreleased]
+
+### Bug Fixes
+
+- *(daemon)* Include pre-session history in session-preload search ([#4536](https://github.com/atuinsh/atuin/issues/4536))
+- *(deps)* Bump pulldown-cmark to 0.13.6 for RUSTSEC-2026-0433 ([#4631](https://github.com/atuinsh/atuin/issues/4631))
+
+
+### Features
+
+- *(api)* Delete a thread with its descendants, and refuse threads under a deleted one
+- *(client)* Load ai-session records by id
+- *(daemon)* Upload captured threads to octavo
+- *(devenv)* A dev shell with CI's toolchain and a sandboxed Atuin ([#4616](https://github.com/atuinsh/atuin/issues/4616))
+- *(setup)* New onboarding that asks what to capture and how to search it ([#4637](https://github.com/atuinsh/atuin/issues/4637))
+- *(threads)* Add Grok Build session capture, resume, and sync ([#4583](https://github.com/atuinsh/atuin/issues/4583))
+- *(threads)* Capture Amp threads through a generic atuin threads push, and import them ([#4635](https://github.com/atuinsh/atuin/issues/4635))
+- *(web)* Derive thread state and transcripts, and fake thread rpcs
+
+
+### Refactor
+
+- *(threads)* Replace manual enum dispatches with `enum_dispatch` ([#4639](https://github.com/atuinsh/atuin/issues/4639))
+
+
+### Testing
+
+- Keep two tests from reading the real environment ([#4617](https://github.com/atuinsh/atuin/issues/4617))
+
 ## 18.24.4
 
 ### Bug Fixes
