@@ -355,4 +355,135 @@ message ThreadFilter {
   // Only the threads naming this thread as their parent. Set `include_subagents` too for its
   // subagents.
   HarnessSession parent = 2;
+  // Only threads of this harness, e.g. `claude-code`.
+  optional string harness = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 32
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+  }];
+  oneof cwd {
+    // Only threads whose starting working directory contains this text.
+    string cwd_contains = 4 [(buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 4096
+      not_contains: "\x00"
+    }];
+    // Only threads that started in exactly this working directory.
+    string cwd_equals = 7 [(buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 4096
+      not_contains: "\x00"
+    }];
+  }
+  // Only threads that started on this git branch.
+  optional string git_branch = 5 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 256
+    not_contains: "\x00"
+  }];
+  oneof model {
+    // Only threads whose starting model contains this text, e.g. `opus`.
+    string model_contains = 6 [(buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 256
+      not_contains: "\x00"
+    }];
+    // Only threads that started on exactly this model: `gpt-5` and not `gpt-5-codex`.
+    string model_equals = 8 [(buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 256
+      not_contains: "\x00"
+    }];
+  }
+}
+
+// What `SearchThreads`, `TallyThreads` and `ListThreadMatches` look for: the threads `filter`
+// allows, narrowed by text, role and time.
+//
+// Unset fields match anything. A query with no `terms` lists by the other fields alone.
+message ThreadQuery {
+  // Which threads to search.
+  ThreadFilter filter = 1;
+  // Every term must appear in one message of a thread, or all in its title, ignoring case and
+  // accents. A term of several words matches them together and in order.
+  repeated string terms = 2 [(buf.validate.field).repeated = {
+    max_items: 16
+    items: {
+      string: {
+        min_len: 1
+        max_bytes: 256
+        not_contains: "\x00"
+      }
+    }
+  }];
+  // Whether the last term's last word also matches as a prefix, once it has two characters.
+  bool prefix_last_term = 3;
+  // Only messages of these roles match, and the title doesn't; any role when empty.
+  repeated ThreadMessage.Role roles = 4 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Only threads last active at or after this time.
+  google.protobuf.Timestamp active_after = 5;
+  // Only threads last active before this time.
+  google.protobuf.Timestamp active_before = 6;
+}
+
+// How `SearchThreads` sorts the threads it returns.
+enum ThreadOrder {
+  THREAD_ORDER_UNSPECIFIED = 0;
+  // The best match first. A title match outweighs a body match, a short message that mentions the
+  // words outranks a long one that mentions them once, and a more recently active thread ranks
+  // higher. Ties go to the more recently active thread, then to the higher id.
+  THREAD_ORDER_RELEVANCE = 1;
+  // The most recently active thread first, as `ListThreads` orders them.
+  THREAD_ORDER_RECENT = 2;
+}
+
+// Text cut from a message or a title around a match, in pieces so a client never has to agree with
+// the hub on UTF-8 or UTF-16 offsets.
+message Snippet {
+  // The text in order; joined, they are the snippet.
+  repeated Segment segments = 1;
+  // Whether the snippet starts mid-text, so a client can show an ellipsis before it.
+  bool clipped_start = 2;
+  // Whether the snippet ends mid-text, so a client can show an ellipsis after it.
+  bool clipped_end = 3;
+
+  // A run of the snippet's text that matched or didn't.
+  message Segment {
+    string text = 1;
+    // Whether the query matched this text, for a client to highlight.
+    bool matched = 2;
+  }
+}
+
+// A thread `SearchThreads` found, and where in it the query matched best.
+message ThreadHit {
+  // The matching thread. Without the filter's `include_subagents`, a subagent's match is credited
+  // to its nearest stored ancestor that isn't a subagent, or the topmost stored one when there is
+  // none.
+  Thread thread = 1;
+  // The subagent credited to `thread` that holds the best match, set when it is not in `thread`
+  // itself.
+  Thread subagent = 2;
+  // The best matching message's `ThreadMessage.id`; unset for a hit on the title alone.
+  UuidV7 message_id = 3;
+  // The best matching message's role; `ROLE_UNSPECIFIED` for a hit on the title alone.
+  ThreadMessage.Role message_role = 4;
+  // The best matching message's text around the match; unset for a hit on the title alone.
+  Snippet snippet = 5;
+  // The thread's title with the match marked; set when the title matched.
+  Snippet title = 6;
+  // How many messages of the thread holding the best message match, so a client can show `of <n>`
+  // beside the message it opens. 0 for a hit on the title alone.
+  uint64 message_matches = 7;
+}
+
+// One value and how many matching threads have it.
+message ThreadTally {
+  // The value, such as a harness name or a directory.
+  string value = 1;
+  // How many matching threads have this value.
+  uint64 count = 2;
 }

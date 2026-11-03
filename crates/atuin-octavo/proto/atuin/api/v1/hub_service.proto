@@ -75,6 +75,37 @@ service HubService {
   // names a share.
   rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
 
+  // Return one page of the calling user's threads that match the query, best match or most
+  // recently active first as `order` says.
+  //
+  // Without the filter's `include_subagents`, a subagent's match is credited to its nearest stored
+  // ancestor that isn't a subagent, or the topmost stored one when there is none. A query without
+  // words lists by its filter alone, most recently active first, whatever the order. `THREAD_ORDER_RECENT` orders as `ListThreads` does. Pages as
+  // `ListThreads` does, with the same query and order. Fails with `INVALID_ARGUMENT`
+  // (`INVALID_THREAD_QUERY`) for a query the hub can't use or an unspecified `order`, and with
+  // `DEADLINE_EXCEEDED` (`THREAD_SEARCH_TIMEOUT`) when the search takes too long: add a word or a
+  // filter.
+  rpc SearchThreads(SearchThreadsRequest) returns (SearchThreadsResponse);
+
+  // Count the calling user's threads that match the query, after crediting subagents' matches as
+  // `SearchThreads` does, and their most common harnesses, working directories, git branches and
+  // models.
+  //
+  // Each list holds the top five values, most common first, ties broken by value, and ignores the
+  // query filter's own field for it: under `harness: "codex"`, `harnesses` still names the other
+  // harnesses. Fails with `INVALID_ARGUMENT` (`INVALID_THREAD_QUERY`) for a query the hub can't
+  // use, and with `DEADLINE_EXCEEDED` (`THREAD_SEARCH_TIMEOUT`) when the count takes too long: add
+  // a word or a filter.
+  rpc TallyThreads(TallyThreadsRequest) returns (TallyThreadsResponse);
+
+  // Return the ids of the messages of the calling user's thread that match the query's terms and
+  // roles, in transcript order.
+  //
+  // The query's filter and time range don't apply: the thread is already chosen. Fails with
+  // `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread, and with `INVALID_ARGUMENT`
+  // (`INVALID_THREAD_QUERY`) for a query the hub can't use.
+  rpc ListThreadMatches(ListThreadMatchesRequest) returns (ListThreadMatchesResponse);
+
   // Return the thread with this id, the calling user's own or one a share holds.
   //
   // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user, or the share, has no such thread.
@@ -285,6 +316,66 @@ message ListThreadsResponse {
   repeated Thread threads = 1;
   // Opaque. Empty on the last page.
   string next_page_token = 2;
+}
+
+message SearchThreadsRequest {
+  // Which threads to return.
+  ThreadQuery query = 1;
+  // How to sort them. Logically required.
+  ThreadOrder order = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // The most threads to return in one page. At most 50; larger values are rejected. 0 means 20.
+  uint32 page_size = 3 [(buf.validate.field).uint32.lte = 50];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 4;
+}
+
+message SearchThreadsResponse {
+  // The threads on this page, in `order`.
+  repeated ThreadHit hits = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyThreadsRequest {
+  // Which threads to count.
+  ThreadQuery query = 1;
+}
+
+message TallyThreadsResponse {
+  // How many threads match the query.
+  uint64 total = 1;
+  // The top five harnesses among the threads the query matches without its `harness`, most common
+  // first, ties broken by value.
+  repeated ThreadTally harnesses = 2;
+  // The top five starting working directories among the threads the query matches without its
+  // `cwd`, most common first, ties broken by value.
+  repeated ThreadTally cwds = 3;
+  // The top five starting git branches among the threads the query matches without its
+  // `git_branch`, most common first, ties broken by value.
+  repeated ThreadTally git_branches = 4;
+  // The top five starting models among the threads the query matches without its `model`, most
+  // common first, ties broken by value.
+  repeated ThreadTally models = 5;
+}
+
+message ListThreadMatchesRequest {
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+  // What to match: only its `terms`, `prefix_last_term` and `roles` apply.
+  ThreadQuery query = 2;
+}
+
+message ListThreadMatchesResponse {
+  // The `ThreadMessage.id` of each matching message, in transcript order. At most 1,000.
+  repeated UuidV7 message_ids = 1;
+  // Whether more messages matched than `message_ids` holds.
+  bool truncated = 2;
 }
 
 message GetThreadRequest {
