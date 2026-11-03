@@ -29,9 +29,7 @@ use opencode::Opencode;
 use pi::Pi;
 use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
 use resume::{ResumeError, ResumePlan, ResumeTarget};
-use session::Observable;
-use session::any::AnySessions;
-// `SessionSync`'s signature types, which its dispatch on `AnyHarness` names here.
+use session::any::{AnySessions, ObservableExt};
 use sync::{
     AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync, SyncError,
 };
@@ -90,6 +88,7 @@ pub trait Harness: std::fmt::Debug {
 
 #[whichever::dispatch(Harness)]
 #[whichever::dispatch(SessionSync)]
+#[whichever::dispatch(ObservableExt)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
     Amp(Amp),
@@ -170,20 +169,5 @@ impl AnyHarness {
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
         ]
-    }
-
-    /// The harness's sessions, whose file reads all run in `pool`.
-    #[must_use]
-    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
-        match self {
-            // Amp pushes its threads (`atuin threads push`): there is nothing to watch.
-            Self::Amp(_) => None,
-            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Copilot(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Grok(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
-        }
     }
 }

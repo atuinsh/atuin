@@ -8,9 +8,11 @@ use std::path::PathBuf;
 
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
+use super::session::any::{AnySessions, ObservableExt};
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
 use crate::path::PathBufExt as _;
+use crate::sync::BlockingPool;
 
 pub mod export;
 
@@ -55,6 +57,13 @@ impl Harness for Amp {
     /// machine is already there.
     async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
         Err(RehydrateError::Unsupported("Amp"))
+    }
+}
+
+/// Amp pushes its threads (`atuin threads push`): there is nothing to watch.
+impl ObservableExt for Amp {
+    fn sessions(&self, _pool: &BlockingPool) -> Option<AnySessions> {
+        None
     }
 }
 
