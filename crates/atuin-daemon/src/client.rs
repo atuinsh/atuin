@@ -31,9 +31,9 @@ use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     CompactStoreReply, CompactStoreRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::grpc::request::ClientInterceptor;
 use crate::grpc::userio::pb::ListenLogsRequest;
@@ -227,6 +227,12 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+
+    /// Tells the daemon `atuin login` saved a session, so the uploads it holds back for one go now.
+    pub async fn logged_in(&mut self) -> Result<(), tonic::Status> {
+        self.client.logged_in(LoggedInRequest {}).await?;
+        Ok(())
     }
 
     pub async fn register_command_output(

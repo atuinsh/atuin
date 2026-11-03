@@ -96,6 +96,10 @@ message ShutdownReply {
   bool accepted = 1;
 }
 
+message LoggedInRequest {}
+
+message LoggedInReply {}
+
 message TailHistoryRequest {}
 
 message HistoryEntry {
@@ -249,6 +253,9 @@ service History {
 
   // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
   rpc Shutdown(ShutdownRequest) returns (ShutdownReply);
+
+  // Tells the daemon `atuin login` saved a session, so the uploads it holds back for one go now.
+  rpc LoggedIn(LoggedInRequest) returns (LoggedInReply);
 
   // Store a completed command's captured output. Errors if output already exists for this id.
   rpc RegisterCommandOutput(RegisterCommandOutputRequest) returns (RegisterCommandOutputResponse);

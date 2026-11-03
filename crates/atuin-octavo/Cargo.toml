@@ -30,6 +30,8 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
+# Reads the `google.rpc.ErrorInfo` a refusal carries, which tells an account without Octavo apart.
+tonic-types = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

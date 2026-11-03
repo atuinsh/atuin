@@ -75,6 +75,8 @@ impl Cmd {
         } else {
             self.run_legacy_login(settings, store).await?;
         }
+        #[cfg(feature = "daemon")]
+        tell_daemon_logged_in(settings).await;
 
         verify_key_against_remote(settings, store, self.interactive()).await
     }
@@ -307,6 +309,23 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     }
 
     Ok(())
+}
+
+/// Tells a running daemon of the session just saved, so the uploads it holds back for one go now.
+/// Starts none itself.
+#[cfg(feature = "daemon")]
+async fn tell_daemon_logged_in(settings: &Settings) {
+    let daemon = match ActiveService::find(settings).await {
+        Ok(Some(daemon)) => daemon,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::debug!(?err, "not telling the daemon of the login");
+            return;
+        }
+    };
+    if let Err(status) = daemon.history_client().logged_in().await {
+        tracing::debug!(?status, "the daemon didn't hear of the login");
+    }
 }
 
 /// Start the daemon on the new key if it was stopped, and restart one running on the old key, such

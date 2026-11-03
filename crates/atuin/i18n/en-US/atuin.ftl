@@ -424,6 +424,7 @@ config-disabled = Disabled.
 config-reload-failed = could not read the new config to restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
 config-restart-daemon-and-shell = Restart the Atuin daemon and your shell for the change to take effect.
 config-daemon-restart-failed = could not restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
+config-managed-daemon-restart-failed = could not restart the Atuin daemon: { $error }
 config-restart-shell = Restart your shell for the change to take effect.
 config-daemon-stop-failed = could not stop the Atuin daemon: { $error }; run `atuin daemon stop` manually
 config-launchd-agent-remove-failed = could not remove the Atuin daemon's launchd agent: { $error }

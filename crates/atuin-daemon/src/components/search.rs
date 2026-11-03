@@ -168,7 +168,7 @@ impl Component for SearchComponent {
                 }
             }
             // Events we don't care about
-            DaemonEvent::ShutdownRequested => {}
+            DaemonEvent::ShutdownRequested | DaemonEvent::LoggedIn => {}
         }
         Ok(())
     }

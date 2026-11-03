@@ -450,7 +450,8 @@ impl Sink {
         };
         // Queued before the push: a daemon that dies between the two leaves an id that the engine
         // expires, never a stored record that Octavo doesn't hear of. Rows a failed push left for
-        // `repair` are queued already too.
+        // `repair` are queued already too. While the account is marked off, none are queued:
+        // `start` uploads them once, and what a dead daemon or a failed push skips goes nowhere.
         #[cfg(feature = "octavo")]
         let upload = self.octavo.queue_thread_messages(&new).await;
         // Write the record store first: it is the synced source of truth and the sidecar is a

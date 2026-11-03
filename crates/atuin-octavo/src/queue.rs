@@ -344,6 +344,41 @@ impl UploadQueue {
         Ok(changed)
     }
 
+    /// Marks `user`'s account as having Octavo off, until [`Self::clear_off`], returning whether
+    /// it wasn't marked already.
+    pub async fn mark_off(&self, user: &UserId) -> Result<bool, QueueError> {
+        let marked = db::query("INSERT OR IGNORE INTO octavo_off (user_id) VALUES (?1)")
+            .bind(user.as_str())
+            .execute(self.db.pool())
+            .await?
+            .rows_affected();
+        Ok(marked == 1)
+    }
+
+    /// Clears the mark [`Self::mark_off`] left on `user`'s account, returning whether there was
+    /// one.
+    pub async fn clear_off(&self, user: &UserId) -> Result<bool, QueueError> {
+        // Read first, as a read takes no write lock, and almost every call finds no mark.
+        if !self.is_off(user).await? {
+            return Ok(false);
+        }
+        let cleared = db::query("DELETE FROM octavo_off WHERE user_id = ?1")
+            .bind(user.as_str())
+            .execute(self.db.pool())
+            .await?
+            .rows_affected();
+        Ok(cleared == 1)
+    }
+
+    /// Whether [`Self::mark_off`] marked `user`'s account, and nothing cleared it since.
+    pub async fn is_off(&self, user: &UserId) -> Result<bool, QueueError> {
+        let marked: Option<i64> = db::query_scalar("SELECT 1 FROM octavo_off WHERE user_id = ?1")
+            .bind(user.as_str())
+            .fetch_optional(self.db.pool())
+            .await?;
+        Ok(marked.is_some())
+    }
+
     /// Starts `user`'s backfill of each of `hosts` over from its first record, with the bound
     /// unfixed.
     pub async fn request_thread_backfill(

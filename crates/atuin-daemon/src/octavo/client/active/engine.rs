@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionStore, Loaded, Message};
@@ -17,11 +18,15 @@ use atuin_octavo::queue::{
 };
 use futures::StreamExt;
 use tokio::sync::Notify;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tonic::Code;
 use uuid::Uuid;
 
+use super::{clear_off, forget_output, is_off, mark_off};
 use crate::daemon::DaemonHandle;
+use crate::events::DaemonEvent;
 use crate::output_capture::OutputStore;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -66,6 +71,7 @@ impl UploadEngine {
         records: AiSessionStore,
         wake: Arc<Notify>,
     ) -> Self {
+        let events = handle.subscribe();
         let inner = EngineInner {
             queue,
             hub,
@@ -73,10 +79,11 @@ impl UploadEngine {
             outputs,
             records,
             wake,
+            logins: Notify::new(),
         };
 
         Self {
-            task: tokio::spawn(inner.run()),
+            task: tokio::spawn(inner.run(events)),
         }
     }
 }
@@ -87,11 +94,45 @@ impl Drop for UploadEngine {
     }
 }
 
-struct RetryLater;
+pub(super) struct RetryLater;
+
+/// Why a pass ends before it has sent all it can.
+enum Halt {
+    /// Something failed for a reason that may pass: the pass goes again after a backoff.
+    RetryLater,
+    /// Octavo refused an upload as off for the account, or answered one without storing it while
+    /// the account is marked off. What is left stays queued, for a later pass to probe.
+    Off,
+}
+
+/// [`upload_thread_messages`] failed for a reason that may pass.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ThreadsRetryLater {
+    /// Whether Octavo stored a request before the failure, which shows the account has it on.
+    pub stored: bool,
+}
+
+impl From<ThreadsRetryLater> for RetryLater {
+    fn from(_: ThreadsRetryLater) -> Self {
+        Self
+    }
+}
+
+impl From<ThreadsRetryLater> for Halt {
+    fn from(_: ThreadsRetryLater) -> Self {
+        Self::RetryLater
+    }
+}
+
+impl From<RetryLater> for Halt {
+    fn from(RetryLater: RetryLater) -> Self {
+        Self::RetryLater
+    }
+}
 
 /// When the run loop starts its next pass.
 enum NextPass {
-    /// Once something wakes the engine, or at the poll interval.
+    /// Once something wakes the engine, at a login, or at the poll interval.
     Waiting,
     /// At once: a backfill has more to go.
     Now,
@@ -105,10 +146,16 @@ struct EngineInner {
     /// Where queued thread messages are read from.
     records: AiSessionStore,
     wake: Arc<Notify>,
+    /// Notified at each `atuin login`, which sends a pass that failed, or one waiting, at once.
+    logins: Notify,
 }
 
 impl EngineInner {
-    async fn run(self) {
+    async fn run(self, events: Receiver<DaemonEvent>) {
+        tokio::join!(self.send_forever(), self.hear_events(events));
+    }
+
+    async fn send_forever(&self) {
         // Held messages wait for a key or a build this daemon didn't start with, which only a
         // restart loads.
         if let Err(err) = self.queue.release_held_thread_messages().await {
@@ -121,32 +168,58 @@ impl EngineInner {
             if woken {
                 DEBOUNCE.settle(|| self.wake.notified()).await;
             }
+            // Only a login cuts the backoff short, as a new session may let the failed pass
+            // through; what a wake brings waits for the next attempt. The pass after a login
+            // probes a paused queue, as one the poll starts does. Atomic only so this future
+            // stays `Send`: both closures run on this task.
+            let retry_woken = AtomicBool::new(woken);
             let next = BACKOFF
-                .retry_forever(|| {
-                    let engine = &self;
-                    async move {
-                        engine
-                            .send_pending()
+                .retry_forever_or_sooner(
+                    || async {
+                        self.send_pending(retry_woken.load(Ordering::Relaxed))
                             .await
                             .map_or(ControlFlow::Continue(()), ControlFlow::Break)
-                    }
-                })
+                    },
+                    || async {
+                        self.logins.notified().await;
+                        retry_woken.store(false, Ordering::Relaxed);
+                    },
+                )
                 .await;
 
             woken = match next {
                 NextPass::Now => false,
                 NextPass::Waiting => tokio::select! {
                     () = self.wake.notified() => true,
+                    () = self.logins.notified() => false,
                     () = tokio::time::sleep(POLL_INTERVAL) => false,
                 },
             };
         }
     }
 
-    /// Sends the logged-in user's queued deletions, then, while Octavo is on, their queued
+    /// Passes each login the daemon hears of on to [`Self::logins`], and wakes the engine at each
+    /// settings reload.
+    async fn hear_events(&self, mut events: Receiver<DaemonEvent>) {
+        loop {
+            match events.recv().await {
+                // The events a lag dropped may have held one.
+                Ok(DaemonEvent::LoggedIn) | Err(RecvError::Lagged(_)) => self.logins.notify_one(),
+                // `config enable octavo` clears the off mark before it writes the config.
+                Ok(DaemonEvent::SettingsReloaded) => self.wake.notify_one(),
+                Ok(DaemonEvent::ShutdownRequested) => {}
+                Err(RecvError::Closed) => return,
+            }
+        }
+    }
+
+    /// Sends the logged-in user's queued deletions, then, while Octavo is on here, their queued
     /// uploads, outputs (while output uploads are on) and thread messages. What other users queued
     /// waits for them to log in again.
-    async fn send_pending(&self) -> Result<NextPass, RetryLater> {
+    ///
+    /// While the account is marked off, a woken pass sends none of the uploads, and any other is a
+    /// probe: it goes on past the first upload Octavo answers only if the answer finds Octavo on.
+    async fn send_pending(&self, woken: bool) -> Result<NextPass, RetryLater> {
         let settings = self.handle.settings().await.clone();
         let login = match self.hub.login(&settings).await {
             Ok(login) => login,
@@ -161,21 +234,40 @@ impl EngineInner {
         if !settings.octavo.enabled {
             return Ok(NextPass::Waiting);
         }
+        // Fixed even while the account is marked off: what capture lets by then goes up direct or
+        // not at all, and a bound fixed once the mark clears would take it.
+        self.fix_backfill_bounds(&login).await?;
+        // A woken pass leaves a paused queue be. Any other probes it, and the poll starts one at most
+        // `POLL_INTERVAL` after the last wake: a stale mark lasts that long, for one refused round
+        // trip a poll while the account is off.
+        if woken && is_off(&self.queue, login.user_id()).await {
+            return Ok(NextPass::Waiting);
+        }
 
+        match self.send_uploads(&login, &settings).await {
+            Ok(next) => Ok(next),
+            Err(Halt::Off) => Ok(NextPass::Waiting),
+            Err(Halt::RetryLater) => Err(RetryLater),
+        }
+    }
+
+    /// Sends `login`'s queued uploads, outputs (while output uploads are on) and thread messages,
+    /// then a page of their first backfill not done, up to the first [`Halt::Off`].
+    async fn send_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
         let mut pending = self.queue.pending_history(login.user_id()).items();
         while let Some(entry) = pending.next().await {
             let entry = entry.map_err(|err| {
                 tracing::warn!(?err, "failed to read the octavo upload queue; retrying later");
                 RetryLater
             })?;
-            self.upload(&login, entry).await?;
+            self.upload(login, entry).await?;
         }
 
-        self.send_outputs(&login, &settings).await?;
-        self.send_threads(&login).await
+        self.send_outputs(login, settings).await?;
+        self.send_threads(login).await
     }
 
-    async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<(), RetryLater> {
+    async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
         if !settings.octavo.upload_output {
             return Ok(());
         }
@@ -194,9 +286,7 @@ impl EngineInner {
 
     /// Sends the queued thread messages of `login`'s user, then a page of their first backfill
     /// not done.
-    async fn send_threads(&self, login: &HubLogin) -> Result<NextPass, RetryLater> {
-        self.fix_backfill_bounds(login).await?;
-
+    async fn send_threads(&self, login: &HubLogin) -> Result<NextPass, Halt> {
         let mut pending = self.queue.pending_thread_messages(login.user_id());
         while let Some(page) = pending.next().await {
             let ids = page
@@ -215,8 +305,8 @@ impl EngineInner {
 
     /// Uploads the queued thread messages `ids`, and settles each: dequeued once uploaded or
     /// refused, held while this build can't read its record, and expired while its record isn't
-    /// stored.
-    async fn send_thread_page(&self, login: &HubLogin, ids: &[RecordId]) -> Result<(), RetryLater> {
+    /// stored. Those to upload stay queued while Octavo refuses them as off for the account.
+    async fn send_thread_page(&self, login: &HubLogin, ids: &[RecordId]) -> Result<(), Halt> {
         let user = login.user_id();
         let loaded = self.records.load(ids).await.map_err(|err| {
             tracing::warn!(?err, "failed to load queued thread messages; retrying later");
@@ -251,18 +341,37 @@ impl EngineInner {
             ),
             Err(err) => {
                 tracing::warn!(?err, "failed to expire queued thread messages; retrying later");
-                return Err(RetryLater);
+                return Err(Halt::RetryLater);
             }
         }
 
-        upload_thread_messages(login, converted(messages).await).await?;
+        let sent = upload_thread_messages(login, converted(messages).await).await?;
+        match sent {
+            ThreadsSent::Stored => {
+                clear_off(&self.queue, user).await;
+            }
+            ThreadsSent::NoneStored | ThreadsSent::Nothing => {}
+            ThreadsSent::Off => {
+                // Those stored before the refusal go again, which Octavo takes as a repeat.
+                tracing::debug!(
+                    "octavo is off for the account; leaving its thread messages queued"
+                );
+                mark_off(&self.queue, user).await;
+                return Err(Halt::Off);
+            }
+        }
         self.queue.remove_thread_messages(user, settled).await.map_err(|err| {
             tracing::warn!(
                 ?err,
                 "failed to remove thread messages from the octavo upload queue; retrying later"
             );
             RetryLater
-        })
+        })?;
+
+        if sent == ThreadsSent::NoneStored {
+            return self.halt_if_off(login).await;
+        }
+        Ok(())
     }
 
     /// Fixes the bound of each of `login`'s backfills that has none just past its series' tail.
@@ -301,7 +410,7 @@ impl EngineInner {
     }
 
     /// Uploads a page of `login`'s first backfill not done, and moves it on past the page.
-    async fn backfill(&self, login: &HubLogin) -> Result<NextPass, RetryLater> {
+    async fn backfill(&self, login: &HubLogin) -> Result<NextPass, Halt> {
         let user = login.user_id();
         let backfills = self.queue.thread_backfills(user).await.map_err(|err| {
             tracing::warn!(?err, "failed to read the octavo thread backfills; retrying later");
@@ -329,8 +438,23 @@ impl EngineInner {
                 self.advance_backfill(login, host_id, until_idx).await?;
                 continue;
             };
-            self.send_backfill_page(login, page).await?;
+            let sent = self.send_backfill_page(login, page).await?;
+            match sent {
+                ThreadsSent::Stored => {
+                    clear_off(&self.queue, user).await;
+                }
+                ThreadsSent::NoneStored | ThreadsSent::Nothing => {}
+                ThreadsSent::Off => {
+                    tracing::debug!("octavo is off for the account; stopping its thread backfill");
+                    mark_off(&self.queue, user).await;
+                    // Left where it is, so it goes on once the account has Octavo again.
+                    return Err(Halt::Off);
+                }
+            }
             self.advance_backfill(login, host_id, last + 1).await?;
+            if sent == ThreadsSent::NoneStored {
+                self.halt_if_off(login).await?;
+            }
             return Ok(NextPass::Now);
         }
 
@@ -343,7 +467,7 @@ impl EngineInner {
         &self,
         login: &HubLogin,
         page: Vec<(RecordIdx, RecordId, Loaded)>,
-    ) -> Result<(), RetryLater> {
+    ) -> Result<ThreadsSent, ThreadsRetryLater> {
         let user = login.user_id();
         let mut messages = Vec::new();
         let mut held = Vec::new();
@@ -361,7 +485,7 @@ impl EngineInner {
         };
         queued.await.map_err(|err| {
             tracing::warn!(?err, "failed to queue unreadable thread messages; retrying later");
-            RetryLater
+            ThreadsRetryLater { stored: false }
         })?;
 
         upload_thread_messages(login, converted(messages).await).await
@@ -387,30 +511,36 @@ impl EngineInner {
             history_id: id,
             record_id,
         }: PendingHistoryUpload,
-    ) -> Result<(), RetryLater> {
+    ) -> Result<(), Halt> {
         let history = self.handle.history_db().load(id).await.map_err(|err| {
             tracing::warn!(?err, %id, "failed to load a queued history entry; retrying later");
             RetryLater
         })?;
         let Some(history) = history.filter(|history| history.deleted_at.is_none()) else {
-            return self.dequeue(login, id).await;
+            return Ok(self.dequeue(login, id).await?);
         };
 
         match login.upload(history, record_id).await {
-            Ok(()) => {}
+            Ok(()) => {
+                clear_off(&self.queue, login.user_id()).await;
+            }
+            Err(HubCallError::OctavoOff(_)) => {
+                tracing::debug!(
+                    %id,
+                    "octavo is off for the account; leaving this history entry queued"
+                );
+                mark_off(&self.queue, login.user_id()).await;
+                return Err(Halt::Off);
+            }
             Err(err) if err.is_permanent() => {
                 tracing::warn!(
                     ?err,
                     %id,
                     "octavo will never accept this history entry; dropping it"
                 );
-                if let Err(err) = self.queue.remove_output(login.user_id(), id).await {
-                    tracing::warn!(
-                        ?err,
-                        %id,
-                        "failed to remove the output of a refused history entry from the queue"
-                    );
-                }
+                forget_output(&self.queue, login.user_id(), id).await;
+                self.dequeue(login, id).await?;
+                return self.halt_if_off(login).await;
             }
             Err(err) => {
                 tracing::warn!(
@@ -418,11 +548,11 @@ impl EngineInner {
                     %id,
                     "failed to upload a history entry to octavo; retrying later"
                 );
-                return Err(RetryLater);
+                return Err(Halt::RetryLater);
             }
         }
 
-        self.dequeue(login, id).await
+        Ok(self.dequeue(login, id).await?)
     }
 
     async fn delete_pending(&self, login: &HubLogin) -> Result<(), RetryLater> {
@@ -482,40 +612,54 @@ impl EngineInner {
         })
     }
 
-    async fn upload_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), RetryLater> {
+    async fn upload_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), Halt> {
         // Octavo can't have an entry `history end` hasn't stored here; its upload wakes the engine.
         if !matches!(self.handle.history_db().load(id).await, Ok(Some(_))) {
-            return self.expire_output(login, id).await;
+            return Ok(self.expire_output(login, id).await?);
         }
 
         let capture = match self.outputs.get(id).await {
             Ok(capture) => capture,
             Err(err) => {
                 tracing::warn!(?err, %id, "failed to read a queued output; skipping it");
-                return self.expire_output(login, id).await;
+                return Ok(self.expire_output(login, id).await?);
             }
         };
-        // Deleted or collected locally since it was queued.
+        // Deleted or collected locally, or not stored yet. A late output whose insert lands
+        // between `outputs.get` and `remove_output` is lost: two local statements wide, and only
+        // on the re-enable path.
         let Some(capture) = capture else {
-            return self.dequeue_output(login, id).await;
+            return Ok(self.dequeue_output(login, id).await?);
         };
 
         match login.upload_output(id, capture).await {
-            Ok(()) => {}
+            Ok(()) => {
+                clear_off(&self.queue, login.user_id()).await;
+            }
             Err(HubCallError::HistoryNotStored(_)) => {
+                // Octavo refuses an account with it off before it looks for the entry, so this
+                // answer finds Octavo on, as a stored output does.
+                clear_off(&self.queue, login.user_id()).await;
                 tracing::debug!(%id, "octavo has not stored this output's entry yet");
-                return self.expire_output(login, id).await;
+                return Ok(self.expire_output(login, id).await?);
+            }
+            Err(HubCallError::OctavoOff(_)) => {
+                tracing::debug!(%id, "octavo is off for the account; leaving this output queued");
+                mark_off(&self.queue, login.user_id()).await;
+                return Err(Halt::Off);
             }
             Err(err) if err.is_permanent() => {
                 tracing::warn!(?err, %id, "octavo will never accept this output; dropping it");
+                self.dequeue_output(login, id).await?;
+                return self.halt_if_off(login).await;
             }
             Err(err) => {
                 tracing::warn!(?err, %id, "failed to upload an output to octavo; retrying later");
-                return Err(RetryLater);
+                return Err(Halt::RetryLater);
             }
         }
 
-        self.dequeue_output(login, id).await
+        Ok(self.dequeue_output(login, id).await?)
     }
 
     /// Leaves the output of `id` queued to wait for its entry, unless it has waited
@@ -547,10 +691,19 @@ impl EngineInner {
             RetryLater
         })
     }
+
+    /// Ends the pass, as [`Halt::Off`], while `login`'s account is marked off: Octavo answered an
+    /// upload without storing it, which doesn't say whether the account has Octavo again.
+    async fn halt_if_off(&self, login: &HubLogin) -> Result<(), Halt> {
+        if is_off(&self.queue, login.user_id()).await {
+            return Err(Halt::Off);
+        }
+        Ok(())
+    }
 }
 
 /// `messages` as Octavo takes them, less those it never will, which are dropped with a warning.
-async fn converted(messages: Vec<Message>) -> Vec<pb::CapturedThreadMessage> {
+pub(super) async fn converted(messages: Vec<Message>) -> Vec<pb::CapturedThreadMessage> {
     let converted = map_parallel(messages, |message| {
         let id = message.id;
         (id, pb::CapturedThreadMessage::try_from(message))
@@ -573,28 +726,53 @@ async fn converted(messages: Vec<Message>) -> Vec<pb::CapturedThreadMessage> {
         .collect()
 }
 
+/// How [`upload_thread_messages`] left the messages it was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThreadsSent {
+    /// Each went up, or was refused and dropped, and Octavo stored at least one request.
+    Stored,
+    /// Each was refused and dropped.
+    ///
+    /// This says nothing of the account's Octavo: the server checks a request's messages before
+    /// whether their owner has it.
+    NoneStored,
+    /// There were none, so Octavo wasn't asked.
+    Nothing,
+    /// The account has Octavo off, so none past the refused request went.
+    Off,
+}
+
 /// Uploads `messages`, dropping with a warning each one Octavo refuses.
 ///
 /// A request Octavo refuses, or that runs out of time, goes again in halves, so one too large for
 /// the server or the uplink shrinks instead of repeating; a lone message that runs out of time is
 /// retried later.
-async fn upload_thread_messages(
+pub(super) async fn upload_thread_messages(
     login: &HubLogin,
     messages: Vec<pb::CapturedThreadMessage>,
-) -> Result<(), RetryLater> {
+) -> Result<ThreadsSent, ThreadsRetryLater> {
+    if messages.is_empty() {
+        return Ok(ThreadsSent::Nothing);
+    }
+
+    let mut sent = ThreadsSent::NoneStored;
     for batch in pb::ThreadBatch::batches(messages) {
         let mut requests = vec![batch];
         while let Some(request) = requests.pop() {
             let Err(err) = login.upload_thread_messages(request.clone()).await else {
+                sent = ThreadsSent::Stored;
                 continue;
             };
             match (UploadFailure::of(&err), request.halves()) {
+                (UploadFailure::Off, _) => return Ok(ThreadsSent::Off),
                 (UploadFailure::Transient, _) | (UploadFailure::TimedOut, Err(_)) => {
                     tracing::warn!(
                         ?err,
                         "failed to upload thread messages to octavo; retrying later"
                     );
-                    return Err(RetryLater);
+                    return Err(ThreadsRetryLater {
+                        stored: sent == ThreadsSent::Stored,
+                    });
                 }
                 (UploadFailure::Refused, Err(lone)) => tracing::warn!(
                     ?err,
@@ -609,11 +787,13 @@ async fn upload_thread_messages(
         }
     }
 
-    Ok(())
+    Ok(sent)
 }
 
 /// Why an `InsertThreadMessages` request failed, as [`upload_thread_messages`] acts on it.
 enum UploadFailure {
+    /// The account has Octavo off, so it stores none of them for now.
+    Off,
     /// Octavo will never store one of its messages.
     Refused,
     /// It didn't go up inside `network_timeout`, which a smaller request may.
@@ -624,6 +804,9 @@ enum UploadFailure {
 
 impl UploadFailure {
     fn of(err: &HubCallError) -> Self {
+        if let HubCallError::OctavoOff(_) = err {
+            return Self::Off;
+        }
         let HubCallError::Hub(status) = err else {
             return if err.is_permanent() {
                 Self::Refused

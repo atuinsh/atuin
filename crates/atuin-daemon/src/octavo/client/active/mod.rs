@@ -10,7 +10,7 @@ use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubSession, UserId};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
-use engine::UploadEngine;
+use engine::{ThreadsRetryLater, ThreadsSent, UploadEngine};
 use thiserror::Error;
 use tokio::sync::Notify;
 
@@ -94,7 +94,10 @@ impl OctavoClient for ActiveOctavoClient {
         let Some(session) = self.uploader.session(&settings).await else {
             return;
         };
-
+        // Queued even while the account is marked off, which pauses the queue, to wait on its
+        // entry's direct upload: a success sends it, and a refusal, or a failure while the mark
+        // holds, forgets it. One stored after a refusal waits out the off spell, then expires
+        // unsent, as Octavo has no entry for it.
         self.uploader.enqueue(session.user_id(), Queued::Output(id)).await;
     }
 
@@ -111,20 +114,35 @@ impl OctavoClient for ActiveOctavoClient {
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
         if !settings.octavo.enabled {
-            return ThreadUpload::default();
+            return ThreadUpload::Nothing;
         }
         // Read now, so the messages go to whoever was logged in as they were captured.
         let Some(session) = self.uploader.session(&settings).await else {
-            return ThreadUpload::default();
+            return ThreadUpload::Nothing;
         };
+        // The mark trails the account's Octavo both ways:
+        // - From the switch-off until the first refusal lands, messages are queued. That is
+        //   normally at most one debounce. They wait in the queue with the rest, and go up once
+        //   Octavo is back on.
+        // - A refusal sent before a re-enable can land after a success sent after it, which marks
+        //   the account off, and pauses its queue, until the next success: at the latest the
+        //   engine's probe of the queue, a poll later.
+        // Sent direct on a stale mark, the messages still go up, and clear it. Should that fail
+        // for a reason that may pass, they're dropped while it holds.
+        if is_off(&self.uploader.queue, session.user_id()).await {
+            return ThreadUpload::Direct(DirectThreadUpload {
+                uploader: Arc::clone(&self.uploader),
+                settings,
+                session,
+                messages: messages.to_vec(),
+            });
+        }
 
         let ids = messages.iter().map(|message| message.id).collect();
         if !self.uploader.queue(session.user_id(), Queued::ThreadMessages(ids)).await {
-            return ThreadUpload::default();
+            return ThreadUpload::Nothing;
         }
-        ThreadUpload {
-            wake: Some(self.uploader.wake.clone()),
-        }
+        ThreadUpload::Queued(self.uploader.wake.clone())
     }
 }
 
@@ -158,7 +176,7 @@ struct DirectUploader {
 
 impl DirectUploader {
     /// Uploads `history`, or queues it for the engine to retry when the upload fails for a reason
-    /// that may pass, such as no network.
+    /// that may pass, such as no network, and the account isn't marked off.
     async fn upload_or_queue(
         self: Arc<Self>,
         settings: Arc<Settings>,
@@ -180,24 +198,39 @@ impl DirectUploader {
         };
 
         match login.upload(history, Some(record_id)).await {
-            // The entry's output may be queued already, waiting on it.
-            Ok(()) if settings.octavo.upload_output => self.wake.notify_one(),
-            Ok(()) => {}
+            Ok(()) => {
+                self.resume(login.user_id()).await;
+                // The entry's output may be queued already, waiting on it.
+                if settings.octavo.upload_output {
+                    self.wake.notify_one();
+                }
+            }
+            Err(HubCallError::OctavoOff(_)) => {
+                tracing::debug!(%id, "octavo is off for the account; dropping this history entry");
+                mark_off(&self.queue, login.user_id()).await;
+                forget_output(&self.queue, login.user_id(), id).await;
+            }
             Err(err) if err.is_permanent() => {
                 tracing::warn!(
                     ?err,
                     %id,
                     "octavo will never accept this history entry; dropping it"
                 );
-                if let Err(err) = self.queue.remove_output(login.user_id(), id).await {
-                    tracing::warn!(
-                        ?err,
-                        %id,
-                        "failed to remove the output of a refused history entry from the queue"
-                    );
-                }
+                forget_output(&self.queue, login.user_id(), id).await;
             }
             Err(err) => {
+                // Work captured while the account has Octavo off is never queued: it would go up
+                // once Octavo is back.
+                if is_off(&self.queue, login.user_id()).await {
+                    tracing::debug!(
+                        ?err,
+                        %id,
+                        "failed to upload a history entry to octavo; dropping it, as the account is \
+                         marked off"
+                    );
+                    forget_output(&self.queue, login.user_id(), id).await;
+                    return;
+                }
                 tracing::debug!(
                     ?err,
                     %id,
@@ -213,6 +246,14 @@ impl DirectUploader {
                 }
                 self.wake.notify_one();
             }
+        }
+    }
+
+    /// Clears the mark [`mark_off`] left on `user`'s account, as an upload just went through, and
+    /// wakes the engine to send what the mark paused, if there was one.
+    async fn resume(&self, user: &UserId) {
+        if clear_off(&self.queue, user).await {
+            self.wake.notify_one();
         }
     }
 
@@ -266,5 +307,116 @@ impl DirectUploader {
                 None
             }
         }
+    }
+}
+
+/// Thread messages to upload once, directly, rather than queue, as the account had Octavo off
+/// when last asked: queued, they would wait out the off spell and go up after it.
+#[derive(Debug)]
+pub struct DirectThreadUpload {
+    uploader: Arc<DirectUploader>,
+    settings: Arc<Settings>,
+    session: HubSession,
+    messages: Vec<Message>,
+}
+
+impl DirectThreadUpload {
+    /// Uploads the messages, whose records are stored, without waiting on the network.
+    ///
+    /// A daemon that exits while the upload is in flight loses only these messages' upload.
+    pub fn start(self) {
+        tokio::spawn(self.upload());
+    }
+
+    async fn upload(self) {
+        let Self {
+            uploader,
+            settings,
+            session,
+            messages,
+        } = self;
+        let ids: Vec<_> = messages.iter().map(|message| message.id).collect();
+        let login = match uploader.hub.login_as(session, &settings) {
+            Ok(login) => login,
+            Err(err) => {
+                tracing::warn!(?err, "failed to log in to octavo; not uploading these messages");
+                return;
+            }
+        };
+        let messages = engine::converted(messages).await;
+
+        let user = login.user_id();
+        match engine::upload_thread_messages(&login, messages).await {
+            Ok(ThreadsSent::Stored) => {
+                uploader.resume(user).await;
+            }
+            Ok(ThreadsSent::NoneStored | ThreadsSent::Nothing) => {}
+            Ok(ThreadsSent::Off) => {
+                tracing::debug!("octavo is off for the account; dropping these thread messages");
+                mark_off(&uploader.queue, user).await;
+            }
+            Err(ThreadsRetryLater { stored }) => {
+                // A stored request shows the account has Octavo on, so the mark is stale and the
+                // rest goes up again; the stored ones repeat, which Octavo dedupes.
+                if stored {
+                    uploader.resume(user).await;
+                } else if is_off(&uploader.queue, user).await {
+                    tracing::debug!(
+                        "failed to upload thread messages to octavo; dropping them, as the \
+                         account is marked off"
+                    );
+                    return;
+                }
+                uploader.enqueue(user, Queued::ThreadMessages(ids)).await;
+            }
+        }
+    }
+}
+
+/// Marks `user`'s account as having Octavo off, which pauses their queue, and keeps their new
+/// entries and thread messages out of it, until an upload finds Octavo on again.
+async fn mark_off(queue: &UploadQueue, user: &UserId) {
+    match queue.mark_off(user).await {
+        Ok(true) => {
+            tracing::info!("octavo is off for the account; pausing its uploads until it's on");
+        }
+        Ok(false) => {}
+        Err(err) => tracing::warn!(?err, "failed to note that octavo is off for the account"),
+    }
+}
+
+/// Clears the mark [`mark_off`] left on `user`'s account, as an upload just found Octavo on,
+/// returning whether there was one.
+async fn clear_off(queue: &UploadQueue, user: &UserId) -> bool {
+    match queue.clear_off(user).await {
+        Ok(true) => {
+            tracing::info!("octavo is on for the account again");
+            true
+        }
+        Ok(false) => false,
+        Err(err) => {
+            tracing::warn!(?err, "failed to note that octavo is on for the account");
+            false
+        }
+    }
+}
+
+/// Whether `user`'s account had Octavo off when last asked. One the queue can't say for is taken
+/// to have it: its work is queued and sent.
+async fn is_off(queue: &UploadQueue, user: &UserId) -> bool {
+    queue.is_off(user).await.unwrap_or_else(|err| {
+        tracing::warn!(?err, "failed to read whether octavo is off for the account");
+        false
+    })
+}
+
+/// Removes the queued output of `user`'s entry `id`, which Octavo didn't store.
+async fn forget_output(queue: &UploadQueue, user: &UserId, id: HistoryId) {
+    if let Err(err) = queue.remove_output(user, id).await {
+        tracing::warn!(
+            ?err,
+            %id,
+            "failed to remove the output of a dropped history entry from the queue"
+        );
     }
 }

@@ -130,10 +130,12 @@ service HubService {
   // once, in the catch-up or after it, so one stored with an earlier timestamp can come after
   // `caught_up`: place each by timestamp, then by id. Sends a heartbeat after every 25 seconds
   // without a message. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user, or the share,
-  // has no such thread, or once the thread is deleted. Through a share, sends a `child` only for a
-  // thread the share holds, and fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) once the share no longer
-  // opens: within a heartbeat of its owner losing Octavo, and at once when it is deleted or its
-  // link rotated. Takes a call without a token when it names a share.
+  // has no such thread, or once the thread is deleted. Of the user's own thread, fails with
+  // `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) within a heartbeat of the user losing Octavo.
+  // Through a share, sends a `child` only for a thread the share holds, and fails with `NOT_FOUND`
+  // (`SHARE_NOT_FOUND`) once the share no longer opens: within a heartbeat of its owner losing
+  // Octavo, and at once when it is deleted or its link rotated. Takes a call without a token when
+  // it names a share.
   rpc WatchThread(WatchThreadRequest) returns (stream WatchThreadResponse);
 
   // Stream the calling user's threads that match the filter: the most recently active of them, then
@@ -145,7 +147,8 @@ service HubService {
   // thread. Sends a `removed` for each of the user's threads deleted, and for each changed so it no
   // longer matches, whether or not it was sent. A thread changed while the page is read may come
   // again after `caught_up`, so keep each thread's newest `Thread`, by id.
-  // Sends a heartbeat after every 25 seconds without a message.
+  // Sends a heartbeat after every 25 seconds without a message, and fails with
+  // `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) within a heartbeat of the user losing Octavo.
   rpc WatchThreads(WatchThreadsRequest) returns (stream WatchThreadsResponse);
 
   // Delete the calling user's thread with this handle and every thread descended from it, with

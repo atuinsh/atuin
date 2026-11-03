@@ -6,25 +6,34 @@ use atuin_client::ai_session::{AiSessionStore, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
-use client::{AnyOctavoClient, NopOctavoClient, OctavoClient};
+use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
 use tokio::sync::Notify;
 
 use crate::daemon::DaemonHandle;
 use crate::output_capture::OutputStore;
 
-/// Thread messages queued for Octavo before capture stores their records: they go once
+/// Thread messages taken for Octavo before capture stores their records: they go once
 /// [`Self::start`] says the records are stored, so no upload reads the queue ahead of them.
-#[must_use = "the queued messages wait for a later upload unless started"]
-#[derive(Debug, Default)]
-pub struct ThreadUpload {
-    wake: Option<Arc<Notify>>,
+#[must_use = "unless started, queued messages wait for a later upload, and direct ones never go"]
+#[derive(Debug)]
+pub enum ThreadUpload {
+    /// None go: Octavo is off here, nobody is logged in, or they couldn't be queued.
+    Nothing,
+    /// Queued, for the engine this wakes to send.
+    Queued(Arc<Notify>),
+    /// Left out of the queue, as the account had Octavo off when last asked: uploaded once,
+    /// directly, and queued only if that fails for a reason that may pass and the mark has cleared
+    /// since.
+    Direct(DirectThreadUpload),
 }
 
 impl ThreadUpload {
     /// Starts the upload, the messages' records stored.
     pub fn start(self) {
-        if let Some(wake) = self.wake {
-            wake.notify_one();
+        match self {
+            Self::Nothing => {}
+            Self::Queued(wake) => wake.notify_one(),
+            Self::Direct(upload) => upload.start(),
         }
     }
 }
