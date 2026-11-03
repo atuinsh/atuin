@@ -147,7 +147,6 @@ mod tests {
     #[case::no_terms(json!({"terms": []}))]
     #[case::empty(json!({"terms": [""]}))]
     #[case::blank(json!({"terms": ["disk", "   "]}))]
-    #[case::not_a_list(json!({"terms": "disk"}))]
     fn rejects_missing_or_blank_terms(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
     }

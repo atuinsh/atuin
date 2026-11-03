@@ -36,6 +36,8 @@ pub struct AtuinThreadsSearchToolCall {
     /// only together and in that order, so give each word its own term unless they must be
     /// adjacent. Use a few distinctive words, e.g. a file name, error text or identifier, not a
     /// sentence.
+    // `query` is what atuin_threads_read calls its search, and what this was called before.
+    #[serde(alias = "query")]
     pub terms: SearchTermsArg,
     /// Maximum number of sessions to return, most relevant first.
     #[serde(default)]
@@ -260,6 +262,8 @@ mod tests {
     #[case::clamped_high(json!({"terms": ["x"], "limit": 100}), 20)]
     #[case::clamped_low(json!({"terms": ["x"], "limit": 0}), 1)]
     #[case::null_limit(json!({"terms": ["x"], "limit": null}), 5)]
+    #[case::one_string(json!({"terms": "flaky test"}), 5)]
+    #[case::query_alias(json!({"query": ["x"]}), 5)]
     fn parses_terms_and_clamps_limit(#[case] input: serde_json::Value, #[case] limit: u32) {
         let call: AtuinThreadsSearchToolCall = serde_json::from_value(input).unwrap();
         assert_eq!(call.limit.get(), limit);
@@ -270,6 +274,7 @@ mod tests {
     #[case::missing(json!({}))]
     #[case::no_terms(json!({"terms": []}))]
     #[case::blank(json!({"terms": ["   "]}))]
+    #[case::blank_string(json!({"terms": "   "}))]
     #[case::unknown_harness(json!({"terms": ["x"], "harness": "emacs"}))]
     #[case::uncapturable_harness(json!({"terms": ["x"], "harness": "cursor"}))]
     fn rejects_invalid_input(#[case] input: serde_json::Value) {
