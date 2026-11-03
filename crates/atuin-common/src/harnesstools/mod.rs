@@ -8,6 +8,7 @@ pub mod codex;
 pub mod continuation;
 pub mod copilot;
 pub mod fork;
+pub mod grok;
 mod json_hooks;
 pub mod mcp;
 pub mod note;
@@ -21,6 +22,7 @@ pub mod sync;
 use ccode::Ccode;
 use codex::Codex;
 use copilot::Copilot;
+use grok::Grok;
 use opencode::Opencode;
 use pi::Pi;
 use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
@@ -91,6 +93,7 @@ pub enum AnyHarness {
     ClaudeCode(Ccode),
     Codex(Codex),
     Copilot(Copilot),
+    Grok(Grok),
     Opencode(Opencode),
     Pi(Pi),
 }
@@ -158,6 +161,7 @@ impl AnyHarness {
             Self::ClaudeCode(Ccode),
             Self::Codex(Codex),
             Self::Copilot(Copilot),
+            Self::Grok(Grok),
             Self::Opencode(Opencode),
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
@@ -171,6 +175,7 @@ impl AnyHarness {
             Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
             Self::Copilot(h) => Some(h.sessions(pool.clone()).into()),
+            Self::Grok(h) => Some(h.sessions(pool.clone()).into()),
             Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
         }

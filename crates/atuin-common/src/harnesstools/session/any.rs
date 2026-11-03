@@ -7,6 +7,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSessions};
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
 use crate::harnesstools::copilot::session::{CopilotListener, CopilotSession, CopilotSessions};
+use crate::harnesstools::grok::session::{GrokListener, GrokSession, GrokSessions};
 use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
@@ -58,6 +59,7 @@ pub enum AnySessions {
     Ccode(CcodeSessions),
     Codex(CodexSessions),
     Copilot(CopilotSessions),
+    Grok(GrokSessions),
     Opencode(OpencodeSessions),
     Pi(PiSessions),
 }
@@ -79,6 +81,7 @@ pub enum AnyListener {
     Ccode(CcodeListener),
     Codex(CodexListener),
     Copilot(CopilotListener),
+    Grok(GrokListener),
     Opencode(OpencodeListener),
     Pi(PiListener),
 }
@@ -107,6 +110,7 @@ pub enum AnySession {
     Ccode(CcodeSession),
     Codex(CodexSession),
     Copilot(CopilotSession),
+    Grok(GrokSession),
     Opencode(OpencodeSession),
     Pi(PiSession),
 }

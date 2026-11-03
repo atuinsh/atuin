@@ -35,6 +35,7 @@ use crate::harnesstools::session::{Message, SessionId};
 mod ccode;
 mod codex;
 mod copilot;
+mod grok;
 pub mod liveness;
 mod opencode;
 mod pi;

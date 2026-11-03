@@ -341,6 +341,7 @@ mod tests {
     use super::*;
     use crate::harnesstools::ccode::session::CcodeSession;
     use crate::harnesstools::codex::session::CodexSession;
+    use crate::harnesstools::grok::session::GrokSession;
     use crate::harnesstools::pi::session::PiSession;
     use crate::harnesstools::session::model::{Content, MessageId, Role};
 
@@ -462,6 +463,7 @@ mod tests {
     enum JsonlHarness {
         Ccode,
         Codex,
+        Grok,
         Pi,
     }
 
@@ -476,6 +478,10 @@ mod tests {
                     .map_ok(|(at, _)| at)
                     .boxed(),
                 Self::Codex => CodexSession::open(id, path, pool)
+                    .messages_from(from)
+                    .map_ok(|(at, _)| at)
+                    .boxed(),
+                Self::Grok => GrokSession::open(id, path, pool)
                     .messages_from(from)
                     .map_ok(|(at, _)| at)
                     .boxed(),
@@ -507,7 +513,8 @@ mod tests {
         &[A], Some(Checkpoint::new(26, B.as_bytes())), vec![Checkpoint::new(13, A.as_bytes())])]
     #[tokio::test]
     async fn a_transcript_resumes_only_where_its_checkpoint_still_holds(
-        #[values(JsonlHarness::Ccode, JsonlHarness::Codex, JsonlHarness::Pi)] harness: JsonlHarness,
+        #[values(JsonlHarness::Ccode, JsonlHarness::Codex, JsonlHarness::Grok, JsonlHarness::Pi)]
+        harness: JsonlHarness,
         #[case] lines: &[&str],
         #[case] from: Option<Checkpoint>,
         #[case] expected: Vec<Checkpoint>,
@@ -524,6 +531,7 @@ pub mod any;
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
 use crate::harnesstools::copilot::session::CopilotMessage;
+use crate::harnesstools::grok::session::GrokMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 
@@ -533,6 +541,7 @@ pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
     Copilot(CopilotMessage),
+    Grok(GrokMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
 }
