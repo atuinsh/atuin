@@ -322,6 +322,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "signal-hook",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
