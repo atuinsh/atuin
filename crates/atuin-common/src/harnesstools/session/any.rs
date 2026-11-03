@@ -17,7 +17,7 @@ use crate::harnesstools::session::{
 use crate::sync::BlockingPool;
 
 /// Runtime-polymorphic version of [`Observable`]: returns "Any" types instead of concrete
-/// per-harness types. Implemented by [`AnyHarness`](crate::harnesstools::AnyHarness).
+/// per-harness types. Implemented by [`AnyHarness`](enum@crate::harnesstools::AnyHarness).
 #[whichever::dispatchable]
 pub trait ObservableExt {
     /// `Any`-returning version of [`Observable::sessions`].
@@ -35,7 +35,7 @@ where
 }
 
 /// Runtime-polymorphic version of [`Sessions`]: returns "Any" types instead of concrete
-/// per-harness types. Implemented by [`AnySessions`].
+/// per-harness types. Implemented by [`AnySessions`](enum@AnySessions).
 #[whichever::dispatchable]
 pub trait SessionsExt {
     /// `Any`-returning version of [`Sessions::listener`].
@@ -76,7 +76,7 @@ pub enum AnySessions {
 }
 
 /// Runtime-polymorphic version of [`Listener`]: returns "Any" types instead of concrete
-/// per-harness types. Implemented by [`AnyListener`].
+/// per-harness types. Implemented by [`AnyListener`](enum@AnyListener).
 #[whichever::dispatchable]
 pub trait ListenerExt {
     /// `Any`-returning version of [`Listener::watch`].
@@ -126,10 +126,11 @@ pub enum AnyListener {
 }
 
 /// Runtime-polymorphic version of [`Session`]: returns "Any" types instead of concrete
-/// per-harness types. Implemented by [`AnySession`].
+/// per-harness types. Implemented by [`AnySession`](enum@AnySession).
 #[whichever::dispatchable]
 pub trait SessionExt {
-    /// Same as [`Session::id`]; in this trait so [`AnySessions`] can implement it.
+    /// Same as [`Session::id`]; in this trait so [`AnySessions`](enum@AnySessions) can implement
+    /// it.
     fn id(&self) -> SessionId;
 
     /// `Any`-returning version of [`Session::messages`].
