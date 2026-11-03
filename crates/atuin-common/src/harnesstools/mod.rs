@@ -1,6 +1,6 @@
 //! Tools for interacting and operating on different AI harnesses.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use enum_dispatch::enum_dispatch;
 
@@ -29,10 +29,12 @@ use copilot::Copilot;
 use grok::Grok;
 use opencode::Opencode;
 use pi::Pi;
-use rehydrate::{RehydrateError, RehydrateSession};
+use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
 use resume::{ResumeError, ResumePlan, ResumeTarget};
-use session::Observable;
-use session::any::AnySessions;
+use session::any::{AnySessions, ObservableExt};
+use sync::{
+    AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync, SyncError,
+};
 
 use crate::sync::BlockingPool;
 
@@ -86,7 +88,7 @@ pub trait Harness: std::fmt::Debug {
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
 }
 
-#[enum_dispatch(Harness)]
+#[enum_dispatch(Harness, SessionSync, ObservableExt)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
     Amp(Amp),
@@ -167,20 +169,5 @@ impl AnyHarness {
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
         ]
-    }
-
-    /// The harness's sessions, whose file reads all run in `pool`.
-    #[must_use]
-    pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
-        match self {
-            // Amp pushes its threads (`atuin threads push`): there is nothing to watch.
-            Self::Amp(_) => None,
-            Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Copilot(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Grok(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Opencode(h) => Some(h.sessions(pool.clone()).into()),
-            Self::Pi(h) => Some(h.sessions(pool.clone()).into()),
-        }
     }
 }

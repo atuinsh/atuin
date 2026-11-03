@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use atuin_client::ai_session::{Appended, HarnessKind, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::any::{AnySession, AnySessions};
+use atuin_common::harnesstools::session::any::{
+    AnySession, AnySessions, ObservableExt as _, SessionExt as _, SessionsExt as _,
+};
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
 

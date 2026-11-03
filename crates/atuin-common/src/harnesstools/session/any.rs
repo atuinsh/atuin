@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::SystemTime;
 
-use derive_more::From;
+use enum_dispatch::enum_dispatch;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 
@@ -12,11 +12,61 @@ use crate::harnesstools::grok::session::{GrokListener, GrokSession, GrokSessions
 use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
 use crate::harnesstools::session::{
-    AnyMessage, CaptureError, Checkpoint, Listener, MessageError, RuntimeError, Session,
-    SessionEvent, SessionId, Sessions, WatchError,
+    AnyMessage, CaptureError, Checkpoint, Listener, MessageError, Observable, RuntimeError,
+    Session, SessionEvent, SessionId, Sessions, WatchError,
 };
+use crate::sync::BlockingPool;
 
-#[derive(Debug, Clone, From)]
+/// Runtime-polymorphic version of [`Observable`]: returns "Any" types instead of concrete
+/// per-harness types. Implemented by [`AnyHarness`](crate::harnesstools::AnyHarness).
+#[enum_dispatch]
+pub trait ObservableExt {
+    /// `Any`-returning version of [`Observable::sessions`].
+    fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions>;
+}
+
+impl<H> ObservableExt for H
+where
+    H: Observable,
+    H::Sessions: Into<AnySessions>,
+{
+    fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
+        Some(Observable::sessions(self, pool.clone()).into())
+    }
+}
+
+/// Runtime-polymorphic version of [`Sessions`]: returns "Any" types instead of concrete
+/// per-harness types. Implemented by [`AnySessions`].
+#[enum_dispatch]
+pub trait SessionsExt {
+    /// `Any`-returning version of [`Sessions::listener`].
+    fn listener(&self) -> Result<AnyListener, RuntimeError>;
+
+    /// `Any`-returning version of [`Sessions::existing`].
+    fn existing(
+        &self,
+    ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError>;
+}
+
+impl<S> SessionsExt for S
+where
+    S: Sessions,
+    S::Listener: Into<AnyListener>,
+    <S::Listener as Listener>::Session: Into<AnySession>,
+{
+    fn listener(&self) -> Result<AnyListener, RuntimeError> {
+        Sessions::listener(self).map(Into::into)
+    }
+
+    fn existing(
+        &self,
+    ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError> {
+        Ok(Sessions::existing(self)?.map_ok(Into::into).boxed())
+    }
+}
+
+#[enum_dispatch(SessionsExt)]
+#[derive(Debug, Clone)]
 pub enum AnySessions {
     Ccode(CcodeSessions),
     Codex(CodexSessions),
@@ -26,33 +76,47 @@ pub enum AnySessions {
     Pi(PiSessions),
 }
 
-impl AnySessions {
-    pub fn listener(&self) -> Result<AnyListener, RuntimeError> {
-        Ok(match self {
-            Self::Ccode(s) => AnyListener::Ccode(s.listener()?),
-            Self::Codex(s) => AnyListener::Codex(s.listener()?),
-            Self::Copilot(s) => AnyListener::Copilot(s.listener()?),
-            Self::Grok(s) => AnyListener::Grok(s.listener()?),
-            Self::Opencode(s) => AnyListener::Opencode(s.listener()?),
-            Self::Pi(s) => AnyListener::Pi(s.listener()?),
-        })
+/// Runtime-polymorphic version of [`Listener`]: returns "Any" types instead of concrete
+/// per-harness types. Implemented by [`AnyListener`].
+#[enum_dispatch]
+pub trait ListenerExt {
+    /// `Any`-returning version of [`Listener::watch`].
+    fn watch(self) -> BoxStream<'static, Result<AnySession, WatchError>>;
+
+    /// `Any`-returning version of [`Listener::events`].
+    fn events<F>(
+        self,
+        since: SystemTime,
+        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
+    ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
+    where
+        F: Future<Output = Option<Checkpoint>> + Send + 'static;
+}
+
+impl<L> ListenerExt for L
+where
+    L: Listener,
+    L::Session: Into<AnySession>,
+    <L::Session as Session>::Message: Into<AnyMessage>,
+{
+    fn watch(self) -> BoxStream<'static, Result<AnySession, WatchError>> {
+        Listener::watch(self).map_ok(Into::into).boxed()
     }
 
-    pub fn existing(
-        &self,
-    ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError> {
-        Ok(match self {
-            Self::Ccode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-            Self::Codex(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-            Self::Copilot(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-            Self::Grok(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-            Self::Opencode(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-            Self::Pi(s) => s.existing()?.map_ok(AnySession::from).boxed(),
-        })
+    fn events<F>(
+        self,
+        since: SystemTime,
+        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
+    ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
+    where
+        F: Future<Output = Option<Checkpoint>> + Send + 'static,
+    {
+        Listener::events(self, since, checkpoint).map_ok(|ev| ev.map_message(Into::into)).boxed()
     }
 }
 
-#[derive(Debug, From)]
+#[enum_dispatch(ListenerExt)]
+#[derive(Debug)]
 pub enum AnyListener {
     Ccode(CcodeListener),
     Codex(CodexListener),
@@ -62,53 +126,40 @@ pub enum AnyListener {
     Pi(PiListener),
 }
 
-impl AnyListener {
-    #[must_use]
-    pub fn watch(self) -> BoxStream<'static, Result<AnySession, WatchError>> {
-        match self {
-            Self::Ccode(l) => l.watch().map_ok(AnySession::from).boxed(),
-            Self::Codex(l) => l.watch().map_ok(AnySession::from).boxed(),
-            Self::Copilot(l) => l.watch().map_ok(AnySession::from).boxed(),
-            Self::Grok(l) => l.watch().map_ok(AnySession::from).boxed(),
-            Self::Opencode(l) => l.watch().map_ok(AnySession::from).boxed(),
-            Self::Pi(l) => l.watch().map_ok(AnySession::from).boxed(),
-        }
+/// Runtime-polymorphic version of [`Session`]: returns "Any" types instead of concrete
+/// per-harness types. Implemented by [`AnySession`].
+#[enum_dispatch]
+pub trait SessionExt {
+    /// Same as [`Session::id`]; in this trait so [`AnySessions`] can implement it.
+    fn id(&self) -> SessionId;
+
+    /// `Any`-returning version of [`Session::messages`].
+    fn messages(self) -> BoxStream<'static, Result<AnyMessage, MessageError>>;
+
+    /// `Any`-returning version of [`Session::read`].
+    fn read(&self) -> BoxStream<'static, Result<AnyMessage, MessageError>>;
+}
+
+impl<S> SessionExt for S
+where
+    S: Session,
+    S::Message: Into<AnyMessage>,
+{
+    fn id(&self) -> SessionId {
+        Session::id(self)
     }
 
-    /// See [`Listener::events`].
-    #[must_use]
-    pub fn events<F>(
-        self,
-        since: SystemTime,
-        checkpoint: impl Fn(&SessionId) -> F + Clone + Send + 'static,
-    ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
-    where
-        F: Future<Output = Option<Checkpoint>> + Send + 'static,
-    {
-        match self {
-            Self::Ccode(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Codex(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Copilot(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Grok(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Opencode(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-            Self::Pi(l) => {
-                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
-            }
-        }
+    fn messages(self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
+        Session::messages(self).map_ok(Into::into).boxed()
+    }
+
+    fn read(&self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
+        Session::read(self).map_ok(Into::into).boxed()
     }
 }
 
-#[derive(Debug, From)]
+#[enum_dispatch(SessionExt)]
+#[derive(Debug)]
 pub enum AnySession {
     Ccode(CcodeSession),
     Codex(CodexSession),
@@ -116,43 +167,6 @@ pub enum AnySession {
     Grok(GrokSession),
     Opencode(OpencodeSession),
     Pi(PiSession),
-}
-
-impl AnySession {
-    #[must_use]
-    pub fn id(&self) -> SessionId {
-        match self {
-            Self::Ccode(s) => s.id(),
-            Self::Codex(s) => s.id(),
-            Self::Copilot(s) => s.id(),
-            Self::Grok(s) => s.id(),
-            Self::Opencode(s) => s.id(),
-            Self::Pi(s) => s.id(),
-        }
-    }
-
-    #[must_use]
-    pub fn messages(self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
-        match self {
-            Self::Ccode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-            Self::Codex(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-            Self::Copilot(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-            Self::Grok(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-            Self::Opencode(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-            Self::Pi(s) => s.messages().map_ok(AnyMessage::from).boxed(),
-        }
-    }
-
-    pub fn read(&self) -> BoxStream<'static, Result<AnyMessage, MessageError>> {
-        match self {
-            Self::Ccode(s) => s.read().map_ok(AnyMessage::from).boxed(),
-            Self::Codex(s) => s.read().map_ok(AnyMessage::from).boxed(),
-            Self::Copilot(s) => s.read().map_ok(AnyMessage::from).boxed(),
-            Self::Grok(s) => s.read().map_ok(AnyMessage::from).boxed(),
-            Self::Opencode(s) => s.read().map_ok(AnyMessage::from).boxed(),
-            Self::Pi(s) => s.read().map_ok(AnyMessage::from).boxed(),
-        }
-    }
 }
 
 #[cfg(test)]
