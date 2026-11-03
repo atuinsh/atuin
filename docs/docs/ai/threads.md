@@ -14,8 +14,8 @@ isn't already, and offers to import the sessions your agents already have.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
-opencode and Pi) as threads into the encrypted record store, and syncs them like
-your history.
+opencode, Pi and Amp) as threads into the encrypted record store, and syncs
+them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record
@@ -32,6 +32,38 @@ atuin threads import
 
 That imports every session the agents have on this machine (or just one
 agent's, with `--harness`), and running it again imports only what's new.
+
+### Amp
+
+Amp keeps its threads on its servers, not on disk, so a plugin hands them to
+Atuin instead:
+
+```shell
+atuin hook install amp
+```
+
+Then restart Amp. At the end of each turn, the plugin pushes the turn's
+messages with `atuin threads push`. Only turns taken with the plugin installed,
+while the daemon is running, are captured. To bring in the rest (threads from
+before the plugin, or turns it missed), import them from Amp's servers:
+
+```shell
+atuin threads import --harness amp
+```
+
+That exports each of your threads with `amp threads export`, as the Amp you're
+logged in as, and stores only what Atuin doesn't have yet. Without
+`--harness amp`, `atuin threads import` leaves Amp out.
+
+`atuin threads push --harness <agent> --session <id>` takes messages in
+Atuin's own format, one JSON object per line on standard input, so any agent
+with hooks or plugins can hand its sessions over the same way: `atuin threads
+push --help` describes the format. Pushing a message again changes nothing.
+
+`atuin resume` reopens an Amp thread with `amp threads continue <id>`, which
+fetches it from Amp's servers. An Amp thread can be continued in another
+agent, but Atuin can't write Amp threads, so it can't fork one or continue
+another agent's session in Amp.
 
 ## What's captured
 
@@ -408,7 +440,7 @@ mouse = true
 
 To resume an agent's sessions with a command of your own in place of the
 built-in one, give a template per agent under `[threads.resume]` (`claude`,
-`codex`, `copilot`, `grok`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these
+`codex`, `copilot`, `grok`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these
 substituted:
 
 - `{id}`: the agent's own id for the session;

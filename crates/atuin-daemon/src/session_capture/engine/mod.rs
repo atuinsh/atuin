@@ -474,15 +474,15 @@ pub(super) async fn warm(
 }
 
 /// What a resumed session's warm-up reads from the sidecar.
-struct Warmed {
-    row: Option<Session>,
-    titles: Vec<TitleChange>,
-    last: Option<Message>,
-    synthetic: Vec<SourceId>,
+pub(super) struct Warmed {
+    pub(super) row: Option<Session>,
+    pub(super) titles: Vec<TitleChange>,
+    pub(super) last: Option<Message>,
+    pub(super) synthetic: Vec<SourceId>,
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WarmError {
+pub(super) enum WarmError {
     #[error(transparent)]
     Repair(#[from] AppendError),
     #[error(transparent)]
@@ -494,7 +494,7 @@ enum WarmError {
 
 /// Read what [`warm`] needs from the sidecar, holding capture's `locks` (released on return,
 /// whether the reads failed or not).
-async fn read_warm(
+pub(super) async fn read_warm(
     sink: &Sink,
     handle: &HarnessSession,
     (mut pending, local): CaptureLocks,

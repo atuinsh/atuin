@@ -271,9 +271,13 @@ pub trait SessionSync {
     ) -> Result<ReplaceOutcome, SyncError>;
 }
 
+/// Amp keeps its threads on its servers, where atuin can't write.
+const AMP_REMOTE: &str = "Amp threads live on Amp's servers";
+
 impl SessionSync for AnyHarness {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
         match self {
+            Self::Amp(_) => Err(SyncError::Unsupported(AMP_REMOTE)),
             Self::ClaudeCode(h) => h.local_tip(id).await,
             Self::Codex(h) => h.local_tip(id).await,
             Self::Copilot(h) => h.local_tip(id).await,
@@ -285,6 +289,7 @@ impl SessionSync for AnyHarness {
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
         match self {
+            Self::Amp(_) => Liveness::Unknown,
             Self::ClaudeCode(h) => h.is_live(id, cwd).await,
             Self::Codex(h) => h.is_live(id, cwd).await,
             Self::Copilot(h) => h.is_live(id, cwd).await,
@@ -302,6 +307,7 @@ impl SessionSync for AnyHarness {
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
         match self {
+            Self::Amp(_) => Err(SyncError::Unsupported(AMP_REMOTE)),
             Self::ClaudeCode(h) => h.append(id, base, lines, options).await,
             Self::Codex(h) => h.append(id, base, lines, options).await,
             Self::Copilot(h) => h.append(id, base, lines, options).await,
@@ -320,6 +326,7 @@ impl SessionSync for AnyHarness {
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
         match self {
+            Self::Amp(_) => Err(SyncError::Unsupported(AMP_REMOTE)),
             Self::ClaudeCode(h) => h.replace(id, base, branch, options, backups).await,
             Self::Codex(h) => h.replace(id, base, branch, options, backups).await,
             Self::Copilot(h) => h.replace(id, base, branch, options, backups).await,

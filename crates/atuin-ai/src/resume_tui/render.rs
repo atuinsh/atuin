@@ -327,7 +327,7 @@ pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
     let meaning = match harness {
         HarnessKind::ClaudeCode => Meaning::AlertWarn,
         HarnessKind::Codex | HarnessKind::Grok => Meaning::AlertInfo,
-        HarnessKind::Opencode => Meaning::Guidance,
+        HarnessKind::Opencode | HarnessKind::Amp => Meaning::Guidance,
         HarnessKind::Pi | HarnessKind::Omp => Meaning::Important,
         HarnessKind::Copilot | HarnessKind::Unknown => Meaning::Annotation,
     };

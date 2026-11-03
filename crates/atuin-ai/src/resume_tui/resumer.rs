@@ -35,7 +35,7 @@ use atuin_common::path::PathBufExt as _;
 
 use super::ResumeContext;
 use super::catchup::{self, CatchUp, Held, Step, Why};
-use super::source::{SessionRow, SessionSource, harness_label};
+use super::source::{SessionRow, SessionSource, harness_arg, harness_label};
 
 /// Why a session can be viewed but not resumed here.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -611,6 +611,13 @@ impl HarnessResumer {
         }
         // The harness decides first (a subagent is never resumable, whatever is on disk).
         harness.resume_plan(&target)?;
+        // Amp keeps its threads on its servers: there is no copy here to catch up or restore.
+        if let AnyHarness::Amp(_) = harness {
+            target.cwd = Some(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
+            let resume = Resume::ready(harness.resume(&target, template)?.prepare()?);
+            self.check_installed(&resume.plan)?;
+            return Ok((resume, None));
+        }
 
         let resume = match self.machine.locate(harness, id).await {
             Some(native) => {
@@ -869,12 +876,15 @@ impl Resumer for HarnessResumer {
         AnyHarness::all()
             .iter()
             .map(HarnessKind::from)
-            .filter(|kind| *kind != own && self.runs_here(*kind, session))
+            .filter(|kind| *kind != own && harness_arg(*kind).is_some())
+            .filter(|kind| self.runs_here(*kind, session))
             .collect()
     }
 
     fn can_fork(&self, session: &SessionRow) -> bool {
-        self.runs_here(session.handle.harness, session)
+        // Forking writes the fork out as a transcript, which atuin can't for Amp.
+        session.handle.harness != HarnessKind::Amp
+            && self.runs_here(session.handle.harness, session)
     }
 
     async fn fork(
@@ -949,6 +959,9 @@ impl Resumer for HarnessResumer {
             from_kind.harness().ok_or(NotResumable::Unsupported(harness_label(from_kind)))?;
         let into = target.harness().ok_or(NotResumable::Unsupported(harness_label(target)))?;
         let fail = |e: String| NotResumable::Continue(harness_label(target), e);
+        if harness_arg(target).is_none() {
+            return Err(fail("atuin can't write its threads".to_owned()));
+        }
         if from_kind == target {
             return Err(fail("it's that agent's own session".to_owned()));
         }

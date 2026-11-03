@@ -439,7 +439,7 @@ impl Cmd {
                     daemon::ready_client(&settings).await?;
                 }
 
-                atuin_ai::commands::run(cli, settings).await
+                Box::pin(atuin_ai::commands::run(cli, settings)).await
             }
 
             #[cfg(feature = "ai")]

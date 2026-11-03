@@ -338,7 +338,9 @@ const fn path_key(target: AnyHarness) -> &'static str {
     match target {
         AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) => "file_path",
         AnyHarness::Opencode(_) => "filePath",
-        AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => "path",
+        AnyHarness::Amp(_) | AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => {
+            "path"
+        }
     }
 }
 
@@ -405,7 +407,7 @@ impl CallIds {
 /// items (Codex's): a call kept as the tool it was, under such a name, would read as that tool.
 fn native(target: AnyHarness, name: &str) -> bool {
     let names: &[&str] = match target {
-        AnyHarness::ClaudeCode(_) => &[
+        AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) => &[
             "bash",
             "read",
             "write",

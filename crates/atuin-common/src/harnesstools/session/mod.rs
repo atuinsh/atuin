@@ -2,6 +2,7 @@ mod checkpoint;
 pub mod error;
 pub mod model;
 pub mod patch;
+pub mod pushed;
 pub mod synthetic;
 
 use std::future::Future;
@@ -535,6 +536,7 @@ use crate::harnesstools::copilot::session::CopilotMessage;
 use crate::harnesstools::grok::session::GrokMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
+use crate::harnesstools::session::pushed::PushedMessage;
 
 #[enum_dispatch(Message)]
 #[derive(Debug, Clone)]
@@ -545,4 +547,6 @@ pub enum AnyMessage {
     Grok(GrokMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
+    /// A message an agent pushed (`atuin threads push`).
+    Pushed(PushedMessage),
 }

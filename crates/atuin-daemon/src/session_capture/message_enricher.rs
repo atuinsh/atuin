@@ -259,9 +259,12 @@ fn build(
     // beside the chain rather than on it, so the conversational rows around it link the same
     // regardless of when it arrived.
     let patch_only = !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_)));
-    let chained = matches!(handle.harness, HarnessKind::Codex | HarnessKind::Grok);
-    let beside_chain = (handle.harness == HarnessKind::Codex && patch_only)
-        || (handle.harness == HarnessKind::Grok && m.parent_id().is_some());
+    // A pushed message names its own parent, whatever the harness's transcripts do.
+    let pushed = matches!(m, AnyMessage::Pushed(_));
+    let chained = !pushed && matches!(handle.harness, HarnessKind::Codex | HarnessKind::Grok);
+    let beside_chain = !pushed
+        && ((handle.harness == HarnessKind::Codex && patch_only)
+            || (handle.harness == HarnessKind::Grok && m.parent_id().is_some()));
     let parent_source_id = if beside_chain {
         m.parent_id().map(|id| SourceId::from(String::from(id))).or_else(|| state.previous.clone())
     } else if chained {
@@ -379,6 +382,29 @@ mod tests {
         let mut out: Vec<Message> = lines.iter().flat_map(|m| n.capture(session, m)).collect();
         out.extend(n.finish(session));
         out
+    }
+
+    /// Pushed messages keep the parents they name, under a harness whose transcripts capture
+    /// chains instead: two answers to one prompt are siblings, not one after the other.
+    #[rstest]
+    fn pushed_messages_keep_their_parents(
+        #[values(HarnessKind::Codex, HarnessKind::Grok, HarnessKind::Amp)] harness: HarnessKind,
+    ) {
+        let line = |id: &str, parent: Option<&str>| {
+            AnyMessage::Pushed(
+                serde_json::from_value(serde_json::json!({
+                    "v": 1, "id": id, "parent": parent, "role": "user",
+                    "time": "2026-11-03T10:00:00Z", "content": [{"type": "text", "text": id}]
+                }))
+                .unwrap(),
+            )
+        };
+        let lines = [line("m1", None), line("m2", Some("m1")), line("m3", Some("m1"))];
+        let parents: Vec<_> = rows(&mut MessageEnricher::new(harness), &session(), &lines)
+            .into_iter()
+            .map(|m| m.parent_source_id.map(String::from))
+            .collect();
+        assert_eq!(parents, [None, Some("m1".to_owned()), Some("m1".to_owned())]);
     }
 
     /// The row a one-line transcript produces.
