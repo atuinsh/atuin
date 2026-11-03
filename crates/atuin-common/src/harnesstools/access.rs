@@ -67,7 +67,9 @@ impl Access {
                     .and_then(|o| o.get("input").and_then(Value::as_str).map(str::to_owned))
                     .or_else(|| Some(text.clone())),
                 _ => object(input).and_then(|o| {
-                    ["input", "patch"].iter().find_map(|k| o.get(*k)?.as_str().map(str::to_owned))
+                    ["input", "patch", "patchText"]
+                        .iter()
+                        .find_map(|k| o.get(*k)?.as_str().map(str::to_owned))
                 }),
             };
             access.writes = patch.as_deref().map(patched).unwrap_or_default();
@@ -255,6 +257,7 @@ mod tests {
     #[case::mcp_write("mcp__fs__write_file", json!({"path": "a.txt", "content": ""}), writes(&["a.txt"]))]
     #[case::patch_freeform("apply_patch", json!("*** Begin Patch\n*** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch"), writes(&[".env"]))]
     #[case::patch_object("apply_patch", json!({"input": "*** Begin Patch\n*** Add File: k.pem\n*** End Patch"}), writes(&["k.pem"]))]
+    #[case::patch_amp("apply_patch", json!({"patchText": "*** Begin Patch\n*** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch"}), writes(&[".env"]))]
     #[case::patch_by_shell("shell", json!({"command": ["apply_patch", "*** Begin Patch\n*** Delete File: a.rs\n*** End Patch"]}), Access { writes: vec!["a.rs".into()], ..shell("apply_patch '*** Begin Patch\n*** Delete File: a.rs\n*** End Patch'", None) })]
     #[case::redirect("Bash", json!({"command": "printf '%s' 'pw' > .env"}), Access { writes: vec![".env".into()], ..shell("printf '%s' 'pw' > .env", None) })]
     #[case::redirect_attached("Bash", json!({"command": "echo A=1>>.env.local"}), Access { writes: vec![".env.local".into()], ..shell("echo A=1>>.env.local", None) })]

@@ -67,6 +67,7 @@ fn show_reload_hint(harness_name: &str) {
         "pi" => userio::log::info!("hook-reload-hint-pi"),
         "omp" => userio::log::info!("hook-reload-hint-omp"),
         "opencode" => userio::log::info!("hook-reload-hint-opencode"),
+        "amp" => userio::log::info!("hook-reload-hint-amp"),
         _ => {}
     }
 }

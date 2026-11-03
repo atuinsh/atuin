@@ -55,6 +55,7 @@ pub fn config_exists(harness: AnyHarness) -> bool {
 /// The user config written by the agent's `mcp add` command, or by us directly.
 fn config_path(harness: AnyHarness) -> PathBuf {
     match harness {
+        AnyHarness::Amp(_) => home_dir().joined(".config").joined("amp").joined("settings.json"),
         AnyHarness::ClaudeCode(_) => var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(
             || home_dir().joined(".claude.json"),
             |dir| PathBuf::from(dir).joined(".claude.json"),
@@ -73,16 +74,13 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
     let atuin = executable()?;
     let atuin = atuin.as_str();
     match harness {
+        // `amp mcp add` and `claude mcp add` refuse a name that's taken.
+        AnyHarness::Amp(_) => {
+            remove("amp", &["mcp", "remove", "atuin"]).await;
+            run("amp", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+        }
         AnyHarness::ClaudeCode(_) => {
-            // `claude mcp add` refuses a name that's taken.
-            let remove = ["mcp", "remove", "--scope", "user", "atuin"];
-            let _ = tokio::process::Command::new("claude")
-                .args(remove)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
+            remove("claude", &["mcp", "remove", "--scope", "user", "atuin"]).await;
             run("claude", &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
         }
         AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
@@ -104,6 +102,17 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
             }
         },
     }
+}
+
+/// Run `program` with `args` to remove a server, whether or not there is one to remove.
+async fn remove(program: &str, args: &[&str]) {
+    let _ = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
 
 /// The atuin for a harness to launch. Harnesses don't necessarily have the user's `PATH`, so it's

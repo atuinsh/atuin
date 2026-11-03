@@ -139,6 +139,7 @@ impl Flattened {
 /// The harness's name as people know it.
 fn label(harness: AnyHarness) -> &'static str {
     match harness {
+        AnyHarness::Amp(_) => "Amp",
         AnyHarness::ClaudeCode(_) => "Claude Code",
         AnyHarness::Codex(_) => "Codex",
         AnyHarness::Copilot(_) => "Copilot",
@@ -462,7 +463,8 @@ impl Rows {
         let calling = Some(StopReason::ToolUse);
         match self.target {
             // Copilot answers each call with a result event of its own, as pi does.
-            AnyHarness::ClaudeCode(_)
+            AnyHarness::Amp(_)
+            | AnyHarness::ClaudeCode(_)
             | AnyHarness::Pi(_)
             | AnyHarness::Copilot(_)
             | AnyHarness::Grok(_) => {
@@ -795,7 +797,9 @@ impl Ids {
     /// Pi's time-ordered), or an opencode `ses_` id, which sort newest first.
     fn session(&self) -> String {
         match self.target {
-            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => Uuid::new_v4().to_string(),
+            AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => {
+                Uuid::new_v4().to_string()
+            }
             AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
                 Uuid::now_v7().to_string()
             }
@@ -814,9 +818,10 @@ impl Ids {
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Grok(_) => {
-                    Uuid::new_v4().to_string()
-                }
+                AnyHarness::Amp(_)
+                | AnyHarness::ClaudeCode(_)
+                | AnyHarness::Copilot(_)
+                | AnyHarness::Grok(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

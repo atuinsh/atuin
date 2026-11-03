@@ -90,6 +90,7 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 /// A real session recorded by `source`, as its harness wrote it.
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
+        AnyHarness::Amp(_) => unreachable!("Amp keeps no transcript to read"),
         AnyHarness::Copilot(_) => {
             let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
             let lines: Vec<_> = CopilotSession::open(
@@ -189,6 +190,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let id = &session.id;
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
+        AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
         AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
             assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7);
@@ -206,6 +208,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
+            AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
             AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Grok(_) => {
                 assert!(uuid(id), "{id}");
             }
@@ -319,6 +322,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             continue;
         }
         let answered: Vec<String> = match target {
+            AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
@@ -404,6 +408,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let root = dir.path();
     let id = SessionId::from(session.id.clone());
     match target {
+        AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
         AnyHarness::Copilot(_) => {
             let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(copilot::session::locate(root, &session.id), Some(path.clone()));

@@ -3,26 +3,30 @@ pub mod pb;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{SearchTerms, SessionFilter};
+use atuin_client::ai_session::{Appended, HarnessSession, SearchTerms, SessionFilter};
+use atuin_common::harnesstools::session::SessionId;
+use atuin_common::harnesstools::session::pushed::PushedMessage;
 use futures::StreamExt;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::metadata::MetadataValue;
-use tonic::{Code, Request, Response, Status};
+use tonic::{Code, Request, Response, Status, Streaming};
 
 use crate::grpc::ai::agent::pb as agent;
+use crate::grpc::ai::agent::pb::ParseError;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, HarnessFilterRequest, ImportSessionsEvent,
     ImportSessionsProgress, ImportSessionsRequest, ImportSessionsSummary, ListSessionsRequest,
-    ProjectSyncedReply, ProjectSyncedRequest, RebuildSessionsReply, RebuildSessionsRequest,
-    SearchSessionsMatch, SearchSessionsRequest, SessionRefRequest, TailSessionsEvent,
-    TailSessionsRequest, get_session_event, import_sessions_event, tail_sessions_event,
+    ProjectSyncedReply, ProjectSyncedRequest, PushMessagesReply, PushMessagesRequest,
+    RebuildSessionsReply, RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest,
+    SessionRefRequest, TailSessionsEvent, TailSessionsRequest, get_session_event,
+    import_sessions_event, tail_sessions_event,
 };
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
 use crate::session_capture::{
-    AiHarnessSessionCapture, ImportProgress, RebuildError, SessionTailEvent,
+    AiHarnessSessionCapture, AppendError, ImportProgress, RebuildError, SessionTailEvent,
 };
 
 #[derive(Clone)]
@@ -237,6 +241,71 @@ impl GrpcService for Service {
     ) -> Result<Response<ProjectSyncedReply>, Status> {
         self.capture.project_synced().await;
         Ok(Response::new(ProjectSyncedReply {}))
+    }
+
+    async fn push_messages(
+        &self,
+        request: Request<Streaming<PushMessagesRequest>>,
+    ) -> Result<Response<PushMessagesReply>, Status> {
+        self.ensure_recovered()?;
+        let mut batches = request.into_inner();
+        let (mut push, mut read, mut pushed, mut duplicates) = (None, 0, 0, 0);
+        let failed = |e: AppendError| match e {
+            AppendError::Unavailable => Status::failed_precondition(e.to_string()),
+            e => Status::internal(e.to_string()),
+        };
+        let mut count = |appended: Vec<Appended>| {
+            let new = appended.iter().filter(|a| **a == Appended::New).count() as u64;
+            (pushed, duplicates) = (pushed + new, duplicates + appended.len() as u64 - new);
+        };
+        // Each batch is captured as it comes, so the daemon never holds a whole push, and read as
+        // the next lines of the one push.
+        let streamed = async {
+            while let Some(PushMessagesRequest {
+                session,
+                lines: batch,
+            }) = batches.message().await?
+            {
+                let session =
+                    HarnessSession::try_from(session.ok_or(ParseError::Missing("session"))?)?;
+                let (handle, capture) = match &mut push {
+                    Some((handle, capture)) => (handle, capture),
+                    None => {
+                        let id = SessionId::from(String::from(session.session.clone()));
+                        let capture =
+                            self.capture.push(session.harness, &id).await.map_err(failed)?;
+                        let (handle, capture) = push.insert((session.clone(), capture));
+                        (handle, capture)
+                    }
+                };
+                if *handle != session {
+                    return Err(Status::invalid_argument(
+                        "every batch of a push names one session",
+                    ));
+                }
+                let mut lines = Vec::with_capacity(batch.len());
+                for line in batch {
+                    read += 1;
+                    lines.push(
+                        serde_json::from_str::<PushedMessage>(&line)
+                            .map_err(|e| Status::invalid_argument(format!("line {read}: {e}")))?,
+                    );
+                }
+                count(capture.lines(lines).await.map_err(failed)?);
+            }
+            Ok::<_, Status>(())
+        }
+        .await;
+        // However the push ended (a bad line, the client gone), what its earlier batches left
+        // waiting for a timed line is stored.
+        let Some((_, capture)) = push else {
+            streamed?;
+            return Err(ParseError::Missing("session").into());
+        };
+        let finished = capture.finish().await.map_err(failed);
+        streamed?;
+        count(finished?);
+        Ok(Response::new(PushMessagesReply { pushed, duplicates }))
     }
 
     async fn import_sessions(

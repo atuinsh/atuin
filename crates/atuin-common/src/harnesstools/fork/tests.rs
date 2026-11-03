@@ -59,6 +59,7 @@ async fn written(
 ) -> (Vec<RehydrateMessage>, Vec<(String, ParentKind)>) {
     let id = SessionId::from(session.id.clone());
     match harness {
+        AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
         AnyHarness::Copilot(_) => {
             let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =

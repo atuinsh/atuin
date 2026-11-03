@@ -10,7 +10,8 @@ use thiserror::Error;
 use tonic::metadata::errors::InvalidMetadataValue;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::transport::{Channel, Endpoint};
-use tonic::{Code, Request};
+use tonic::{Code, Request, Status};
+use tonic_types::StatusExt as _;
 use tracing::warn;
 use url::Url;
 
@@ -58,8 +59,26 @@ pub enum HubCallError {
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
     NoUserId,
+    #[error("Octavo is not enabled for this account")]
+    OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
-    Hub(#[source] tonic::Status),
+    Hub(#[source] Status),
+}
+
+impl From<Status> for HubCallError {
+    fn from(status: Status) -> Self {
+        /// The `google.rpc.ErrorInfo` reason of a call refused as its account has Octavo off.
+        const OCTAVO_NOT_ENABLED: &str = "OCTAVO_NOT_ENABLED";
+
+        let off = status.code() == Code::FailedPrecondition
+            && status
+                .get_details_error_info()
+                .is_some_and(|info| info.reason == OCTAVO_NOT_ENABLED);
+        if off {
+            return Self::OctavoOff(status);
+        }
+        Self::Hub(status)
+    }
 }
 
 impl HubCallError {
@@ -77,7 +96,9 @@ impl HubCallError {
             | Self::HubChanged(_)
             | Self::InvalidToken(_)
             | Self::HistoryNotStored(_)
-            | Self::NoUserId => false,
+            | Self::NoUserId
+            // Until the account has Octavo again.
+            | Self::OctavoOff(_) => false,
         }
     }
 }
@@ -285,7 +306,7 @@ impl HubLogin {
         match self.caller.service.clone().insert_history(request).await {
             Ok(_) => Ok(()),
             Err(status) if status.code() == Code::AlreadyExists => Ok(()),
-            Err(status) => Err(HubCallError::Hub(status)),
+            Err(status) => Err(status.into()),
         }
     }
 
@@ -308,7 +329,7 @@ impl HubLogin {
             Err(status) if status.code() == Code::NotFound => {
                 Err(HubCallError::HistoryNotStored(status))
             }
-            Err(status) => Err(HubCallError::Hub(status)),
+            Err(status) => Err(status.into()),
         }
     }
 
@@ -318,7 +339,7 @@ impl HubLogin {
             id: Some(id.try_into()?),
         });
 
-        self.caller.service.clone().delete_history(request).await.map_err(HubCallError::Hub)?;
+        self.caller.service.clone().delete_history(request).await.map_err(HubCallError::from)?;
         Ok(())
     }
 
@@ -331,7 +352,7 @@ impl HubLogin {
             .clone()
             .insert_thread_messages(request)
             .await
-            .map_err(HubCallError::Hub)?;
+            .map_err(HubCallError::from)?;
         Ok(())
     }
 }
@@ -354,7 +375,7 @@ impl Caller {
     async fn who_am_i(&self) -> Result<UserId, HubCallError> {
         let request = self.request(pb::WhoAmIRequest {});
         let user_id =
-            self.service.clone().who_am_i(request).await.map_err(HubCallError::Hub)?.into_inner();
+            self.service.clone().who_am_i(request).await.map_err(HubCallError::from)?.into_inner();
 
         if user_id.user_id.is_empty() {
             return Err(HubCallError::NoUserId);

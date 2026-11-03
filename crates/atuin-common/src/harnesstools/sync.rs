@@ -32,6 +32,7 @@ use crate::harnesstools::rehydrate::{MERGED_FIELD, RehydrateMessage};
 use crate::harnesstools::session::synthetic::{SYNTHETIC, content_hash, synthetic_id};
 use crate::harnesstools::session::{Message, SessionId};
 
+mod amp;
 mod ccode;
 mod codex;
 mod copilot;

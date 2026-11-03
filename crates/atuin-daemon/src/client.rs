@@ -19,21 +19,22 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{Level, instrument, span, warn};
 
-use crate::grpc::ai::agent::pb::Session as AiSession;
+use crate::grpc::ai::agent::pb::{HarnessSession as AgentHarnessSession, Session as AiSession};
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
-    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
-    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    ListSessionsRequest, ProjectSyncedRequest, PushMessagesReply, PushMessagesRequest,
+    RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent,
+    TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     CompactStoreReply, CompactStoreRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest,
+    TailHistoryReply, TailHistoryRequest,
 };
 use crate::grpc::request::ClientInterceptor;
 use crate::grpc::userio::pb::ListenLogsRequest;
@@ -227,6 +228,12 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+
+    /// Tells the daemon `atuin login` saved a session, so the uploads it holds back for one go now.
+    pub async fn logged_in(&mut self) -> Result<(), tonic::Status> {
+        self.client.logged_in(LoggedInRequest {}).await?;
+        Ok(())
     }
 
     pub async fn register_command_output(
@@ -557,6 +564,21 @@ impl AiClient {
         Ok(())
     }
 
+    /// Hand the daemon messages of `session`, each a line of `atuin threads push` input, to
+    /// capture: one push, sent a batch at a time.
+    pub async fn push_messages(
+        &mut self,
+        session: HarnessSession,
+        batches: Vec<Vec<String>>,
+    ) -> Result<PushMessagesReply> {
+        let session = AgentHarnessSession::from(session);
+        let requests = batches.into_iter().map(move |lines| PushMessagesRequest {
+            session: Some(session.clone()),
+            lines,
+        });
+        Ok(self.client.push_messages(futures::stream::iter(requests)).await?.into_inner())
+    }
+
     pub async fn import_sessions(
         &mut self,
         harness: Option<HarnessKind>,
@@ -679,6 +701,36 @@ mod rebuild_tests {
         let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
         tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
         (AiClient::new(path).await.unwrap(), state, dir)
+    }
+
+    /// A push whose later batch is bad still stores what the batches before it held, a line
+    /// waiting for a timed one included.
+    #[rstest]
+    #[tokio::test]
+    async fn a_bad_batch_keeps_the_batches_before_it() {
+        use atuin_client::ai_session::{HarnessKind, HarnessSession};
+        use futures::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.sock");
+        let (capture, _state) = AiHarnessSessionCapture::with_state(StoreState::Ready).await;
+        let capture = Arc::new(capture);
+        let service = AiSessionServer::new(AiSessionService::new(capture.clone()));
+        let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
+        tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
+        let mut client = AiClient::new(path).await.unwrap();
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Amp,
+            session: "T-1".to_owned().into(),
+        };
+        let untimed = r#"{"v":1,"id":"m1","role":"user","content":[{"type":"text","text":"hi"}]}"#;
+        let batches = vec![vec![untimed.to_owned()], vec!["not a message".to_owned()]];
+        assert!(client.push_messages(handle.clone(), batches).await.is_err());
+
+        let stored: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].source_id.as_ref(), "m1");
     }
 
     #[rstest]

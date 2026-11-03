@@ -1,7 +1,7 @@
 mod active;
 mod nop;
 
-pub use active::ActiveOctavoClient;
+pub use active::{ActiveOctavoClient, DirectThreadUpload};
 use atuin_client::ai_session::Message;
 use atuin_client::history::{History, HistoryId};
 use atuin_domain::record::RecordId;

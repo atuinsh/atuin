@@ -8,6 +8,10 @@ use atuin_client::settings::Settings;
 use atuin_common::string::StrExt;
 use atuin_common::userio;
 #[cfg(feature = "octavo")]
+use atuin_daemon::service::pidfile::Pidfile;
+#[cfg(feature = "octavo")]
+use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
+#[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
 #[cfg(feature = "octavo")]
 use atuin_domain::record::{HostId, RecordTag};
@@ -324,7 +328,9 @@ impl EnableCmd {
 
         // The daemon reads these settings only at startup, so it needs a restart to pick them
         // up. A running daemon with autostart off may be externally managed (systemd, launchd),
-        // so leave that one alone and tell the user instead.
+        // so leave that one alone and tell the user instead, unless Octavo was enabled: then a
+        // daemon systemd or launchd runs, Atuin's launchd agent included, is restarted through
+        // them.
         #[cfg(feature = "daemon")]
         {
             // `settings` predates the edit, which may have switched the daemon and its autostart
@@ -338,6 +344,11 @@ impl EnableCmd {
                 }
             };
             if settings.daemon.enabled && !settings.daemon.autostart {
+                #[cfg(feature = "octavo")]
+                if self.feature == Feature::Octavo {
+                    restart_managed_daemon(&settings).await;
+                    return backfilled;
+                }
                 userio::log::info!("config-restart-daemon-and-shell");
                 return backfilled;
             } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
@@ -513,6 +524,12 @@ async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboard
     let queue = UploadQueue::open(settings.octavo_queue_path())
         .await
         .wrap_err("failed to open Octavo's upload queue")?;
+    // The server says the account has Octavo now, so a daemon that found it off queues again, and
+    // sends what it paused as it reloads the config this writes.
+    queue.clear_off(login.user_id()).await.wrap_err(
+        "failed to note that your account has Octavo; run `atuin config enable octavo` again to \
+         retry",
+    )?;
     // An unfixed backfill from an earlier yes would be fixed at the tail on the daemon's next pass
     // with Octavo on, taking threads captured while Octavo was off. Dropped before the config
     // turns Octavo on, so that pass can't come first.
@@ -592,6 +609,82 @@ impl DisableCmd {
 
         Ok(updated)
     }
+}
+
+/// Restarts the running daemon through the systemd unit or launchd job that runs it, or Atuin's
+/// launchd agent, as the daemon picks its Octavo client as it starts. Any other, such as one run
+/// by hand, is left to the user.
+#[cfg(feature = "octavo")]
+async fn restart_managed_daemon(settings: &Settings) {
+    // Connecting to a systemd socket, or to launchd's for the agent, would start a daemon that
+    // isn't running, which reads the new config, only to restart it or warn that it can't be.
+    if !Pidfile::new(&settings.daemon.pidfile_path).is_live() {
+        userio::log::info!("config-restart-shell");
+        return;
+    }
+    let found = match ActiveService::find(settings).await {
+        Ok(found) => found,
+        Err(err) => {
+            tracing::debug!(?err, "can't tell what runs the daemon");
+            None
+        }
+    };
+    let Some(service) = found else {
+        userio::log::info!("config-restart-daemon-and-shell");
+        return;
+    };
+
+    match service.external_manager().cloned() {
+        // It doesn't say which unit the socket starts, so a restart would only be refused.
+        Some(manager @ ExternalManager::SystemdSocket) => {
+            userio::log::warn!("config-managed-daemon-restart-failed", error = manager.to_string());
+        }
+        Some(
+            manager @ (ExternalManager::SystemdUnit { .. } | ExternalManager::LaunchdJob { .. }),
+        ) => {
+            restart_through(service, Some(&manager)).await;
+        }
+        None if service.is_launchd_agent() => restart_through(service, None).await,
+        None => {
+            userio::log::info!("config-restart-daemon-and-shell");
+            return;
+        }
+    }
+    userio::log::info!("config-restart-shell");
+}
+
+/// Restarts `service` through `manager`, the systemd unit or launchd job that runs it in Atuin's
+/// place, if any.
+#[cfg(feature = "octavo")]
+async fn restart_through(service: ActiveService, manager: Option<&ExternalManager>) {
+    userio::log::info!("daemon-restarting");
+    let Err(e) = service.restart().await else {
+        userio::log::info!("daemon-restarted");
+        return;
+    };
+    let Some(manager) = manager else {
+        // Atuin runs it, so `atuin daemon restart` is the instruction.
+        userio::log::warn!("config-daemon-restart-failed", error = e.to_string());
+        return;
+    };
+    userio::log::warn!(
+        "config-managed-daemon-restart-failed",
+        error = with_instruction(&e, manager)
+    );
+}
+
+/// `err`, from restarting the daemon `manager` runs, followed by the manager's instruction for
+/// restarting it.
+#[cfg(feature = "octavo")]
+fn with_instruction(err: &RestartError, manager: &ExternalManager) -> String {
+    let (err, instruction) = (err.to_string(), manager.to_string());
+    // A daemon that recorded no program to run again is refused with the instruction alone.
+    // The comparison relies on the error wrappers being `#[error(transparent)]`; a
+    // non-transparent one would only print the instruction twice.
+    if err == instruction {
+        return err;
+    }
+    format!("{err}; {instruction}")
 }
 
 #[cfg(feature = "daemon")]

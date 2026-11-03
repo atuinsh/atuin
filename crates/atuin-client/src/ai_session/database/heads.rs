@@ -113,7 +113,8 @@ impl Model {
                 chained: false,
                 beside: true,
             },
-            HarnessKind::Copilot => Self::Tree {
+            // Amp's title rows (an import's) are content-addressed, beside its messages.
+            HarnessKind::Copilot | HarnessKind::Amp => Self::Tree {
                 chained: true,
                 beside: true,
             },

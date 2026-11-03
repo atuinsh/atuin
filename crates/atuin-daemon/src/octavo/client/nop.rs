@@ -16,6 +16,6 @@ impl OctavoClient for NopOctavoClient {
     async fn delete_history(&self, _ids: &[HistoryId]) {}
 
     async fn queue_thread_messages(&self, _messages: &[Message]) -> ThreadUpload {
-        ThreadUpload::default()
+        ThreadUpload::Nothing
     }
 }

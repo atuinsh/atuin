@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod access;
+pub mod amp;
 pub mod ccode;
 pub mod codex;
 pub mod continuation;
@@ -19,6 +20,7 @@ pub mod resume;
 pub mod session;
 pub mod sync;
 
+use amp::Amp;
 use ccode::Ccode;
 use codex::Codex;
 use copilot::Copilot;
@@ -90,6 +92,7 @@ pub trait Harness: std::fmt::Debug {
 #[whichever::dispatch(SessionSync)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
+    Amp(Amp),
     ClaudeCode(Ccode),
     Codex(Codex),
     Copilot(Copilot),
@@ -158,6 +161,7 @@ impl AnyHarness {
     #[must_use]
     pub fn all() -> &'static [Self] {
         &[
+            Self::Amp(Amp),
             Self::ClaudeCode(Ccode),
             Self::Codex(Codex),
             Self::Copilot(Copilot),
@@ -172,6 +176,8 @@ impl AnyHarness {
     #[must_use]
     pub fn sessions(&self, pool: &BlockingPool) -> Option<AnySessions> {
         match self {
+            // Amp pushes its threads (`atuin threads push`): there is nothing to watch.
+            Self::Amp(_) => None,
             Self::ClaudeCode(h) => Some(h.sessions(pool.clone()).into()),
             Self::Codex(h) => Some(h.sessions(pool.clone()).into()),
             Self::Copilot(h) => Some(h.sessions(pool.clone()).into()),

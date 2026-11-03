@@ -13,19 +13,20 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Instrument, Level, instrument};
 
-use crate::DaemonHandle;
 // `Lagged` now lives in the shared `common` package (see `common.proto`).
 use crate::grpc::common::pb::Lagged;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply,
-    RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
-    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
-    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, LoggedInReply,
+    LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
+    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
+    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
+    TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
+use crate::{DaemonEvent, DaemonHandle};
 
 /// The History gRPC service.
 ///
@@ -34,7 +35,7 @@ use crate::history_journal::HistoryJournal;
 pub struct Service {
     journal: Arc<HistoryJournal>,
     /// TODO(markovejnovic): Revisit whether we need to hold this handle. It exists only to service
-    /// the [`GrpcService::shutdown`] request.
+    /// the [`GrpcService::shutdown`] and [`GrpcService::logged_in`] requests.
     daemon_handle: DaemonHandle,
 }
 
@@ -203,6 +204,17 @@ impl GrpcService for Service {
     ) -> Result<Response<ShutdownReply>, Status> {
         self.daemon_handle.shutdown();
         Ok(Response::new(ShutdownReply { accepted: true }))
+    }
+
+    /// Tells the daemon's parts that `atuin login` saved a session. Has nothing to do with
+    /// history.
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn logged_in(
+        &self,
+        _request: Request<LoggedInRequest>,
+    ) -> Result<Response<LoggedInReply>, Status> {
+        self.daemon_handle.emit(DaemonEvent::LoggedIn);
+        Ok(Response::new(LoggedInReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]

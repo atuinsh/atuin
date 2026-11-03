@@ -1570,6 +1570,7 @@ impl AiSessionDatabase {
             5 => Ok(HarnessKind::Pi),
             6 => Ok(HarnessKind::Omp),
             7 => Ok(HarnessKind::Grok),
+            8 => Ok(HarnessKind::Amp),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
