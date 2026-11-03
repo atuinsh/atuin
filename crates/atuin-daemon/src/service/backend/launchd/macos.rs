@@ -306,20 +306,26 @@ impl Launchd {
 
     /// The socket launchd listens on for the agent.
     fn socket(&self) -> PathBuf {
-        match self.daemon.socket_path() {
-            // launchd creates a missing socket directory itself, owned by root. macOS empties
-            // `$TMPDIR` at boot, so the default `$TMPDIR/atuin-$UID` would be root's after the next
-            // login, and the pty-proxy, which keeps its sockets there too, refuses it.
-            SocketPath::Default(_) => self.daemon.legacy_socket_path(),
-            user_defined @ SocketPath::UserDefined(_) => user_defined.into_owned(),
+        let socket = self.daemon.socket_path();
+        if matches!(socket, SocketPath::Default(_)) {
+            // After a reboot, launchd would create `$TMPDIR/atuin-$UID` as root, which the
+            // pty-proxy refuses.
+            let legacy = self.daemon.legacy_socket_path();
+            if rustix::net::SocketAddrUnix::new(&legacy).is_ok() {
+                return legacy;
+            }
         }
+        socket.into_owned()
     }
 
     /// Install the agent, replacing any copy of it that is loaded, and so have launchd start it.
     async fn install(&self) -> Result<(), LaunchdError> {
         let socket = self.socket();
         // Without its directory, launchd loads the agent but can't place the socket.
-        if let Some(dir) = socket.parent() {
+        let configured = self.daemon.socket_path();
+        if socket == configured.as_path() {
+            configured.create_default_dir_if_needed()?;
+        } else if let Some(dir) = socket.parent() {
             std::fs::create_dir_all(dir).map_err(SecureTempDirError::from)?;
         }
 
@@ -717,6 +723,31 @@ mod tests {
         env.set("XPC_SERVICE_NAME", label);
         // The test runner spawned this test, not launchd.
         assert_eq!(Launchd::external_job_label(), None);
+    }
+
+    #[rstest]
+    #[case::fits("data", true)]
+    #[case::too_long("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", false)]
+    fn default_socket_is_the_legacy_one_if_it_fits(#[case] data_home: &str, #[case] legacy: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = atuin_common::env::MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
+        env.set("TMPDIR", dir.path().join("tmp"));
+        env.set("XDG_DATA_HOME", dir.path().join(data_home));
+        env.remove("XDG_RUNTIME_DIR");
+        let launchd = Launchd {
+            daemon: atuin_client::settings::Settings::default().daemon,
+        };
+
+        let expected = if legacy {
+            dir.path().join(data_home).joined("atuin").joined("atuin.sock")
+        } else {
+            dir.path()
+                .join("tmp")
+                .joined(format!("atuin-{}", atuin_common::os::unix::uid()))
+                .joined("atuin.sock")
+        };
+        assert_eq!(launchd.socket(), expected);
     }
 
     /// A lossy path would point launchd at an executable that doesn't exist.
