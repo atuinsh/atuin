@@ -248,6 +248,16 @@ Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 filter_mode = "host"
 ```
 
+### `bind_ctrl_r` and `bind_up_arrow`
+
+Default: `true`
+
+Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+```toml
+bind_up_arrow = false
+```
+
 ### `search_mode_shell_up_key_binding`
 
 Default: `fuzzy`

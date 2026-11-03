@@ -799,7 +799,7 @@ fn detect_existing_type(doc: &DocumentMut, key: &str) -> Option<ValueType> {
 /// If `config` doesn't already contain a key, this function tries to insert it at an intelligent
 /// location -- at or near a commented-out example of that key if one exists. See [`enable_example`]
 /// for more information.
-fn update_config<'a, C>(config: &str, changes: C) -> Result<String>
+pub(super) fn update_config<'a, C>(config: &str, changes: C) -> Result<String>
 where
     // These bounds allow passing arrays or `Vec`s. Don't try changing the `AsRef`-slice bound to
     // `for<'c> &'c C: IntoIterator<Item = &'c C::Item>` for more flexibility: it causes compilation

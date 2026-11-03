@@ -533,6 +533,38 @@ pub async fn import_all(
     import(&mut client, None, style, out).await
 }
 
+/// A thread as `atuin setup` lists the latest: who, how long ago and what about.
+pub struct Recent {
+    pub harness: HarnessKind,
+    pub age: String,
+    pub title: String,
+}
+
+/// The `n` most recently active threads, leaving out subagents.
+pub async fn recent(settings: &Settings, n: usize) -> Result<Vec<Recent>> {
+    let mut client = AiClient::from_settings(settings).await?;
+    client.wait_for_sessions(|_| {}).await?;
+    let filter = SessionFilter {
+        roots_only: true,
+        ..SessionFilter::default()
+    };
+    // Newest first, so only as many as are shown.
+    client
+        .list_sessions(&filter)
+        .await?
+        .take(n)
+        .map(|s| {
+            let s = Session::try_from(s?)?;
+            Ok(Recent {
+                harness: s.handle.harness,
+                age: age(s.updated_at),
+                title: one_line(title_of(&s), 200),
+            })
+        })
+        .try_collect()
+        .await
+}
+
 async fn import(
     client: &mut AiClient,
     harness: Option<HarnessKind>,
@@ -1164,6 +1196,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
 /// Collapse all whitespace (including embedded newlines) to single spaces and truncate to `max`
 /// characters with an ellipsis. Session titles/previews are captured from multi-line prompts, so the
 /// human table and `tail` views must flatten them or a single entry spills across many rows.
+#[must_use]
 pub fn one_line(text: &str, max: usize) -> String {
     // Whitespace-fold, then drop any control chars left over (ESC, BEL, C1): captured session
     // content is untrusted and must not emit terminal escape sequences into the compact views.

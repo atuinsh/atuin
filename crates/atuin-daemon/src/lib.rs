@@ -182,9 +182,10 @@ pub async fn boot(
     let journal = Arc::new(journal);
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     // A push's message can be one large line (a tool's whole result), clipped only in capture.
-    let ai_session_service =
-        AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()))
-            .max_decoding_message_size(usize::MAX);
+    let ai_session_service = AiSessionServer::new(
+        grpc::AiSessionService::new(ai_session_capture.clone()).with_daemon(handle.clone()),
+    )
+    .max_decoding_message_size(usize::MAX);
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;

@@ -1,6 +1,7 @@
 pub mod pb;
 
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
@@ -19,11 +20,11 @@ use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, LoggedInReply,
-    LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest,
-    RegisterCommandOutputResponse, ShutdownReply, ShutdownRequest, StartHistoryReply,
-    StartHistoryRequest, StatusReply, StatusRequest, TailHistoryEvent, TailHistoryReply,
-    TailHistoryRequest,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, ImportHistoryReply,
+    ImportHistoryRequest, LoggedInReply, LoggedInRequest, RebuildHistoryReply,
+    RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
+    ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
+    StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
 use crate::{DaemonEvent, DaemonHandle};
@@ -152,6 +153,51 @@ impl GrpcService for Service {
             .map_err(|e| Status::internal(format!("compact did not complete: {e}")))?;
 
         Ok(Response::new(CompactStoreReply { rewritten }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn import_history(
+        &self,
+        request: Request<ImportHistoryRequest>,
+    ) -> Result<Response<ImportHistoryReply>, Status> {
+        let ImportHistoryRequest {
+            shell,
+            histfile,
+            fish_history,
+        } = request.into_inner();
+        let exe = std::env::current_exe().map_err(|e| Status::internal(e.to_string()))?;
+        let service = self.clone();
+        tokio::spawn(async move {
+            // The importers are the CLI's.
+            let mut command = tokio::process::Command::new(&exe);
+            command.args(["import", shell.as_str()]).stdin(Stdio::null()).stdout(Stdio::null());
+            // Where the client's history is, not where the daemon's own environment says, which
+            // may be another shell's.
+            for (name, value) in [("HISTFILE", &histfile), ("fish_history", &fish_history)] {
+                match value {
+                    Some(value) => command.env(name, value),
+                    None => command.env_remove(name),
+                };
+            }
+            match command.output().await {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    tracing::error!("`atuin import {shell}` failed: {}", stderr.trim());
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("couldn't run `atuin import {shell}`: {e}");
+                    return;
+                }
+            }
+            // Search reads its index, which doesn't see rows written by another process.
+            let search = service.daemon_handle.settings().await.search.clone();
+            service.journal.reload_search_index(&search).await;
+            tracing::info!(shell, "imported shell history");
+            service.daemon_handle.request_sync();
+        });
+        Ok(Response::new(ImportHistoryReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]

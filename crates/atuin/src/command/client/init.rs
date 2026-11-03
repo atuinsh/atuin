@@ -90,8 +90,8 @@ impl Cmd {
 
     fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
         StaticInitOptions {
-            enable_up_arrow: !self.disable_up_arrow,
-            enable_ctrl_r: !self.disable_ctrl_r,
+            enable_up_arrow: !self.disable_up_arrow && settings.bind_up_arrow,
+            enable_ctrl_r: !self.disable_ctrl_r && settings.bind_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
             enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,

@@ -1080,6 +1080,11 @@ pub struct Settings {
     /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
     /// the hidden `--shell-up-key-binding` option was passed.
     pub shell_up_key_binding: bool,
+    /// Whether `atuin init` binds ctrl-r to search. `--disable-ctrl-r` turns it off either way.
+    pub bind_ctrl_r: bool,
+    /// Whether `atuin init` binds the up arrow to search. `--disable-up-arrow` turns it off either
+    /// way.
+    pub bind_up_arrow: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
@@ -1610,6 +1615,8 @@ impl Settings {
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
+            .set_default("bind_ctrl_r", true)?
+            .set_default("bind_up_arrow", true)?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?

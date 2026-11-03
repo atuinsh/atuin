@@ -1140,8 +1140,6 @@ impl Cmd {
                 bail!("`atuin history tail` requires Atuin to be built with the `daemon` feature");
             }
             cmd => {
-                let context = current_context(settings).await?;
-
                 let db_path = &settings.db_path;
                 let record_store_path = &settings.record_store_path;
 
@@ -1165,6 +1163,7 @@ impl Cmd {
                         timezone,
                         format,
                     } => {
+                        let context = current_context(settings).await?;
                         let mode = ListMode::from_flags(human, cmd_only);
                         let tz = timezone.unwrap_or(settings.timezone);
                         Self::handle_list(
@@ -1201,6 +1200,7 @@ impl Cmd {
                     Self::InitStore => history_store.init_store(&db, settings).await,
 
                     Self::Prune { dry_run } => {
+                        let context = current_context(settings).await?;
                         Self::handle_prune(&db, settings, store, context, dry_run).await
                     }
 

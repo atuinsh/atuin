@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::{self, LogConfig};
 use atuin_common::userio;
 use atuin_common::userio::log::{Held, Nop, SINK};
@@ -85,7 +87,7 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-setup"))]
     #[couture(category = "setup")]
-    Setup,
+    Setup(setup::Cmd),
 
     #[command(about = fl!("cmd-init"))]
     #[couture(category = "setup")]
@@ -350,8 +352,14 @@ impl Cmd {
         let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
 
         match self {
-            Self::Setup => setup::run(&settings).await,
-            Self::Import(import) => import.run(&db).await,
+            Self::Setup(setup) => setup.run(&settings, &db, &sqlite_store).await,
+            Self::Import(import) => {
+                import.run(&db).await?;
+                // Sync sends the record store, and the importers only write the history database.
+                let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
+                let history = HistoryStore::new(sqlite_store, settings.host_id().await?, key);
+                history.init_store(&db, &settings).await
+            }
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
             Self::Search(search) => {
                 Box::pin(search.run(db, settings, sqlite_store, theme, &messages)).await

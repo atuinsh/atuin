@@ -78,6 +78,19 @@ message CompactStoreReply {
   uint64 rewritten = 1;
 }
 
+// Import a shell's history file in the background, as `atuin setup` offers to. The reply comes
+// straight away; the daemon logs how the import went.
+message ImportHistoryRequest {
+  // The shell, as `atuin import <shell>` takes it.
+  string shell = 1;
+  // Its history file, when the client's `HISTFILE` names one.
+  optional string histfile = 2;
+  // Fish's history session, when the client's `fish_history` names one.
+  optional string fish_history = 3;
+}
+
+message ImportHistoryReply {}
+
 // Do **not** change this RPC, ever. Updating the daemon **requires** this RPC to be stable.
 message StatusRequest {}
 
@@ -245,6 +258,8 @@ service History {
   rpc RebuildHistory(RebuildHistoryRequest) returns (RebuildHistoryReply);
 
   rpc CompactStore(CompactStoreRequest) returns (CompactStoreReply);
+
+  rpc ImportHistory(ImportHistoryRequest) returns (ImportHistoryReply);
 
   rpc TailHistory(TailHistoryRequest) returns (stream TailHistoryReply);
 

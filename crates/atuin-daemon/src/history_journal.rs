@@ -624,7 +624,7 @@ impl HistoryJournal {
     }
 
     /// Reload the search index from the history database.
-    async fn reload_search_index(&self, search_settings: &Search) {
+    pub async fn reload_search_index(&self, search_settings: &Search) {
         // Clone the shell filter and drop the read guard before the (full) reload, so the scan
         // doesn't hold the search-index lock across the database load.
         //

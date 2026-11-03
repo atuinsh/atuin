@@ -12,6 +12,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Request, Response, Status, Streaming};
 
+use crate::DaemonHandle;
 use crate::grpc::ai::agent::pb as agent;
 use crate::grpc::ai::agent::pb::ParseError;
 use crate::grpc::ai::session::pb::ai_session_server::AiSession as GrpcService;
@@ -32,12 +33,23 @@ use crate::session_capture::{
 #[derive(Clone)]
 pub struct Service {
     capture: Arc<AiHarnessSessionCapture>,
+    /// Asked to sync once a background import is done.
+    daemon: Option<DaemonHandle>,
 }
 
 impl Service {
     #[must_use]
     pub fn new(capture: Arc<AiHarnessSessionCapture>) -> Self {
-        Self { capture }
+        Self {
+            capture,
+            daemon: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_daemon(mut self, daemon: DaemonHandle) -> Self {
+        self.daemon = Some(daemon);
+        self
     }
 
     /// Refuse while startup recovery or a rebuild is still restoring sessions: a read would
@@ -321,7 +333,31 @@ impl GrpcService for Service {
             ));
         }
 
-        let harness = HarnessFilterRequest::harness(&request.into_inner())?;
+        let request = request.into_inner();
+        let harness = HarnessFilterRequest::harness(&request)?;
+
+        if request.background {
+            let import = self.capture.import(harness);
+            let daemon = self.daemon.clone();
+            tokio::spawn(async move {
+                futures::pin_mut!(import);
+                while let Some(progress) = import.next().await {
+                    if let ImportProgress::Finished {
+                        sessions,
+                        imported,
+                        failed,
+                        ..
+                    } = progress
+                    {
+                        tracing::info!(sessions, imported, failed, "imported threads");
+                    }
+                }
+                if let Some(daemon) = daemon {
+                    daemon.request_sync();
+                }
+            });
+            return Ok(Response::new(Box::pin(futures::stream::empty())));
+        }
 
         let stream = self.capture.import(harness).filter_map(|progress| {
             let event = match progress {
@@ -431,7 +467,7 @@ mod tests {
                 filter: None,
             }))
         };
-        let import = || svc.import_sessions(Request::new(ImportSessionsRequest { harness: None }));
+        let import = || svc.import_sessions(Request::new(ImportSessionsRequest::default()));
 
         let rebuilding = |result: Result<(), Status>| result.is_err_and(|e| is_rebuilding(&e));
         assert!(rebuilding(list().await.map(drop)));
@@ -464,8 +500,7 @@ mod tests {
         let cap = Arc::new(AiHarnessSessionCapture::nop().await);
         let svc = Service::new(cap);
 
-        let result =
-            svc.import_sessions(Request::new(ImportSessionsRequest { harness: None })).await;
+        let result = svc.import_sessions(Request::new(ImportSessionsRequest::default())).await;
 
         assert!(matches!(result, Err(ref e) if e.code() == tonic::Code::FailedPrecondition));
     }

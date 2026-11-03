@@ -273,7 +273,11 @@ impl Cmd {
 
 /// Write the key to the key file, re-encrypting the local store first if it was
 /// previously encrypted with a different key.
-async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Key) -> Result<()> {
+pub async fn store_key(
+    settings: &Settings,
+    store: &SqliteStore,
+    key: &paseto_v4::Key,
+) -> Result<()> {
     let key_path = &settings.key_path;
 
     if !key_path.exists() {
@@ -314,7 +318,7 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
 /// Tells a running daemon of the session just saved, so the uploads it holds back for one go now.
 /// Starts none itself.
 #[cfg(feature = "daemon")]
-async fn tell_daemon_logged_in(settings: &Settings) {
+pub async fn tell_daemon_logged_in(settings: &Settings) {
     let daemon = match ActiveService::find(settings).await {
         Ok(Some(daemon)) => daemon,
         Ok(None) => return,
