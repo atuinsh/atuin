@@ -66,6 +66,7 @@ eye_declare = "0.7"
 eye_declare_engine = { version = "0.7", features = ["test-util"] }
 eyre = "0.6"
 fjall = { version = "3" }
+fixedbitset = "0.5"
 flume = { version = "0.12", default-features = false, features = ["async"] }
 frizbee = "0.13"
 fs-err = "3"

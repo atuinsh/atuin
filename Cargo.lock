@@ -577,6 +577,7 @@ dependencies = [
  "easy-cast",
  "enum_dispatch",
  "eyre",
+ "fixedbitset 0.5.7",
  "fjall",
  "frizbee",
  "futures",

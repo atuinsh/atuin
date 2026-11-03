@@ -294,13 +294,15 @@ impl SearchSvc for SearchGrpcService {
                 };
 
                 // Perform the search
-                let history_ids: Vec<Vec<u8>> =
-                    span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index
-                            .search(&query, &index_filter, RESULTS_LIMIT)
-                            .map(|id| id.into_bytes().to_vec())
-                            .collect()
-                    });
+                let history_ids: Vec<Vec<u8>> = async {
+                    index
+                        .search(&query, &index_filter, RESULTS_LIMIT, this.handle.history_db())
+                        .await
+                        .map(|id| id.into_bytes().to_vec())
+                        .collect()
+                }
+                .instrument(span!(Level::TRACE, "daemon_search_query", %query, query_id))
+                .await;
                 drop(index);
 
                 if tx
@@ -438,8 +440,7 @@ fn convert_filter_mode(
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
-            // SessionPreload is similar to Session - filter by session
-            IndexFilterMode::Session(ctx.session_id.clone())
+            IndexFilterMode::SessionPreload(ctx.session_id.clone())
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
