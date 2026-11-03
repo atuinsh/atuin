@@ -101,6 +101,13 @@ impl Daemon {
             .expect("there is always at least one potential socket path")
     }
 
+    /// The socket path Atuin used before `$TMPDIR/atuin-$UID/atuin.sock`, which clients still
+    /// look for: `$XDG_RUNTIME_DIR/atuin.sock`, or `atuin.sock` in the data directory.
+    #[must_use]
+    pub fn legacy_socket_path(&self) -> PathBuf {
+        DefaultSocketCtx.legacy_socket_path()
+    }
+
     fn socket_path_ctx(&self, ctx: impl SocketCtx) -> SocketPath<'_> {
         if let Some(path) = &self.socket_path {
             return SocketPath::UserDefined(path);

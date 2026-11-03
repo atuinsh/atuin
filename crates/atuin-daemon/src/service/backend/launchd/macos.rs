@@ -9,6 +9,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
+use atuin_client::settings::daemon::SocketPath;
 use atuin_common::os::macos::launchd;
 use atuin_common::os::macos::login_items::LoginItem;
 use atuin_common::os::unix::SecureTempDirError;
@@ -303,13 +304,26 @@ impl Launchd {
         }
     }
 
+    /// The socket launchd listens on for the agent.
+    fn socket(&self) -> PathBuf {
+        match self.daemon.socket_path() {
+            // launchd creates a missing socket directory itself, owned by root. macOS empties
+            // `$TMPDIR` at boot, so the default `$TMPDIR/atuin-$UID` would be root's after the next
+            // login, and the pty-proxy, which keeps its sockets there too, refuses it.
+            SocketPath::Default(_) => self.daemon.legacy_socket_path(),
+            user_defined @ SocketPath::UserDefined(_) => user_defined.into_owned(),
+        }
+    }
+
     /// Install the agent, replacing any copy of it that is loaded, and so have launchd start it.
     async fn install(&self) -> Result<(), LaunchdError> {
-        let socket = self.daemon.socket_path();
+        let socket = self.socket();
         // Without its directory, launchd loads the agent but can't place the socket.
-        socket.create_default_dir_if_needed()?;
+        if let Some(dir) = socket.parent() {
+            std::fs::create_dir_all(dir).map_err(SecureTempDirError::from)?;
+        }
 
-        let plist = AgentPlist::for_this_client(socket.into_owned())?;
+        let plist = AgentPlist::for_this_client(socket)?;
         let ctx = ServiceInstallCtx {
             label: Self::label(),
             contents: Some(plist.to_xml()?),
@@ -355,7 +369,7 @@ impl Launchd {
 
 impl Backend for Launchd {
     fn address(&self) -> DaemonAddress {
-        DaemonAddress::configured(&self.daemon)
+        DaemonAddress::from(self.socket())
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
