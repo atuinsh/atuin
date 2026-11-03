@@ -309,10 +309,15 @@ impl Launchd {
         let socket = self.daemon.socket_path();
         if matches!(socket, SocketPath::Default(_)) {
             // After a reboot, launchd would create `$TMPDIR/atuin-$UID` as root, which the
-            // pty-proxy refuses.
+            // pty-proxy refuses. These directories already exist.
             let legacy = self.daemon.legacy_socket_path();
-            if rustix::net::SocketAddrUnix::new(&legacy).is_ok() {
-                return legacy;
+            let in_tmpdir = atuin_common::env::var_abspath("TMPDIR")
+                .map(|dir| dir.into_path_buf().joined("atuin.sock"));
+            if let Some(socket) = std::iter::once(legacy)
+                .chain(in_tmpdir)
+                .find(|socket| rustix::net::SocketAddrUnix::new(socket).is_ok())
+            {
+                return socket;
             }
         }
         socket.into_owned()
@@ -742,10 +747,7 @@ mod tests {
         let expected = if legacy {
             dir.path().join(data_home).joined("atuin").joined("atuin.sock")
         } else {
-            dir.path()
-                .join("tmp")
-                .joined(format!("atuin-{}", atuin_common::os::unix::uid()))
-                .joined("atuin.sock")
+            dir.path().join("tmp").joined("atuin.sock")
         };
         assert_eq!(launchd.socket(), expected);
     }
