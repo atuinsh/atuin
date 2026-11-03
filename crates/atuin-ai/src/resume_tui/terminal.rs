@@ -161,7 +161,9 @@ fn restore(writer: &mut Writer, inline_mode: bool, no_mouse: bool) {
     let _ = terminal::disable_raw_mode();
 }
 
+#[whichever::dispatch(whichever::foreign::Write)]
 pub struct TuiStdout {
+    #[dispatch]
     writer: Writer,
     inline_mode: bool,
     no_mouse: bool,
@@ -203,15 +205,5 @@ impl Drop for TuiStdout {
         if take_setup().is_some() {
             restore(&mut self.writer, self.inline_mode, self.no_mouse);
         }
-    }
-}
-
-impl Write for TuiStdout {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.writer.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
     }
 }
