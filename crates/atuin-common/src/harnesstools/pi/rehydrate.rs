@@ -20,7 +20,8 @@
 //!   (`StartModel`), the one it starts the session on: pi falls back to that default by itself
 //!   when it can't use the model a turn names, but omp refuses to open a session whose turns
 //!   name no model, or one it has no provider for, unless a `model_change` on the path names one
-//!   it can use. A system-role text entry is skipped too.
+//!   it can use. The entry is the same in every write of the session (see `Writer::opening_id`),
+//!   so copies on two machines share their root. A system-role text entry is skipped too.
 //! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
 //!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
@@ -50,7 +51,7 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::Flavour;
-use super::session::{default_root, locate, new_session_dir};
+use super::session::{default_root, is_omp_file, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
     merge_uncaptured_runs, on_parent_cycles, record_merged,
@@ -120,8 +121,9 @@ pub(crate) fn rehydrate_into(
 /// The model an agent starts a new session on: its configured default. pi's is
 /// `settings.json` `defaultProvider` and `defaultModel` (pi-mono coding-agent
 /// `settings-manager.ts`); omp's is `config.yml` `modelRoles.default`, as `<provider>/<id>`
-/// (omp `config.ts`). Each names it in its own `model_change` shape: pi `provider` and
-/// `modelId`, omp `model` as `<provider>/<id>`.
+/// (omp `config.ts`). omp with no default picks one itself from the providers it can use, so
+/// then it is the one omp last started a session on. Each names it in its own `model_change`
+/// shape: pi `provider` and `modelId`, omp `model` as `<provider>/<id>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StartModel {
     pub flavour: Flavour,
@@ -130,12 +132,17 @@ pub(crate) struct StartModel {
 }
 
 impl StartModel {
-    /// The default model the agent's config directory names, if it names one.
+    /// The default model the agent's config directory names, else (omp) the one it last started
+    /// a session on.
     pub(crate) fn configured(flavour: Flavour) -> Option<Self> {
-        Self::configured_in(flavour, &flavour.agent_dir())
+        Self::configured_in(flavour, &flavour.agent_dir(), &default_root(flavour))
     }
 
-    pub(crate) fn configured_in(flavour: Flavour, agent_dir: &Path) -> Option<Self> {
+    pub(crate) fn configured_in(
+        flavour: Flavour,
+        agent_dir: &Path,
+        sessions: &Path,
+    ) -> Option<Self> {
         let (provider, id) = match flavour {
             Flavour::Pi => {
                 let raw = std::fs::read_to_string(agent_dir.join("settings.json")).ok()?;
@@ -152,8 +159,10 @@ impl StartModel {
                 (field("defaultProvider")?, field("defaultModel")?)
             }
             Flavour::Omp => {
-                let raw = std::fs::read_to_string(agent_dir.join("config.yml")).ok()?;
-                let model = yaml_model_role_default(&raw)?;
+                let configured = std::fs::read_to_string(agent_dir.join("config.yml"))
+                    .ok()
+                    .and_then(|raw| yaml_model_role_default(&raw));
+                let model = configured.or_else(|| last_started_model(sessions))?;
                 let (provider, id) = model.split_once('/')?;
                 (provider.to_owned(), id.to_owned())
             }
@@ -210,6 +219,41 @@ fn yaml_model_role_default(yaml: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The model omp started its newest session under `sessions` on: that file's last
+/// `model_change` of omp's own (`<provider>/<id>`). pi may keep its sessions in the same
+/// directory, so only omp's files count. Files only atuin wrote have no `model_change` of omp's:
+/// their opening entry is atuin's (`atuin-` ids). The newest few omp files are enough to find one.
+fn last_started_model(sessions: &Path) -> Option<String> {
+    const LOOK_AT: usize = 16;
+    let mut files = Vec::new();
+    let mut dirs = vec![sessions.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => dirs.push(path),
+                Ok(t) if t.is_file() && path.extension().is_some_and(|e| e == "jsonl") => {
+                    if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+                        files.push((modified, path));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    files.into_iter().filter(|(_, path)| is_omp_file(path)).take(LOOK_AT).find_map(|(_, path)| {
+        let raw = std::fs::read_to_string(path).ok()?;
+        raw.lines()
+            .rev()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry["type"] == "model_change")
+            .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
+            .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
+            .find(|model| model.contains('/'))
+    })
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.
@@ -396,9 +440,32 @@ impl<'a> Writer<'a> {
 
     /// Open the file on `start`: the entry the root rows hang from.
     fn start(&mut self, start: &StartModel) {
-        let id = format!("atuin-{}", crate::utils::uuid_v7().as_simple());
+        let id = self.opening_id();
         self.lines.push(start.entry(&id, self.session.started_at));
         self.start_id = Some(id);
+    }
+
+    /// The id the file opens under, the same in every write of the session: capture keeps the
+    /// opening entry as a row, so a root minted afresh by each machine's write would split the
+    /// synced session at its root, and no copy could catch up with another. It is the captured
+    /// `model_change` the first written row hangs from (an earlier write's opening, or a native
+    /// session's own), else one derived from the session.
+    fn opening_id(&self) -> String {
+        let model_change = Role::Other("model_change".to_owned());
+        let first =
+            self.session.messages.iter().find(|m| self.writable.contains(m.source_id.as_str()));
+        let mut parent = first.and_then(|m| m.parent_source_id.as_deref());
+        // At most one step per row.
+        for _ in 0..=self.by_id.len() {
+            let Some(row) = parent.and_then(|p| self.by_id.get(p)) else {
+                break;
+            };
+            if row.role == model_change && row.parent_source_id.is_none() {
+                return row.source_id.clone();
+            }
+            parent = row.parent_source_id.as_deref();
+        }
+        format!("atuin-model-{}", self.session.id)
     }
 
     fn push(&mut self, m: &'a RehydrateMessage) {

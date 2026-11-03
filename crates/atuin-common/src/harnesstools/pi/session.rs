@@ -380,15 +380,23 @@ fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     if !matches!(header, Header::Session { .. }) {
         return Ok(header);
     }
-    let mut first = Vec::new();
-    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
-    let titled = crate::json::js::from_slice::<serde_json::Value>(&first)
-        .is_ok_and(|entry| entry["type"] == "title");
-    Ok(if titled == (flavour == Flavour::Omp) {
+    Ok(if starts_with_title_slot(path)? == (flavour == Flavour::Omp) {
         header
     } else {
         Header::Other
     })
+}
+
+/// Whether the file is omp's: omp's sessions start with their title slot, pi's never do.
+pub(crate) fn is_omp_file(path: &Path) -> bool {
+    starts_with_title_slot(path).unwrap_or(false)
+}
+
+fn starts_with_title_slot(path: &Path) -> io::Result<bool> {
+    let mut first = Vec::new();
+    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
+    Ok(crate::json::js::from_slice::<serde_json::Value>(&first)
+        .is_ok_and(|entry| entry["type"] == "title"))
 }
 
 /// The session id pi's own file naming (`<timestamp>_<id>.jsonl`, session-manager.ts
