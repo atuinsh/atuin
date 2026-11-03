@@ -88,7 +88,6 @@ plugins:
         "cli/ai/skills.md": "ai/skills.md"
         "cli/ai/slash-commands.md": "ai/slash-commands.md"
         "cli/ai/tools-permissions.md": "ai/tools-permissions.md"
-        "cli/ai/user-context.md": "ai/user-context.md"
         "cli/configuration/advanced-key-binding.md": "configuration/advanced-key-binding.md"
         "cli/configuration/config.md": "configuration/config.md"
         "cli/configuration/key-binding.md": "configuration/key-binding.md"
@@ -182,7 +181,6 @@ plugins:
           - ai/introduction.md: Atuin AI - command generation and lookup via LLM from your terminal.
           - ai/settings.md: AI configuration in config.toml - enabled, endpoint, session timeout.
           - ai/slash-commands.md: Slash commands available in Atuin AI.
-          - ai/user-context.md: Send additional context to the LLM via TERMINAL.md files and dynamic shell substitution.
           - ai/skills.md: Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
           - ai/tools-permissions.md: Tools the AI can use (shell, filesystem) and permission files to control access.
           - ai/command-output.md: Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
@@ -303,7 +301,6 @@ nav:
       - Introduction: ai/introduction.md
       - Settings: ai/settings.md
       - "Slash Commands": ai/slash-commands.md
-      - "User-Defined Context": ai/user-context.md
       - Skills: ai/skills.md
       - "Tools & Permissions": ai/tools-permissions.md
       - "Reading Command Output": ai/command-output.md

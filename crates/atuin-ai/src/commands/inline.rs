@@ -348,7 +348,6 @@ async fn run_inline_tui(
         edit_permissions,
         snapshot_store,
         skill_registry,
-        user_context_cache: Default::default(),
     };
 
     println!();
