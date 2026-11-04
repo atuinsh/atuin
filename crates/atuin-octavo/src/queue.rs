@@ -17,8 +17,9 @@ use crate::hub::UserId;
 use crate::pb;
 
 const PAGE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();
+const HISTORY_PAGE_SIZE: NonZeroU32 = pb::HistoryBatch::MAX_ITEMS;
 /// As many as one `InsertThreadMessages` takes, so a page of small messages is one request.
-const THREAD_PAGE_SIZE: NonZeroU32 = pb::ThreadBatch::MAX_MESSAGES;
+const THREAD_PAGE_SIZE: NonZeroU32 = pb::ThreadBatch::MAX_ITEMS;
 
 #[derive(Debug, Error)]
 pub enum QueueError {
@@ -163,19 +164,22 @@ impl UploadQueue {
     ) -> ChunkedStream<Result<PendingHistoryUpload, QueueError>> {
         self.paged(
             user,
-            PAGE_SIZE,
+            HISTORY_PAGE_SIZE,
             "SELECT history_id, record_id FROM history_uploads WHERE user_id = ?1 AND (?2 IS NULL \
              OR history_id > ?2) ORDER BY history_id LIMIT ?3",
             |upload: &PendingHistoryUpload| upload.history_id,
         )
     }
 
-    pub async fn remove_history(&self, user: &UserId, id: HistoryId) -> Result<(), QueueError> {
-        db::query("DELETE FROM history_uploads WHERE user_id = ?1 AND history_id = ?2")
-            .bind(user.as_str())
-            .bind(id)
-            .execute(self.db.pool())
-            .await?;
+    pub async fn remove_history(
+        &self,
+        user: &UserId,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<(), QueueError> {
+        self.run_over_ids(user, "history_id", ids, |statement| {
+            statement.push("DELETE FROM history_uploads WHERE");
+        })
+        .await?;
         Ok(())
     }
 
@@ -263,7 +267,7 @@ impl UploadQueue {
         user: &UserId,
         ids: impl IntoIterator<Item = RecordId>,
     ) -> Result<(), QueueError> {
-        self.run_over_thread_messages(user, ids, |statement| {
+        self.run_over_ids(user, "record_id", ids, |statement| {
             statement.push("DELETE FROM thread_message_uploads WHERE");
         })
         .await?;
@@ -279,7 +283,7 @@ impl UploadQueue {
         after: Duration,
     ) -> Result<u64, QueueError> {
         let after = i64::try_from(after.as_secs()).unwrap_or(i64::MAX);
-        self.run_over_thread_messages(user, ids, |statement| {
+        self.run_over_ids(user, "record_id", ids, |statement| {
             statement
                 .push("DELETE FROM thread_message_uploads WHERE queued_at <= unixepoch() - ")
                 .push_bind(after)
@@ -295,7 +299,7 @@ impl UploadQueue {
         user: &UserId,
         ids: impl IntoIterator<Item = RecordId>,
     ) -> Result<(), QueueError> {
-        self.run_over_thread_messages(user, ids, |statement| {
+        self.run_over_ids(user, "record_id", ids, |statement| {
             statement.push("UPDATE thread_message_uploads SET held = 1 WHERE");
         })
         .await?;
@@ -310,17 +314,21 @@ impl UploadQueue {
         Ok(())
     }
 
-    /// Runs the statement `head` starts over `user`'s queued thread message uploads `ids`, once per
-    /// chunk SQLite can bind, in one transaction, returning the rows it changed.
+    /// Runs the statement `head` starts over `user`'s queued uploads whose `column` is one of
+    /// `ids`, once per chunk SQLite can bind, in one transaction, returning the rows it changed.
     ///
-    /// `head` ends where its `WHERE` clause can go on with `user_id = <user> AND record_id IN
+    /// `head` ends where its `WHERE` clause can go on with `user_id = <user> AND <column> IN
     /// (<ids>)`.
-    async fn run_over_thread_messages(
+    async fn run_over_ids<I>(
         &self,
         user: &UserId,
-        ids: impl IntoIterator<Item = RecordId>,
+        column: &'static str,
+        ids: impl IntoIterator<Item = I>,
         head: impl Fn(&mut QueryBuilder<sqlx::Sqlite>),
-    ) -> Result<u64, QueueError> {
+    ) -> Result<u64, QueueError>
+    where
+        I: for<'q> sqlx::Encode<'q, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+    {
         // Leaves a parameter for the user and one for `head`.
         let ids_per_statement =
             self.db.info().await.variable_number_limit().saturating_sub(2).max(1);
@@ -331,7 +339,10 @@ impl UploadQueue {
         while ids.peek().is_some() {
             let mut statement = QueryBuilder::new("");
             head(&mut statement);
-            statement.push(" user_id = ").push_bind(user.as_str()).push(" AND record_id IN (");
+            statement
+                .push(" user_id = ")
+                .push_bind(user.as_str())
+                .push(format!(" AND {column} IN ("));
             let mut list = statement.separated(", ");
             for id in ids.by_ref().take(ids_per_statement) {
                 list.push_bind(id);

@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-use atuin_client::history::{CommandCapture, History, HistoryId};
+use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
-use atuin_domain::record::RecordId;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use secrecy::{ExposeSecret, SecretString};
@@ -17,7 +16,7 @@ use url::Url;
 
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
-use crate::pb::{HistoryConversionError, NotUuidV7, OutputTooLarge};
+use crate::pb::{NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
@@ -33,12 +32,8 @@ pub enum ConnectError {
 
 #[derive(Debug, Error)]
 pub enum HubCallError {
-    #[error(transparent)]
-    Convert(#[from] HistoryConversionError),
     #[error("history {0}")]
     Id(#[from] NotUuidV7<HistoryId>),
-    #[error("record {0}")]
-    RecordId(#[from] NotUuidV7<RecordId>),
     #[error(transparent)]
     OutputTooLarge(#[from] OutputTooLarge),
     #[error("the hub has not stored the history entry yet")]
@@ -86,7 +81,7 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Convert(_) | Self::Id(_) | Self::RecordId(_) | Self::OutputTooLarge(_) => true,
+            Self::Id(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser
@@ -292,22 +287,11 @@ impl HubLogin {
         &self.user_id
     }
 
-    pub async fn upload(
-        &self,
-        history: History,
-        record_id: Option<RecordId>,
-    ) -> Result<(), HubCallError> {
-        let mut history = pb::History::try_from(history)?;
-        history.record_id = record_id.map(pb::UuidV7::try_from).transpose()?;
-        let request = self.caller.request(pb::InsertHistoryRequest {
-            history: Some(history),
-        });
+    pub async fn upload_history(&self, batch: pb::HistoryBatch) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::InsertHistoryRequest::from(batch));
 
-        match self.caller.service.clone().insert_history(request).await {
-            Ok(_) => Ok(()),
-            Err(status) if status.code() == Code::AlreadyExists => Ok(()),
-            Err(status) => Err(status.into()),
-        }
+        self.caller.service.clone().insert_history(request).await.map_err(HubCallError::from)?;
+        Ok(())
     }
 
     /// Stores `capture` as the output of the entry with `id`.

@@ -3,15 +3,17 @@ mod codegen {
     tonic::include_proto!("atuin.api.v1");
 }
 
+mod batch;
 mod history;
 mod threads;
 
 use atuin_client::history::HistoryId;
 use atuin_domain::record::{HostId as DomainHostId, RecordId};
+pub use batch::{Batch, HistoryBatch, ThreadBatch};
 pub use codegen::*;
 pub use history::{HistoryConversionError, OutputTooLarge};
 use thiserror::Error;
-pub use threads::{Field, KeyError, ThreadBatch, ThreadMessageConversionError};
+pub use threads::{Field, KeyError, ThreadMessageConversionError};
 use uuid::{Uuid, Version};
 
 /// An id of another version than UUIDv7, the only one Octavo stores.

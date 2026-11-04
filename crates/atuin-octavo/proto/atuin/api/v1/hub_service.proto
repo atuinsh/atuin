@@ -10,9 +10,13 @@ import "buf/validate/validate.proto";
 
 // The hub's user-facing API.
 service HubService {
-  // Store a finished command for the calling user if the history is not already stored.
+  // Store the calling user's finished commands that their history doesn't hold yet.
   //
-  // Otherwise fails with `ALREADY_EXISTS` (`HISTORY_ALREADY_EXISTS`), keeping what was stored.
+  // The history keeps one entry per id, the first stored, so a client can repeat a request or send
+  // entries another install already sent. Entries the user deleted are accepted and dropped. Fails
+  // with `INVALID_ARGUMENT` (`INVALID_HISTORY`), naming the first field at fault and storing none
+  // of the request, and with `RESOURCE_EXHAUSTED` when the request body, gRPC framing included, is
+  // over 10 MiB.
   rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
 
   // Return one page of the calling user's history entries that match the filter, newest first by
@@ -207,8 +211,8 @@ service HubService {
 }
 
 message InsertHistoryRequest {
-  // Logically required.
-  History history = 1 [(buf.validate.field).required = true];
+  // At most 500. An empty request stores nothing.
+  repeated History entries = 1 [(buf.validate.field).repeated.max_items = 500];
 }
 
 message InsertHistoryResponse {}

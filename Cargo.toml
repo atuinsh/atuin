@@ -199,9 +199,10 @@ yaml-rust2 = "0.11"
 zeroize = "1"
 zstd = "0.14"
 
-# Dependencies that are pure hot loops (the bundled SQLite and the record-store
-# crypto) run 10x+ slower unoptimized, which makes every test that touches a
-# database or the record store crawl. Optimize just those in dev/test builds; the
+# Dependencies that are pure hot loops (the bundled SQLite, the record-store
+# crypto and the regex engines secret redaction runs on) run 10x+ slower
+# unoptimized, which makes every test that touches a database, the record store
+# or redaction crawl. Optimize just those in dev/test builds; the
 # workspace crates themselves stay fast to compile and easy to debug.
 [profile.dev.package]
 libsqlite3-sys.opt-level = 3
@@ -210,6 +211,11 @@ blake2.opt-level = 3
 rusty_paseto.opt-level = 3
 rusty_paserk.opt-level = 3
 base64.opt-level = 3
+regex.opt-level = 3
+regex-automata.opt-level = 3
+regex-syntax.opt-level = 3
+aho-corasick.opt-level = 3
+memchr.opt-level = 3
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
