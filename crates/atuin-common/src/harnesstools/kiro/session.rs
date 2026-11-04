@@ -46,8 +46,10 @@
 //! modification time) whenever it has changed, the first line of a read included. Its id is made
 //! of the title and how many title rows the read yielded before it: a rename back to an earlier
 //! title is a row of its own, while a read started over (an import, a restart) names the session
-//! under the same row as any other read started over, so no new row. A title row waits until no
-//! reply is held (below), so its checkpoint never passes a row yet to be yielded.
+//! under the same row as any other read started over, so no new row. A session atuin wrote names
+//! the row its title was last read under in its header (`_meta.kiro.atuin.title`, `{text, row}`):
+//! a read's first title row goes under that row while the title is still that text. A title row
+//! waits until no reply is held (below), so its checkpoint never passes a row yet to be yielded.
 //!
 //! **Stop reasons.** A turn's `turn_end` carries the stop reason of the reply before it. The
 //! reader holds a turn's assistant rows back until the row after them, and stamps the stop reason
@@ -210,7 +212,7 @@ pub(crate) fn read_log(path: &Path, bytes: &[u8]) -> Vec<KiroMessage> {
         if n == 0
             && let Some((title, at)) = title.clone()
         {
-            out.push(title_row(title, at, 0, None));
+            out.push(title_row(title, at, 0, header.recorded(), None));
         }
     }
     out.extend(reading.finish().into_iter().map(|(_, m)| m));
@@ -495,7 +497,8 @@ impl KiroSession {
                                 yield Ok(released);
                             }
                             if let (Some((title, at)), Some(checkpoint)) = (pending_title.take(), last) {
-                                yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
+                                let recorded = header.lock().recorded();
+                                yield Ok((checkpoint, title_row(title, at, titled, recorded, self.parent.clone())));
                             }
                             break;
                         };
@@ -529,7 +532,8 @@ impl KiroSession {
                         if !reading.holding()
                             && let Some((title, at)) = pending_title.take()
                         {
-                            yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
+                            let recorded = header.lock().recorded();
+                            yield Ok((checkpoint, title_row(title, at, titled, recorded, self.parent.clone())));
                             titled += 1;
                         }
                     }
@@ -545,7 +549,8 @@ impl KiroSession {
                                 && let Some(checkpoint) = last
                                 && let Some((title, at)) = pending_title.take()
                             {
-                                yield Ok((checkpoint, title_row(title, at, titled, self.parent.clone())));
+                                let recorded = header.lock().recorded();
+                                yield Ok((checkpoint, title_row(title, at, titled, recorded, self.parent.clone())));
                                 titled += 1;
                             }
                         }
@@ -781,15 +786,22 @@ const TITLE_ROW: &str = "atuin-title";
 /// A row carrying `title`, which the header (or for a subagent of `parent`, its spawn) gave the
 /// session at `at`, the `nth` title row of its read (see the module docs): the same title read
 /// again from the start is the same row, and a title the session is renamed back to is a new one.
+/// The first row of a read whose title atuin `recorded` in the header goes under the row recorded.
 fn title_row(
     title: TitleChange,
     at: Option<SystemTime>,
     nth: u32,
+    recorded: Option<TitleRecord>,
     parent: Option<SessionId>,
 ) -> KiroMessage {
-    let mut keyed = title.text.as_deref().unwrap_or_default().as_bytes().to_vec();
-    keyed.extend_from_slice(&nth.to_le_bytes());
-    let id = format!("{SYNTHETIC}title-{:016x}", xxhash_rust::xxh3::xxh3_64(&keyed));
+    let recorded = recorded
+        .filter(|r| nth == 0 && title.text.as_deref() == Some(r.text.as_str()))
+        .map(|r| r.row);
+    let id = recorded.unwrap_or_else(|| {
+        let mut keyed = title.text.as_deref().unwrap_or_default().as_bytes().to_vec();
+        keyed.extend_from_slice(&nth.to_le_bytes());
+        format!("{SYNTHETIC}title-{:016x}", xxhash_rust::xxh3::xxh3_64(&keyed))
+    });
     KiroMessage {
         row: Row {
             id: Some(id),
@@ -845,6 +857,14 @@ impl Beside {
         match &self.spawn {
             Some(spawn) => spawn.current(),
             None => self.header.current(),
+        }
+    }
+
+    /// The title row atuin recorded in a parent's header; a subagent's title is its spawn's.
+    fn recorded(&self) -> Option<TitleRecord> {
+        match &self.spawn {
+            Some(_) => None,
+            None => self.header.recorded(),
         }
     }
 
@@ -920,7 +940,21 @@ struct Header {
     title: Option<String>,
     /// `titleSetByUser`: the title is the user's (`/rename`), not the generated one.
     user_titled: bool,
+    recorded: Option<TitleRecord>,
 }
+
+/// The title a session atuin wrote had, and the row it was read under before
+/// (`_meta.kiro.atuin.title`, out of the model's sight). A read of the copy counts its title rows
+/// from its own first line, so without it the copy would name its title under a row of its own:
+/// one more title row to sync, for a title that never changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TitleRecord {
+    pub(crate) text: String,
+    pub(crate) row: String,
+}
+
+/// Where in the header atuin keeps what is its own.
+pub(crate) const ATUIN_META: [&str; 3] = ["_meta", "kiro", "atuin"];
 
 impl Header {
     fn parse(text: &str) -> serde_json::Result<Self> {
@@ -942,6 +976,12 @@ impl Header {
             },
             title: header["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_owned),
             user_titled: header["titleSetByUser"].as_bool() == Some(true),
+            recorded: ATUIN_META.iter().fold(&header, |v, k| &v[*k]).get("title").and_then(|t| {
+                Some(TitleRecord {
+                    text: t["text"].as_str()?.to_owned(),
+                    row: t["row"].as_str()?.to_owned(),
+                })
+            }),
         })
     }
 
@@ -999,6 +1039,10 @@ impl HeaderWatch {
     /// The title as last read, with when the header was written.
     fn current(&self) -> Option<(TitleChange, Option<SystemTime>)> {
         self.title.clone().map(|title| (title, self.modified))
+    }
+
+    fn recorded(&self) -> Option<TitleRecord> {
+        self.header.recorded.clone()
     }
 
     fn context(&self) -> Context {

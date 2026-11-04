@@ -17,8 +17,10 @@
 //!   `run_command_` prefix and no `modelToolUseId`.
 //! - **A `tool_call` needs `status`.** Without one Kiro dropped the call and its result from
 //!   the model's context (the model then denied ever running the command); with `completed`
-//!   it kept them, `kind` or no `kind`. A failed result is `success: false` under a `completed`
-//!   call, as a hand-written one read back.
+//!   it kept them, `kind` or no `kind`. A call whose result is an error is written `failed`, as
+//!   Kiro writes one itself: on Kiro 2.37.1 the model kept a failed call in context under
+//!   `failed` and under `completed` with `success: false` alike, quoting the error and exit
+//!   code from each.
 //! - **`agent_note` is read by the model**, so a continuation's marker goes there: Kiro gives
 //!   the model the note's text as context, as it does its own `<session_context>` block, and
 //!   the model quoted the marker's first line back verbatim. The reader yields it as a system
@@ -29,6 +31,12 @@
 //! - **A tool call under a foreign name** (Claude Code's `Read`, with its own `args`) was read
 //!   like any other; so was a turn with no prompt (`turn_start` right after a `turn_end`, as an
 //!   append of a turn's tail writes), and an `error` row.
+//! - **Kiro's own tools, carried in** (Kiro 2.37.1): a Claude Code session continued into Kiro by
+//!   this writer, its `Write`, `Edit` (`replace_all`) and `Grep` (`-i`, a glob) written as
+//!   `fs_write`, `str_replace` and `grep_search` and a failed `Bash` as a `failed`
+//!   `execute_bash`, resumed headless: the model quoted each call's name, arguments and result
+//!   verbatim, and the shell call as failed with exit code 1. It listed the calls, a run of
+//!   call and result pairs in one turn as Kiro writes them itself, last first.
 //! - **The header is rewritten whole** after a turn, keeping `title`, `parentSessionId`,
 //!   `forkedAtMessageId` and `_meta.kiro.atuin` as written and adding Kiro's defaults; a title
 //!   written there is kept, not generated over. A row's extra field (`atuinMerged`) is ignored.
@@ -66,7 +74,10 @@
 //!   session in the profile its header names, whatever `--agent` says, and a profile not the
 //!   user's asks approval for every write and command.
 //! - **Rows with nothing to write** (a reader's title rows, attachments) are skipped: the title
-//!   is the header's, which Kiro keeps.
+//!   is the header's, which Kiro keeps. A reader counts title rows from its read's first line, so
+//!   the copy of a session renamed before would name its title under a row of its own; the
+//!   header records the last title row under `_meta.kiro.atuin.title` (`{text, row}`), and the
+//!   reader names the copy's first title row so while the title is still that text.
 //!
 //! A [fork](crate::harnesstools::fork) names the session it was forked from in its header, as
 //! Kiro's own rewinds and tangents do (`parentSessionId`, `forkedAtMessageId`: the row it was
@@ -88,13 +99,14 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::kiro_home;
-use super::session::{HEADER_FILE, LOG_FILE, locate};
+use super::session::{ATUIN_META, HEADER_FILE, LOG_FILE, TitleRecord, locate};
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, merge_uncaptured_runs,
     record_merged,
 };
 use crate::harnesstools::resume;
-use crate::harnesstools::session::{Content, Role, StopReason, ToolResult, ToolUse};
+use crate::harnesstools::session::synthetic::SYNTHETIC;
+use crate::harnesstools::session::{Content, Role, StopReason, ToolCallId, ToolResult, ToolUse};
 use crate::path::PathBufExt as _;
 
 /// The header's `schemaVersion`, the one Kiro CLI 2.36.0 writes and the only one it opens.
@@ -117,9 +129,10 @@ pub(crate) fn default_agent(home: &Path) -> String {
         .unwrap_or_else(|| AGENT_MODE.to_owned())
 }
 
-/// The `status` a written `tool_call` carries: the one Kiro keeps the call under when it
-/// replays the log (see the module docs).
+/// The `status` a written `tool_call` carries (see the module docs): Kiro's own for a call
+/// whose result is an error, else the one for a call that ran.
 const CALL_STATUS: &str = "completed";
+const FAILED_STATUS: &str = "failed";
 
 /// What Kiro writes for the model's reasoning when it can't be shown, and the reader reads as a
 /// marker that the model reasoned.
@@ -228,14 +241,35 @@ pub(crate) fn header(session: &RehydrateSession, agent: &str) -> String {
         "modelId": session.model.as_deref().unwrap_or("auto"),
         "status": "idle",
     });
+    let mut atuin = serde_json::Map::new();
     if let Some(of) = &session.fork_of {
         header["parentSessionId"] = json!(of.id);
         if let Some(tip) = session.messages.last() {
             header["forkedAtMessageId"] = json!(tip.source_id);
         }
-        header["_meta"] = json!({"kiro": {"atuin": {"forkedFrom": of.id, "atuinId": of.atuin_id}}});
+        atuin.insert("forkedFrom".to_owned(), json!(of.id));
+        atuin.insert("atuinId".to_owned(), json!(of.atuin_id));
+    }
+    if let Some(title) = title_record(session) {
+        atuin.insert("title".to_owned(), json!({"text": title.text, "row": title.row}));
+    }
+    if !atuin.is_empty() {
+        let [meta, kiro, key] = ATUIN_META;
+        header[meta][kiro][key] = Value::Object(atuin);
     }
     serde_json::to_string_pretty(&header).unwrap_or_default()
+}
+
+/// The session's title and the row a reader last named it under (a title row, which the log
+/// has no row for), for the reader of the copy to name it under the same row.
+fn title_record(session: &RehydrateSession) -> Option<TitleRecord> {
+    let text = session.title.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
+    let prefix = format!("{SYNTHETIC}title-");
+    let row = session.messages.iter().rev().find(|m| m.source_id.starts_with(&prefix))?;
+    Some(TitleRecord {
+        text: text.to_owned(),
+        row: row.source_id.clone(),
+    })
 }
 
 /// The whole log: one line per written row, the turns framed.
@@ -264,7 +298,15 @@ pub(crate) fn timestamp(at: OffsetDateTime) -> String {
 /// [`MERGED_FIELD`]: crate::harnesstools::rehydrate::MERGED_FIELD
 pub(crate) fn lines(session: &RehydrateSession, current: Option<&[u8]>) -> Vec<Value> {
     let (messages, hosts) = merge_uncaptured_runs(&session.messages);
-    let mut writer = Writer::new(current);
+    let failed = messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|c| match c {
+            Content::ToolResult(r) if r.error => Some(r.call.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut writer = Writer::new(current, failed);
     for message in &messages {
         writer.push(message);
     }
@@ -299,10 +341,12 @@ struct Writer {
     executions: HashSet<String>,
     /// The rows written as no row, each with the row it went into.
     merged: Vec<(String, String)>,
+    /// The calls whose result is an error.
+    failed: HashSet<ToolCallId>,
 }
 
 impl Writer {
-    fn new(current: Option<&[u8]>) -> Self {
+    fn new(current: Option<&[u8]>, failed: HashSet<ToolCallId>) -> Self {
         let mut first = None;
         let mut count = 0;
         let mut executions = HashSet::new();
@@ -326,6 +370,7 @@ impl Writer {
             turn: None,
             executions,
             merged: Vec::new(),
+            failed,
         }
     }
 
@@ -503,7 +548,7 @@ impl Writer {
                 "toolCallId": call.id,
                 "toolName": call.name,
                 "args": args,
-                "status": CALL_STATUS,
+                "status": if self.failed.contains(&call.id) { FAILED_STATUS } else { CALL_STATUS },
             });
             extend(&mut row, &in_turn);
             self.row(id(call.id.as_ref()), m.timestamp, row);

@@ -44,6 +44,8 @@ enum Canonical {
         pattern: String,
         path: Option<String>,
         glob: Option<String>,
+        /// Matches letters of either case (Claude Code's `-i`, pi's `ignoreCase`).
+        insensitive: bool,
     },
     Glob {
         pattern: String,
@@ -75,12 +77,15 @@ fn command(value: Option<&Value>) -> Option<String> {
 }
 
 impl Canonical {
-    /// What the call `name` with `input` did, when it is one of these; a command run elsewhere
-    /// than `ran_in`, the directory the session ran in (Codex's `workdir`), runs there first:
-    /// within it, as the same place under the directory the continuation resumes in.
-    fn parse(name: &str, input: &Value, ran_in: &Path) -> Option<Self> {
+    /// What the call `name` with `input`, made in `source`, did, when it is one of these; a
+    /// command run elsewhere than `ran_in`, the directory the session ran in (Codex's `workdir`),
+    /// runs there first: within it, as the same place under the directory the continuation
+    /// resumes in.
+    fn parse(source: AnyHarness, name: &str, input: &Value, ran_in: &Path) -> Option<Self> {
         let kind = name.to_ascii_lowercase();
-        // Before the input is looked at: most calls are of other tools.
+        // Before the input is looked at: most calls are of other tools. Kiro's `fs_append` (no
+        // other harness appends), `file_search` (two schemas in its bundle: a substring, a glob)
+        // and `list_directory` stay the tools they were.
         let known = matches!(
             kind.as_str(),
             "bash"
@@ -96,9 +101,12 @@ impl Canonical {
                 | "view"
                 | "write"
                 | "create"
+                | "fs_write"
                 | "edit"
                 | "search_replace"
+                | "str_replace"
                 | "grep"
+                | "grep_search"
                 | "glob"
                 | "find"
         );
@@ -136,10 +144,15 @@ impl Canonical {
                 }
                 Self::Shell { command }
             }
-            // Kiro's `read_file` takes the same `offset` and `limit`, `null` for a whole file.
             "read" | "read_file" => Self::Read {
                 path: path()?,
-                offset: input.get("offset").filter(|v| v.is_number()).cloned(),
+                offset: match source {
+                    // Kiro's `read_file` counts lines from 0, the others from 1.
+                    AnyHarness::Kiro(_) => {
+                        input.get("offset").and_then(Value::as_u64).map(|n| json!(n + 1))
+                    }
+                    _ => input.get("offset").filter(|v| v.is_number()).cloned(),
+                },
                 limit: input.get("limit").filter(|v| v.is_number()).cloned(),
             },
             // Copilot's `view` reads a range of lines, `[first, last]`, 1-based.
@@ -155,11 +168,11 @@ impl Canonical {
                         .map(|(first, last)| json!(last.saturating_sub(first) + 1)),
                 }
             }
-            "write" | "create" => Self::Write {
+            "write" | "create" | "fs_write" => Self::Write {
                 path: path()?,
-                content: string(&input, &["content", "file_text"])?,
+                content: string(&input, &["content", "file_text", "text"])?,
             },
-            "edit" | "search_replace" => {
+            "edit" | "search_replace" | "str_replace" => {
                 // pi's edit takes its replacements as `edits`; only one is an edit the others make.
                 let one = match input.get("edits") {
                     Some(Value::Array(edits)) => match edits.as_slice() {
@@ -170,8 +183,20 @@ impl Canonical {
                 };
                 Self::Edit {
                     path: path()?,
-                    old: string(&one, &["old_string", "oldString", "oldText", "old_str"])?,
-                    new: string(&one, &["new_string", "newString", "newText", "new_str"])?,
+                    old: string(&one, &[
+                        "old_string",
+                        "oldString",
+                        "oldText",
+                        "old_str",
+                        "oldStr",
+                    ])?,
+                    new: string(&one, &[
+                        "new_string",
+                        "newString",
+                        "newText",
+                        "new_str",
+                        "newStr",
+                    ])?,
                     all: ["replace_all", "replaceAll"]
                         .iter()
                         .any(|k| one.get(*k).and_then(Value::as_bool) == Some(true)),
@@ -181,7 +206,23 @@ impl Canonical {
                 pattern: string(&input, &["pattern"])?,
                 path: string(&input, &["path"]),
                 glob: string(&input, &["glob", "include"]),
+                insensitive: ["-i", "ignoreCase"]
+                    .iter()
+                    .any(|k| input.get(*k).and_then(Value::as_bool) == Some(true)),
             },
+            // Kiro's search covers the whole workspace, and ignores case unless told otherwise.
+            // The others have no way to leave files out.
+            "grep_search" => {
+                if input.get("excludePattern").is_some_and(|v| !v.is_null()) {
+                    return None;
+                }
+                Self::Grep {
+                    pattern: string(&input, &["query"])?,
+                    path: None,
+                    glob: string(&input, &["includePattern"]),
+                    insensitive: input.get("caseSensitive").and_then(Value::as_bool) != Some(true),
+                }
+            }
             // pi's `find` lists files by a glob.
             "glob" | "find" => Self::Glob {
                 pattern: string(&input, &["pattern"])?,
@@ -254,7 +295,14 @@ impl Canonical {
                     _ => path_key(target),
                 };
                 put(key, Some(json!(path)));
-                put("offset", offset.clone());
+                let offset = match target {
+                    // Kiro counts lines from 0 (see `parse`).
+                    Kiro(_) => {
+                        offset.as_ref().and_then(Value::as_u64).map(|n| json!(n.saturating_sub(1)))
+                    }
+                    _ => offset.clone(),
+                };
+                put("offset", offset);
                 put("limit", limit.clone());
                 match target {
                     ClaudeCode(_) => "Read",
@@ -263,13 +311,10 @@ impl Canonical {
                     _ => "read",
                 }
             }
-            // Kiro's `fs_write`, `str_replace`, `grep_search` and `file_search` take input atuin
-            // hasn't seen: such a call stays the tool it was, which the model reads like any other.
-            (
-                Self::Write { .. } | Self::Edit { .. } | Self::Grep { .. } | Self::Glob { .. },
-                Kiro(_),
-            ) => {
-                return None;
+            (Self::Write { path, content }, Kiro(_)) => {
+                put("path", Some(json!(path)));
+                put("text", Some(json!(content)));
+                "fs_write"
             }
             (Self::Write { path, content }, Copilot(_)) => {
                 put("path", Some(json!(path)));
@@ -299,6 +344,7 @@ impl Canonical {
                 let (old_key, new_key, all_key) = match target {
                     ClaudeCode(_) | Grok(_) => ("old_string", "new_string", "replace_all"),
                     Opencode(_) => ("oldString", "newString", "replaceAll"),
+                    Kiro(_) => ("oldStr", "newStr", "replace_all"),
                     Copilot(_) => ("old_str", "new_str", ""),
                     _ => ("oldText", "newText", ""),
                 };
@@ -308,21 +354,64 @@ impl Canonical {
                 match target {
                     ClaudeCode(_) => "Edit",
                     Grok(_) => "search_replace",
+                    Kiro(_) => "str_replace",
                     _ => "edit",
                 }
             }
             // Copilot's searches (`rg`, `glob`) take input atuin hasn't seen: a search stays
-            // the tool it was, which the model reads like any other.
-            (Self::Grep { .. } | Self::Glob { .. }, Copilot(_)) => return None,
+            // the tool it was, which the model reads like any other. So does a `Glob` into Kiro,
+            // whose `file_search` may take a substring rather than a glob (see `parse`).
+            (Self::Grep { .. } | Self::Glob { .. }, Copilot(_)) | (Self::Glob { .. }, Kiro(_)) => {
+                return None;
+            }
+            // Kiro's `grep_search` searches the whole workspace: one under a path stays foreign.
+            (Self::Grep { path: Some(_), .. }, Kiro(_)) => return None,
+            (
+                Self::Grep {
+                    pattern,
+                    glob,
+                    insensitive,
+                    ..
+                },
+                Kiro(_),
+            ) => {
+                put("query", Some(json!(pattern)));
+                // Kiro's `includePattern` needs `**` to reach into directories; a glob with no `/`
+                // names files in any of them, as Claude Code's does.
+                let glob = glob.as_ref().map(|g| {
+                    if g.contains('/') {
+                        g.clone()
+                    } else {
+                        format!("**/{g}")
+                    }
+                });
+                put("includePattern", glob.map(|g| json!(g)));
+                // Kiro ignores case unless told otherwise.
+                put("caseSensitive", (!insensitive).then_some(json!(true)));
+                "grep_search"
+            }
+            // opencode's search can't ignore case.
+            (
+                Self::Grep {
+                    insensitive: true, ..
+                },
+                Opencode(_),
+            ) => return None,
             (
                 Self::Grep {
                     pattern,
                     path,
                     glob,
+                    insensitive,
                 },
                 _,
             ) => {
                 put("pattern", Some(json!(pattern)));
+                let case_key = match target {
+                    Pi(_) => "ignoreCase",
+                    _ => "-i",
+                };
+                put(case_key, insensitive.then_some(json!(true)));
                 put("path", path.as_ref().map(|p| json!(p)));
                 let glob_key = match target {
                     Opencode(_) => "include",
@@ -542,7 +631,7 @@ pub(super) fn carry(
     cwd: &Path,
     ids: &mut CallIds,
 ) -> (ToolUse, ToolResult) {
-    let (name, input) = Canonical::parse(&call.name, &call.input, ran_in)
+    let (name, input) = Canonical::parse(source, &call.name, &call.input, ran_in)
         .and_then(|canonical| canonical.render(target, cwd))
         .map_or_else(
             || {
@@ -586,7 +675,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::harnesstools::continuation::tests::{CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI};
+    use crate::harnesstools::continuation::tests::{
+        CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI,
+    };
 
     /// Copilot as a target, for a case whose source must stay Claude Code (its name shows in
     /// a call kept foreign).
@@ -647,11 +738,29 @@ mod tests {
     #[case::replace_all_kept_foreign_by_copilot("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}), COPILOT, "claude-code_Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}))]
     #[case::grep_kept_foreign_by_copilot("Grep", json!({"pattern": "fn main"}), CLAUDE_TO_COPILOT, "claude-code_Grep", json!({"pattern": "fn main"}))]
     #[case::claude_to_kiro("Bash", json!({"command": "ls", "description": "list"}), KIRO, "execute_bash", json!({"command": "ls"}))]
-    #[case::read_to_kiro("Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}), KIRO, "read_file", json!({"path": "/a.rs", "offset": 10, "limit": 5}))]
-    #[case::kiro_read_to_claude("read_file", json!({"path": "/a.rs", "offset": null, "limit": null}), CLAUDE, "Read", json!({"file_path": "/a.rs"}))]
-    #[case::edit_kept_foreign_by_kiro("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}), KIRO, "Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}))]
-    #[case::write_kept_foreign_by_kiro("create", json!({"path": "/a.rs", "file_text": "x"}), KIRO, "create", json!({"path": "/a.rs", "file_text": "x"}))]
-    #[case::grep_kept_foreign_by_kiro("Grep", json!({"pattern": "fn main"}), KIRO, "Grep", json!({"pattern": "fn main"}))]
+    #[case::read_to_kiro("Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}), KIRO, "read_file", json!({"path": "/a.rs", "offset": 9, "limit": 5}))]
+    #[case::read_from_line_0_to_kiro("Read", json!({"file_path": "/a.rs", "offset": 0}), KIRO, "read_file", json!({"path": "/a.rs", "offset": 0}))]
+    #[case::write_to_kiro("create", json!({"path": "/a.rs", "file_text": "x"}), KIRO, "fs_write", json!({"path": "/a.rs", "text": "x"}))]
+    #[case::kiro_write_to_claude("fs_write", json!({"path": "/a.rs", "text": "x"}), CLAUDE, "Write", json!({"file_path": "/a.rs", "content": "x"}))]
+    #[case::edit_to_kiro("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}), KIRO, "str_replace", json!({"path": "/a", "oldStr": "a", "newStr": "b"}))]
+    #[case::replace_all_to_kiro("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}), KIRO, "str_replace", json!({"path": "/a", "oldStr": "a", "newStr": "b", "replace_all": true}))]
+    #[case::kiro_edit_to_claude("str_replace", json!({"path": "/a", "oldStr": "a", "newStr": "b", "replace_all": true}), CLAUDE, "Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}))]
+    #[case::kiro_edit_to_pi("str_replace", json!({"path": "/a", "oldStr": "a", "newStr": "b", "replace_all": false}), PI, "edit", json!({"path": "/a", "oldText": "a", "newText": "b"}))]
+    #[case::grep_to_kiro("Grep", json!({"pattern": "fn main", "glob": "*.rs"}), KIRO, "grep_search", json!({"query": "fn main", "includePattern": "**/*.rs", "caseSensitive": true}))]
+    #[case::grep_under_a_dir_to_kiro("Grep", json!({"pattern": "fn main", "glob": "src/**/*.rs"}), KIRO, "grep_search", json!({"query": "fn main", "includePattern": "src/**/*.rs", "caseSensitive": true}))]
+    #[case::insensitive_grep_to_kiro("Grep", json!({"pattern": "fn main", "-i": true}), KIRO, "grep_search", json!({"query": "fn main"}))]
+    #[case::kiro_grep_to_claude("grep_search", json!({"query": "fn main", "includePattern": "**/*.rs", "explanation": "find it"}), CLAUDE, "Grep", json!({"pattern": "fn main", "glob": "**/*.rs", "-i": true}))]
+    #[case::kiro_case_sensitive_grep_to_claude("grep_search", json!({"query": "fn main", "caseSensitive": true}), CLAUDE, "Grep", json!({"pattern": "fn main"}))]
+    #[case::insensitive_grep_to_pi("Grep", json!({"pattern": "fn main", "-i": true}), PI, "grep", json!({"pattern": "fn main", "ignoreCase": true}))]
+    #[case::pi_insensitive_grep_to_claude("grep", json!({"pattern": "fn main", "ignoreCase": true}), CLAUDE, "Grep", json!({"pattern": "fn main", "-i": true}))]
+    #[case::insensitive_grep_kept_foreign_by_opencode("Grep", json!({"pattern": "fn main", "-i": true}), OPENCODE, "claude-code_Grep", json!({"pattern": "fn main", "-i": true}))]
+    #[case::kiro_grep_kept_foreign_by_opencode("grep_search", json!({"query": "fn main"}), OPENCODE, "grep_search", json!({"query": "fn main"}))]
+    #[case::grep_under_a_path_kept_foreign_by_kiro("Grep", json!({"pattern": "fn main", "path": "/a"}), KIRO, "Grep", json!({"pattern": "fn main", "path": "/a"}))]
+    #[case::kiro_grep_excluding_kept_foreign("grep_search", json!({"query": "fn main", "caseSensitive": true, "excludePattern": "target/**"}), CLAUDE, "grep_search", json!({"query": "fn main", "caseSensitive": true, "excludePattern": "target/**"}))]
+    #[case::glob_kept_foreign_by_kiro("Glob", json!({"pattern": "**/*.rs"}), KIRO, "Glob", json!({"pattern": "**/*.rs"}))]
+    #[case::kiro_append_kept_foreign("fs_append", json!({"path": "/a", "text": "x"}), CLAUDE, "fs_append", json!({"path": "/a", "text": "x"}))]
+    #[case::kiro_file_search_kept_foreign("file_search", json!({"query": "main"}), CLAUDE, "file_search", json!({"query": "main"}))]
+    #[case::kiro_list_kept_foreign("list_directory", json!({"path": "/a"}), CLAUDE, "list_directory", json!({"path": "/a"}))]
     fn calls_translate(
         #[case] name: &str,
         #[case] input: Value,
@@ -660,6 +769,32 @@ mod tests {
         #[case] want_input: Value,
     ) {
         assert_eq!(carried(name, input, target), (want_name.to_owned(), want_input));
+    }
+
+    /// Kiro's `read_file` counts lines from 0, and Grok Build's, of the same name, from 1 as
+    /// atuin's canonical read does.
+    #[rstest]
+    #[case::kiro(KIRO, json!({"path": "/a.rs", "offset": 0, "limit": 5}), json!({"file_path": "/a.rs", "offset": 1, "limit": 5}))]
+    #[case::kiro_whole(KIRO, json!({"path": "/a.rs", "offset": null, "limit": null}), json!({"file_path": "/a.rs"}))]
+    #[case::grok(GROK, json!({"target_file": "/a.rs", "offset": 10, "limit": 5}), json!({"file_path": "/a.rs", "offset": 10, "limit": 5}))]
+    fn a_read_file_keeps_its_sources_line_numbers(
+        #[case] source: AnyHarness,
+        #[case] input: Value,
+        #[case] want: Value,
+    ) {
+        let call = ToolUse {
+            id: ToolCallId::from("call_1".to_owned()),
+            name: "read_file".to_owned(),
+            input,
+        };
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: json!("ok"),
+            error: false,
+        };
+        let here = Path::new("/work");
+        let (call, _) = carry(source, CLAUDE, &call, &result, here, here, &mut CallIds::default());
+        assert_eq!((call.name.as_str(), call.input), ("Read", want));
     }
 
     #[rstest]
