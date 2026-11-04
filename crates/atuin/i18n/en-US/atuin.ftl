@@ -74,6 +74,7 @@ link-no-cli-session = No CLI session found. Please log in first with 'atuin logi
 link-both-sessions = Found both Hub and CLI sessions. Linking accounts...
 link-hub-login-first = Found CLI session but no Hub session. Logging in to Hub first...
 link-hub-complete = Hub authentication complete.
+link-hub-authenticated = Already authenticated with Atuin Hub. Nothing to link.
 link-success = Successfully linked CLI account to Hub.
 delete-provide-password = please provide your password
 delete-success = Your account is deleted

@@ -11,6 +11,15 @@ pub async fn run(settings: &Settings) -> Result<()> {
     let hub_token = meta.hub_session_token().await?;
 
     let Some(cli_token) = cli_token else {
+        // No CLI (sync) session to link. If the user is already authenticated
+        // with Hub — e.g. they logged in through the browser flow with
+        // `atuin login` — their Hub identity is already their account, so
+        // there is no separate CLI session to associate.
+        if hub_token.is_some() {
+            userio::log::info!("link-hub-authenticated");
+            return Ok(());
+        }
+
         bail!(fl!("link-no-cli-session"));
     };
 
