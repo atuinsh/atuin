@@ -241,10 +241,10 @@ fn codex_heads(
     assert_eq!(analysis.diverged(), diverged);
 }
 
-/// Copilot rows name the row before them in their lane; those captured before the reader
-/// linked them (none) follow on from their host's row before them, as Codex's do, so the old
-/// history of a session two hosts went on with stays on both branches. Its title rows (`syn-`)
-/// are no node: they go with the branch of the host's row before them.
+/// Copilot rows name the row before them in their lane, and Kiro rows the row before them; those
+/// captured before the readers linked them (none) follow on from their host's row before them,
+/// as Codex's do, so the old history of a session two hosts went on with stays on both branches.
+/// Their title rows (`syn-`) are no node: they go with the branch of the host's row before them.
 #[rstest]
 #[case::old_rows_then_two_hosts(
     &[("p0", None, 1, 0, Prompt), ("r0", None, 1, 1, Reply), ("syn-title", None, 1, 2, Title),
@@ -263,14 +263,15 @@ fn codex_heads(
     "q1",
     &["p0", "r0", "q1"]
 )]
-fn copilot_heads(
+fn copilot_and_kiro_heads(
+    #[values(HarnessKind::Copilot, HarnessKind::Kiro)] harness: HarnessKind,
     #[case] rows: &[Row<'static>],
     #[case] heads: &[(&str, u64)],
     #[case] diverged: bool,
     #[case] head: &str,
     #[case] branch: &[&str],
 ) {
-    let analysis = analyse(HarnessKind::Copilot, rows);
+    let analysis = analyse(harness, rows);
     let want: Vec<(String, u64)> = heads.iter().map(|&(id, n)| (id.to_owned(), n)).collect();
     assert_eq!(tips(&analysis), want);
     assert_eq!(analysis.diverged(), diverged);

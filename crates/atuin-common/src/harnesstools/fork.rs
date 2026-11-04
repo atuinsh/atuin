@@ -14,6 +14,8 @@
 //!   `atuin_forked_from` names the segment. Such a rollout holds only what came after the revert,
 //!   and names the rollout holding the rest in its `history_base`: with the original's rollout
 //!   here, the fork names the same, so it resumes with the whole history.
+//! - **Copilot**: its `session.start` names the original under `atuin`, a field Copilot keeps.
+//! - **Kiro**: the header's `parentSessionId`, as Kiro's own rewinds and tangents set it.
 //! - **pi**: the header's `parentSession`, the original's *file*, which must be on this machine.
 //! - **opencode**: `parentID` names a subagent's parent, and `opencode import` writes no fork link
 //!   (`fork_session_id` is a column of opencode 2.0's own session table, which import doesn't
@@ -29,12 +31,10 @@
 use time::OffsetDateTime;
 
 use super::rehydrate::{ForkOf, RehydrateMessage, RehydrateSession};
-use super::{AnyHarness, Harness as _, continuation};
+use super::{AnyHarness, continuation};
 
 /// `original`, recorded by `harness`, as a new session of it forked from `of`: its rows up to
-/// `tip` (the row of that source id, it included), or all of them. `None` when no row is `tip`,
-/// and for a harness whose transcripts atuin never writes
-/// ([`Harness::writes_transcripts`](super::Harness::writes_transcripts)).
+/// `tip` (the row of that source id, it included), or all of them. `None` when no row is `tip`.
 #[must_use]
 pub fn fork(
     harness: AnyHarness,
@@ -42,9 +42,6 @@ pub fn fork(
     of: ForkOf,
     tip: Option<&str>,
 ) -> Option<RehydrateSession> {
-    if !harness.writes_transcripts() {
-        return None;
-    }
     let messages = match tip {
         Some(tip) => up_to(&original.messages, tip)?.to_vec(),
         None => original.messages.clone(),

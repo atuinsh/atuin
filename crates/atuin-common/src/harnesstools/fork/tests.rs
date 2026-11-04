@@ -13,10 +13,11 @@ use crate::harnesstools::continuation::tests::{
 use crate::harnesstools::continuation::{fork_marker_text, linked_from_message};
 use crate::harnesstools::copilot::session::CopilotSession;
 use crate::harnesstools::grok::session::GrokSession;
+use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, database, opencode_import};
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::session::{Content, Message, ParentKind, Role, Session, SessionId};
-use crate::harnesstools::{ccode, codex, copilot, grok, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, kiro, opencode, pi};
 
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
@@ -60,7 +61,12 @@ async fn written(
     let id = SessionId::from(session.id.clone());
     match harness {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-        AnyHarness::Kiro(_) => panic!("Kiro transcripts are never written"),
+        AnyHarness::Kiro(_) => {
+            let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
+            let lines: Vec<_> =
+                KiroSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            (rows_of(&lines), links(&session.id, &lines))
+        }
         AnyHarness::Copilot(_) => {
             let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =
@@ -138,20 +144,6 @@ fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
 }
 
 /// A fork, written by its harness's writer next to the original and read back by its reader, is
-/// Kiro's transcripts are never written: a Kiro session is not forked, whatever its rows.
-#[rstest]
-#[tokio::test]
-async fn a_kiro_session_is_not_forked() {
-    let original = recorded(KIRO).await;
-    assert!(!original.messages.is_empty());
-    let of = ForkOf {
-        id: original.id.clone(),
-        atuin_id: Some(ATUIN_ID.to_owned()),
-        path: None,
-    };
-    assert!(fork(KIRO, &original, of, None).is_none());
-}
-
 /// a new session holding what the original's restore holds, and each of its lines that names a
 /// session names the original as the one it is a fork of. Rows keep their ids where ids are the
 /// transcript's own (capture keys rows per session), and opencode's, keys of its whole database,
@@ -159,7 +151,7 @@ async fn a_kiro_session_is_not_forked() {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] harness: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] harness: AnyHarness,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let original = recorded(harness).await;

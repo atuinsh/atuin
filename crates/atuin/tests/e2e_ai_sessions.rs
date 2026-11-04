@@ -415,7 +415,8 @@ fn restored(agent: Agent) -> Restored {
 /// there carries on the same session -- nothing in it read twice -- which syncs back.
 #[rstest]
 fn a_session_from_another_machine_restores_as_the_same_session(
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -474,7 +475,8 @@ fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
 /// once caught up resumes as it is.
 #[rstest]
 fn a_copy_behind_another_machine_catches_up_as_it_resumes(
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -507,7 +509,7 @@ fn a_copy_behind_another_machine_catches_up_as_it_resumes(
 /// restored copy): the copy goes on from the turn's last row, as the original does.
 #[rstest]
 fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
-    #[values(Agent::Claude, Agent::Copilot, Agent::Grok, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)] agent: Agent,
     project: TempDir,
 ) {
     let server = SyncServer::start();
@@ -536,7 +538,8 @@ fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
 /// other machine's branch, keeping it whole as a backup.
 #[rstest]
 fn a_diverged_copy_resumes_only_as_chosen(
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -613,6 +616,7 @@ fn a_diverged_copy_resumes_only_as_chosen(
 #[case::pi_to_codex(Agent::Pi, Agent::Codex)]
 #[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
 #[case::grok_to_codex(Agent::Grok, Agent::Codex)]
+#[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case] to: Agent) {
     let Restored {
         _server,
@@ -659,7 +663,8 @@ fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case]
 fn forking_a_session_leaves_it_and_links_the_fork(
     machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let turns = vec![Turn::new(), Turn::new()];
     let original = Transcript::create(machine.home(), agent, project.path(), &turns);
@@ -686,7 +691,9 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 #[case::claude_to_codex(Agent::Claude, Agent::Codex)]
 #[case::claude_to_pi(Agent::Claude, Agent::Pi)]
 #[case::claude_to_copilot(Agent::Claude, Agent::Copilot)]
+#[case::claude_to_kiro(Agent::Claude, Agent::Kiro)]
 #[case::codex_to_claude(Agent::Codex, Agent::Claude)]
+#[case::codex_to_kiro(Agent::Codex, Agent::Kiro)]
 #[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
 #[case::copilot_to_pi(Agent::Copilot, Agent::Pi)]
 #[case::claude_to_grok(Agent::Claude, Agent::Grok)]

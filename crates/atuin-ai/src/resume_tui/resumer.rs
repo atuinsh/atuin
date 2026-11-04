@@ -65,11 +65,6 @@ pub enum NotResumable {
     #[error(transparent)]
     Empty(#[from] continuation::NothingToContinue),
 
-    /// A restore of, or a fork or continuation into, a harness whose sessions atuin never
-    /// writes.
-    #[error("atuin can't write {0} sessions")]
-    Unwritable(&'static str),
-
     #[error(transparent)]
     Harness(#[from] ResumeError),
 }
@@ -646,18 +641,13 @@ impl HarnessResumer {
                     .or_else(|| local_dir(session.cwd.as_deref(), &self.context));
                 let live = self.machine.is_live(harness, id, dir.as_deref()).await;
                 let resume = Resume {
-                    // A copy atuin never writes resumes as it is.
-                    catch_up: harness.writes_transcripts(),
+                    catch_up: true,
                     live: live != Liveness::NotLive,
                     ..Resume::ready(harness.resume(&target, template)?.prepare()?)
                 };
                 (resume, Some(Copy { tip, dir }))
             }
             None => {
-                // No copy to resume as it is, and none can be written.
-                if !harness.writes_transcripts() {
-                    return Err(NotResumable::Unwritable(harness.name()));
-                }
                 let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
                 target.cwd = Some(restore.cwd.clone());
                 // The transcript is only written once the user accepts the restore.
@@ -670,15 +660,6 @@ impl HarnessResumer {
         };
         self.check_installed(&resume.0.plan)?;
         Ok(resume)
-    }
-}
-
-impl From<continuation::ContinueError> for NotResumable {
-    fn from(err: continuation::ContinueError) -> Self {
-        match err {
-            continuation::ContinueError::NothingToContinue(empty) => Self::Empty(empty),
-            continuation::ContinueError::Unwritable(harness) => Self::Unwritable(harness),
-        }
     }
 }
 
@@ -894,19 +875,15 @@ impl Resumer for HarnessResumer {
         }
         AnyHarness::all()
             .iter()
-            .filter(|harness| harness.writes_transcripts())
             .map(HarnessKind::from)
             .filter(|kind| *kind != own && harness_arg(*kind).is_some())
             .filter(|kind| self.runs_here(*kind, session))
             .collect()
     }
 
-    /// Every harness atuin writes forks, when installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
-        // Forking writes the fork out as a transcript, which atuin can't for Amp, nor for a
-        // harness it only reads.
+        // Forking writes the fork out as a transcript, which atuin can't for Amp.
         session.handle.harness != HarnessKind::Amp
-            && session.handle.harness.harness().is_some_and(|h| h.writes_transcripts())
             && self.runs_here(session.handle.harness, session)
     }
 
@@ -918,9 +895,6 @@ impl Resumer for HarnessResumer {
     ) -> Result<Forked, NotResumable> {
         let kind = session.handle.harness;
         let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
-        if !harness.writes_transcripts() {
-            return Err(NotResumable::Unwritable(harness.name()));
-        }
         let fail = |e: String| NotResumable::Fork(e);
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
         // Restored as a resume would restore it (along its newest head, when it diverged), should
