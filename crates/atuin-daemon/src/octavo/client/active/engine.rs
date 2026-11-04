@@ -262,6 +262,10 @@ impl EngineInner {
         if let NextPass::Now = self.send_threads(login).await? {
             return Ok(NextPass::Now);
         }
+
+        // TODO(taylordotfish): History and output capture uploads can be starved behind very large
+        // threads. Octavo doesn't actually do anything with history or output captures yet, so this
+        // is fine for now, but better interleaving should be implemented eventually.
         if let NextPass::Now = self.send_history(login).await? {
             return Ok(NextPass::Now);
         }
