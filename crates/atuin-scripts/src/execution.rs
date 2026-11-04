@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::process::Stdio;
 
+use atuin_common::os::umask::Umask;
 use atuin_common::userio;
 use eyre::Result;
 use tempfile::NamedTempFile;
@@ -72,10 +74,44 @@ pub fn template_variables(script: &Script) -> Result<HashSet<String>> {
     Ok(template.undeclared_variables(true))
 }
 
+/// Build a [`tokio::process::Command`] for `program` that runs with `child_umask`, if given.
+fn script_command(
+    program: impl AsRef<OsStr>,
+    child_umask: Option<Umask>,
+) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+
+    #[cfg(unix)]
+    if let Some(mask) = child_umask {
+        // SAFETY: the closure only calls `Umask::install_raw`, which is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(move || {
+                mask.install_raw();
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = child_umask;
+
+    cmd
+}
+
 /// Execute a script interactively, allowing for ongoing stdin/stdout interaction
+///
+/// The script runs under this process's original umask, not Atuin's owner-only one (#2726).
 pub async fn execute_script_interactive(
     script: String,
     shebang: String,
+) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
+    execute_script_with_umask(script, shebang, Umask::original()).await
+}
+
+async fn execute_script_with_umask(
+    script: String,
+    shebang: String,
+    child_umask: Option<Umask>,
 ) -> Result<ScriptSession, Box<dyn std::error::Error + Send + Sync>> {
     // Create a temporary file for the script
     let temp_file = NamedTempFile::new()?;
@@ -111,7 +147,7 @@ pub async fn execute_script_interactive(
     let keep_temp_file = temp_file;
 
     debug!("attempting direct script execution");
-    let mut child_result = tokio::process::Command::new(temp_path.to_str().unwrap())
+    let mut child_result = script_command(&temp_path, child_umask)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -129,7 +165,7 @@ pub async fn execute_script_interactive(
         // Parse the interpreter command
         let parts: Vec<&str> = interpreter.split_whitespace().collect();
         if !parts.is_empty() {
-            let mut cmd = tokio::process::Command::new(parts[0]);
+            let mut cmd = script_command(parts[0], child_umask);
 
             // Add any interpreter args
             for i in parts.iter().skip(1) {
@@ -137,7 +173,7 @@ pub async fn execute_script_interactive(
             }
 
             // Add the script path
-            cmd.arg(temp_path.to_str().unwrap());
+            cmd.arg(&temp_path);
 
             // Try with the interpreter
             child_result =
@@ -283,7 +319,7 @@ pub async fn execute_script_interactive(
 mod tests {
     use rstest::rstest;
 
-    use super::build_executable_script;
+    use super::{Umask, build_executable_script, execute_script_with_umask};
 
     #[rstest]
     #[case::default_bash("", "#!/usr/bin/env bash")]
@@ -298,5 +334,22 @@ mod tests {
             build_executable_script(script, shebang),
             format!("{expected_shebang}\n{script}")
         );
+    }
+
+    /// The script runs under the umask it's given, not this process's (#2726).
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn runs_script_under_child_umask(#[values(0o022, 0o002, 0o027)] mask: u32) {
+        // `$(( 0022 ))` reads the octal umask, so the exit status is the umask the script saw.
+        let mut session = execute_script_with_umask(
+            "exit $(( $(umask) ))".to_string(),
+            "/bin/sh".to_string(),
+            Some(Umask::from_bits(mask)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(session.wait_for_exit().await, Some(i32::try_from(mask).unwrap()));
     }
 }

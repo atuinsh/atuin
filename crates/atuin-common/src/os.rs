@@ -3,6 +3,7 @@
 pub mod disk;
 pub mod fs;
 pub mod process;
+pub mod umask;
 
 #[cfg(target_os = "linux")]
 pub mod linux;

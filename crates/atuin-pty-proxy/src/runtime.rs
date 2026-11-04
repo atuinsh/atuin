@@ -164,16 +164,14 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
         cmd.env("SHELL", shell);
     }
     set_child_env(&mut cmd, socket_path.as_deref());
-    // Atuin sets a restrictive process-wide umask on startup to protect the
-    // files it creates. The shell must not inherit it (#3695) — restore the
-    // umask the user launched us with. Applied in the child between fork and
-    // exec, so the proxy's own umask stays restrictive.
-    if let Some(mask) = options.child_umask {
+    // The shell must not inherit atuin's owner-only umask (#3695): restore the one the user
+    // launched us with. Applied in the child between fork and exec, so ours stays restrictive.
+    if let Some(mask) = atuin_common::os::umask::Umask::original() {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "mode_t is u16 on macOS and u32 on Linux. nop on linux, narrowing on macOS."
         )]
-        cmd.umask(Some(mask as _));
+        cmd.umask(Some(mask.bits() as _));
     }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;
