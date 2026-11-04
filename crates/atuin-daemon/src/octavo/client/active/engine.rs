@@ -57,6 +57,10 @@ const DEBOUNCE: Debounce = Debounce {
 /// The most records one pass reads of a backfill: as many as one `InsertThreadMessages` takes.
 const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_MESSAGES.get() as u64;
 
+/// The most history entries one pass uploads. Each history entry is an individual request, so this
+/// bounds how long thread uploads can wait behind pending history: about 25s, at ~250ms per entry.
+const HISTORY_PER_PASS: usize = 100;
+
 #[derive(Debug)]
 pub struct UploadEngine {
     task: JoinHandle<()>,
@@ -134,7 +138,7 @@ impl From<RetryLater> for Halt {
 enum NextPass {
     /// Once something wakes the engine, at a login, or at the poll interval.
     Waiting,
-    /// At once: a backfill has more to go.
+    /// At once: a backfill, or the history queue, has more to go.
     Now,
 }
 
@@ -251,20 +255,39 @@ impl EngineInner {
         }
     }
 
-    /// Sends `login`'s queued uploads, outputs (while output uploads are on) and thread messages,
-    /// then a page of their first backfill not done, up to the first [`Halt::Off`].
+    /// Sends `login`'s queued thread messages and up to a page of backfilled threads messages, then
+    /// up to [`HISTORY_PER_PASS`] queued history entries, then, once no history is left, their
+    /// output captures (while output uploads are on), up to the first [`Halt::Off`].
     async fn send_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
+        if let NextPass::Now = self.send_threads(login).await? {
+            return Ok(NextPass::Now);
+        }
+        if let NextPass::Now = self.send_history(login).await? {
+            return Ok(NextPass::Now);
+        }
+
+        self.send_outputs(login, settings).await?;
+        Ok(NextPass::Waiting)
+    }
+
+    /// Uploads up to [`HISTORY_PER_PASS`] of `login`'s queued history entries, saying whether more
+    /// may be left.
+    async fn send_history(&self, login: &HubLogin) -> Result<NextPass, Halt> {
         let mut pending = self.queue.pending_history(login.user_id()).items();
+        let mut sent = 0;
         while let Some(entry) = pending.next().await {
+            if sent == HISTORY_PER_PASS {
+                return Ok(NextPass::Now);
+            }
             let entry = entry.map_err(|err| {
                 tracing::warn!(?err, "failed to read the octavo upload queue; retrying later");
                 RetryLater
             })?;
             self.upload(login, entry).await?;
+            sent += 1;
         }
 
-        self.send_outputs(login, settings).await?;
-        self.send_threads(login).await
+        Ok(NextPass::Waiting)
     }
 
     async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
