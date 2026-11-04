@@ -20,6 +20,14 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-in
 
 The script also automatically detects non-interactive environments (piped input, no TTY) and skips the prompts in those cases.
 
+Anything else you pass goes to `atuin setup`, which starts from those choices. For example, to leave the up arrow to your shell and keep everything on this machine:
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --no-up-arrow --sync off
+```
+
+Run `atuin setup --help` for every option.
+
 [**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](https://docs.atuin.sh/guide/sync/index.md)
 
 ### On Windows

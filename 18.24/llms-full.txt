@@ -88,7 +88,7 @@ Some key bindings depend on the terminal, not the shell. Terminals that implemen
 
 ## AI agents
 
-Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *opencode* and *pi*.
+Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *Kiro*, *opencode* and *pi*.
 
 ## Getting help
 
@@ -175,6 +175,14 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-in
 ```
 
 The script also automatically detects non-interactive environments (piped input, no TTY) and skips the prompts in those cases.
+
+Anything else you pass goes to `atuin setup`, which starts from those choices. For example, to leave the up arrow to your shell and keep everything on this machine:
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --no-up-arrow --sync off
+```
+
+Run `atuin setup --help` for every option.
 
 [**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](https://docs.atuin.sh/guide/sync/index.md)
 
@@ -763,7 +771,7 @@ These shells are supported too. For how to load the plugin in each, see [install
 
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Kiro CLI, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -778,6 +786,12 @@ atuin hook install codex
 
 # GitHub Copilot CLI
 atuin hook install copilot
+
+# Grok Build
+atuin hook install grok
+
+# Kiro CLI
+atuin hook install kiro
 
 # opencode
 atuin hook install opencode
@@ -801,6 +815,8 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Claude Code | `~/.claude/settings.json`                                                                         |
 | Codex       | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
 | Copilot     | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                       |
+| Grok Build  | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`)                             |
+| Kiro CLI    | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`)                             |
 | opencode    | `~/.config/opencode/plugins/atuin.ts`                                                             |
 | pi          | `~/.pi/agent/extensions/atuin.ts`                                                                 |
 
@@ -809,7 +825,7 @@ The hook lifecycle:
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 1. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Atuin only captures `Bash` tool invocations. It ignores other tool types (file writes, web fetches, etc.).
+Atuin only captures shell tool invocations (`Bash`, or Kiro's `execute_bash`). It ignores other tool types (file writes, web fetches, etc.).
 
 Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
 
@@ -845,7 +861,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `opencode`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `kiro`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -878,6 +894,28 @@ atuin hook install copilot
 This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
 
 Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
+
+### Grok Build
+
+```
+atuin hook install grok
+```
+
+This writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
+
+Grok Build also runs hooks from `~/.claude/settings.json` when Claude compatibility is enabled. Inside a Grok Build session, Atuin attributes inherited `atuin hook claude-code` events to `grok`, and skips them when native `grok` hooks are installed too so commands aren't recorded twice.
+
+### Kiro CLI
+
+```
+atuin hook install kiro
+```
+
+This writes Atuin's hooks to `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Kiro calls `atuin hook kiro` before and after each `execute_bash` command (`execute_pwsh` on Windows), with the same event Claude Code sends. These hooks run under the V3 engine of Kiro CLI; on Kiro CLI 2.x, where the classic engine is still the default, run `kiro-cli --v3 chat` or set `chat.agentEngine` to `v3`.
+
+Kiro loads hooks when a session starts, so restart any Kiro already running. Hooks in your home directory run in every workspace; a hook file in a project's `.kiro/hooks` only runs once you have trusted that workspace, which is why the install writes to your home.
+
+Like Copilot, Kiro doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. A command Kiro runs in the background isn't recorded, since Kiro reports it as done as soon as it starts. When Kiro reports a command that never ran (one whose permission was denied, say), it gives the exit code `-1`, and Atuin records that.
 
 ### opencode
 
@@ -926,6 +964,9 @@ cat ~/.claude/settings.json | grep atuin
 
 # Codex
 cat ~/.codex/hooks.json | grep atuin
+
+# Kiro CLI
+cat ~/.kiro/hooks/atuin.json
 
 # opencode
 ls ~/.config/opencode/plugins/atuin.ts
@@ -1523,22 +1564,22 @@ mkdir -p ~/.atuin
 Check whether you have any AI-related files in `~/.atuin`:
 
 ```
-ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
 ```
 
 If you do, please expand and follow this section:
 
 Migrating home-scoped AI config
 
-In older installations, `permissions.ai.toml`, `skills`, or `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
+In older installations, `permissions.ai.toml` and `skills` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
 
 Before you move your `config.toml` to `~/.atuin`, review the existing AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything you're ok with being made global can be left as-is (global is likely not too different from applying to your entire home directory anyway); anything else should be deleted or moved to subdirectories (meaning moving it into `~/subdir/.atuin/` for each subdirectory).
 
 After you've confirmed that the AI items in `~/.atuin` can be interpreted as global, check whether any AI items appear in both `~/.atuin` and `~/.config/atuin`:
 
 ```
-ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
-    -e TERMINAL.md | sort | uniq -d
+ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
+    sort | uniq -d
 ```
 
 If there are any such items, you must merge the items in `~/.config/atuin` into the configuration at `~/.atuin` if you still want them to take effect; otherwise, the items in `~/.config/atuin` will be shadowed by those in `~/.atuin`.
@@ -1547,7 +1588,7 @@ Next, move your config items:
 
 ```
 cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-    -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+    -e themes -e skills -e permissions.ai.toml) ~/.atuin/
 ```
 
 Then, move your data:
@@ -1689,6 +1730,16 @@ Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 
 ```
 filter_mode = "host"
+```
+
+### `bind_ctrl_r` and `bind_up_arrow`
+
+Default: `true`
+
+Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+```
+bind_up_arrow = false
 ```
 
 ### `search_mode_shell_up_key_binding`
@@ -2868,6 +2919,8 @@ eval "$(atuin init zsh --disable-up-arrow)"
 # Bind up-arrow but not ctrl-r
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
+
+Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your [config](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow).
 
 If you don't want either key to be bound, either pass both `--disable` arguments, or set the environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 
@@ -5588,7 +5641,7 @@ Settings for capturing your AI coding agents' sessions as [threads](https://docs
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
 
 ### `capture_tools`
 
@@ -5606,63 +5659,11 @@ Atuin AI includes several slash commands that help you control various aspects o
 
 - **`/help`** - Show a list of all available slash commands, along with a brief description of each, and a link to this documentation.
 - **`/new`** - Start a new session. This will clear the current session's context and history and start fresh.
-- **`/reload`** - Reloads cached `TERMINAL.md` files on the next request - run this when you change a `TERMINAL.md` file mid-session to make sure the LLM has the latest context.
 - **`/model`** - Select a different model for the current session. This will override the default model specified in your Atuin config. You can see a list of available models by running this command.
 
 ## Slash Commands from Skills
 
 Any [user-defined skills](https://docs.atuin.sh/ai/skills/index.md) with a name will register that name as a slash command, with the skill's description as the slash command description (shown in `/help` and in the slash command fuzzy picker). For example, if you have a skill named `my-skill`, you can invoke it by typing `/my-skill` in the Atuin AI prompt. If the skill has any parameters, you can provide them after the skill name, separated by spaces.
-
-# Sending Additional Context in Atuin AI
-
-Use Atuin AI to send additional context to the LLM beyond just your prompt, similar to `CLAUDE.md` or `AGENTS.md`.
-
-## Additional Context Search Paths
-
-Atuin AI looks for additional context in the current directory and its parent directories, in two locations per directory:
-
-- `.atuin/TERMINAL.md` — scoped inside the `.atuin` dotdir
-- `TERMINAL.md` — at the directory root (for example, project root)
-
-It also checks `TERMINAL.md` in your Atuin home directory (`~/.atuin/TERMINAL.md` by default).
-
-If it finds any of these files, it sends their contents as additional context to the LLM. Atuin AI will send at maximum 10 additional context files, prioritizing files found globally first and then other files in order of filesystem depth, shallowest to deepest, and each file is limited to 10,000 characters.
-
-## Dynamic Content
-
-You can send dynamic content by using shell substitution in your `TERMINAL.md` file:
-
-```
-My username: !`whoami`
-```
-
-When Atuin AI reads this file, it will execute the `whoami` command and include its output in the context sent to the LLM. If your username is `binarymuse`, the context sent to the LLM would include:
-
-```
-My username: binarymuse
-```
-
-Atuin AI can also run substitutions for code blocks, to run multi-line commands. For example:
-
-````
-```!
-node --version
-npm --version
-git status --short
-````
-
-````
-
-## Caching
-
-Atuin AI caches `TERMINAL.md` files after it first loads them, so if you change them mid-session, use the `/reload` slash command to refresh the data. This will invalidate the server cache on the next request, increasing the latency and token usage for that request.
-
-## Why not `AGENTS.md`?
-
-Most agent files are optimized for *coding* agents: patterns, tools, coding style, and so on. This is great for coding agents, but not as useful for general-purpose agents. By using `TERMINAL.md` instead, Atuin AI provides a more flexible way to send additional context that's not tied to coding-specific patterns. Users can then provide any kind of context they want, without being constrained by the structure of an agent file.
-
-If your agent file has relevant information, you can instruct the LLM in `TERMINAL.md` to read from it.```
-````
 
 # Skills
 
@@ -5734,7 +5735,7 @@ When the LLM determines a skill is relevant to your request, it calls `load_skil
 
 ## Dynamic Content
 
-Skills support the same shell substitution as [user context files](https://docs.atuin.sh/ai/user-context/index.md):
+Skills support shell substitution:
 
 - **Inline:** `!`command`` ` — replaced with command ``stdout\`
 - **Block:** ```` ```! ```` code block — entire block replaced with script `stdout`
@@ -5990,7 +5991,7 @@ atuin threads enable
 
 That's short for `atuin config enable threads`. It sets `capture = true` under `[threads]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while capture is off, and `atuin config disable threads` turns it off again.
 
-With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, opencode and Pi) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
+With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build, Kiro, opencode, Pi and Amp) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record store, and brings it up to date as threads are captured, synced in from your other machines, or imported.
 
@@ -6002,11 +6003,31 @@ atuin threads import
 
 That imports every session the agents have on this machine (or just one agent's, with `--harness`), and running it again imports only what's new.
 
+### Amp
+
+Amp keeps its threads on its servers, not on disk, so a plugin hands them to Atuin instead:
+
+```
+atuin hook install amp
+```
+
+Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
+
+```
+atuin threads import --harness amp
+```
+
+That exports each of your threads with `amp threads export`, as the Amp you're logged in as, and stores only what Atuin doesn't have yet. Without `--harness amp`, `atuin threads import` leaves Amp out.
+
+`atuin threads push --harness <agent> --session <id>` takes messages in Atuin's own format, one JSON object per line on standard input, so any agent with hooks or plugins can hand its sessions over the same way: `atuin threads push --help` describes the format. Pushing a message again changes nothing.
+
+`atuin resume` reopens an Amp thread with `amp threads continue <id>`, which fetches it from Amp's servers. An Amp thread can be continued in another agent, but Atuin can't write Amp threads, so it can't fork one or continue another agent's session in Amp.
+
 ## What's captured
 
 Capture keeps the conversation (what you and the agent said) and its tool calls: each call's input and output (the commands run and what they printed, the files read and written). A session resumed from them, on this machine or another, has its tool calls back as they were, and so does a session continued in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker that the model reasoned.
 
-When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, Copilot, opencode and pi each keep one), so a resumed session shows its edits as the agent showed them, and `atuin threads show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
+When an agent edits a file, capture also keeps the diff the agent recorded for the edit (Claude Code, Codex, Copilot, opencode and pi each keep one; for Grok Build, Atuin works it out from the file as the turn found it), so a resumed session shows its edits as the agent showed them, and `atuin threads show` prints them. A diff names its file and the lines changed, with a few lines around them, not the whole file. Search covers the names of the files a session changed.
 
 Secrets Atuin recognises are replaced with `****`, in the conversation and the tool calls alike: the [same patterns](https://docs.atuin.sh/configuration/config/#secrets_filter) as for captured command output, and your own [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). Images are left out, and the input or output of a single call is clipped to 64 KiB, keeping its start and its end. An edit's diff past 64 KiB keeps only the files it changed. Search covers a call's input, but not its output.
 
@@ -6105,7 +6126,7 @@ mouse = false
 ```
 
 - Forks of a session (including Claude Code `--resume` copies, and continuations in another agent) are grouped under it. Inspect (`Ctrl`+`O`) lists them, and `C` there expands the list.
-- Subagents aren't listed at all, as they can't be resumed. A search that matches something a subagent said still finds the session it worked for, and `atuin resume <subagent-id>` resumes that session. Atuin records whether a child session is a subagent, a fork or a continuation as it captures it. Sessions captured by older versions don't say, and for Codex and opencode nearly all such children are subagents, so the picker treats them as such (they still resume by id).
+- Subagents aren't listed at all, as they can't be resumed. A search that matches something a subagent said still finds the session it worked for, and `atuin resume <subagent-id>` resumes that session. Atuin records whether a child session is a subagent, a fork or a continuation as it captures it. Sessions captured by older versions don't say, and for Codex and opencode nearly all such children are subagents, so the picker treats them as such (they still resume by id). A Kiro subagent's id is the bare id Kiro files it under, without the `sess_` prefix its parent's has.
 
 Once you choose a thread, with `Enter` (or `Tab` to edit the command first), Atuin asks where to resume it, under the thread in the list, the two in a border:
 
@@ -6124,7 +6145,7 @@ Once you choose a thread, with `Enter` (or `Tab` to edit the command first), Atu
 The help line says what the keys do there: `Enter` resumes (or edits, opened with `Tab`), `Tab` edits the command first, and `Esc` goes back.
 
 - The session's own agent comes first and is already selected, so `Enter` `Enter` resumes it. If the session was recorded on another machine, or its transcript was deleted, Atuin writes the transcript back out from the synced messages before resuming it ("from sync").
-- Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Pi's `parentSession`; Copilot's start event gets a note it keeps; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Sessions with no messages can't be forked.
+- Right under it, forking writes the session out as a new session of the same agent, with the same history, tool calls and all, and resumes that. The original is left as it is. The fork is linked to it the way the agent links its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Grok Build's `parent_session_id`, Kiro's `parentSessionId`, Pi's `parentSession`; Copilot's start event gets a note it keeps; opencode gets a line it keeps from the model), so it's grouped under the original, with an Atuin id of its own. It keeps the original's title. Pi names the original by its file, so a Pi session that isn't on this machine is written out first. Forking is selected instead of the original when the original can't resume here, or its agent has it open on this machine. Sessions with no messages can't be forked.
 - Every other agent installed on this machine follows. Picking one continues the session there as a new session: the conversation carries over, and so do the tool calls captured with their input and output (`capture_tools`), with what they returned. Each becomes the new agent's own tool where it has one that does the same (a shell command, reading, writing or editing a file, a search), and stays the tool it was otherwise: the agent reads it, it just can't call it again. Calls captured without their input, calls that never got a result, and web searches the model's provider ran itself become notes in the text, and reasoning is dropped. The new session opens with a note to the agent naming the session it continues, by its own agent's id and its Atuin id (in Pi, the note opens the first prompt, so you see it too). Agents that aren't installed aren't listed, and with nothing else to offer (no other agent installed, and a session that can't be forked) `Enter` resumes straight away.
 - If the session's own agent can't resume it here (an agent that isn't installed, or a session whose transcript is here but whose directory is gone, for an agent that needs it), its line is dimmed with the reason, and the next one is selected instead.
 
@@ -6133,11 +6154,11 @@ A session keeps one id on every machine. When you resume one in its own agent an
 - If the session continued on another machine since, the messages this copy lacks are appended to it, and it resumes in place. The status line says `caught up: 12 messages from @3f9a12bc`.
 - If this copy is up to date, or went on past the newest messages along the same branch, it resumes unchanged.
 - Otherwise Atuin writes nothing and asks, with the chooser saying why: when the agent is running this session here (`Claude Code is running this session here`), when this copy went another way than the newest messages, when it has messages sync hasn't got, or when this copy can't be caught up (`couldn't catch up: ...`). Its first line resumes this copy unchanged, and a fork line for each branch of the session, newest first, forks from that branch (`fork @3f9a12bc's · +11 since they split · 20m ago`). With the agent running here, the newest fork is selected.
-- When this copy went another way, sync holds every message of it, and the agent isn't running it here, a switch line for each other branch comes after the first line (`switch to @3f9a12bc's · replaces this copy, yours stays in atuin`). It moves this copy onto that branch, in place, under the same session id, and resumes it. The history this copy shares with that branch stays exactly as it was, and the messages this copy went on with are taken out. The branch's messages since the two split are added from sync, so, like a restore, they carry what Atuin keeps of them: the conversation and which tools were called, but not the other machine's tool input and output, or its images. Before anything changes, your copy is saved whole to `ai/switched/<agent>/` in Atuin's data directory, where no agent lists it, and the status line says where: `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin never deletes these copies. The branch this copy was on stays in Atuin too, so forking it brings it back. Claude Code, Codex, Copilot and Pi sessions can switch. These can only fork, and get no switch line: a Codex session that was reverted, so its history spans several files, or that Codex wrote in its older format; a Pi session file Pi hasn't opened since version 2 of its format; and opencode sessions, which live in a database.
+- When this copy went another way, sync holds every message of it, and the agent isn't running it here, a switch line for each other branch comes after the first line (`switch to @3f9a12bc's · replaces this copy, yours stays in atuin`). It moves this copy onto that branch, in place, under the same session id, and resumes it. The history this copy shares with that branch stays exactly as it was, and the messages this copy went on with are taken out. The branch's messages since the two split are added from sync, so, like a restore, they carry what Atuin keeps of them: the conversation and which tools were called, but not the other machine's tool input and output, or its images. Before anything changes, your copy is saved whole to `ai/switched/<agent>/` in Atuin's data directory, where no agent lists it, and the status line says where: `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin never deletes these copies. The branch this copy was on stays in Atuin too, so forking it brings it back. Claude Code, Codex, Copilot, Grok Build, Kiro and Pi sessions can switch. These can only fork, and get no switch line: a Codex session that was reverted, so its history spans several files, or that Codex wrote in its older format; a Pi session file Pi hasn't opened since version 2 of its format; and opencode sessions, which live in a database.
 
-Atuin never merges branches, and never writes to a session its agent has open. Claude Code, Copilot, and Codex where it keeps session locks, say which session they have open. opencode, Pi and other Codex installs don't, so Atuin treats a session as possibly open, and doesn't catch it up, while one of that agent's processes works in the session's directory or below it: the directory this copy records, or else where the session works on this machine. A process elsewhere counts when its command line names the session (`opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has changed in the last two minutes, any running process of that agent counts, wherever it works.
+Atuin never merges branches, and never writes to a session its agent has open. Claude Code, Copilot, and Codex where it keeps session locks, say which session they have open. Kiro says while a turn runs (its header's status). Grok Build, opencode, Pi, Kiro between turns and other Codex installs don't, so Atuin treats a session as possibly open, and doesn't catch it up, while one of that agent's processes works in the session's directory or below it: the directory this copy records, or else where the session works on this machine. A process elsewhere counts when its command line names the session (`grok --resume <id>`, `opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has changed in the last two minutes, any running process of that agent counts, wherever it works.
 
-A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which.
+A session written back out from sync, or continued in another agent, resumes in the directory the session ran in when that exists here. Otherwise, when you're in a checkout of a repository with the same name, it resumes in the same place in that checkout (or at its root), and otherwise in the current directory. The picker says which. A Kiro session Atuin writes opens in Kiro's default agent profile (`kiro-cli agent set-default`, else `vibe`): Kiro resumes a session in the profile its header names, whatever `--agent` says.
 
 In the chooser, `Up` / `Down` (or `K` / `J`) move, `F` moves to the fork, a digit picks that line, and `Esc` goes back to the list. `Enter` does what the key that opened the chooser did: it resumes, and after `Tab` it edits. `Tab` in the chooser always edits. `Ctrl`+`Y` copies the command.
 
@@ -6152,7 +6173,7 @@ resume_chooser = false
 
 The chooser still opens for a session its own agent can't resume.
 
-From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude-code`, `codex`, `copilot`, `opencode`, `pi` or `omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
+From the command line, `atuin resume <id>` resumes a session in its own agent directly (an id prefix works too), writing it out from sync first when it isn't on this machine, and `atuin resume <id> --in codex` continues it in another (`claude-code`, `codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi` or `omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name, and `kiro-cli` for `kiro`). `atuin resume <id> --fork` forks it. It catches the session up with sync as the picker does, and fails when that needs a choice, saying which: `--as-is` resumes this copy unchanged, `--switch` switches it to another branch, and `--fork` forks it from its newest branch. `--branch` picks the branch to catch up to, to switch to, to fork from, or to continue with `--in`: `this`, `@<host id>`, or the start of the id the error lists. A session that went different ways on several machines needs `--branch` with `--in`, and with `--switch` when more than one branch could be switched to; without it, Atuin lists the branches to choose from. `--as-is`, `--switch` and `--branch` need an id that names a single session: when it names several, Atuin lists them and asks you to be more specific. `--print` prints the command instead of running it.
 
 The id can be the agent's own, or the thread's Atuin id, which Inspect and the MCP threads tools show. An Atuin id is a UUIDv7, written as 32 hex digits like a history id. It's fixed when Atuin first records the session, and is the same for every agent and on every machine. Its first 12 digits are when the session started, so a prefix needs more digits than that to name a single session.
 
@@ -6177,7 +6198,7 @@ inline_height = 40
 mouse = true
 ```
 
-To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[threads.resume]` (`claude`, `codex`, `copilot`, `opencode`, `pi` or `omp`). It runs after `cd -- <cwd> &&`, with these substituted:
+To resume an agent's sessions with a command of your own in place of the built-in one, give a template per agent under `[threads.resume]` (`claude`, `codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these substituted:
 
 - `{id}`: the agent's own id for the session;
 - `{path}`: the session's transcript on this machine (for a session written back out from sync, the one Atuin wrote);
@@ -6207,7 +6228,7 @@ If `atuin resume` reports that the threads database is at an older schema versio
 
 # MCP Server
 
-Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
+Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
 
 The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) uses, plus output search and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
@@ -6219,7 +6240,7 @@ Connect all your configured agents with one command:
 atuin mcp install
 ```
 
-Atuin checks for existing user config files for Claude Code, Codex, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
+Atuin checks for existing user config files for Claude Code, Codex, Grok Build (`grok`), Kiro CLI, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `grok`, `kiro`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
 
 Then restart the agents you connected. They can now search your shell history.
 
@@ -6264,6 +6285,40 @@ Or add it to `~/.codex/config.toml` yourself:
 [mcp_servers.atuin]
 command = "atuin"
 args = ["mcp"]
+```
+
+### Grok Build
+
+```
+grok mcp add atuin -- atuin mcp
+```
+
+Or add it to `~/.grok/config.toml` yourself:
+
+```
+[mcp_servers.atuin]
+command = "atuin"
+args = ["mcp"]
+```
+
+### Kiro CLI
+
+```
+kiro-cli mcp add --name atuin --command atuin --args mcp --scope global
+```
+
+This adds it to `~/.kiro/settings/mcp.json` (under `$KIRO_HOME` if you have set it), which every session loads; `atuin mcp install kiro` writes the same file without going through `kiro-cli`. Check it with `kiro-cli mcp list`. Kiro doesn't run the server with your shell's `PATH`, so if it can't find `atuin`, use the full path from `which atuin`:
+
+```
+{
+  "mcpServers": {
+    "atuin": {
+      "command": "/full/path/to/atuin",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
 ```
 
 ### opencode
@@ -6407,7 +6462,7 @@ Like `atuin_output`, this needs output capture set up and the daemon running.
 
 ### `atuin_threads_search`, `atuin_threads_list` and `atuin_threads_read`
 
-Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
+Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Kiro CLI, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
 
 These need thread capture turned on with `atuin config enable threads`.
 

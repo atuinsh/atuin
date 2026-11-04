@@ -30,22 +30,22 @@ mkdir -p ~/.atuin
 Check whether you have any AI-related files in `~/.atuin`:
 
 ```
-ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
 ```
 
 If you do, please expand and follow this section:
 
 Migrating home-scoped AI config
 
-In older installations, `permissions.ai.toml`, `skills`, or `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
+In older installations, `permissions.ai.toml` and `skills` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
 
 Before you move your `config.toml` to `~/.atuin`, review the existing AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything you're ok with being made global can be left as-is (global is likely not too different from applying to your entire home directory anyway); anything else should be deleted or moved to subdirectories (meaning moving it into `~/subdir/.atuin/` for each subdirectory).
 
 After you've confirmed that the AI items in `~/.atuin` can be interpreted as global, check whether any AI items appear in both `~/.atuin` and `~/.config/atuin`:
 
 ```
-ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
-    -e TERMINAL.md | sort | uniq -d
+ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
+    sort | uniq -d
 ```
 
 If there are any such items, you must merge the items in `~/.config/atuin` into the configuration at `~/.atuin` if you still want them to take effect; otherwise, the items in `~/.config/atuin` will be shadowed by those in `~/.atuin`.
@@ -54,7 +54,7 @@ Next, move your config items:
 
 ```
 cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-    -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+    -e themes -e skills -e permissions.ai.toml) ~/.atuin/
 ```
 
 Then, move your data:
@@ -196,6 +196,16 @@ Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 
 ```
 filter_mode = "host"
+```
+
+### `bind_ctrl_r` and `bind_up_arrow`
+
+Default: `true`
+
+Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+```
+bind_up_arrow = false
 ```
 
 ### `search_mode_shell_up_key_binding`

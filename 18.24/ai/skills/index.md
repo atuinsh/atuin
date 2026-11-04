@@ -68,7 +68,7 @@ When the LLM determines a skill is relevant to your request, it calls `load_skil
 
 ## Dynamic Content
 
-Skills support the same shell substitution as [user context files](https://docs.atuin.sh/ai/user-context/index.md):
+Skills support shell substitution:
 
 - **Inline:** `!`command`` ` — replaced with command ``stdout\`
 - **Block:** ```` ```! ```` code block — entire block replaced with script `stdout`
