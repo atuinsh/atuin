@@ -30,7 +30,8 @@ pub async fn run(settings: &Settings) -> Result<()> {
             } else {
                 fl!("account-hub-open-url")
             },
-            url = session.auth_url.to_string()
+            url = session.auth_url.to_string(),
+            code = session.short_code()
         );
 
         let new_session = session

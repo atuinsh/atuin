@@ -109,6 +109,9 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Default timeout for the entire auth flow
 pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// How much of the code `HubAuthSession::short_code` shows; the Hub's approval page shows as much.
+const SHORT_CODE_LEN: usize = 8;
+
 impl HubAuthSession {
     /// Start a new hub authentication session
     ///
@@ -129,6 +132,14 @@ impl HubAuthSession {
             auth_url,
             hub_address: hub_address.clone(),
         })
+    }
+
+    /// The start of the code, for the user to match against what the Hub's approval page
+    /// shows: a link someone else made shows a different one.
+    #[must_use]
+    pub fn short_code(&self) -> &str {
+        let code = self.code.expose_secret();
+        &code[..code.len().min(SHORT_CODE_LEN)]
     }
 
     /// Poll for the authentication status
@@ -418,6 +429,7 @@ mod tests {
         };
 
         assert!(!format!("{session:?}").contains("s3cret-code"));
+        assert_eq!(session.short_code(), "s3cret-c");
     }
 
     #[rstest]

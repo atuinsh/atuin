@@ -41,6 +41,7 @@ login-legacy-success = Logged in!
 account-hub-open-url = Open this URL to authenticate with Atuin Hub:
 account-hub-browser-opened = Opened your browser to authenticate with Atuin Hub. If it didn't open, visit:
 account-hub-waiting = Waiting for you to authorize in your browser… (Ctrl-C to cancel)
+account-hub-check-code = Check the page shows the code { $code }.
 login-key-important = IMPORTANT
 login-key-same-everywhere = If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.
 login-key-find = You can find your key by running 'atuin key' on the other machine.
@@ -408,6 +409,7 @@ login-key-verify-failed = could not verify encryption key against remote: { $err
 link-hub-open =
     { $instructions }
     { $url }
+    Check the page shows the code { $code }.
 daemon-deprecated = `atuin daemon` is deprecated, use `atuin daemon start`
 daemon-indexing-threads = Indexing threads in the background
 daemon-rebuilding-search-index = Rebuilding the daemon's search index in the background

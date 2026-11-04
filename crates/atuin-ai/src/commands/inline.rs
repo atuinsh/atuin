@@ -140,6 +140,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         println!("Open this URL to continue:");
     }
     println!("{}", session.auth_url);
+    println!("Check the page shows the code {}.", session.short_code());
 
     let new_session = session
         .wait_for_completion(
