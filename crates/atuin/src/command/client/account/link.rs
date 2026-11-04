@@ -20,9 +20,14 @@ pub async fn run(settings: &Settings) -> Result<()> {
         // with Hub — e.g. they logged in through the browser flow with
         // `atuin login` — their Hub identity is already their account, so
         // there is no separate CLI session to associate.
-        if hub_token.is_some() {
-            userio::log::info!("link-hub-authenticated");
-            return Ok(());
+        if let Some(hub_token) = &hub_token {
+            if atuin_client::meta::is_hub_token(hub_token) {
+                userio::log::info!("link-hub-authenticated");
+                return Ok(());
+            }
+            // A non-Hub token in hub_session (e.g. a misplaced CLI token
+            // that resolve_sync_auth() couldn't move, such as on a full
+            // disk) is not a Hub session — fall through to the error below.
         }
 
         bail!(fl!("link-no-cli-session"));
