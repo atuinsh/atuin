@@ -702,6 +702,11 @@ pub(crate) fn title_id(session_id: &str, change: &TitleChange) -> String {
     format!("atuin-title-{digest:016x}")
 }
 
+/// What Grok Build (1.0.70) later puts in place of an old tool result's output, in
+/// `chat_history.jsonl` and `updates.jsonl` alike.
+#[cfg(test)]
+pub(crate) const OMITTED_TOOL_RESULT: &str = "[Tool result omitted \u{2014} too old]";
+
 /// Deterministic prefix-chained content key (`gk-<digest>`) for a conversational line, derived
 /// from `prev_gk` (the previous conversational line's `gk-` key) plus the fields Grok Build
 /// preserves verbatim when rewriting `chat_history.jsonl` on resume.
@@ -709,11 +714,22 @@ pub(crate) fn title_id(session_id: &str, change: &TitleChange) -> String {
 /// Chaining `prev_gk` gives repeated prompts (such as `"continue"` or `"ok"`) distinct keys both
 /// within a single transcript and across diverged branches on different machines, while staying
 /// invariant when Grok prepends its `"system"` prompt on `--resume`.
+///
+/// A tool result is keyed by the call it answers, not by its output: Grok Build later replaces
+/// old results' output with a placeholder, in place. Keyed on it, every line from the first
+/// replaced result on would get a new key, and capture would take the session's rest as new rows.
 pub(crate) fn line_key(prev_gk: Option<&str>, role: &Role, content: &[Content]) -> Option<String> {
     if content.is_empty() {
         return None;
     }
-    let canonical = json!([prev_gk, role, content]);
+    let keyed: Vec<Value> = content
+        .iter()
+        .map(|c| match c {
+            Content::ToolResult(result) => json!({"ToolResult": {"call": result.call}}),
+            other => json!(other),
+        })
+        .collect();
+    let canonical = json!([prev_gk, role, keyed]);
     let hash = xxhash_rust::xxh3::xxh3_64(canonical.to_string().as_bytes());
     Some(format!("gk-{hash:016x}"))
 }
@@ -1742,6 +1758,76 @@ mod tests {
         let after_branch_a = line_key(Some("gk-aaaa"), &Role::User, &prompt).unwrap();
         let after_branch_b = line_key(Some("gk-bbbb"), &Role::User, &prompt).unwrap();
         assert_ne!(after_branch_a, after_branch_b);
+    }
+
+    /// Grok Build later replaces an old tool result's output with a placeholder, so a result's
+    /// key can't depend on its output: only on the call it answers.
+    #[rstest]
+    fn a_tool_results_key_ignores_its_output() {
+        let result = |output: &str| {
+            vec![Content::ToolResult(ToolResult {
+                call: ToolCallId::from("c1".to_owned()),
+                output: json!(output),
+                error: false,
+            })]
+        };
+        let before = line_key(Some("gk-aaaa"), &Role::Tool, &result("a.txt\n")).unwrap();
+        let omitted = line_key(Some("gk-aaaa"), &Role::Tool, &result(OMITTED_TOOL_RESULT)).unwrap();
+        assert_eq!(before, omitted);
+        let other_call = vec![Content::ToolResult(ToolResult {
+            call: ToolCallId::from("c2".to_owned()),
+            output: json!("a.txt\n"),
+            error: false,
+        })];
+        assert_ne!(before, line_key(Some("gk-aaaa"), &Role::Tool, &other_call).unwrap());
+    }
+
+    /// Re-read after Grok Build replaced its old tool results' output, a session keeps every
+    /// line's id, so capture finds nothing new in it.
+    #[rstest]
+    #[tokio::test]
+    async fn a_session_keeps_its_ids_when_grok_omits_old_tool_results() {
+        let id = "01a1a402-a2f1-70d8-ba53-67e9e9137ef9";
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join(TRANSCRIPT_FILE);
+        // As Grok Build 1.0.70 writes them: a prompt, two shell calls and their results, a reply.
+        let call = |n: u32| {
+            json!({"type": "assistant", "content": format!("step {n}"), "tool_calls": [
+                {"id": format!("TU-{n}"), "name": "run_terminal_command",
+                 "arguments": json!({"command": format!("ls {n}")}).to_string()},
+            ]})
+        };
+        let result = |n: u32, output: &str| json!({"type": "tool_result", "tool_call_id": format!("TU-{n}"), "content": output});
+        let transcript = |output: &dyn Fn(u32) -> String| {
+            [
+                json!({"type": "system", "content": "you are grok"}),
+                json!({"type": "user", "content": [{"type": "text", "text": "look around"}]}),
+                call(1),
+                result(1, &output(1)),
+                call(2),
+                result(2, &output(2)),
+                json!({"type": "assistant", "content": "all done"}),
+            ]
+            .iter()
+            .map(|line| line.to_string() + "\n")
+            .collect::<String>()
+        };
+        let ids = |path: PathBuf| async move {
+            let msgs: Vec<_> = GrokSession::open(SessionId::from(id.to_owned()), path, pool())
+                .read()
+                .try_collect()
+                .await
+                .unwrap();
+            msgs.iter().filter_map(|m| m.id().map(|id| id.to_string())).collect::<Vec<_>>()
+        };
+
+        std::fs::write(&path, transcript(&|n| format!("exit: 0\nfile{n}.txt\n"))).unwrap();
+        let before = ids(path.clone()).await;
+        std::fs::write(&path, transcript(&|_| OMITTED_TOOL_RESULT.to_owned())).unwrap();
+
+        assert_eq!(ids(path).await, before);
     }
 
     /// A real session (Grok Build 1.0.70): shell calls, a read and an edit, then `/compact`.

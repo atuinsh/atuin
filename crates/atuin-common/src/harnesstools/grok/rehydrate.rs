@@ -550,7 +550,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::harnesstools::grok::session::GrokSession;
+    use crate::harnesstools::grok::session::{GrokSession, OMITTED_TOOL_RESULT};
     use crate::harnesstools::rehydrate::ForkOf;
     use crate::harnesstools::session::{Message, ParentKind, Patch, Session, SessionId};
     use crate::sync::BlockingPool;
@@ -688,6 +688,78 @@ mod tests {
 
         assert_eq!(&after_ids[..before_ids.len()], before_ids.as_slice());
         assert_eq!(after_ids.len(), before_ids.len() + 2);
+    }
+
+    /// A session atuin wrote keeps its ids once Grok Build replaces its old tool results' output
+    /// with a placeholder: the sidecar's keys still name every line.
+    #[rstest]
+    #[tokio::test]
+    async fn a_written_session_keeps_its_ids_when_grok_omits_old_tool_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let sid = "01a18221-a7b8-75e0-b6ef-b2a5cc95d2ca";
+        let call = |id: &str| {
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from(id.to_owned()),
+                name: "run_terminal_command".to_owned(),
+                input: json!({"command": "ls"}),
+            })
+        };
+        let result = |id: &str| {
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from(id.to_owned()),
+                output: json!("exit: 0\na.txt\n"),
+                error: false,
+            })
+        };
+        let session = RehydrateSession {
+            id: sid.to_owned(),
+            title: None,
+            cwd: PathBuf::from("/work/proj"),
+            original_cwd: None,
+            git_branch: None,
+            model: None,
+            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            // Continued from another agent: ids that are no line's content key.
+            messages: vec![
+                sample_msg("u1", Role::User, vec![Content::Text("look".to_owned())], 10),
+                sample_msg("a1", Role::Assistant, vec![call("c1")], 11),
+                sample_msg("t1", Role::Tool, vec![result("c1")], 12),
+                sample_msg("a2", Role::Assistant, vec![call("c2")], 13),
+                sample_msg("t2", Role::Tool, vec![result("c2")], 14),
+                sample_msg("a3", Role::Assistant, vec![Content::Text("done".to_owned())], 15),
+            ],
+            fork_of: None,
+        };
+        let path = rehydrate_into(&root, dir.path(), &session).unwrap();
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        let ids = |path: PathBuf, pool: BlockingPool| async move {
+            let msgs: Vec<_> = GrokSession::open(SessionId::from(sid.to_owned()), path, pool)
+                .read()
+                .try_collect()
+                .await
+                .unwrap();
+            msgs.iter().filter_map(|m| m.id().map(|id| id.to_string())).collect::<Vec<_>>()
+        };
+        let before = ids(path.clone(), pool.clone()).await;
+        for id in ["u1", "a1", "t1", "a2", "t2", "a3"] {
+            assert!(before.iter().any(|b| b == id), "{id} in {before:?}");
+        }
+
+        let rewritten: Vec<String> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut value: Value = serde_json::from_str(line).unwrap();
+                if value["type"] == "tool_result" {
+                    value["content"] = json!(OMITTED_TOOL_RESULT);
+                }
+                value.to_string()
+            })
+            .collect();
+        std::fs::write(&path, rewritten.join("\n") + "\n").unwrap();
+
+        assert_eq!(ids(path, pool).await, before);
     }
 
     #[rstest]
