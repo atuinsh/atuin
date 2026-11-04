@@ -14,8 +14,8 @@ isn't already, and offers to import the sessions your agents already have.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
-opencode, Pi and Amp) as threads into the encrypted record store, and syncs
-them like your history.
+Kiro, opencode, Pi and Amp) as threads into the encrypted record store, and
+syncs them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record
@@ -297,7 +297,10 @@ back.
   original's title. Pi names the original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
   the original when the original can't resume here, or its agent has it open
-  on this machine. Sessions with no messages can't be forked.
+  on this machine. Sessions with no messages can't be forked, and neither can
+  Kiro sessions: Atuin reads Kiro's transcripts but doesn't write them yet, so
+  a Kiro session resumes only on a machine that has it, in Kiro itself or
+  continued in another agent.
 - Every other agent installed on this machine follows. Picking one continues
   the session there as a new session: the conversation carries over, and so do
   the tool calls captured with their input and output (`capture_tools`), with
@@ -313,8 +316,8 @@ back.
   else to offer (no other agent installed, and a session that can't be
   forked) ++enter++ resumes straight away.
 - If the session's own agent can't resume it here (an agent that isn't
-  installed, or a session whose transcript is here but whose directory is
-  gone, for an agent that needs it),
+  installed, a Kiro session recorded on another machine, or a session whose
+  transcript is here but whose directory is gone, for an agent that needs it),
   its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent
@@ -354,7 +357,8 @@ synced messages:
   and get no switch line: a Codex session that was reverted, so its history spans
   several files, or that Codex wrote in its older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
-  live in a database.
+  live in a database. Kiro sessions are neither caught up nor switched, since
+  Atuin doesn't write them yet.
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, Copilot, and Codex where it keeps session locks, say which session
@@ -393,8 +397,9 @@ The chooser still opens for a session its own agent can't resume.
 From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
-another (`claude-code`, `codex`, `copilot`, `grok`, `opencode`, `pi` or `omp`; `claude`
-is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume
+another (`claude-code`, `codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi` or
+`omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name,
+and `kiro-cli` for `kiro`). Not into Kiro, whose sessions Atuin doesn't write yet. `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest
@@ -440,7 +445,7 @@ mouse = true
 
 To resume an agent's sessions with a command of your own in place of the
 built-in one, give a template per agent under `[threads.resume]` (`claude`,
-`codex`, `copilot`, `grok`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these
+`codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these
 substituted:
 
 - `{id}`: the agent's own id for the session;

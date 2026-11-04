@@ -196,6 +196,8 @@ pub(super) mod tests {
     #[case::read_key("Read", json!({"file_path": "~/.ssh/id_ed25519"}), Verdict::WithholdOutput)]
     #[case::grep_credentials("Grep", json!({"pattern": "x", "path": "~/.aws/credentials"}), Verdict::WithholdOutput)]
     #[case::write_dotenv("Write", json!({"file_path": ".env", "content": "A=1"}), Verdict::WithholdWritten)]
+    #[case::kiro_write_dotenv("fs_write", json!({"path": ".env", "text": "A=1"}), Verdict::WithholdWritten)]
+    #[case::kiro_edit_dotenv("str_replace", json!({"path": ".env", "oldStr": "A=1", "newStr": "A=hunter2"}), Verdict::WithholdWritten)]
     #[case::patch_dotenv("apply_patch", json!("*** Begin Patch\n*** Update File: .env\n+A=1\n*** End Patch"), Verdict::WithholdWritten)]
     #[case::shell_write("Bash", json!({"command": "printf '%s' 'violetmeadow' > .env"}), Verdict::WithholdWritten)]
     #[case::opencode_patch("patch", json!({"patchText": "*** Begin Patch\n*** Update File: .env\n*** End Patch"}), Verdict::WithholdWritten)]

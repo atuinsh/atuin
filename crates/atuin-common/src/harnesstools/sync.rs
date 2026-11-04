@@ -39,6 +39,7 @@ mod ccode;
 mod codex;
 mod copilot;
 mod grok;
+mod kiro;
 pub mod liveness;
 mod opencode;
 mod pi;

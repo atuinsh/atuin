@@ -89,6 +89,8 @@ impl Canonical {
                 | "exec_command"
                 | "local_shell"
                 | "run_terminal_command"
+                | "execute_bash"
+                | "execute_pwsh"
                 | "read"
                 | "read_file"
                 | "view"
@@ -111,7 +113,9 @@ impl Canonical {
             | "shell_command"
             | "exec_command"
             | "local_shell"
-            | "run_terminal_command" => {
+            | "run_terminal_command"
+            | "execute_bash"
+            | "execute_pwsh" => {
                 let (command, workdir) = if name == "local_shell" {
                     (command(input.get("command")), string(&input, &["working_directory"]))
                 } else {
@@ -338,9 +342,11 @@ const fn path_key(target: AnyHarness) -> &'static str {
     match target {
         AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) => "file_path",
         AnyHarness::Opencode(_) => "filePath",
-        AnyHarness::Amp(_) | AnyHarness::Codex(_) | AnyHarness::Copilot(_) | AnyHarness::Pi(_) => {
-            "path"
-        }
+        AnyHarness::Amp(_)
+        | AnyHarness::Codex(_)
+        | AnyHarness::Copilot(_)
+        | AnyHarness::Kiro(_)
+        | AnyHarness::Pi(_) => "path",
     }
 }
 
@@ -488,6 +494,26 @@ fn native(target: AnyHarness, name: &str) -> bool {
             "sql",
             "store_memory",
             "vote_memory",
+        ],
+        // Kiro CLI 2.36.0's built-in tool ids (`execute_pwsh` is the shell on Windows).
+        AnyHarness::Kiro(_) => &[
+            "execute_bash",
+            "execute_pwsh",
+            "read_file",
+            "list_directory",
+            "file_search",
+            "grep_search",
+            "fs_write",
+            "fs_append",
+            "str_replace",
+            "delete_file",
+            "web_fetch",
+            "remote_web_search",
+            "invoke_sub_agent",
+            "code",
+            "introspect",
+            "knowledge",
+            "disclose_context",
         ],
     };
     names.contains(&name.to_ascii_lowercase().as_str())

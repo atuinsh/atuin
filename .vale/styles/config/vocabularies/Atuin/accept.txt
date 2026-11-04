@@ -57,6 +57,7 @@ histdb
 IDE
 ignorespace
 Infracost
+Kiro
 launchd
 LLM
 loopback

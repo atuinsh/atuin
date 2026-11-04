@@ -30,6 +30,7 @@ pub enum HarnessKind {
     Omp = 6,
     Grok = 7,
     Amp = 8,
+    Kiro = 9,
     /// No harness atuin knows: unstated, or one a newer atuin added, whose records name it.
     #[serde(other)]
     Unknown = 0,
@@ -43,6 +44,7 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Copilot(_) => Self::Copilot,
             AnyHarness::Grok(_) => Self::Grok,
+            AnyHarness::Kiro(_) => Self::Kiro,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -57,13 +59,14 @@ impl HarnessKind {
     /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{amp, ccode, codex, copilot, grok, opencode, pi};
+        use atuin_common::harnesstools::{amp, ccode, codex, copilot, grok, kiro, opencode, pi};
         match self {
             Self::Amp => Some(AnyHarness::Amp(amp::Amp)),
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
             Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
+            Self::Kiro => Some(AnyHarness::Kiro(kiro::Kiro)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
@@ -603,6 +606,7 @@ mod tests {
     #[case::opencode(HarnessKind::Opencode, true)]
     #[case::pi(HarnessKind::Pi, true)]
     #[case::copilot(HarnessKind::Copilot, true)]
+    #[case::kiro(HarnessKind::Kiro, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,
@@ -665,8 +669,8 @@ mod tests {
     }
 
     /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, one v3
-    /// readers can't (naming Grok) as v4, one v4 readers can't (naming Amp) as v5, and each reads
-    /// back.
+    /// readers can't (naming Grok) as v4, one v4 readers can't (naming Amp, or Kiro) as v5, and
+    /// each reads back.
     #[rstest]
     #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
     #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
@@ -676,6 +680,8 @@ mod tests {
     #[case::continued_from_grok(HarnessKind::Pi, Some(HarnessKind::Grok), None, RecordVersion::V4)]
     #[case::amp(HarnessKind::Amp, None, None, RecordVersion::V5)]
     #[case::continued_from_amp(HarnessKind::Pi, Some(HarnessKind::Amp), None, RecordVersion::V5)]
+    #[case::kiro(HarnessKind::Kiro, None, None, RecordVersion::V5)]
+    #[case::continued_from_kiro(HarnessKind::Pi, Some(HarnessKind::Kiro), None, RecordVersion::V5)]
     #[case::grok_continued_from_amp(
         HarnessKind::Grok,
         Some(HarnessKind::Amp),

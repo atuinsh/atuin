@@ -186,6 +186,8 @@ proptest = { workspace = true }
 rstest = { workspace = true }
 # opencode keeps its sessions in SQLite: the e2e tests write one as it does.
 rusqlite = { workspace = true }
+# Kiro buckets its sessions by a SHA-256 of the working directory: the e2e tests write one as it does.
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
 

@@ -534,6 +534,7 @@ use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
 use crate::harnesstools::copilot::session::CopilotMessage;
 use crate::harnesstools::grok::session::GrokMessage;
+use crate::harnesstools::kiro::session::KiroMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 use crate::harnesstools::session::pushed::PushedMessage;
@@ -545,6 +546,7 @@ pub enum AnyMessage {
     Codex(CodexMessage),
     Copilot(CopilotMessage),
     Grok(GrokMessage),
+    Kiro(KiroMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
     /// A message an agent pushed (`atuin threads push`).
