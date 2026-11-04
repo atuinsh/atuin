@@ -2,24 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
-## [unreleased]
+## 18.24.5
 
 ### Bug Fixes
 
 - *(daemon)* Include pre-session history in session-preload search ([#4536](https://github.com/atuinsh/atuin/issues/4536))
 - *(deps)* Bump pulldown-cmark to 0.13.6 for RUSTSEC-2026-0433 ([#4631](https://github.com/atuinsh/atuin/issues/4631))
+- *(mcp)* Show the input schema on bad arguments, and accept query and a string as search terms ([#4640](https://github.com/atuinsh/atuin/issues/4640))
+- *(scripts)* Run scripts with process's original umask ([#4651](https://github.com/atuinsh/atuin/issues/4651))
+- *(threads)* Open written pi and omp sessions on one root, and on a model omp can use ([#4649](https://github.com/atuinsh/atuin/issues/4649))
+- *(threads)* Key a Grok tool result by its call, not its output ([#4652](https://github.com/atuinsh/atuin/issues/4652))
 
 
 ### Features
 
+- *(ai)* Remove TERMINAL.md user context ([#4646](https://github.com/atuinsh/atuin/issues/4646))
 - *(api)* Delete a thread with its descendants, and refuse threads under a deleted one
 - *(client)* Load ai-session records by id
 - *(daemon)* Upload captured threads to octavo
 - *(devenv)* A dev shell with CI's toolchain and a sandboxed Atuin ([#4616](https://github.com/atuinsh/atuin/issues/4616))
 - *(setup)* New onboarding that asks what to capture and how to search it ([#4637](https://github.com/atuinsh/atuin/issues/4637))
+- *(setup)* Ask what to import on a screen of its own, with checkboxes and a button to continue ([#4650](https://github.com/atuinsh/atuin/issues/4650))
 - *(threads)* Add Grok Build session capture, resume, and sync ([#4583](https://github.com/atuinsh/atuin/issues/4583))
 - *(threads)* Capture Amp threads through a generic atuin threads push, and import them ([#4635](https://github.com/atuinsh/atuin/issues/4635))
+- *(threads)* Kiro CLI harness ([#4611](https://github.com/atuinsh/atuin/issues/4611))
+- *(threads)* Capture Kiro subagents as child sessions ([#4612](https://github.com/atuinsh/atuin/issues/4612))
+- *(threads)* Write, fork, continue into and sync Kiro sessions ([#4614](https://github.com/atuinsh/atuin/issues/4614))
+- *(threads)* Carry Kiro's write, edit and search tools, and fix its read offset ([#4633](https://github.com/atuinsh/atuin/issues/4633))
 - *(web)* Derive thread state and transcripts, and fake thread rpcs
+
+
+### Miscellaneous Tasks
+
+- Remove vestigial mentions of TERMINAL.md ([#4648](https://github.com/atuinsh/atuin/issues/4648))
 
 
 ### Refactor
