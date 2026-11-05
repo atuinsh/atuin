@@ -186,7 +186,8 @@ impl Row {
         match self {
             Self::Shell | Self::Threads | Self::AgentHistory => Some("What should Atuin capture?"),
             Self::CtrlR | Self::UpArrow | Self::Mcp => Some("How do you want to search it?"),
-            Self::Sync | Self::Server | Self::Go => None,
+            Self::Sync | Self::Server => Some("Where should it sync?"),
+            Self::Go => None,
         }
     }
 }
@@ -239,7 +240,7 @@ impl Choose {
         let agents = THREADS && !found.agents.is_empty();
         let mut rows = vec![Row::Shell];
         if agents {
-            rows.extend([Row::Threads, Row::AgentHistory]);
+            rows.extend([Row::AgentHistory, Row::Threads]);
         }
         // The keys search shell history.
         if self.shell {
@@ -338,9 +339,6 @@ impl Choose {
         let mut heading = None;
         let mut focus = 0;
         for (i, row) in self.rows(found).into_iter().enumerate() {
-            if row == Row::Go {
-                lines.push(Line::default());
-            }
             if row.heading() != heading && row != Row::Server {
                 heading = row.heading();
                 if i > 0 {
@@ -355,30 +353,23 @@ impl Choose {
                 focus = lines.len();
             }
             lines.push(match row {
-                Row::Shell => choice(at, self.shell, "Shell history", "every command you run"),
-                Row::Threads => {
-                    choice(at, self.threads, "Agent threads", "your conversations with your agents")
-                }
+                Row::Shell => choice(at, self.shell, "Shell history", "all your commands"),
+                Row::Threads => choice(
+                    at,
+                    self.threads,
+                    "Agent threads",
+                    "full agent sessions, resumable cross harness",
+                ),
                 Row::AgentHistory => choice(
                     at,
                     self.agent_history,
                     "Agent shell history",
-                    "every command your agents run",
+                    "all your agents' commands",
                 ),
-                Row::CtrlR => choice(
-                    at,
-                    self.ctrl_r,
-                    "Ctrl-R",
-                    "search your history, instead of your shell's",
-                ),
-                Row::UpArrow => choice(
-                    at,
-                    self.up_arrow,
-                    "Up arrow",
-                    "open search too, instead of the last command",
-                ),
+                Row::CtrlR => choice(at, self.ctrl_r, "Ctrl-R", "search shell history"),
+                Row::UpArrow => choice(at, self.up_arrow, "Up arrow", "also search shell history"),
                 Row::Mcp => {
-                    choice(at, self.mcp, "Agent search", "let your agents search it, over MCP")
+                    choice(at, self.mcp, "Agent search", "search history and threads over MCP")
                 }
                 Row::Sync => {
                     let about = match self.sync {
@@ -426,8 +417,12 @@ impl Choose {
         });
 
         // A short terminal can't show it all: scroll to keep the row they're on, and the two lines
-        // after it (on Continue, the hint), in sight.
-        let shown = (focus + 3).min(lines.len());
+        // after it (on Continue, the hint), in sight. An error, on the last line, always shows.
+        let shown = if self.error.is_some() {
+            lines.len()
+        } else {
+            (focus + 3).min(lines.len())
+        };
         let scroll = shown.saturating_sub(usize::from(frame.area().height));
         let scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
         frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), frame.area());
@@ -979,6 +974,11 @@ mod tests {
         assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
         assert_eq!(choose.row, Row::Server);
         assert!(choose.error.is_some());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, HEIGHT)).unwrap();
+        let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
+        let text: String = shown.content().iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("Enter your server's address"));
 
         let typed: Vec<_> = "https://atuin.example.com".chars().map(KeyCode::Char).collect();
         press(&mut choose, &found, &typed);
