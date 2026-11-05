@@ -164,6 +164,35 @@ service HubService {
   // deletion, or send it before the upload it races.
   rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
 
+  // Give the calling user's thread with this id exactly the labels of theirs among these. An id of
+  // no label of theirs, such as one deleted since the client read it, is left out.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread, and with
+  // `INVALID_ARGUMENT` (`INVALID_THREAD_LABELS`) for ids `SetThreadLabelsRequest` doesn't allow.
+  rpc SetThreadLabels(SetThreadLabelsRequest) returns (SetThreadLabelsResponse);
+
+  // List every label of the calling user's, in order of name.
+  rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse);
+
+  // Make a label for the calling user, under the id their client minted.
+  //
+  // Fails with `ALREADY_EXISTS` (`LABEL_EXISTS`) when they have a label of the name, ignoring case,
+  // or a label has the id, with `FAILED_PRECONDITION` (`TOO_MANY_LABELS`) when they have 2000
+  // labels already, and with `INVALID_ARGUMENT` (`INVALID_LABEL`) for a label `Label` doesn't allow.
+  rpc CreateLabel(CreateLabelRequest) returns (CreateLabelResponse);
+
+  // Rename, recolor or redescribe the calling user's label with this id, on every thread it's on.
+  //
+  // Fails with `NOT_FOUND` (`LABEL_NOT_FOUND`) when they have no such label, with `ALREADY_EXISTS`
+  // (`LABEL_EXISTS`) when another of theirs has the name, ignoring case, and with
+  // `INVALID_ARGUMENT` (`INVALID_LABEL`) for a label `Label` doesn't allow.
+  rpc UpdateLabel(UpdateLabelRequest) returns (UpdateLabelResponse);
+
+  // Delete the calling user's label with this id, taking it off every thread.
+  //
+  // Fails with `NOT_FOUND` (`LABEL_NOT_FOUND`) when they have no such label.
+  rpc DeleteLabel(DeleteLabelRequest) returns (DeleteLabelResponse);
+
   // Identify the user the call's token logs in.
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
 
@@ -524,6 +553,46 @@ message DeleteThreadRequest {
 }
 
 message DeleteThreadResponse {}
+
+message SetThreadLabelsRequest {
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+  // The `Label.id`s of the thread's labels from now on, up to 20. Empty takes every label off.
+  repeated UuidV7 label_ids = 2 [(buf.validate.field).repeated.max_items = 20];
+}
+
+message SetThreadLabelsResponse {}
+
+message ListLabelsRequest {}
+
+message ListLabelsResponse {
+  repeated Label labels = 1;
+}
+
+message CreateLabelRequest {
+  // The label to make. Logically required.
+  Label label = 1 [(buf.validate.field).required = true];
+}
+
+message CreateLabelResponse {
+  Label label = 1;
+}
+
+message UpdateLabelRequest {
+  // The label as it is to be from now on, under its `id`. Logically required.
+  Label label = 1 [(buf.validate.field).required = true];
+}
+
+message UpdateLabelResponse {
+  Label label = 1;
+}
+
+message DeleteLabelRequest {
+  // The label's `Label.id`. Logically required.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteLabelResponse {}
 
 message WhoAmIRequest {}
 
