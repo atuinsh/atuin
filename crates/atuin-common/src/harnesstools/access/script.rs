@@ -18,15 +18,15 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 /// One tool call a script makes, and its arguments as JSON.
-#[derive(Debug, PartialEq)]
-pub(super) struct Call {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Call {
     pub name: String,
     pub input: Value,
 }
 
 /// What [`calls`] makes of a script.
-#[derive(Debug, PartialEq)]
-pub(super) struct Script {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Script {
     /// The calls it makes, with their arguments as far as they are literals.
     pub calls: Vec<Call>,
     /// Whether that is all of it: every call's arguments were literals, every use of `tools`
@@ -40,7 +40,7 @@ static TOOLS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\btools\s*[.\[]").expect("a valid regex"));
 
 /// The tool calls `script` makes.
-pub(super) fn calls(script: &str) -> Script {
+pub fn calls(script: &str) -> Script {
     let (tokens, closed) = tokens(script);
     let mut parser = Parser {
         tokens: &tokens,
