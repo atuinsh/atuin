@@ -25,7 +25,8 @@ use super::hooks::WarmStep;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
 use super::{AppendError, CaptureLocks, Sink, StoreState};
 
-/// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
+/// Backoff bounds for restarting a harness listener that failed or ended. One whose session
+/// directory does not exist yet is looked for again every [`LISTENER_RETRY_START`] instead.
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
 const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
 
@@ -73,7 +74,10 @@ impl SessionCaptureEngine {
 /// growing from `retry` (capped at [`LISTENER_RETRY_MAX`]), whenever it ends, fails or panics.
 ///
 /// A harness whose session directory does not exist yet (not installed, or never run) is
-/// listened to once it appears, so capture starts without a restart. One whose listener ended
+/// listened to once it appears, so capture starts without a restart. It is looked for again every
+/// `retry`, not after a growing backoff: the directory can appear with a session in it at any
+/// time (`atuin threads resume --in omp` writes omp's first), and a file first read a minute
+/// late may already be rewritten (omp blanks old reads in place). One whose listener ended
 /// (its source gone, or no longer readable) or panicked would otherwise stop capturing until the
 /// daemon restarts, and nothing would say so but a log line.
 async fn supervise<F, L>(kind: HarnessKind, mut listen: F, retry: Duration)
@@ -85,7 +89,7 @@ where
     loop {
         let started = Instant::now();
         match AssertUnwindSafe(listen()).catch_unwind().await {
-            Ok(Err(RuntimeError::NotFound(_))) => {}
+            Ok(Err(RuntimeError::NotFound(_))) => delay = retry,
             Ok(Err(e)) => {
                 tracing::warn!(?e, ?kind, ?delay, "ai-session listener failed; retrying");
             }
@@ -843,6 +847,41 @@ mod tests {
         })
         .await
         .expect("the listener was not started again");
+    }
+
+    /// A harness's session directory that doesn't exist yet is looked for again every `retry`,
+    /// however long it has been missing, so a session written into it is read before its harness
+    /// can rewrite it.
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_session_directory_is_looked_for_without_backing_off() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let listen = {
+            let runs = runs.clone();
+            move || {
+                let run = runs.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if run < 10 {
+                        Err(RuntimeError::NotFound("/nowhere".into()))
+                    } else {
+                        futures::future::pending().await
+                    }
+                }
+            }
+        };
+        let started = Instant::now();
+        let supervised = supervise(HarnessKind::Omp, listen, Duration::from_secs(2));
+        let found = async {
+            while runs.load(Ordering::SeqCst) <= 10 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
+        tokio::select! {
+            () = supervised => unreachable!("supervision never ends"),
+            () = found => {}
+        }
+        let waited = started.elapsed();
+        assert!(waited < Duration::from_secs(25), "found after {waited:?}");
     }
 
     /// Byte offsets and row seqs alike: only a first event strictly past the checkpoint handed
