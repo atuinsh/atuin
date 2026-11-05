@@ -7,6 +7,7 @@ import "atuin/api/v1/history.proto";
 import "atuin/api/v1/share.proto";
 import "atuin/api/v1/threads.proto";
 import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
 
 // The hub's user-facing API.
 service HubService {
@@ -101,6 +102,15 @@ service HubService {
   // use, and with `DEADLINE_EXCEEDED` (`THREAD_SEARCH_TIMEOUT`) when the count takes too long: add
   // a word or a filter.
   rpc TallyThreads(TallyThreadsRequest) returns (TallyThreadsResponse);
+
+  // Count what the calling user's agents did over the request's days, across all their threads:
+  // tokens, messages, tool calls, time spent working and waiting, lines changed, and when they ran.
+  //
+  // Fails with `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) while the user has Octavo off, and with
+  // `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know, or
+  // (`INVALID_THREAD_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
+  // `DEADLINE_EXCEEDED` (`THREAD_ACTIVITY_TIMEOUT`) when the count takes too long.
+  rpc TallyThreadActivity(TallyThreadActivityRequest) returns (TallyThreadActivityResponse);
 
   // Return the ids of the messages of the calling user's thread that match the query's terms and
   // roles, in transcript order.
@@ -410,6 +420,110 @@ message TallyThreadsResponse {
   // The top five starting models among the threads the query matches without its `model`, most
   // common first, ties broken by value.
   repeated ThreadTally models = 5;
+}
+
+message TallyThreadActivityRequest {
+  // How many days to count, ending with today.
+  uint32 days = 1 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 90
+  }];
+  // The IANA time zone whose calendar days the counts fall into, such as `Europe/Berlin`. Today is
+  // the day it is there now.
+  string time_zone = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 64
+    not_contains: "\x00"
+  }];
+}
+
+message TallyThreadActivityResponse {
+  // Each counted day, oldest first, ending with today.
+  repeated ThreadActivityDay days = 1;
+  // The counted days together.
+  ThreadActivityCounts totals = 2;
+  // As many days again, just before the counted ones, together.
+  ThreadActivityCounts previous_totals = 3;
+  // The messages of the counted days by hour of the week in the time zone: 168 values, the first
+  // for Monday from 00:00 to 01:00.
+  repeated uint64 messages_by_hour = 4;
+  // How many days in a row, ending today or yesterday, the user sent a prompt. Yesterday counts so
+  // that a streak isn't over before today's first prompt.
+  uint32 current_streak_days = 5;
+  // The most days in a row the user sent a prompt, over the last year.
+  uint32 longest_streak_days = 6;
+  // The counted day with the most messages, as `YYYY-MM-DD`, the earliest when several tie; unset
+  // when none has any.
+  optional string busiest_day = 7;
+  // The most threads, subagents included, with a message in the same 15 minutes of the counted days.
+  uint32 peak_threads = 8;
+  // When the latest of those 15 minutes started; unset when no thread has a message on those days.
+  google.protobuf.Timestamp peak_at = 9;
+  // The top ten harnesses of the counted days, most messages first, ties broken by name.
+  repeated ThreadActivityGroup harnesses = 10;
+  // The top ten models of the counted days, most messages first, ties broken by name. `threads`
+  // counts the threads that started with the model; the other counts cover the messages naming it,
+  // which a user's prompts and tool results don't.
+  repeated ThreadActivityGroup models = 11;
+  // The ten tools called most over the counted days, ties broken by name.
+  repeated ThreadActivityTool tools = 12;
+}
+
+// What some of a user's threads did over some time. A line copied from another thread, as a fork
+// starts with its parent's lines, counts once, in the thread it came from.
+message ThreadActivityCounts {
+  // The threads started, not counting subagents.
+  uint64 threads = 1;
+  // The messages with text, as `Thread.message_count` counts them.
+  uint64 messages = 2;
+  // The messages with text the user wrote to an agent. A subagent's prompts come from its parent
+  // agent, so they don't count.
+  uint64 prompts = 3;
+  // The messages that call a tool, as `Thread.tool_call_count` counts them.
+  uint64 tool_calls = 4;
+  // The messages holding a failed tool result.
+  uint64 tool_errors = 5;
+  // The model calls the user stopped.
+  uint64 stopped = 6;
+  // The model calls that ended at the token limit.
+  uint64 token_limited = 7;
+  // The messages holding a compaction summary.
+  uint64 compactions = 8;
+  // The tokens of the model calls, each call counted once. A count no call reported is 0.
+  TokenUsage usage = 9;
+  // How long agents spent between messages, in milliseconds, apart from `waiting_ms`. Threads
+  // running at once each count in full, and a gap of over 30 minutes counts as nobody working.
+  uint64 working_ms = 10;
+  // How long agents spent waiting on the user, in milliseconds: the time before each of `replies`.
+  uint64 waiting_ms = 11;
+  // The prompts that came within 30 minutes of the thread's last message, which `waiting_ms` adds
+  // up. Divide the two for the user's average time to reply.
+  uint64 replies = 12;
+  // The lines the threads' patches added.
+  uint64 lines_added = 13;
+  // The lines the threads' patches removed.
+  uint64 lines_removed = 14;
+  // How many files the threads' patches changed, a file patched twice counting twice.
+  uint64 file_edits = 15;
+}
+
+// One day of a user's agent activity.
+message ThreadActivityDay {
+  // The day in the request's time zone, as `YYYY-MM-DD`.
+  string date = 1;
+  ThreadActivityCounts counts = 2;
+}
+
+// One harness's or model's share of a user's agent activity.
+message ThreadActivityGroup {
+  string name = 1;
+  ThreadActivityCounts counts = 2;
+}
+
+// How often a user's agents called one tool.
+message ThreadActivityTool {
+  string name = 1;
+  uint64 calls = 2;
 }
 
 message ListThreadMatchesRequest {
