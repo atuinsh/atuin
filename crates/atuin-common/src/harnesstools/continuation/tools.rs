@@ -843,6 +843,7 @@ mod tests {
     #[case::branch(r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#, CLAUDE, "exec", json!({"input": r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#}))]
     #[case::loop_(r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#, CLAUDE, "exec", json!({"input": r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#}))]
     #[case::callback(r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#, CLAUDE, "exec", json!({"input": r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#}))]
+    #[case::method(r#"const o = { run() { tools.exec_command({cmd: "ls"}) } }"#, CLAUDE, "exec", json!({"input": r#"const o = { run() { tools.exec_command({cmd: "ls"}) } }"#}))]
     #[case::not_whole(r"await tools.exec_command({cmd: process.argv[2]})", CLAUDE, "exec", json!({"input": r"await tools.exec_command({cmd: process.argv[2]})"}))]
     fn codex_exec_scripts_are_carried_as_their_calls(
         #[case] script: &str,
