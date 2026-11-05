@@ -32,6 +32,9 @@ pub struct Script {
     /// Whether that is all of it: every call's arguments were literals, every use of `tools`
     /// such a call, and nothing in the script was left open.
     pub whole: bool,
+    /// Whether each call ran once, in turn: nothing around them branches, loops, calls back or
+    /// catches (`if`, `for`, `?`, `&&`, `=>`, ...).
+    pub straight: bool,
 }
 
 /// Where a script uses `tools`, however it reads (`tools.x`, `tools [`), in strings and
@@ -72,7 +75,26 @@ pub fn calls(script: &str) -> Script {
     let whole = parser.whole
         && TOOLS.find_iter(script).count() <= calls.len()
         && parser.reads_are_all_mentions();
-    Script { calls, whole }
+    Script {
+        calls,
+        whole,
+        straight: straight(&tokens),
+    }
+}
+
+/// Whether `tokens` hold nothing that may run a call other than once, in turn.
+fn straight(tokens: &[Token]) -> bool {
+    const FLOW: &[&str] = &[
+        "if", "else", "for", "while", "do", "switch", "case", "try", "catch", "finally", "function",
+    ];
+    !tokens.iter().zip(tokens.iter().skip(1).map(Some).chain([None])).any(|(token, next)| {
+        match token {
+            Token::Ident(word) => FLOW.contains(&word.as_str()),
+            Token::Punct('?' | '&' | '|') => true,
+            Token::Punct('=') => next == Some(&Token::Punct('>')),
+            _ => false,
+        }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -239,7 +239,7 @@ impl Canonical {
         let commands = calls
             .iter()
             .map(|call| match Self::parse(source, &call.name, &call.input, ran_in)? {
-                Self::Shell { command } => Some(format!("({command})")),
+                Self::Shell { command } => Some(format!("({command}\n)")),
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
@@ -636,13 +636,13 @@ fn native(target: AnyHarness, name: &str) -> bool {
 }
 
 /// The tool calls a Codex `exec` call's script makes (see the `script` module), when it was
-/// read whole.
+/// read whole and each ran once, in turn.
 fn script_calls(source: AnyHarness, call: &ToolUse) -> Option<Vec<Call>> {
     let script = match (source, &call.input) {
         (AnyHarness::Codex(_), Value::String(text)) if call.name == "exec" => script::calls(text),
         _ => return None,
     };
-    script.whole.then_some(script.calls)
+    (script.whole && script.straight).then_some(script.calls)
 }
 
 /// `call` (made in `source`, in a session that ran in `ran_in`) and its `result` as `target`
@@ -837,8 +837,12 @@ mod tests {
     #[case::shell_to_copilot(r#"await tools.exec_command({cmd: "ls", workdir: "/work/x"})"#, COPILOT, "bash", json!({"command": "cd x && ls"}))]
     #[case::patch(r#"await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, CLAUDE, "apply_patch", json!({"input": "*** Begin Patch\n*** End Patch"}))]
     #[case::patch_to_copilot(r#"await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, COPILOT, "codex_apply_patch", json!({"input": "*** Begin Patch\n*** End Patch"}))]
-    #[case::shells(r#"text(await tools.exec_command({cmd: "echo a", workdir: "/work"})); text(await tools.exec_command({cmd: "ls", workdir: "/work/x"}));"#, PI, "bash", json!({"command": "(echo a)\n(cd x && ls)"}))]
+    #[case::shells(r#"text(await tools.exec_command({cmd: "echo a", workdir: "/work"})); text(await tools.exec_command({cmd: "ls", workdir: "/work/x"}));"#, PI, "bash", json!({"command": "(echo a\n)\n(cd x && ls\n)"}))]
+    #[case::shells_ending_in_a_comment(r#"await tools.exec_command({cmd: "echo a # note"}); await tools.exec_command({cmd: "ls"})"#, PI, "bash", json!({"command": "(echo a # note\n)\n(ls\n)"}))]
     #[case::shell_and_patch(r#"await tools.exec_command({cmd: "ls"}); await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, CLAUDE, "exec", json!({"input": r#"await tools.exec_command({cmd: "ls"}); await tools.apply_patch("*** Begin Patch\n*** End Patch")"#}))]
+    #[case::branch(r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#, CLAUDE, "exec", json!({"input": r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#}))]
+    #[case::loop_(r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#, CLAUDE, "exec", json!({"input": r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#}))]
+    #[case::callback(r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#, CLAUDE, "exec", json!({"input": r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#}))]
     #[case::not_whole(r"await tools.exec_command({cmd: process.argv[2]})", CLAUDE, "exec", json!({"input": r"await tools.exec_command({cmd: process.argv[2]})"}))]
     fn codex_exec_scripts_are_carried_as_their_calls(
         #[case] script: &str,
