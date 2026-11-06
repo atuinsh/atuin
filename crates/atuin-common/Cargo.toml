@@ -25,7 +25,7 @@ jsonl = ["io"]
 # Enables `atuin_common::io`.
 io = ["os"]
 # Enables `atuin_common::os`.
-os = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-service-management", "dep:rustix", "dep:windows-sys"]
+os = ["dep:libc", "dep:objc2", "dep:objc2-foundation", "dep:objc2-service-management", "dep:rustix", "dep:windows-sys"]
 # Enables protobuf derives and conversions throughout the crate.
 proto = ["dep:prost"]
 # Enables `atuin_common::db::sqlite`.
@@ -106,6 +106,7 @@ zeroize = { workspace = true }
 zstd = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

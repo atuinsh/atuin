@@ -506,6 +506,7 @@ dependencies = [
  "i18n-embed-fl",
  "imara-diff",
  "itertools 0.15.0",
+ "libc",
  "libsqlite3-sys",
  "memchr",
  "notify",
