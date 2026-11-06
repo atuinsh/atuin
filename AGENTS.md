@@ -94,6 +94,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
+- Use `#[cfg()]` only for code that actually needs conditional compilation; prefer `if cfg!()` otherwise.
 
 ## Writing style (comments, commit messages, prose)
 - Write plain, complete sentences. Keep articles and relative pronouns ("that", "which", "who").
