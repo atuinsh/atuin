@@ -58,6 +58,10 @@ const DEBOUNCE: Debounce = Debounce {
 /// The most records one pass reads of a backfill: as many as one `InsertThreadMessages` takes.
 const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_ITEMS.get() as u64;
 
+/// How long one pass can spend on history or command output uploads, to prevent starving thread
+/// uploads.
+const PASS_BUDGET: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 pub struct UploadEngine {
     task: JoinHandle<()>,
@@ -132,10 +136,11 @@ impl From<RetryLater> for Halt {
 }
 
 /// When the run loop starts its next pass.
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum NextPass {
     /// Once something wakes the engine, at a login, or at the poll interval.
     Waiting,
-    /// At once: a backfill has more to go.
+    /// At once: more backfill, queued history, or queued outputs exist.
     Now,
 }
 
@@ -252,11 +257,34 @@ impl EngineInner {
         }
     }
 
-    /// Sends `login`'s queued uploads, outputs (while output uploads are on) and thread messages,
-    /// then a page of their first backfill not done, up to the first [`Halt::Off`].
+    /// Sends `login`'s queued thread messages and up to a page of backfill, then queued history
+    /// entries, then (only after all history is done) command output, all up to the first
+    /// [`Halt::Off`].
+    ///
+    /// History and command output uploads are bounded by [`PASS_BUDGET`].
     async fn send_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
+        let threads = self.send_threads(login).await?;
+        let commands = match self.send_history(login).await? {
+            NextPass::Waiting => self.send_outputs(login, settings).await?,
+            n @ NextPass::Now => n,
+        };
+
+        Ok(if [threads, commands].into_iter().any(|n| n == NextPass::Now) {
+            NextPass::Now
+        } else {
+            NextPass::Waiting
+        })
+    }
+
+    /// Uploads pages of `login`'s queued history entries for up to [`PASS_BUDGET`], saying whether
+    /// more may be left.
+    async fn send_history(&self, login: &HubLogin) -> Result<NextPass, Halt> {
+        let deadline = tokio::time::Instant::now() + PASS_BUDGET;
         let mut pending = self.queue.pending_history(login.user_id());
         while let Some(page) = pending.next().await {
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(NextPass::Now);
+            }
             let page = page.into_iter().collect::<Result<Vec<_>, _>>().map_err(|err| {
                 tracing::warn!(?err, "failed to read the octavo upload queue; retrying later");
                 RetryLater
@@ -264,8 +292,7 @@ impl EngineInner {
             self.send_history_page(login, page).await?;
         }
 
-        self.send_outputs(login, settings).await?;
-        self.send_threads(login).await
+        Ok(NextPass::Waiting)
     }
 
     async fn send_history_page(
@@ -355,13 +382,18 @@ impl EngineInner {
         Ok(())
     }
 
-    async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
+    /// Uploads `login`'s queued outputs for up to [`PASS_BUDGET`], saying whether more may be left.
+    async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
         if !settings.octavo.upload_output {
-            return Ok(());
+            return Ok(NextPass::Waiting);
         }
 
+        let deadline = tokio::time::Instant::now() + PASS_BUDGET;
         let mut pending = self.queue.pending_outputs(login.user_id()).items();
         while let Some(output) = pending.next().await {
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(NextPass::Now);
+            }
             let PendingOutputUpload { history_id } = output.map_err(|err| {
                 tracing::warn!(?err, "failed to read the octavo output queue; retrying later");
                 RetryLater
@@ -369,7 +401,7 @@ impl EngineInner {
             self.upload_output(login, history_id).await?;
         }
 
-        Ok(())
+        Ok(NextPass::Waiting)
     }
 
     /// Sends the queued thread messages of `login`'s user, then a page of their first backfill
