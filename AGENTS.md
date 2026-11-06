@@ -95,6 +95,13 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
 
+## Writing style (comments, commit messages, prose)
+- Write plain, complete sentences. Keep articles and relative pronouns ("that", "which", "who").
+- One idea per sentence. If a sentence has more than one clause, split it.
+- No mid-sentence parentheticals; put examples in a separate sentence ("For example, ...").
+- Every comment must make sense on its own. Don't start with "So does", "Same for", "This too".
+- If a reader would need to reread a sentence, rewrite it.
+
 ## Testing
 
 - Unit tests inline with `#[cfg(test)]`. Use `rstest` for every test — `#[rstest]`, never a
