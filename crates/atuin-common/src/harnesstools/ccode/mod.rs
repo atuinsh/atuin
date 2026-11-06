@@ -1,5 +1,5 @@
 //! Integrations and utilities for interacting with claude code.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
@@ -36,10 +36,10 @@ impl Harness for Ccode {
     }
 
     /// Install the hooks on the current active user's machine
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         // Claude Code reads hooks from its settings.json.
         let config_path = config_dir().joined("settings.json");
-        json_hooks::install(&config_path, "^Bash$", self.name()).await?;
+        json_hooks::install(&config_path, "^Bash$", self.name(), executable).await?;
         Ok(config_path)
     }
 
@@ -102,7 +102,8 @@ mod tests {
         let custom = dir.path().join("custom");
         env.set("CLAUDE_CONFIG_DIR", &custom);
 
-        let path = Ccode::new().install_hooks().await.unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let path = Ccode::new().install_hooks(&exe).await.unwrap();
 
         assert_eq!(path, custom.join("settings.json"));
         let settings: Value =

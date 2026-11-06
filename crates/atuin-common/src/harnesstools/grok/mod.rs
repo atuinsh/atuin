@@ -1,6 +1,6 @@
 //! Integrations and utilities for interacting with Grok Build (`grok`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
@@ -43,9 +43,9 @@ impl Harness for Grok {
     }
 
     /// Install Atuin's command hooks in `$GROK_HOME/hooks/atuin.json`.
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         let config_path = home().joined("hooks").joined("atuin.json");
-        json_hooks::install(&config_path, "^Bash$", self.name()).await?;
+        json_hooks::install(&config_path, "^Bash$", self.name(), executable).await?;
         Ok(config_path)
     }
 
@@ -91,7 +91,8 @@ mod tests {
         env.set("GROK_HOME", dir.path());
         assert!(!has_installed_hooks());
 
-        let path = Grok.install_hooks().await.unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let path = Grok.install_hooks(&exe).await.unwrap();
         assert_eq!(path, dir.path().join("hooks").joined("atuin.json"));
         assert!(has_installed_hooks());
 
@@ -100,7 +101,7 @@ mod tests {
             assert_eq!(parsed["hooks"][stage][0]["matcher"], "^Bash$");
         }
 
-        let second = Grok.install_hooks().await.unwrap_err();
+        let second = Grok.install_hooks(&exe).await.unwrap_err();
         assert!(matches!(second, InstallHookError::AlreadyInstalled));
     }
 

@@ -4,7 +4,7 @@
 //! Copilot's log format is undocumented and the CLI closed: what the reader and writer know of
 //! it was verified against Copilot CLI 1.0.104 (see their module docs).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -44,12 +44,13 @@ impl Harness for Copilot {
     /// The hook is registered as `exec` and `args` rather than a `command` string: on Windows
     /// Copilot runs commands through PowerShell, which cannot parse a quoted executable path at
     /// the start of one.
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         let config_path = copilot_home().joined("hooks").joined("atuin.json");
         json_hooks::install_in(
             &config_path,
             "^Bash$",
             self.name(),
+            executable,
             HookStyle::Exec,
             json!({"version": 1}),
         )

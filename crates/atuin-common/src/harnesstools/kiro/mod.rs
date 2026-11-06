@@ -47,8 +47,8 @@ impl Harness for Kiro {
     }
 
     /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        hooks::install(&kiro_home(), &std::env::current_exe()?).await
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
+        hooks::install(&kiro_home(), executable).await
     }
 
     /// `kiro-cli chat --resume-id <id>`. Kiro finds the session in whichever bucket holds it,

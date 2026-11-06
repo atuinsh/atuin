@@ -4,7 +4,7 @@
 //! plugin for it converts the messages of each turn, as Amp's `agent.end` event hands them over,
 //! and pushes them with `atuin threads push`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
@@ -27,7 +27,7 @@ impl Harness for Amp {
     /// Amp loads every plugin in `~/.config/amp/plugins/` ([Plugin API]).
     ///
     /// [Plugin API]: https://ampcode.com/docs/plugin-api
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, _executable: &Path) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/amp/atuin.ts");
 
         let plugins_dir = home_dir().joined(".config").joined("amp").joined("plugins");
