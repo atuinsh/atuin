@@ -455,9 +455,11 @@ message TallyThreadActivityResponse {
   // The counted day with the most messages, as `YYYY-MM-DD`, the earliest when several tie; unset
   // when none has any.
   optional string busiest_day = 7;
-  // The most threads, subagents included, with a message in the same 15 minutes of the counted days.
+  // The most threads, leaving out subagents, with a line in the same 15 minutes of the counted
+  // days.
   uint32 peak_threads = 8;
-  // When the latest of those 15 minutes started; unset when no thread has a message on those days.
+  // When the latest of those 15 minutes started; unset when no such thread has a line on those
+  // days.
   google.protobuf.Timestamp peak_at = 9;
   // The top ten harnesses of the counted days, most messages first, ties broken by name.
   repeated ThreadActivityGroup harnesses = 10;
