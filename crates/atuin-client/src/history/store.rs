@@ -19,7 +19,7 @@ use tracing::instrument;
 use tracing_futures::Instrument;
 
 use super::{History, HistoryId, Version};
-use crate::database::{Sqlite, current_context};
+use crate::database::{Sqlite, query_context};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
@@ -504,7 +504,9 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context(settings).await?;
+        // The list is unfiltered, so this needs no shell session: `atuin sync` straight after an
+        // import, before the shell loads Atuin, has to work.
+        let context = query_context(settings).await?;
         let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");

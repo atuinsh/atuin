@@ -75,6 +75,8 @@ impl Cmd {
         } else {
             self.run_legacy_login(settings, store).await?;
         }
+        #[cfg(feature = "daemon")]
+        tell_daemon_logged_in(settings).await;
 
         verify_key_against_remote(settings, store, self.interactive()).await
     }
@@ -105,11 +107,15 @@ impl Cmd {
 
             let mut totp_code = self.totp_code.clone();
 
-            let (session, auth_type) = loop {
+            let (session, auth_type, user_id) = loop {
                 let response = client.login(username, &password, totp_code.as_ref()).await?;
 
                 match response {
-                    AuthResponse::Success { session, auth_type } => break (session, auth_type),
+                    AuthResponse::Success {
+                        session,
+                        auth_type,
+                        user_id,
+                    } => break (session, auth_type, user_id),
                     AuthResponse::TwoFactorRequired => {
                         let Some(code) = read_user_input(&fl!("prompt-two-factor-code")) else {
                             bail!(fl!("login-totp-required"));
@@ -124,7 +130,7 @@ impl Cmd {
                 auth_type.as_deref() == Some("hub") || atuin_client::meta::is_hub_token(&session);
 
             if is_hub_token {
-                meta.save_hub_session(&session).await?;
+                meta.save_hub_session(&session, user_id.as_deref()).await?;
             } else {
                 meta.save_session(&session).await?;
                 userio::log::info!("account-not-migrated-note");
@@ -195,8 +201,9 @@ impl Cmd {
             println!("{}", fl!("account-hub-open-url"));
         }
         println!("{}", session.auth_url);
+        println!("{}", fl!("account-hub-check-code", code = session.short_code()));
 
-        let token = session
+        let new_session = session
             .wait_for_completion(
                 atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
                 atuin_client::hub::DEFAULT_POLL_INTERVAL,
@@ -206,7 +213,7 @@ impl Cmd {
 
         userio::log::info!("login-hub-saving-session");
 
-        atuin_client::hub::save_session(&token, settings).await?;
+        atuin_client::hub::save_session(&new_session, settings).await?;
 
         Ok(())
     }
@@ -267,7 +274,11 @@ impl Cmd {
 
 /// Write the key to the key file, re-encrypting the local store first if it was
 /// previously encrypted with a different key.
-async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Key) -> Result<()> {
+pub async fn store_key(
+    settings: &Settings,
+    store: &SqliteStore,
+    key: &paseto_v4::Key,
+) -> Result<()> {
     let key_path = &settings.key_path;
 
     if !key_path.exists() {
@@ -303,6 +314,23 @@ async fn store_key(settings: &Settings, store: &SqliteStore, key: &paseto_v4::Ke
     }
 
     Ok(())
+}
+
+/// Tells a running daemon of the session just saved, so the uploads it holds back for one go now.
+/// Starts none itself.
+#[cfg(feature = "daemon")]
+pub async fn tell_daemon_logged_in(settings: &Settings) {
+    let daemon = match ActiveService::find(settings).await {
+        Ok(Some(daemon)) => daemon,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::debug!(?err, "not telling the daemon of the login");
+            return;
+        }
+    };
+    if let Err(status) = daemon.history_client().logged_in().await {
+        tracing::debug!(?status, "the daemon didn't hear of the login");
+    }
 }
 
 /// Start the daemon on the new key if it was stopped, and restart one running on the old key, such

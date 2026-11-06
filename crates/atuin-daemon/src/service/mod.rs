@@ -271,6 +271,33 @@ impl ActiveService {
         self.connection.address()
     }
 
+    /// The systemd unit or socket, or the launchd job, that runs the service in Atuin's place, if
+    /// one does: [`Self::restart`] then goes through it.
+    #[must_use]
+    pub fn external_manager(&self) -> Option<&ExternalManager> {
+        match self.backend() {
+            AnyBackend::External(external) => Some(external.manager()),
+            AnyBackend::Launchd(_) | AnyBackend::Subproc(_) => None,
+        }
+    }
+
+    /// Whether the service is Atuin's launchd agent, which [`Self::restart`] installs again.
+    #[must_use]
+    pub fn is_launchd_agent(&self) -> bool {
+        match self.backend() {
+            // Also the backend of another daemon while the agent is installed, which a restart
+            // would replace with the agent.
+            AnyBackend::Launchd(_) => {
+                self.pidfile.is_live()
+                    && self
+                        .pidfile
+                        .info()
+                        .is_some_and(|info| info.run_mode == Some(RunMode::LaunchdAgent))
+            }
+            AnyBackend::External(_) | AnyBackend::Subproc(_) => false,
+        }
+    }
+
     /// Restart the service.
     pub async fn restart(self) -> Result<Self, RestartError> {
         let _held = self.startup.acquire().await?;
@@ -348,6 +375,7 @@ impl ActiveService {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::env::MockEnv;
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
@@ -366,6 +394,10 @@ mod tests {
         #[case] claimed: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
+        // Without `ATUIN_HOME`, whatever the process exports: with it, a socket the pidfile
+        // doesn't name is another profile's and refused outright, never waited on.
+        let env = MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
         let socket = dir.path().join("atuin.sock");
         let mut settings = Settings::default();
         settings.daemon.pidfile_path =

@@ -13,7 +13,7 @@ version.workspace = true
 
 [dependencies]
 # The `proto` features derive the prost traits the extern paths in build.rs map onto.
-atuin-client = { workspace = true, features = ["proto"] }
+atuin-client = { workspace = true, features = ["octavo", "proto"] }
 atuin-common = { workspace = true, features = ["ai", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 eyre = { workspace = true }
@@ -24,10 +24,15 @@ native-tls = { workspace = true, features = ["alpn"] }
 prost = { workspace = true }
 prost-types = { workspace = true }
 secrecy = { workspace = true }
+# Strips NUL out of tool payloads before they are encoded: Octavo refuses NUL in JSON strings.
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
+# Reads the `google.rpc.ErrorInfo` a refusal carries, which tells an account without Octavo apart.
+tonic-types = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
@@ -35,6 +40,7 @@ xxhash-rust = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 
 [build-dependencies]

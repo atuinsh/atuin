@@ -207,20 +207,35 @@ impl MetaStore {
         Ok(self.get(KEY_HUB_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
+    /// Saves `token` as the hub session, with `user_id`, the user it logs in, when the hub said
+    /// whose it is. Without one, [`Self::hub_user_id`] has none until
+    /// [`Self::save_hub_user_id`] records it.
+    pub async fn save_hub_session(
+        &self,
+        token: &SecretString,
+        user_id: Option<&str>,
+    ) -> Result<()> {
+        const UPSERT: &str = "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, \
+                              strftime('%s', 'now')) ON CONFLICT(key) DO UPDATE SET value = ?2, \
+                              updated_at = strftime('%s', 'now')";
+
         let mut tx = self.sqlite.pool().begin().await?;
-        db::query(
-            "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
-             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
-        )
-        .bind(KEY_HUB_SESSION)
-        .bind(token.expose_secret())
-        .execute(&mut *tx)
-        .await?;
-        db::query("DELETE FROM meta WHERE key = ?1")
-            .bind(KEY_HUB_USER_ID)
+        db::query(UPSERT)
+            .bind(KEY_HUB_SESSION)
+            .bind(token.expose_secret())
             .execute(&mut *tx)
             .await?;
+        match user_id {
+            Some(user_id) => {
+                db::query(UPSERT).bind(KEY_HUB_USER_ID).bind(user_id).execute(&mut *tx).await?;
+            }
+            None => {
+                db::query("DELETE FROM meta WHERE key = ?1")
+                    .bind(KEY_HUB_USER_ID)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         tx.commit().await?;
 
         Ok(())

@@ -14,19 +14,20 @@ use std::pin::pin;
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
-use atuin_client::history::{History, HistoryId};
+use atuin_client::history::{History, HistoryId, ShellSession};
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use easy_cast::Conv;
+use fixedbitset::FixedBitSet;
 use futures::{Stream, TryStreamExt, stream};
 use lasso::{Spur, ThreadedRodeo};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use time::OffsetDateTime;
-use tracing::{Level, instrument};
+use tracing::{Level, error, instrument};
 use uuid::Uuid;
 
-/// Failure to (re)build a [`SearchIndex`] from the history database.
+/// Error trying to load history from the database into the search index.
 #[derive(Debug, thiserror::Error)]
 #[error("failed to load history from the database: {0}")]
 pub struct LoadFromDbError(eyre::Report);
@@ -188,6 +189,9 @@ pub enum IndexFilterMode {
     Host(String),
     /// Filter to commands run in a specific session.
     Session(String),
+    /// Filter to commands run in a specific session, plus all commands run before the start of the
+    /// session.
+    SessionPreload(String),
 }
 
 /// A "compiled" form of [`IndexFilterMode`], with most of the strings interned and parsed.
@@ -197,13 +201,15 @@ enum CompiledFilter<'a> {
     Workspace(&'a str),
     Host(Spur),
     Session(Uuid),
+    /// The session's own commands, plus those run before it started.
+    SessionPreload(SessionPreload),
     /// Used when a target (host/dir/session) has never been seen by the index -- nothing can match.
     Nothing,
 }
 
 impl CompiledFilter<'_> {
-    /// Check whether `data` matches this filter.
-    fn matches(&self, data: &CommandData, interner: &ThreadedRodeo) -> bool {
+    /// Check whether `data`, the command at `index`, matches this filter.
+    fn matches(&self, index: u32, data: &CommandData, interner: &ThreadedRodeo) -> bool {
         match self {
             Self::All => true,
             Self::Nothing => false,
@@ -211,13 +217,18 @@ impl CompiledFilter<'_> {
             Self::Workspace(prefix) => data.has_invocation_in_workspace(prefix, interner),
             Self::Host(hostname) => data.has_invocation_on_host(*hostname),
             Self::Session(session) => data.has_invocation_in_session(session),
+            Self::SessionPreload(preload) => {
+                preload.commands.contains(usize::conv(index))
+                    || data.has_invocation_in_session(&preload.session.id)
+            }
         }
     }
 }
 
 impl IndexFilterMode {
-    /// "Compile" this filter by interning and parsing its strings.
-    fn compile(&self, interner: &ThreadedRodeo) -> CompiledFilter<'_> {
+    /// "Compile" this filter for `index` by interning and parsing its strings.
+    async fn compile(&self, index: &SearchIndex, db: &Sqlite) -> CompiledFilter<'_> {
+        let interner = &index.interner;
         match self {
             Self::Global => CompiledFilter::All,
             Self::Directory(dir) => {
@@ -230,7 +241,88 @@ impl IndexFilterMode {
             Self::Session(session) => {
                 Uuid::parse_str(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
             }
+            Self::SessionPreload(session) => {
+                let preload =
+                    index.prepare_session_preload(session, db).await.unwrap_or_else(|e| {
+                        error!("Failed to load history from before the session started: {e}");
+                        None
+                    });
+                match preload {
+                    Some(preload) => CompiledFilter::SessionPreload(preload),
+                    // Fall back to `Session` filtering if we couldn't get a valid preload cache.
+                    None => Uuid::parse_str(session)
+                        .map_or(CompiledFilter::Nothing, CompiledFilter::Session),
+                }
+            }
         }
+    }
+}
+
+/// The commands run before a session started, for [`IndexFilterMode::SessionPreload`].
+#[derive(Debug, Clone)]
+struct SessionPreload {
+    session: ShellSession,
+    /// The commands, stored as indices into [`SearchIndex::commands`].
+    commands: Arc<FixedBitSet>,
+}
+
+impl SessionPreload {
+    /// Start preparing the [`SessionPreload`] for `session` in `index`.
+    pub fn begin(session: ShellSession, index: &SearchIndex) -> PendingSessionPreload {
+        PendingSessionPreload {
+            session,
+            num_commands: index.commands.read().count(),
+        }
+    }
+}
+
+/// An in-progress [`SessionPreload`].
+#[derive(Debug, Clone, Copy)]
+struct PendingSessionPreload {
+    session: ShellSession,
+    /// The number of commands in the index at the time the [`PendingSessionPreload`] was created.
+    num_commands: CommandCount,
+}
+
+impl PendingSessionPreload {
+    /// Finish preparing and return the [`SessionPreload`].
+    ///
+    /// `excluded_commands` is the list of commands to be excluded from the cache; that is, all
+    /// commands run after the start of the session.
+    pub fn finish(self, index: &SearchIndex, excluded_commands: &[String]) -> SessionPreload {
+        let all_commands = index.commands.read();
+
+        // Limit the cache to the commands that existed in the index before the database query;
+        // otherwise commands added during the query could be mistaken for commands that should be
+        // added to the cache.
+        let mut commands = FixedBitSet::with_capacity(self.num_commands.unique);
+        commands.insert_range(..);
+
+        for command in excluded_commands {
+            if let Some(position) =
+                all_commands.indices.get(command.as_str()).map(|i| usize::conv(*i))
+                && position < self.num_commands.unique
+            {
+                commands.set(position, false);
+            }
+        }
+
+        let preload = SessionPreload {
+            session: self.session,
+            commands: Arc::new(commands),
+        };
+
+        // Install the cache only if no new commands were added while we were building it --
+        // otherwise it's stale, and while we can use it for the current search query, we shouldn't
+        // install it.
+        //
+        // Continue holding the read lock on `all_commands`, so this doesn't interleave with
+        // `add_history` invalidating the cache.
+        if all_commands.num_total == self.num_commands.total {
+            *index.session_preload.lock() = Some(preload.clone());
+        }
+        drop(all_commands);
+        preload
     }
 }
 
@@ -254,9 +346,32 @@ struct Commands {
     ///
     /// Stored in insertion order -- aligned with [`Self::haystack`].
     data: Vec<CommandData>,
+
+    /// The total number of commands added to the index, including multiple invocations of the same
+    /// command.
+    num_total: u64,
+}
+
+/// Represents the number of commands in the search index at a given point in time.
+///
+/// This can be used to tell whether the index has changed at a later time.
+#[derive(Debug, Clone, Copy)]
+struct CommandCount {
+    /// The number of unique commands.
+    pub unique: usize,
+    /// The total number of commands added, including invocations of the same command.
+    pub total: u64,
 }
 
 impl Commands {
+    /// The number of commands in this structure.
+    const fn count(&self) -> CommandCount {
+        CommandCount {
+            unique: self.data.len(),
+            total: self.num_total,
+        }
+    }
+
     /// Add a history entry. See [`SearchIndex::add_history`].
     pub fn add(&mut self, history: &History, interner: &ThreadedRodeo) {
         let command = history.command.as_str();
@@ -264,6 +379,7 @@ impl Commands {
         if let Some(&index) = self.indices.get(command) {
             // Existing command - just update invocations
             self.data[usize::conv(index)].add_invocation(history, interner);
+            self.num_total += 1;
             return;
         }
 
@@ -287,6 +403,7 @@ impl Commands {
         self.indices.insert(command, index);
         self.haystack.push(normalized);
         self.data.push(data);
+        self.num_total += 1;
     }
 }
 
@@ -343,6 +460,9 @@ pub struct SearchIndex {
 
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
+
+    /// Cache for the most recent session used with the "session-preload" filter.
+    session_preload: Mutex<Option<SessionPreload>>,
 }
 
 impl SearchIndex {
@@ -354,6 +474,7 @@ impl SearchIndex {
             frecency_map: RwLock::default(),
             interner: Arc::new(ThreadedRodeo::new()),
             shells,
+            session_preload: Mutex::default(),
         }
     }
 
@@ -407,7 +528,18 @@ impl SearchIndex {
             return;
         }
 
-        self.commands.write().add(history, &self.interner);
+        let mut commands = self.commands.write();
+        commands.add(history, &self.interner);
+
+        // Continue holding the write lock on `commands`, so this doesn't interleave with
+        // `prepare_session_preload` installing a new cache.
+        let mut preload = self.session_preload.lock();
+        if preload.as_ref().is_some_and(|cached| history.timestamp < cached.session.start) {
+            *preload = None;
+        }
+
+        drop(preload);
+        drop(commands);
         // Note: frecency_map is rebuilt by background task, not invalidated here
     }
 
@@ -417,6 +549,34 @@ impl SearchIndex {
         for history in histories {
             self.add_history(history);
         }
+    }
+
+    /// Prepare a [`SessionPreload`] cache for the given session.
+    ///
+    /// Installs the cache and returns it; callers should use the returned value as the installed
+    /// cache could change at any time.
+    #[instrument(skip_all, level = tracing::Level::TRACE, name = "prepare_session_preload", fields(session = %session))]
+    async fn prepare_session_preload(
+        &self,
+        session: &str,
+        db: &Sqlite,
+    ) -> Result<Option<SessionPreload>, LoadFromDbError> {
+        let Some(session) = ShellSession::parse(session) else {
+            return Ok(None);
+        };
+        if let Some(cached) = self.session_preload.lock().as_ref()
+            && cached.session == session
+        {
+            return Ok(Some(cached.clone()));
+        }
+
+        let pending = SessionPreload::begin(session, self);
+        let excluded_commands = db
+            .commands_only_since(session.start, self.shells.as_slice_filter())
+            .await
+            .map_err(|e| LoadFromDbError(e.into()))?;
+
+        Ok(Some(pending.finish(self, &excluded_commands)))
     }
 
     /// Get the number of unique commands in the index.
@@ -429,13 +589,29 @@ impl SearchIndex {
     ///
     /// Returns an iterator of history IDs as parsed UUIDs (most recent invocation per command).
     /// Uses precomputed global frecency for scoring if available.
+    ///
+    /// The database is used for [`IndexFilterMode::SessionPreload`] -- a query needs to be executed
+    /// to determine which commands to include, but this gets cached for subsequent
+    /// "session-preload" searches for the same session.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %query))]
-    pub fn search(
+    pub async fn search(
         &self,
         query: &str,
         filter_mode: &IndexFilterMode,
         limit: usize,
-    ) -> impl Iterator<Item = HistoryId> {
+        db: &Sqlite,
+    ) -> impl Iterator<Item = HistoryId> + use<'_> {
+        let filter = filter_mode.compile(self, db).await;
+        self.search_compiled(query, &filter, limit)
+    }
+
+    /// [`Self::search`] with the filter already [compiled](IndexFilterMode::compile).
+    fn search_compiled(
+        &self,
+        query: &str,
+        filter: &CompiledFilter<'_>,
+        limit: usize,
+    ) -> impl Iterator<Item = HistoryId> + use<'_> {
         // Get precomputed frecency map (empty if not yet computed)
         let frecency_map = self.frecency_map.read().clone();
 
@@ -448,17 +624,16 @@ impl SearchIndex {
         }
 
         let commands = self.commands.read();
-        let filter = filter_mode.compile(&self.interner);
 
         // Filter pre-pass: collect the candidate commands for this filter mode. This is a sorted
         // vector of command indices.
         let candidates: Vec<u32> =
-            tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match &filter {
+            tracing::span!(Level::TRACE, "index_search_filter").in_scope(|| match filter {
                 CompiledFilter::All => (0..u32::conv(commands.data.len())).collect(),
                 CompiledFilter::Nothing => Vec::new(),
                 filter => (0..)
                     .zip(&commands.data)
-                    .filter(|(_, data)| filter.matches(data, &self.interner))
+                    .filter(|&(index, data)| filter.matches(index, data, &self.interner))
                     .map(|(index, _)| index)
                     .collect(),
             });
@@ -574,11 +749,30 @@ impl Default for SearchIndex {
 
 #[cfg(test)]
 mod tests {
+    use atuin_client::history::AuthorKind;
     use parking_lot::{MappedRwLockReadGuard, RwLockReadGuard};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use time::macros::datetime;
 
     use super::*;
+
+    /// An empty history db.
+    /// A session that started at 2024-01-01 12:00 UTC, with a UUIDv7 id that records it.
+    #[fixture]
+    fn session() -> ShellSession {
+        let start = datetime!(2024-01-01 12:00 UTC);
+        let secs = u64::try_from(start.unix_timestamp()).unwrap();
+        let id = Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0));
+        let session = ShellSession { id, start };
+        // The daemon reads the start back out of the id, so the two must agree.
+        assert_eq!(ShellSession::parse(&id.as_simple().to_string()), Some(session));
+        session
+    }
+
+    #[fixture]
+    async fn db() -> Sqlite {
+        Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap()
+    }
 
     fn make_history(command: &str, cwd: &str, timestamp: OffsetDateTime) -> History {
         History::import()
@@ -760,7 +954,8 @@ mod tests {
     }
 
     #[rstest]
-    fn search_index_add_and_search() {
+    #[tokio::test]
+    async fn search_index_add_and_search(#[future(awt)] db: Sqlite) {
         let index = SearchIndex::default();
 
         let h1 = make_history("git status", "/home/user/project", datetime!(2024-01-01 10:00 UTC));
@@ -778,20 +973,159 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        assert_eq!(index.search("git", &IndexFilterMode::Global, 10).count(), 2);
+        assert_eq!(index.search_compiled("git", &CompiledFilter::All, 10).count(), 2);
 
         // Search with directory filter
         // git status and git commit
-        let count = index
-            .search(
-                "",
-                &IndexFilterMode::Directory(
-                    "/home/user/project".display_rich().trailing_slash(true).to_string(),
-                ),
-                10,
-            )
-            .count();
-        assert_eq!(count, 2);
+        let directory = IndexFilterMode::Directory(
+            "/home/user/project".display_rich().trailing_slash(true).to_string(),
+        );
+        assert_eq!(index.search("", &directory, 10, &db).await.count(), 2);
+    }
+
+    fn make_session_history(
+        command: &str,
+        session: Uuid,
+        timestamp: OffsetDateTime,
+        author_kind: AuthorKind,
+    ) -> History {
+        History::import()
+            .timestamp(timestamp)
+            .command(command)
+            .cwd("/tmp")
+            .session(session.as_simple().to_string())
+            .author("test-user")
+            .author_kind(Some(author_kind))
+            .build()
+            .into()
+    }
+
+    /// `session-preload` matches the session's own commands plus anything a user ran, in any
+    /// session, before the session started -- not just the session's own commands.
+    #[rstest]
+    #[case::v7_session(true, &["before", "mine", "before_and_after"])]
+    #[case::session_without_timestamp(false, &["mine"])]
+    #[tokio::test]
+    async fn session_preload_includes_history_before_session_start(
+        #[case] v7: bool,
+        #[case] expected: &[&str],
+        #[future(awt)] db: Sqlite,
+        session: ShellSession,
+    ) {
+        let start = session.start;
+        let session = if v7 {
+            session.id
+        } else {
+            Uuid::new_v4()
+        };
+        let other = Uuid::new_v4();
+
+        let index = SearchIndex::default();
+        for (command, session, timestamp, author_kind) in [
+            ("before", other, start - time::Duration::nanoseconds(1), AuthorKind::User),
+            ("mine", session, start + time::Duration::minutes(5), AuthorKind::User),
+            ("after", other, start, AuthorKind::User),
+            ("before_and_after", other, start + time::Duration::minutes(1), AuthorKind::User),
+            ("before_and_after", other, start - time::Duration::minutes(1), AuthorKind::User),
+            // An agent's earlier run doesn't count: the index only holds user history.
+            ("agent_before", other, start - time::Duration::minutes(1), AuthorKind::Agent),
+            ("agent_before", other, start + time::Duration::minutes(1), AuthorKind::User),
+        ] {
+            let history = make_session_history(command, session, timestamp, author_kind);
+            db.save(&history).await.unwrap();
+            index.add_history(&history);
+        }
+
+        let session = session.as_simple().to_string();
+
+        let filter = IndexFilterMode::SessionPreload(session);
+        let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+        let mut expected: Vec<_> =
+            expected.iter().map(|c| command(&index, c).most_recent_id).collect();
+        results.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(results, expected);
+    }
+
+    /// The cache built by the first `session-preload` search stays correct as history arrives
+    /// later, without the caller clearing it: a command run since the session started stays out,
+    /// and history from before it (a sync, or the rest of the initial load) is picked up.
+    #[rstest]
+    #[tokio::test]
+    async fn session_preload_follows_history_added_after_the_cache_is_built(
+        #[future(awt)] db: Sqlite,
+        session: ShellSession,
+    ) {
+        let start = session.start;
+        let other = Uuid::new_v4();
+        let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
+
+        let index = SearchIndex::default();
+        let add = async |command: &str, timestamp: OffsetDateTime| {
+            let history = make_session_history(command, other, timestamp, AuthorKind::User);
+            db.save(&history).await.unwrap();
+            index.add_history(&history);
+        };
+        let search = async || {
+            let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+            results.sort_unstable();
+            results
+        };
+        let ids = |commands: &[&str]| {
+            let mut ids: Vec<_> =
+                commands.iter().map(|c| command(&index, c).most_recent_id).collect();
+            ids.sort_unstable();
+            ids
+        };
+
+        add("old", start - time::Duration::minutes(1)).await;
+        assert_eq!(search().await, ids(&["old"]));
+
+        add("new_since_start", start + time::Duration::minutes(1)).await;
+        assert_eq!(search().await, ids(&["old"]), "a command run since the start stays out");
+
+        add("synced_from_before", start - time::Duration::minutes(2)).await;
+        assert_eq!(
+            search().await,
+            ids(&["old", "synced_from_before"]),
+            "history from before the start is picked up"
+        );
+    }
+
+    /// History from before the session start that arrives while the preload query runs (the rest
+    /// of the initial load, or a sync) can't discard a cache that doesn't exist yet, so the result
+    /// of that query must not be cached: the next search has to run the query again.
+    #[rstest]
+    #[tokio::test]
+    async fn session_preload_is_not_cached_when_history_arrives_during_the_query(
+        #[future(awt)] db: Sqlite,
+        session: ShellSession,
+    ) {
+        let start = session.start;
+        let other = Uuid::new_v4();
+
+        let index = SearchIndex::default();
+        let add = async |command: &str| {
+            let timestamp = start - time::Duration::minutes(1);
+            let history = make_session_history(command, other, timestamp, AuthorKind::User);
+            db.save(&history).await.unwrap();
+            index.add_history(&history);
+        };
+        add("old").await;
+
+        // `prepare_session_preload`, with "late" arriving between beginning and its query.
+        let pending = SessionPreload::begin(session, &index);
+        add("late").await;
+        let excluded = db.commands_only_since(start, index.shells.as_slice_filter()).await.unwrap();
+        pending.finish(&index, &excluded);
+
+        let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
+        let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+        results.sort_unstable();
+        let mut expected =
+            vec![command(&index, "old").most_recent_id, command(&index, "late").most_recent_id];
+        expected.sort_unstable();
+        assert_eq!(results, expected, "the next search must find the late history");
     }
 
     /// Regression test for #3702: a frequently-run command whose match is
@@ -815,7 +1149,7 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results: Vec<_> = index.search("foo bar", &IndexFilterMode::Global, 10).collect();
+        let results: Vec<_> = index.search_compiled("foo bar", &CompiledFilter::All, 10).collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -840,7 +1174,7 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results: Vec<_> = index.search("echo", &IndexFilterMode::Global, 10).collect();
+        let results: Vec<_> = index.search_compiled("echo", &CompiledFilter::All, 10).collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -862,10 +1196,10 @@ mod tests {
 
         let expected = command(&index, "echo déjà-vu").most_recent_id;
 
-        let results: Vec<_> = index.search("deja", &IndexFilterMode::Global, 10).collect();
+        let results: Vec<_> = index.search_compiled("deja", &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![expected]);
 
-        let results: Vec<_> = index.search("déjà", &IndexFilterMode::Global, 10).collect();
+        let results: Vec<_> = index.search_compiled("déjà", &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![expected]);
     }
 
@@ -878,10 +1212,10 @@ mod tests {
         index.add_history(&plain);
 
         for query in ["¡\"", "^¡\"$", "'¡\"", "\\!\""] {
-            let results: Vec<_> = index.search(query, &IndexFilterMode::Global, 10).collect();
+            let results: Vec<_> = index.search_compiled(query, &CompiledFilter::All, 10).collect();
             assert_eq!(results, vec![literal.id], "query {query:?}");
         }
-        let results: Vec<_> = index.search("!¡\"", &IndexFilterMode::Global, 10).collect();
+        let results: Vec<_> = index.search_compiled("!¡\"", &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![plain.id]);
     }
 
@@ -946,9 +1280,10 @@ mod tests {
         index.rebuild_frecency(&Search::default());
 
         for query in ["git", "git p", "docker compose up", "deja", ""] {
-            let first: Vec<_> = index.search(query, &IndexFilterMode::Global, 200).collect();
+            let first: Vec<_> = index.search_compiled(query, &CompiledFilter::All, 200).collect();
             for _ in 0..2 {
-                let again: Vec<_> = index.search(query, &IndexFilterMode::Global, 200).collect();
+                let again: Vec<_> =
+                    index.search_compiled(query, &CompiledFilter::All, 200).collect();
                 assert_eq!(first, again, "query {query:?} returned unstable results");
             }
         }
@@ -962,14 +1297,12 @@ mod tests {
         index.add_history(&make_history("echo hello", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
         let long_query = "a".repeat(5000);
-        assert!(index.search(&long_query, &IndexFilterMode::Global, 10).next().is_none());
+        assert!(index.search_compiled(&long_query, &CompiledFilter::All, 10).next().is_none());
     }
 
     #[rstest]
     #[tokio::test]
-    async fn load_from_db_counts_every_invocation() {
-        let db = Sqlite::in_memory(std::time::Duration::from_secs(5)).await.unwrap();
-
+    async fn load_from_db_counts_every_invocation(#[future(awt)] db: Sqlite) {
         // One group by (command, cwd, host, session), with the newest id holding the oldest
         // timestamp: the grouped load picked that row and its cursor skipped the rest.
         for minute in 0..3 {
@@ -1016,7 +1349,7 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results: Vec<_> = index.search("echo", &IndexFilterMode::Global, 100).collect();
+        let results: Vec<_> = index.search_compiled("echo", &CompiledFilter::All, 100).collect();
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

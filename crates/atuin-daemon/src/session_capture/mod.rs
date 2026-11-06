@@ -22,13 +22,15 @@ use atuin_client::ai_session::{
 use atuin_client::record::decode::map_parallel;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::encryption::paseto_v4::Key;
-use atuin_common::harnesstools::session::{Content, Role, ToolCallId};
+use atuin_common::harnesstools::session::pushed::PushedMessage;
+use atuin_common::harnesstools::session::{AnyMessage, Content, Role, SessionId, ToolCallId};
 use atuin_common::sync::BlockingPool;
 use atuin_domain::record::HostId;
 use engine::SessionCaptureEngine;
 use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
+use message_enricher::MessageEnricher;
 pub use policy::CapturePolicy;
 use policy::Verdict;
 use recovery::{Backoff, Coordinator, Msg};
@@ -37,6 +39,9 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 pub use tools::ToolCapture;
 use tracing::Instrument as _;
+
+#[cfg(feature = "octavo")]
+use crate::octavo::Octavo;
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -105,6 +110,9 @@ pub(crate) struct Sink {
     unsafe_calls: Arc<parking_lot::Mutex<UnsafeCalls>>,
     /// Where capture last moved this host's watermark (see [`AiSessionStore::advance_past_capture`]).
     capture_mark: Arc<parking_lot::Mutex<Option<CaptureMark>>>,
+    /// Hears of every row this host captures, live or imported.
+    #[cfg(feature = "octavo")]
+    octavo: Arc<Octavo>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -132,6 +140,8 @@ impl Sink {
             policy: Arc::default(),
             unsafe_calls: Arc::default(),
             capture_mark: Arc::default(),
+            #[cfg(feature = "octavo")]
+            octavo: Arc::new(Octavo::nop()),
             #[cfg(test)]
             hooks: None,
         }
@@ -440,6 +450,12 @@ impl Sink {
             Some(known) => known,
             None => CaptureMark::Unknown(self.sidecar.projection_generation().await?),
         };
+        // Queued before the push: a daemon that dies between the two leaves an id that the engine
+        // expires, never a stored record that Octavo doesn't hear of. Rows a failed push left for
+        // `repair` are queued already too. While the account is marked off, none are queued:
+        // `start` uploads them once, and what a dead daemon or a failed push skips goes nowhere.
+        #[cfg(feature = "octavo")]
+        let upload = self.octavo.queue_thread_messages(&new).await;
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -449,6 +465,8 @@ impl Sink {
             std::panic::panic_any(hooks::INJECTED_PANIC);
         }
         let pushed = self.records.push_all(&new).await?;
+        #[cfg(feature = "octavo")]
+        upload.start();
         #[cfg(test)]
         if self.hook(hooks::Point::CapturePushed).await == hooks::Fault::Panic {
             std::panic::panic_any(hooks::INJECTED_PANIC);
@@ -870,6 +888,7 @@ impl AiHarnessSessionCapture {
         tools: ToolCapture,
         policy: CapturePolicy,
         pool: BlockingPool,
+        #[cfg(feature = "octavo")] octavo: Arc<Octavo>,
     ) -> Self {
         Self::open_with(
             records,
@@ -878,11 +897,17 @@ impl AiHarnessSessionCapture {
             tools,
             policy,
             pool,
+            #[cfg(feature = "octavo")]
+            octavo,
             #[cfg(test)]
             None,
         )
     }
 
+    #[cfg_attr(
+        all(test, feature = "octavo"),
+        expect(clippy::too_many_arguments, reason = "`open`'s arguments, and the test hooks")
+    )]
     fn open_with(
         records: AiSessionStore,
         sidecar: AiSessionDatabase,
@@ -890,11 +915,16 @@ impl AiHarnessSessionCapture {
         tools: ToolCapture,
         policy: CapturePolicy,
         pool: BlockingPool,
+        #[cfg(feature = "octavo")] octavo: Arc<Octavo>,
         #[cfg(test)] hooks: Option<Arc<dyn hooks::Hooks>>,
     ) -> Self {
         let (state_tx, state) = watch::channel(StoreState::Recovering);
         let mut sink = Sink::with_state(records, sidecar, tools, state.clone());
         sink.policy = Arc::new(policy);
+        #[cfg(feature = "octavo")]
+        {
+            sink.octavo = octavo;
+        }
         #[cfg(test)]
         {
             sink.hooks = hooks;
@@ -1093,6 +1123,36 @@ impl AiHarnessSessionCapture {
             .is_ok_and(|state| *state == StoreState::Ready)
     }
 
+    /// Start capturing messages an agent hands over for `session` (`atuin threads push`), as a
+    /// transcript's lines are captured: rows already stored are duplicates, so a line pushed again
+    /// is skipped.
+    pub async fn push(
+        &self,
+        harness: HarnessKind,
+        session: &SessionId,
+    ) -> Result<Push, AppendError> {
+        let sink = self.sink.clone();
+        let mut enricher = MessageEnricher::new(harness).keeping_patches(sink.keeps_patches());
+        let handle = enricher.handle(session);
+        let warmed =
+            engine::read_warm(&sink, &handle, sink.lock_ready().await?).await.map_err(|err| {
+                match err {
+                    engine::WarmError::Repair(err) => err,
+                    engine::WarmError::Read(err) => AppendError::Sidecar(err),
+                    #[cfg(test)]
+                    engine::WarmError::Injected => AppendError::Aborted,
+                }
+            })?;
+        // Without the content-addressed ids stored: a line without an id pushed again is the
+        // same line, not the next one like it.
+        enricher.resume(session, warmed.row.as_ref(), &warmed.titles, warmed.last.as_ref(), &[]);
+        Ok(Push {
+            sink,
+            enricher,
+            session: session.clone(),
+        })
+    }
+
     pub fn import(
         &self,
         harness: Option<HarnessKind>,
@@ -1145,6 +1205,32 @@ impl AiHarnessSessionCapture {
         limit: u32,
     ) -> impl Stream<Item = Result<SessionMatch, DbError>> + Send + 'static {
         self.sink.sidecar.search(terms, filter, limit)
+    }
+}
+
+/// One push being captured (see [`AiHarnessSessionCapture::push`]): its lines are read as one
+/// transcript is, however many batches they come in.
+pub struct Push {
+    sink: Arc<Sink>,
+    enricher: MessageEnricher,
+    session: SessionId,
+}
+
+impl Push {
+    /// Capture `lines`, the next of the push. Returns what became of each row stored now: a row
+    /// whose line had no time waits for the next line that has one.
+    pub async fn lines(&mut self, lines: Vec<PushedMessage>) -> Result<Vec<Appended>, AppendError> {
+        let mut rows = Vec::new();
+        for line in lines {
+            rows.extend(self.enricher.capture(&self.session, &AnyMessage::Pushed(line)));
+        }
+        self.sink.append_all(rows).await
+    }
+
+    /// The push is over: store what was waiting.
+    pub async fn finish(mut self) -> Result<Vec<Appended>, AppendError> {
+        let rows = self.enricher.finish(&self.session);
+        self.sink.append_all(rows).await
     }
 }
 
@@ -2036,6 +2122,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(!capture.ready().await);
         let mut import = Box::pin(capture.import(None));
@@ -2053,6 +2141,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         assert_eq!(charged(&sidecar).await, (100, 42), "recovery projects the stranded record");
@@ -2097,6 +2187,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         // Capture and import hold on this, so the dedup gate sees every persisted message.
         assert!(capture.ready().await);
@@ -2117,6 +2209,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let msg = sample_message();
@@ -2152,6 +2246,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let mut sub = capture.subscribe();
@@ -2205,6 +2301,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let other = records_of(HostId(atuin_common::utils::uuid_v7()));
@@ -2312,6 +2410,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         assert_eq!(capture.list_sessions(&SessionFilter::default()).await.unwrap().len(), 2);
@@ -2366,6 +2466,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
 
@@ -2405,6 +2507,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         capture.rebuild().await.unwrap();
         assert!(capture.is_recovering());
@@ -2491,6 +2595,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
@@ -2540,6 +2646,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         gate.reached().await;
@@ -2584,6 +2692,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(gate.clone() as Arc<dyn hooks::Hooks>),
         );
         // Startup recovery's replay has replayed; a rebuild empties the sidecar under it.
@@ -2617,6 +2727,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
 
@@ -2662,6 +2774,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(capture.ready().await);
         let stored = async || store.all_tagged(&RecordTag::AiSession).await.unwrap().len();
@@ -2812,6 +2926,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
         assert!(capture.ready().await);
@@ -2915,6 +3031,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             Some(hooks.clone() as Arc<dyn hooks::Hooks>),
         );
         if !at_startup {
@@ -2981,6 +3099,8 @@ mod tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
         );
         assert!(!capture.ready().await);
         assert!(matches!(capture.sink.append(msg).await, Err(AppendError::Unavailable)));
@@ -3005,6 +3125,8 @@ mod tests {
                 ToolCapture::Names,
                 CapturePolicy::default(),
                 BlockingPool::new(NonZeroUsize::MIN),
+                #[cfg(feature = "octavo")]
+                Arc::new(Octavo::nop()),
             )
         };
 
@@ -3628,6 +3750,8 @@ mod pipeline_tests {
             ToolCapture::Names,
             CapturePolicy::default(),
             BlockingPool::new(NonZeroUsize::MIN),
+            #[cfg(feature = "octavo")]
+            Arc::new(Octavo::nop()),
             hooks,
         );
         assert!(capture.ready().await);
@@ -4306,5 +4430,90 @@ mod pipeline_tests {
             continued.iter().flat_map(|m| enricher.capture(&sid(id), m)).collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].parent_source_id, Some(last));
+    }
+
+    /// A thread pushed again stores each row once, a line without an id
+    /// included, and keeps the title an earlier push gave it.
+    #[rstest]
+    #[tokio::test]
+    async fn pushing_a_thread_again_stores_only_what_is_new() {
+        let (capture, _state) = AiHarnessSessionCapture::with_state(StoreState::Ready).await;
+        let line = |raw: serde_json::Value| serde_json::from_value::<PushedMessage>(raw).unwrap();
+        let first = vec![
+            line(serde_json::json!({
+                "v": 1, "id": "m1", "role": "user", "time": "2026-10-16T10:00:00Z",
+                "title": {"text": "fix the tests", "source": "named"},
+                "content": [{"type": "text", "text": "fix the tests"}]
+            })),
+            line(serde_json::json!({
+                "v": 1, "role": "system", "time": "2026-10-16T10:00:01Z",
+                "content": [{"type": "text", "text": "no id"}]
+            })),
+        ];
+        let mut second = first.clone();
+        second.push(line(serde_json::json!({
+            "v": 1, "id": "m2", "parent": "m1", "role": "assistant", "time": "2026-10-16T10:00:02Z",
+            "content": [{"type": "text", "text": "done"}]
+        })));
+        let session = SessionId::from("T-1".to_owned());
+        let push = |lines| async {
+            let mut push = capture.push(HarnessKind::Pi, &session).await?;
+            let mut appended = push.lines(lines).await?;
+            appended.extend(push.finish().await?);
+            Ok::<_, AppendError>(appended)
+        };
+
+        assert_eq!(push(first).await.unwrap(), vec![Appended::New; 2]);
+        assert_eq!(push(second).await.unwrap(), vec![
+            Appended::Duplicate,
+            Appended::Duplicate,
+            Appended::New
+        ]);
+        let handle = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: "T-1".to_owned().into(),
+        };
+        let messages: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
+        assert_eq!(messages.len(), 3);
+        let row = capture.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(row.title.as_deref(), Some("fix the tests"));
+    }
+
+    /// A push in several batches is read as one: identical lines without an id in different
+    /// batches are two rows, and a line without a time takes the next timed line's, even when
+    /// that comes in a later batch.
+    #[rstest]
+    #[tokio::test]
+    async fn a_push_split_into_batches_reads_as_one() {
+        let (capture, _state) = AiHarnessSessionCapture::with_state(StoreState::Ready).await;
+        let line = |raw: serde_json::Value| serde_json::from_value::<PushedMessage>(raw).unwrap();
+        let ping = || {
+            line(serde_json::json!({
+                "v": 1, "role": "system", "time": "2026-10-16T10:00:00Z",
+                "content": [{"type": "text", "text": "ping"}]
+            }))
+        };
+        let untimed = line(serde_json::json!({
+            "v": 1, "id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}]
+        }));
+        let timed = line(serde_json::json!({
+            "v": 1, "id": "m2", "parent": "m1", "role": "assistant", "time": "2026-10-16T10:00:05Z",
+            "content": [{"type": "text", "text": "hello"}]
+        }));
+        let session = SessionId::from("T-1".to_owned());
+        let mut push = capture.push(HarnessKind::Amp, &session).await.unwrap();
+        push.lines(vec![untimed]).await.unwrap();
+        push.lines(vec![ping(), timed]).await.unwrap();
+        push.lines(vec![ping()]).await.unwrap();
+        push.finish().await.unwrap();
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Amp,
+            session: "T-1".to_owned().into(),
+        };
+        let messages: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
+        assert_eq!(messages.len(), 4, "both pings are kept");
+        let hi = messages.iter().find(|m| m.source_id.as_ref() == "m1").unwrap();
+        assert_eq!(hi.timestamp.unix_timestamp(), 1_792_144_800, "the first ping's time");
     }
 }

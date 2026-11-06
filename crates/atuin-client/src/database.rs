@@ -17,13 +17,13 @@ use sqlx::{Result, Row};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tracing::instrument;
-use uuid::Uuid;
 
 use super::history::History;
 use super::ordering;
 use super::settings::{Dialect, FilterMode, SearchMode, Settings};
 use crate::history::{
-    AuthorKind, AuthorPattern, CommandRuns, HistoryId, HistoryStats, KNOWN_AGENTS,
+    AuthorKind, AuthorPattern, CommandRuns, HistoryId, HistoryStats, KNOWN_AGENTS, ShellSession,
+    all_user_author_filter,
 };
 
 #[derive(Clone)]
@@ -195,16 +195,6 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
 
     // `OrFilter::items` is always non-empty.
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
-}
-
-fn get_session_start_time(session_id: &str) -> Option<i64> {
-    // A session id is not guaranteed to be one of our UUIDv7s: ATUIN_SESSION comes from the
-    // environment, and a stray value whose version nibble reads as v1/v6/v7 can carry a timestamp
-    // far outside the unix-nanos range. Treat such a session as having no start time rather than
-    // overflowing.
-    let uuid = Uuid::parse_str(session_id).ok()?;
-    let (seconds, nanos) = uuid.get_timestamp()?.to_unix();
-    i64::try_from(seconds).ok()?.checked_mul(1_000_000_000)?.checked_add(i64::from(nanos))
 }
 
 /// SQL predicate to match for a [`CmdOrigin`].
@@ -615,7 +605,7 @@ impl Sqlite {
         }
 
         let git_root = context.git_root_str();
-        let session_start = get_session_start_time(&context.session);
+        let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
         for filter in filters {
             match filter {
@@ -729,7 +719,7 @@ impl Sqlite {
         sql.field(HISTORY_COLUMNS);
 
         let git_root = context.git_root_str();
-        let session_start = get_session_start_time(&context.session);
+        let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
         match filter {
             FilterMode::Global => &mut sql,
@@ -885,6 +875,49 @@ impl Sqlite {
             .await?;
 
         Ok(ordering::reorder_fuzzy(search_mode, &ranking_query(orig_query), res))
+    }
+
+    /// Get all unique user-run commands that have only been run since `start` (no invocations
+    /// before that).
+    ///
+    /// Only considers user-run commands that match the given shell filter. Returns a vector of
+    /// command strings.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn commands_only_since(
+        &self,
+        start: OffsetDateTime,
+        shells: OrFilter<&[String]>,
+    ) -> Result<Vec<String>> {
+        let Ok(start) = i64::try_from(start.unix_timestamp_nanos()) else {
+            return Ok(Vec::new());
+        };
+
+        // Subquery to check if some command `h` that occurs after `start` *also* has an invocation
+        // before `start`.
+        let mut earlier = SqlBuilder::select_from("history");
+        earlier
+            .field("1")
+            .and_where("command = h.command")
+            .and_where_lt("timestamp", start)
+            .and_where_is_null("deleted_at");
+        apply_author_filter(&mut earlier, all_user_author_filter());
+        apply_shell_filter(&mut earlier, shells);
+        let earlier = earlier.sql().expect("bug in commands_only_since query. please report");
+        let earlier = earlier.trim().trim_end_matches(';');
+
+        // `INDEXED BY` forces SQLite to only access the rows since `start`, which is expected to be
+        // much smaller than the whole DB.
+        let mut sql = SqlBuilder::select_from("history h INDEXED BY idx_history_active_timestamp");
+        sql.distinct()
+            .field("command")
+            .and_where_ge("timestamp", start)
+            .and_where_is_null("deleted_at")
+            .and_where(format!("NOT EXISTS ({earlier})"));
+        apply_author_filter(&mut sql, all_user_author_filter());
+        apply_shell_filter(&mut sql, shells);
+        let sql = sql.sql().expect("bug in commands_only_since query. please report");
+
+        db::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql)).fetch_all(self.sqlite.pool()).await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -1386,20 +1419,6 @@ mod test {
     use crate::history::all_user_author_filter;
     use crate::settings::test_local_timeout;
 
-    /// `ATUIN_SESSION` comes from the environment: a stray value whose version nibble reads as a
-    /// timestamped UUID can carry a timestamp far outside the unix-nanos range, which must mean
-    /// "no start time" rather than an overflow.
-    #[rstest]
-    #[case::a_real_v7_session(atuin_common::utils::uuid_v7().to_string(), true)]
-    #[case::not_a_uuid("not-a-uuid".to_string(), false)]
-    #[case::out_of_range_timestamp("ffffffff-ffff-1fff-bfff-ffffffffffff".to_string(), false)]
-    fn session_start_time_tolerates_hostile_session_ids(
-        #[case] session_id: String,
-        #[case] has_start: bool,
-    ) {
-        assert_eq!(get_session_start_time(&session_id).is_some(), has_start);
-    }
-
     fn new_context() -> Context {
         Context {
             cmd_origin: CmdOrigin::try_from("test:host").unwrap(),
@@ -1413,6 +1432,51 @@ mod test {
     #[fixture]
     async fn empty_db() -> Sqlite {
         Sqlite::in_memory(test_local_timeout()).await.unwrap()
+    }
+
+    /// Only commands with no counting run before `start` are returned: an agent's run, a run in
+    /// another shell, or a deleted run doesn't count, but any user run before `start` does.
+    #[rstest]
+    #[tokio::test]
+    async fn commands_only_since_excludes_commands_run_before(#[future] empty_db: Sqlite) {
+        let db = empty_db.await;
+        let start = datetime!(2024-01-01 12:00 UTC);
+        let (before, after) = (start - Duration::from_secs(60), start);
+        for (command, timestamp, author_kind, shell, deleted) in [
+            ("only_after", after, AuthorKind::User, "zsh", false),
+            ("before_and_after", before, AuthorKind::User, "zsh", false),
+            ("before_and_after", after, AuthorKind::User, "zsh", false),
+            ("only_before", before, AuthorKind::User, "zsh", false),
+            ("agent_before", before, AuthorKind::Agent, "zsh", false),
+            ("agent_before", after, AuthorKind::User, "zsh", false),
+            ("other_shell_before", before, AuthorKind::User, "bash", false),
+            ("other_shell_before", after, AuthorKind::User, "zsh", false),
+            ("deleted_before", before, AuthorKind::User, "zsh", true),
+            ("deleted_before", after, AuthorKind::User, "zsh", false),
+            ("agent_after", after, AuthorKind::Agent, "zsh", false),
+        ] {
+            let mut entry: History = History::import()
+                .timestamp(timestamp)
+                .command(command)
+                .author_kind(Some(author_kind))
+                .shell(shell)
+                .build()
+                .into();
+            if deleted {
+                entry.deleted_at = Some(timestamp);
+            }
+            db.save(&entry).await.unwrap();
+        }
+
+        let shells = OrFilter::from_list(vec!["zsh".to_string()]).unwrap();
+        let mut commands = db.commands_only_since(start, shells.as_slice_filter()).await.unwrap();
+        commands.sort_unstable();
+        assert_eq!(commands, [
+            "agent_before",
+            "deleted_before",
+            "only_after",
+            "other_shell_before"
+        ]);
     }
 
     #[rstest]

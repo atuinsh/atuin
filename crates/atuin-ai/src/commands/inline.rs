@@ -140,8 +140,9 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         println!("Open this URL to continue:");
     }
     println!("{}", session.auth_url);
+    println!("Check the page shows the code {}.", session.short_code());
 
-    let token = session
+    let new_session = session
         .wait_for_completion(
             atuin_client::hub::DEFAULT_AUTH_TIMEOUT,
             atuin_client::hub::DEFAULT_POLL_INTERVAL,
@@ -150,7 +151,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         .await?;
 
     info!("Authentication complete, saving session token");
-    atuin_client::hub::save_session(&token, settings).await?;
+    atuin_client::hub::save_session(&new_session, settings).await?;
 
     if let Ok(meta) = settings.meta_store().await
         && let Ok(Some(cli_token)) = meta.session_token().await
@@ -163,7 +164,7 @@ async fn ensure_hub_session(settings: &Settings) -> Result<SecretString> {
         }
     }
 
-    Ok(token)
+    Ok(new_session.token)
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -348,7 +349,6 @@ async fn run_inline_tui(
         edit_permissions,
         snapshot_store,
         skill_registry,
-        user_context_cache: Default::default(),
     };
 
     println!();

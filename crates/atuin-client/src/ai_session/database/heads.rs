@@ -25,6 +25,9 @@
 //!   between is interleaving: the session parts where that host left off, and the rows other
 //!   hosts wrote since are on none of its paths. (A side holding only tool rows still makes no
 //!   branch of its own; see below.)
+//! - **Kiro** rows name the row before them since the reader learnt to, as Copilot's do, and
+//!   those captured before it did follow on from the row before them the same way. Its title
+//!   rows (`syn-`) are no node.
 //! - Anything else is linear, in time order.
 //!
 //! A row whose parent is not stored (a line capture keeps no row of, or one not synced yet)
@@ -95,9 +98,9 @@ pub struct Analysis {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Model {
     /// By parent pointers. `chained`: a row with no parent follows on from the row before it
-    /// (Codex, whose capture links rows; Copilot's rows from before its reader did); otherwise
+    /// (Codex and Grok, whose capture links rows; Copilot's rows from before its reader did); otherwise
     /// it is a root. `beside`: content-addressed rows are no node (titles, lines with no id);
-    /// otherwise they are nodes like any other (Codex).
+    /// otherwise they are nodes like any other (Codex, Grok).
     Tree {
         chained: bool,
         beside: bool,
@@ -113,11 +116,12 @@ impl Model {
                 chained: false,
                 beside: true,
             },
-            HarnessKind::Copilot => Self::Tree {
+            // Amp's title rows (an import's) are content-addressed, beside its messages.
+            HarnessKind::Copilot | HarnessKind::Amp | HarnessKind::Kiro => Self::Tree {
                 chained: true,
                 beside: true,
             },
-            HarnessKind::Codex => Self::Tree {
+            HarnessKind::Codex | HarnessKind::Grok => Self::Tree {
                 chained: true,
                 beside: false,
             },

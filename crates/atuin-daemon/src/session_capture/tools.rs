@@ -918,6 +918,10 @@ mod tests {
         json!({"path": ".env", "edits": [{"oldText": "A=1", "newText": "A=2"}]}),
         json!({"path": ".env", "edits": [{"oldText": WITHHELD, "newText": WITHHELD}]}),
     )]
+    #[case::kiro_str_replace(
+        json!({"path": ".env", "oldStr": "A=1", "newStr": "A=hunter2"}),
+        json!({"path": ".env", "oldStr": WITHHELD, "newStr": WITHHELD}),
+    )]
     #[case::codex_arguments(
         json!(r#"{"path":".env","content":"A=1"}"#),
         json!(json!({"path": ".env", "content": WITHHELD}).to_string()),

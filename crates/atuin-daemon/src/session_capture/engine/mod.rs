@@ -8,7 +8,9 @@ use atuin_client::ai_session::{
     Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::any::AnySessions;
+use atuin_common::harnesstools::session::any::{
+    AnySessions, ListenerExt as _, ObservableExt as _, SessionsExt as _,
+};
 use atuin_common::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId, TitleChange,
 };
@@ -474,15 +476,15 @@ pub(super) async fn warm(
 }
 
 /// What a resumed session's warm-up reads from the sidecar.
-struct Warmed {
-    row: Option<Session>,
-    titles: Vec<TitleChange>,
-    last: Option<Message>,
-    synthetic: Vec<SourceId>,
+pub(super) struct Warmed {
+    pub(super) row: Option<Session>,
+    pub(super) titles: Vec<TitleChange>,
+    pub(super) last: Option<Message>,
+    pub(super) synthetic: Vec<SourceId>,
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WarmError {
+pub(super) enum WarmError {
     #[error(transparent)]
     Repair(#[from] AppendError),
     #[error(transparent)]
@@ -494,7 +496,7 @@ enum WarmError {
 
 /// Read what [`warm`] needs from the sidecar, holding capture's `locks` (released on return,
 /// whether the reads failed or not).
-async fn read_warm(
+pub(super) async fn read_warm(
     sink: &Sink,
     handle: &HarnessSession,
     (mut pending, local): CaptureLocks,
@@ -1009,7 +1011,7 @@ mod tests {
         #[case] long_first_line: bool,
     ) {
         use atuin_common::harnesstools::ccode::session::CcodeSessions;
-        use atuin_common::harnesstools::session::{Listener as _, Sessions as _};
+        use atuin_common::harnesstools::session::{Listener, Sessions};
 
         const WAIT: Duration = Duration::from_secs(20);
         let root = tempfile::tempdir().unwrap();
@@ -1023,12 +1025,11 @@ mod tests {
         std::fs::write(&path, &old).unwrap();
 
         let sink = Arc::new(sink().await);
-        let listener = CcodeSessions::builder()
+        let sessions = CcodeSessions::builder()
             .root(root.path().to_path_buf())
             .pool(BlockingPool::new(std::num::NonZeroUsize::MIN))
-            .build()
-            .listener()
-            .unwrap();
+            .build();
+        let listener = Sessions::listener(&sessions).unwrap();
         let opened: Opened = Arc::default();
         let checkpoint = {
             let (sink, opened) = (sink.clone(), opened.clone());
@@ -1041,7 +1042,7 @@ mod tests {
                 }
             }
         };
-        let events = listener.events(SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
+        let events = Listener::events(listener, SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
             ev.map(|ev| SessionEvent {
                 session: ev.session,
                 checkpoint: ev.checkpoint,

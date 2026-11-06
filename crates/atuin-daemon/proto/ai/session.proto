@@ -121,6 +121,9 @@ message ImportSessionsRequest {
   // Only import sessions from this harness. Absent imports every file-based
   // harness.
   optional ai.agent.HarnessKind harness = 1;
+  // Import after replying, for whoever asked to get on: the stream ends at once, and the daemon
+  // logs the summary instead.
+  bool background = 2;
 }
 
 // Per-session progress: one session finished importing.
@@ -146,6 +149,22 @@ message RebuildSessionsReply {}
 message ProjectSyncedRequest {}
 
 message ProjectSyncedReply {}
+
+// Messages an agent hands over itself (`atuin threads push`), rather than
+// capture reading them from its transcript: one push streamed as a batch of
+// them at a time, every batch naming the same session.
+message PushMessagesRequest {
+  ai.agent.HarnessSession session = 1;
+  // One message each, as JSON in the shape `atuin threads push` reads.
+  repeated string lines = 2;
+}
+
+message PushMessagesReply {
+  // Rows stored.
+  uint64 pushed = 1;
+  // Rows already stored, from an earlier push.
+  uint64 duplicates = 2;
+}
 
 message ImportSessionsEvent {
   oneof event {
@@ -175,6 +194,12 @@ service AiSession {
   // Import every already-existing on-disk session, streaming per-session
   // progress and a final summary.
   rpc ImportSessions(ImportSessionsRequest) returns (stream ImportSessionsEvent);
+
+  // Capture messages an agent hands over, as capture does a transcript's lines,
+  // a batch at a time. INVALID_ARGUMENT for a line that isn't one (the message
+  // says which) or a batch naming another session: the batches before it are
+  // stored, that one and those after it aren't.
+  rpc PushMessages(stream PushMessagesRequest) returns (PushMessagesReply);
 
   // Rebuild the sessions from the record store, after records were deleted
   // under them: everything projected is deleted before this returns, then

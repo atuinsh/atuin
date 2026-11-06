@@ -39,6 +39,8 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
+Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your [config](config.md#bind_ctrl_r-and-bind_up_arrow).
+
 If you don't want either key to be bound, either pass both `--disable` arguments, or set the
 environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
 

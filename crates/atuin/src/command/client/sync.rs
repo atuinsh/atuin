@@ -137,6 +137,9 @@ async fn run(settings: &Arc<Settings>, force: bool, db: &Sqlite, store: SqliteSt
         userio::log::info!("sync-up-down", uploaded = uploaded, downloaded = downloaded.len());
     }
 
+    // As the daemon and the shell's auto sync do, so `atuin status` says when it last synced.
+    settings.save_sync_time().await?;
+
     let count = db.history_count(true).await?;
     userio::log::info!("sync-complete", count = count, force = force.to_string());
 

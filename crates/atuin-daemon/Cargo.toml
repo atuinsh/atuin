@@ -31,6 +31,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 eyre = { workspace = true }
 fjall = { workspace = true }
+fixedbitset = { workspace = true }
 frizbee = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }

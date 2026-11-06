@@ -400,7 +400,8 @@ impl TestEnv {
 
     /// Ids the live index returns for `query` (global filter, generous limit).
     pub async fn index_hits(&self, query: &str) -> Vec<HistoryId> {
-        self.index.read().await.search(query, &IndexFilterMode::Global, 200).collect()
+        let index = self.index.read().await;
+        index.search(query, &IndexFilterMode::Global, 200, &self.history_db).await.collect()
     }
 
     /// Ids the Search RPC returns for `query`, i.e. what the TUI would show.

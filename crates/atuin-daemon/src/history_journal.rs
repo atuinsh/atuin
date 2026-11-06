@@ -240,7 +240,7 @@ pub struct HistoryJournal {
     output_capture: OutputCaptureEngine,
 
     #[cfg(feature = "octavo")]
-    octavo: Octavo,
+    octavo: Arc<Octavo>,
 
     /// Ids a [`Self::delete`] is currently tearing down, reference-counted across concurrent
     /// deletes. [`Self::register_command_output`] refuses these, so no capture can land between a
@@ -326,7 +326,7 @@ impl HistoryJournal {
             broadcast,
             output_capture,
             #[cfg(feature = "octavo")]
-            octavo: Octavo::nop(),
+            octavo: Arc::new(Octavo::nop()),
             deleting: DashMap::new(),
             lifecycle_mutex: AsyncShardedMutex::new(DEFAULT_LIFECYCLE_SHARDS),
         }
@@ -334,7 +334,7 @@ impl HistoryJournal {
 
     /// Sends what this journal records to `octavo`, which [`Self::new`] leaves as a nop.
     #[cfg(feature = "octavo")]
-    pub(crate) fn with_octavo(self, octavo: Octavo) -> Self {
+    pub(crate) fn with_octavo(self, octavo: Arc<Octavo>) -> Self {
         Self { octavo, ..self }
     }
 
@@ -624,7 +624,7 @@ impl HistoryJournal {
     }
 
     /// Reload the search index from the history database.
-    async fn reload_search_index(&self, search_settings: &Search) {
+    pub async fn reload_search_index(&self, search_settings: &Search) {
         // Clone the shell filter and drop the read guard before the (full) reload, so the scan
         // doesn't hold the search-index lock across the database load.
         //

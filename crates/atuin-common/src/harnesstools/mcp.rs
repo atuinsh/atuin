@@ -7,7 +7,7 @@ use std::process::Stdio;
 use serde_json::{Value, json};
 
 use super::pi::Flavour;
-use super::{AnyHarness, codex, copilot, opencode};
+use super::{AnyHarness, codex, copilot, grok, kiro, opencode};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::{AbsPathBuf, PathBufExt as _};
@@ -55,12 +55,15 @@ pub fn config_exists(harness: AnyHarness) -> bool {
 /// The user config written by the agent's `mcp add` command, or by us directly.
 fn config_path(harness: AnyHarness) -> PathBuf {
     match harness {
+        AnyHarness::Amp(_) => home_dir().joined(".config").joined("amp").joined("settings.json"),
         AnyHarness::ClaudeCode(_) => var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(
             || home_dir().joined(".claude.json"),
             |dir| PathBuf::from(dir).joined(".claude.json"),
         ),
         AnyHarness::Codex(_) => codex::home().joined("config.toml"),
         AnyHarness::Copilot(_) => copilot::copilot_home().joined("mcp-config.json"),
+        AnyHarness::Grok(_) => grok::home().joined("config.toml"),
+        AnyHarness::Kiro(_) => kiro_config_path(&kiro::kiro_home()),
         AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
         AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
     }
@@ -72,16 +75,13 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
     let atuin = executable()?;
     let atuin = atuin.as_str();
     match harness {
+        // `amp mcp add` and `claude mcp add` refuse a name that's taken.
+        AnyHarness::Amp(_) => {
+            remove("amp", &["mcp", "remove", "atuin"]).await;
+            run("amp", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+        }
         AnyHarness::ClaudeCode(_) => {
-            // `claude mcp add` refuses a name that's taken.
-            let remove = ["mcp", "remove", "--scope", "user", "atuin"];
-            let _ = tokio::process::Command::new("claude")
-                .args(remove)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
+            remove("claude", &["mcp", "remove", "--scope", "user", "atuin"]).await;
             run("claude", &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
         }
         AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
@@ -89,6 +89,8 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
         AnyHarness::Copilot(_) => {
             run("copilot", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
         }
+        AnyHarness::Grok(_) => run("grok", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+        AnyHarness::Kiro(_) => install_kiro(&config_path(harness), atuin).await,
         // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
         // doesn't load. Both load `mcp.<name>`.
         AnyHarness::Opencode(_) => install_opencode(&config_path(harness), atuin).await,
@@ -102,6 +104,17 @@ pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
             }
         },
     }
+}
+
+/// Run `program` with `args` to remove a server, whether or not there is one to remove.
+async fn remove(program: &str, args: &[&str]) {
+    let _ = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
 
 /// The atuin for a harness to launch. Harnesses don't necessarily have the user's `PATH`, so it's
@@ -155,6 +168,20 @@ async fn install_opencode(path: &Path, atuin: &str) -> Result<(), InstallMcpErro
     let server = json!({"type": "local", "command": [atuin, "mcp"], "enabled": true});
     let new = json!({"$schema": "https://opencode.ai/config.json"});
     add_to_config(path, new, "mcp", server).await
+}
+
+/// Kiro's user-level MCP config under its home (`$KIRO_HOME`, else `~/.kiro`): the file
+/// `kiro-cli mcp add --scope global` writes, which every session loads.
+fn kiro_config_path(kiro_home: &Path) -> PathBuf {
+    kiro_home.join("settings").joined("mcp.json")
+}
+
+/// Add the server to the Kiro config at `path`, keeping the rest of it, as `kiro-cli mcp add
+/// --scope global` would (Kiro CLI 2.36.0). Not through `kiro-cli` itself: its binary is named
+/// differently per platform, and the file is plain JSON.
+async fn install_kiro(path: &Path, atuin: &str) -> Result<(), InstallMcpError> {
+    let server = json!({"command": atuin, "args": ["mcp"], "env": {}});
+    add_to_config(path, json!({}), "mcpServers", server).await
 }
 
 /// Add `server` as `atuin` to the `key` object of the JSON config at `path`, `new` when there is
@@ -223,6 +250,8 @@ mod tests {
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
     #[case("copilot", ".copilot/mcp-config.json")]
+    #[case("grok", ".grok/config.toml")]
+    #[case("kiro", ".kiro/settings/mcp.json")]
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
     #[case("omp", ".omp/agent/mcp.json")]
@@ -247,6 +276,8 @@ mod tests {
     #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
     #[case("codex", "CODEX_HOME", "config.toml")]
     #[case("copilot", "COPILOT_HOME", "mcp-config.json")]
+    #[case("grok", "GROK_HOME", "config.toml")]
+    #[case("kiro", "KIRO_HOME", "settings/mcp.json")]
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]
     #[case("omp", "PI_CODING_AGENT_DIR", "mcp.json")]
@@ -326,6 +357,45 @@ mod tests {
 
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(config["mcp"]["atuin"]["command"], json!(["/bin/atuin", "mcp"]));
+    }
+
+    /// The file `kiro-cli mcp add --scope global` writes, exactly.
+    #[rstest]
+    #[tokio::test]
+    async fn kiro_gets_a_new_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = kiro_config_path(dir.path());
+
+        install_kiro(&path, "/bin/atuin").await.unwrap();
+
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            config,
+            json!({"mcpServers": {"atuin": {"command": "/bin/atuin", "args": ["mcp"], "env": {}}}})
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn kiro_keeps_the_rest_of_its_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, r#"{"mcpServers": {"other": {"url": "https://x.test/mcp"}}}"#)
+            .unwrap();
+
+        install_kiro(&path, "/bin/atuin").await.unwrap();
+        install_kiro(&path, "/opt/atuin").await.unwrap();
+
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            config,
+            json!({
+                "mcpServers": {
+                    "other": {"url": "https://x.test/mcp"},
+                    "atuin": {"command": "/opt/atuin", "args": ["mcp"], "env": {}},
+                },
+            })
+        );
     }
 
     #[rstest]

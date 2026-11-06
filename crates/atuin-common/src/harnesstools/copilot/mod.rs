@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use super::json_hooks::HookStyle;
 use super::rehydrate::{RehydrateError, RehydrateSession};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -39,6 +40,10 @@ impl Harness for Copilot {
     /// takes Claude Code's entries and sends Claude Code's payload (`hook_event_name`,
     /// `tool_name` `Bash`, `tool_input.command`), so atuin's hook reads it as Claude Code's
     /// (verified against Copilot CLI 1.0.104).
+    ///
+    /// The hook is registered as `exec` and `args` rather than a `command` string: on Windows
+    /// Copilot runs commands through PowerShell, which cannot parse a quoted executable path at
+    /// the start of one.
     async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         let config_path = copilot_home().joined("hooks").joined("atuin.json");
         json_hooks::install_in(
@@ -46,6 +51,7 @@ impl Harness for Copilot {
             "^Bash$",
             self.name(),
             executable,
+            HookStyle::Exec,
             json!({"version": 1}),
         )
         .await?;

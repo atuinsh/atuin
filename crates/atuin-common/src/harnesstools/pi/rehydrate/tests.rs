@@ -11,6 +11,7 @@ use super::*;
 use crate::harnesstools::pi::session::{PiMessage, PiSession};
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Message, Session, SessionId};
+use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 #[fixture]
@@ -537,7 +538,8 @@ fn a_new_file_opens_on_the_agents_default_model(
         )
         .unwrap(),
     }
-    let start = StartModel::configured_in(flavour, agent.path()).unwrap();
+    let start =
+        StartModel::configured_in(flavour, agent.path(), &agent.path().join("sessions")).unwrap();
     assert_eq!((start.provider.as_str(), start.id.as_str()), ("openai-codex", "gpt-5.6-luna"));
 
     let session = session("s-start", sessions.path(), vec![
@@ -561,15 +563,118 @@ fn a_new_file_opens_on_the_agents_default_model(
     assert_eq!(lines.iter().find(|l| l["id"] == "a1").unwrap()["parentId"], "u1");
 }
 
+/// Every write of a session opens on one root: the session's own captured `model_change` (an
+/// earlier write's, or a native session's) when its rows hang from one, else an id derived from
+/// the session. Capture keeps the opening entry as a row, so a root minted afresh on each
+/// machine would split the synced session at its root, and no copy could catch up.
+#[rstest]
+#[case::continued_here(vec![], "atuin-model-s-root")]
+#[case::restored(vec![("m0", None)], "m0")]
+#[case::restored_after_a_split(vec![("atuin-b", None), ("atuin-a", None)], "atuin-a")]
+fn every_write_of_a_session_opens_on_one_root(
+    sessions: TempDir,
+    #[case] roots: Vec<(&str, Option<&str>)>,
+    #[case] want: &str,
+) {
+    let start = StartModel {
+        flavour: Flavour::Pi,
+        provider: "openai-codex".to_owned(),
+        id: "gpt-5.6-luna".to_owned(),
+    };
+    let hangs_from = roots.last().map(|(id, _)| *id);
+    let mut rows: Vec<_> = roots
+        .iter()
+        .map(|(id, parent)| message(id, *parent, Role::Other("model_change".to_owned()), vec![]))
+        .collect();
+    rows.push(message("u1", hangs_from, Role::User, vec![Content::Text("hi".to_owned())]));
+    rows.push(message("a1", Some("u1"), Role::Assistant, vec![Content::Text("hello".to_owned())]));
+    let session = session("s-root", sessions.path(), rows);
+
+    let opening_of = |dir: &Path| {
+        let path = rehydrate_into(Flavour::Pi, dir, dir, &session, Some(&start)).unwrap();
+        let lines = lines(&path);
+        let opening = lines.iter().find(|l| l["type"] == "model_change").cloned().unwrap();
+        let first = lines.iter().find(|l| l["id"] == "u1").cloned().unwrap();
+        assert_eq!(first["parentId"], opening["id"]);
+        assert_eq!(lines.iter().filter(|l| l["type"] == "model_change").count(), 1);
+        opening["id"].as_str().unwrap().to_owned()
+    };
+    let other_machine = tempfile::tempdir().unwrap();
+    assert_eq!(opening_of(sessions.path()), want);
+    assert_eq!(opening_of(other_machine.path()), want);
+}
+
+/// omp with no `modelRoles.default` starts a session on a model it picks itself, and records it
+/// in the session's `model_change`: the newest of those it wrote (not atuin's) is what a written
+/// file opens on, however many newer pi sessions share the directory.
+#[rstest]
+fn omp_without_a_default_opens_on_the_model_it_last_started_on() {
+    let agent = tempfile::tempdir().unwrap();
+    std::fs::write(agent.path().join("config.yml"), "setupVersion: 2\n").unwrap();
+    let dir = agent.path().join("sessions").joined("-src-proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let native = |name: &str, change: serde_json::Value| {
+        let slot = json!({"type": "title", "v": 1, "title": ""});
+        let header = json!({"type": "session", "version": 3, "id": name, "cwd": "/src/proj"});
+        let path = dir.join(format!("{name}.jsonl"));
+        std::fs::write(&path, format!("{slot}\n{header}\n{change}\n")).unwrap();
+        path
+    };
+    let older = native("older", json!({"type": "model_change", "id": "1", "model": "a/old"}));
+    let newer = native(
+        "newer",
+        json!({"type": "model_change", "id": "2", "model": "openrouter/openai/gpt-5.5"}),
+    );
+    let written = native(
+        "written",
+        json!({"type": "model_change", "id": "atuin-model-written", "model": "x/atuin"}),
+    );
+    let at = |path: &Path, secs: u64| {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(time).unwrap();
+    };
+    at(&older, 1_000);
+    at(&newer, 2_000);
+    at(&written, 3_000);
+    // pi's sessions, newer still, in the same directory: no title slot, and pi's own shape.
+    for n in 0..20 {
+        let path = dir.join(format!("pi-{n}.jsonl"));
+        let header = json!({"type": "session", "version": 3, "id": format!("pi-{n}")});
+        let change = json!({"type": "model_change", "id": "p", "provider": "p", "modelId": "m"});
+        std::fs::write(&path, format!("{header}\n{change}\n")).unwrap();
+        at(&path, 4_000 + n);
+    }
+
+    let start =
+        StartModel::configured_in(Flavour::Omp, agent.path(), &agent.path().join("sessions"))
+            .unwrap();
+    assert_eq!((start.provider.as_str(), start.id.as_str()), ("openrouter", "openai/gpt-5.5"));
+    // A configured default still comes first.
+    std::fs::write(agent.path().join("config.yml"), "modelRoles:\n  default: a/b\n").unwrap();
+    let start =
+        StartModel::configured_in(Flavour::Omp, agent.path(), &agent.path().join("sessions"))
+            .unwrap();
+    assert_eq!((start.provider.as_str(), start.id.as_str()), ("a", "b"));
+}
+
 /// Without a configured default there is nothing to open on, and rows appended to a file never
 /// open it again.
 #[rstest]
 fn no_opening_model_without_a_default_or_on_an_append(sessions: TempDir) {
     let agent = tempfile::tempdir().unwrap();
-    assert_eq!(StartModel::configured_in(Flavour::Pi, agent.path()), None);
-    assert_eq!(StartModel::configured_in(Flavour::Omp, agent.path()), None);
+    assert_eq!(
+        StartModel::configured_in(Flavour::Pi, agent.path(), &agent.path().join("sessions")),
+        None
+    );
+    assert_eq!(
+        StartModel::configured_in(Flavour::Omp, agent.path(), &agent.path().join("sessions")),
+        None
+    );
     std::fs::write(agent.path().join("settings.json"), r#"{"defaultProvider": "openai"}"#).unwrap();
-    assert_eq!(StartModel::configured_in(Flavour::Pi, agent.path()), None);
+    assert_eq!(
+        StartModel::configured_in(Flavour::Pi, agent.path(), &agent.path().join("sessions")),
+        None
+    );
 
     let start = StartModel {
         flavour: Flavour::Pi,

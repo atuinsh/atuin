@@ -51,11 +51,13 @@ Ghostty
 gitleaks
 glibc
 Grafana
+Grok
 Groq
 histdb
 IDE
 ignorespace
 Infracost
+Kiro
 launchd
 LLM
 loopback
@@ -67,6 +69,7 @@ nginx
 npm
 OAuth
 Ollama
+omp
 opencode
 Pacman
 Pinecone

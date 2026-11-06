@@ -18,15 +18,21 @@ message HostId {
 // The machine and account a command ran on.
 message CmdOrigin {
   // The machine's hostname, e.g. `laptop`. Never contains a `:`.
-  string host = 1 [(buf.validate.field).string.not_contains = ":"];
+  string host = 1 [(buf.validate.field).string = {
+    not_contains: ":"
+    pattern: "^[^\\x00]*$"
+  }];
   // The account on that machine, e.g. `alice`.
-  string user = 2;
+  string user = 2 [(buf.validate.field).string.not_contains = "\x00"];
 }
 
 // Who decided to run a command: a person or an agent. Not a hub user.
 message Author {
   // e.g. `alice` or `claude-code`.
-  string name = 1 [(buf.validate.field).string.max_bytes = 255];
+  string name = 1 [(buf.validate.field).string = {
+    max_bytes: 255
+    not_contains: "\x00"
+  }];
   // Logically required; the hub rejects `AUTHOR_KIND_UNSPECIFIED`.
   AuthorKind kind = 2 [
     (buf.validate.field).required = true,

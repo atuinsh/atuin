@@ -60,7 +60,8 @@ sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Not a default feature until Octavo ships; release artifacts build without it.
+# Not a default feature until Octavo ships. Release artifacts build with it (dist enables it in
+# dist-workspace.toml), but it stays off until the user sets `octavo.enabled`.
 octavo = [
     "sync",
     "daemon",
@@ -92,7 +93,7 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.24.4", optional = true, default-features = false }
+atuin-client = { path = "../atuin-client", version = "18.24.5", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
@@ -186,6 +187,8 @@ proptest = { workspace = true }
 rstest = { workspace = true }
 # opencode keeps its sessions in SQLite: the e2e tests write one as it does.
 rusqlite = { workspace = true }
+# Kiro buckets its sessions by a SHA-256 of the working directory: the e2e tests write one as it does.
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
 

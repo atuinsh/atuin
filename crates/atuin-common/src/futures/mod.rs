@@ -3,7 +3,10 @@ use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
+mod debounce;
 pub mod stream;
+
+pub use debounce::Debounce;
 
 /// Jitter a delay by up to +/-10%.
 #[must_use]
@@ -161,35 +164,54 @@ impl Backoff {
     /// # Panics
     ///
     /// Panics if called outside the context of a Tokio runtime with a time driver enabled.
-    pub async fn retry_forever<B, C, Fut, F>(self, mut fxn: F) -> B
+    pub async fn retry_forever<B, C, Fut, F>(self, fxn: F) -> B
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = ControlFlow<B, C>>,
     {
-        if let ControlFlow::Break(value) = fxn().await {
-            return value;
-        }
+        self.retry_forever_or_sooner(fxn, std::future::pending::<()>).await
+    }
 
-        match self {
-            Self::Constant(period) => loop {
-                tokio::time::sleep(jittered(period)).await;
-                if let ControlFlow::Break(value) = fxn().await {
-                    return value;
+    /// Equivalent to [`Self::retry_forever`], except that each future `interrupt` returns cuts
+    /// the delay it races short: the next call comes at once, and the delays start over.
+    ///
+    /// `interrupt` races only the delays, so it never cancels a call in flight. One ready at once,
+    /// such as a [`tokio::sync::Notify`] permit stored during a call, cuts the next delay to
+    /// nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside the context of a Tokio runtime with a time driver enabled.
+    pub async fn retry_forever_or_sooner<B, C, Fut, F, I, Interrupted>(
+        self,
+        mut fxn: F,
+        mut interrupt: I,
+    ) -> B
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ControlFlow<B, C>>,
+        I: FnMut() -> Interrupted,
+        Interrupted: Future,
+    {
+        let first = match self {
+            Self::Constant(period) => period,
+            Self::Exponential { initial, max, .. } => initial.min(max),
+        };
+        let mut backoff = first;
+        loop {
+            if let ControlFlow::Break(value) = fxn().await {
+                return value;
+            }
+
+            let (delay, next) = match self {
+                Self::Constant(_) => (jittered(backoff), backoff),
+                Self::Exponential { max, factor, .. } => {
+                    (jittered(backoff).min(max), backoff.saturating_mul(factor.get()).min(max))
                 }
-            },
-            Self::Exponential {
-                initial,
-                max,
-                factor,
-            } => {
-                let mut backoff = initial.min(max);
-                loop {
-                    tokio::time::sleep(jittered(backoff).min(max)).await;
-                    backoff = backoff.saturating_mul(factor.get()).min(max);
-                    if let ControlFlow::Break(value) = fxn().await {
-                        return value;
-                    }
-                }
+            };
+            tokio::select! {
+                () = tokio::time::sleep(delay) => backoff = next,
+                _ = interrupt() => backoff = first,
             }
         }
     }

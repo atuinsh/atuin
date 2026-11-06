@@ -11,7 +11,7 @@ pub(crate) mod resume;
 pub(crate) mod session;
 
 pub use resume::Cmd as ResumeCmd;
-pub use session::{Cmd as ThreadsCmd, import_all};
+pub use session::{Cmd as ThreadsCmd, Recent, import_all, one_line, recent};
 
 #[derive(Args, Debug)]
 pub struct AiArgs {

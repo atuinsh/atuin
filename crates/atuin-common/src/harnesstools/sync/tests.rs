@@ -3,6 +3,7 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 
 use super::*;
+use crate::harnesstools::AnyHarness;
 use crate::harnesstools::session::Role;
 use crate::harnesstools::sync::liveness::tests::{dir, entry, table};
 

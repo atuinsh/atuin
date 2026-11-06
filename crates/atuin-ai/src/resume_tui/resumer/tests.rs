@@ -632,7 +632,13 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
 #[tokio::test]
 async fn an_empty_session_is_not_continued(
     dirs: Dirs,
-    #[values(HarnessKind::Codex, HarnessKind::Copilot, HarnessKind::Opencode, HarnessKind::Pi)]
+    #[values(
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Kiro,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
     target: HarnessKind,
 ) {
     let machine = FakeMachine::default();
@@ -655,6 +661,7 @@ async fn an_empty_session_is_not_forked(
         HarnessKind::ClaudeCode,
         HarnessKind::Codex,
         HarnessKind::Copilot,
+        HarnessKind::Kiro,
         HarnessKind::Opencode,
         HarnessKind::Pi
     )]
@@ -703,8 +710,10 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
         HarnessKind::Copilot,
+        HarnessKind::Grok,
+        HarnessKind::Kiro,
         HarnessKind::Pi,
-        HarnessKind::Omp
+        HarnessKind::Omp,
     ]);
 
     let err =

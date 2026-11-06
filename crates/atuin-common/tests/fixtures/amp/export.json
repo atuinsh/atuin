@@ -1,0 +1,420 @@
+{
+ "id": "T-01a19e63-1266-7242-8a1a-c2a4308e1e50",
+ "title": "calc.py addition fix",
+ "env": {
+  "initial": {
+   "trees": [
+    {
+     "uri": "file:///home/ellie/.cache/amp-e2e/proj",
+     "displayName": "proj"
+    }
+   ]
+  }
+ },
+ "messages": [
+  {
+   "meta": {
+    "sentAt": 1793658656688,
+    "fromExecutorClient": true
+   },
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "text": "calc.py has a bug in add. Run 'python3 -c \"import calc; print(calc.add(2,2))\"', fix it, run it again, and also run 'ls /nonexistent'. One short sentence.",
+     "type": "text"
+    }
+   ],
+   "createdAt": "2026-11-02T22:30:56.688Z",
+   "messageId": 1,
+   "protocolMessageID": "M-034qq9yNic5tdSISmJcXx8",
+   "protocolMessageVersion": 0
+  },
+  {
+   "meta": {
+    "openAIResponsePhase": "commentary"
+   },
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "tool_use"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:02.636Z",
+    "inputTokens": 0,
+    "outputTokens": 85,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 28719,
+    "cacheReadInputTokens": 0,
+    "cacheCreationInputTokens": 28719
+   },
+   "readAt": null,
+   "content": [
+    {
+     "text": "I\u2019ll run the check, inspect and fix `add`, then run both commands.\n",
+     "type": "text",
+     "finalTime": 1793658661763,
+     "startTime": 1793658661376,
+     "blockState": "complete"
+    },
+    {
+     "id": "TU-034qqA6R6naxma7a68shrH",
+     "name": "shell_command",
+     "type": "tool_use",
+     "input": {
+      "command": "python3 -c \"import calc; print(calc.add(2,2))\"; cat calc.py; git status --short",
+      "workdir": "/home/ellie/.cache/amp-e2e/proj"
+     },
+     "complete": true,
+     "blockState": "complete",
+     "providerToolUseId": "call_BvDgzKNESTPTCOZqHtrwU4Mm"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:02.546Z",
+   "messageId": 2,
+   "protocolMessageID": "M-034qqA07X0aoaZDdCEYIno",
+   "protocolMessageVersion": 1
+  },
+  {
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "run": {
+      "result": {
+       "output": "0\ndef add(a, b):\n    return a - b\n?? .amp/\n?? __pycache__/\n?? calc.py\n",
+       "exitCode": 0
+      },
+      "status": "done"
+     },
+     "type": "tool_result",
+     "toolUseID": "TU-034qqA6R6naxma7a68shrH"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:03.163Z",
+   "messageId": 3,
+   "protocolMessageID": "M-034qqA8dBwmqVYxsoZuXWR",
+   "protocolMessageVersion": 0
+  },
+  {
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "tool_use"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:05.769Z",
+    "inputTokens": 0,
+    "outputTokens": 72,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 28856,
+    "cacheReadInputTokens": 28716,
+    "cacheCreationInputTokens": 140
+   },
+   "readAt": null,
+   "content": [
+    {
+     "id": "TU-034qqABM1gjXuYvPgLOnI0",
+     "name": "apply_patch",
+     "type": "tool_use",
+     "input": {
+      "patchText": "*** Begin Patch\n*** Update File: /home/ellie/.cache/amp-e2e/proj/calc.py\n@@\n def add(a, b):\n-    return a - b\n+    return a + b\n*** End Patch"
+     },
+     "complete": true,
+     "blockState": "complete",
+     "providerToolUseId": "call_CYb8w2AcbyumDvZeLOFKjX5o"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:05.703Z",
+   "messageId": 4,
+   "protocolMessageID": "M-034qqA8i4BLqtIyFaBZ7iU",
+   "protocolMessageVersion": 1
+  },
+  {
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "run": {
+      "result": {
+       "files": [
+        {
+         "uri": "file:///home/ellie/.cache/amp-e2e/proj/calc.py",
+         "diff": "Index: /home/ellie/.cache/amp-e2e/proj/calc.py\n===================================================================\n--- /home/ellie/.cache/amp-e2e/proj/calc.py\n+++ /home/ellie/.cache/amp-e2e/proj/calc.py\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a - b\n+    return a + b\n",
+         "type": "update",
+         "additions": 1,
+         "deletions": 1
+        }
+       ],
+       "summary": "update: /home/ellie/.cache/amp-e2e/proj/calc.py (+1/-1)"
+      },
+      "status": "done",
+      "progress": {}
+     },
+     "type": "tool_result",
+     "toolUseID": "TU-034qqABM1gjXuYvPgLOnI0"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:06.102Z",
+   "messageId": 5,
+   "protocolMessageID": "M-034qqADFgVOj4VAzxRX1Tw",
+   "protocolMessageVersion": 0
+  },
+  {
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "tool_use"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:08.941Z",
+    "inputTokens": 0,
+    "outputTokens": 61,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 29106,
+    "cacheReadInputTokens": 28853,
+    "cacheCreationInputTokens": 253
+   },
+   "readAt": null,
+   "content": [
+    {
+     "id": "TU-034qqAGevMOLfXYOA32t1R",
+     "name": "shell_command",
+     "type": "tool_use",
+     "input": {
+      "command": "cat calc.py; python3 -c \"import calc; print(calc.add(2,2))\"; ls /nonexistent",
+      "workdir": "/home/ellie/.cache/amp-e2e/proj"
+     },
+     "complete": true,
+     "blockState": "complete",
+     "providerToolUseId": "call_VV8o3MojOmocZwXc5j6CbQFk"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:08.849Z",
+   "messageId": 6,
+   "protocolMessageID": "M-034qqADLXGDj1tPZieVJ33",
+   "protocolMessageVersion": 1
+  },
+  {
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "run": {
+      "result": {
+       "output": "def add(a, b):\n    return a + b\n4\nls: cannot access '/nonexistent': No such file or directory\n",
+       "exitCode": 2
+      },
+      "status": "done"
+     },
+     "type": "tool_result",
+     "toolUseID": "TU-034qqAGevMOLfXYOA32t1R"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:09.300Z",
+   "messageId": 7,
+   "protocolMessageID": "M-034qqAIHQXKhjJN4JzJN6p",
+   "protocolMessageVersion": 0
+  },
+  {
+   "meta": {
+    "openAIResponsePhase": "final_answer"
+   },
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "end_turn"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:12.828Z",
+    "inputTokens": 0,
+    "outputTokens": 35,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 29217,
+    "cacheReadInputTokens": 29103,
+    "cacheCreationInputTokens": 114
+   },
+   "readAt": null,
+   "content": [
+    {
+     "text": "Fixed `add`: the command now prints `4` instead of `0`; `ls /nonexistent` failed with \u201cNo such file or directory.\u201d",
+     "type": "text",
+     "finalTime": 1793658672575,
+     "startTime": 1793658671690,
+     "blockState": "complete"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:12.794Z",
+   "messageId": 8,
+   "protocolMessageID": "M-034qqAINNA4F4Gojguh65z",
+   "protocolMessageVersion": 1
+  },
+  {
+   "meta": {
+    "sentAt": 1793658691669,
+    "fromExecutorClient": true
+   },
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "text": "Say just: second.",
+     "type": "text"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:31.669Z",
+   "messageId": 9,
+   "protocolMessageID": "M-034qqAr6JkeGCV7hflHrMS",
+   "protocolMessageVersion": 0
+  },
+  {
+   "meta": {
+    "openAIResponsePhase": "final_answer"
+   },
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "end_turn"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:34.608Z",
+    "inputTokens": 0,
+    "outputTokens": 6,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 29306,
+    "cacheReadInputTokens": 29214,
+    "cacheCreationInputTokens": 92
+   },
+   "readAt": null,
+   "content": [
+    {
+     "text": "second.",
+     "type": "text",
+     "finalTime": 1793658694414,
+     "startTime": 1793658694172,
+     "blockState": "complete"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:34.574Z",
+   "messageId": 10,
+   "protocolMessageID": "M-034qqAsDWvvOxlrZBntg4d",
+   "protocolMessageVersion": 1
+  },
+  {
+   "meta": {
+    "sentAt": 1793658707429,
+    "fromExecutorClient": true
+   },
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "text": "Say just: daemon down.",
+     "type": "text"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:47.429Z",
+   "messageId": 11,
+   "protocolMessageID": "M-034qqBFuwa6MGYwJZGdqya",
+   "protocolMessageVersion": 0
+  },
+  {
+   "meta": {
+    "openAIResponsePhase": "final_answer"
+   },
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "end_turn"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:31:51.060Z",
+    "inputTokens": 0,
+    "outputTokens": 7,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 29367,
+    "cacheReadInputTokens": 29303,
+    "cacheCreationInputTokens": 64
+   },
+   "readAt": null,
+   "content": [
+    {
+     "text": "daemon down.",
+     "type": "text",
+     "finalTime": 1793658710848,
+     "startTime": 1793658710713,
+     "blockState": "complete"
+    }
+   ],
+   "createdAt": "2026-11-02T22:31:51.006Z",
+   "messageId": 12,
+   "protocolMessageID": "M-034qqBGtZq6C9y4cyfOehp",
+   "protocolMessageVersion": 1
+  },
+  {
+   "meta": {
+    "sentAt": 1793659039740,
+    "fromExecutorClient": true
+   },
+   "role": "user",
+   "readAt": null,
+   "content": [
+    {
+     "text": "Say just: back up.",
+     "type": "text"
+    }
+   ],
+   "createdAt": "2026-11-02T22:37:19.740Z",
+   "messageId": 13,
+   "protocolMessageID": "M-034qqJgUVQCkQiogmJDk5v",
+   "protocolMessageVersion": 0
+  },
+  {
+   "meta": {
+    "openAIResponsePhase": "final_answer"
+   },
+   "role": "assistant",
+   "state": {
+    "type": "complete",
+    "stopReason": "end_turn"
+   },
+   "usage": {
+    "model": "gpt-6.1-sol",
+    "features": [],
+    "timestamp": "2026-11-02T22:37:22.259Z",
+    "inputTokens": 0,
+    "outputTokens": 7,
+    "maxInputTokens": 272000,
+    "totalInputTokens": 29429,
+    "cacheReadInputTokens": 29364,
+    "cacheCreationInputTokens": 65
+   },
+   "readAt": null,
+   "content": [
+    {
+     "text": "back up.",
+     "type": "text",
+     "finalTime": 1793659041959,
+     "startTime": 1793659041788,
+     "blockState": "complete"
+    }
+   ],
+   "createdAt": "2026-11-02T22:37:22.178Z",
+   "messageId": 14,
+   "protocolMessageID": "M-034qqJhX2TiqLovLB2enOg",
+   "protocolMessageVersion": 1
+  }
+ ]
+}

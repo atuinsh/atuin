@@ -2,13 +2,41 @@ mod client;
 
 use std::sync::Arc;
 
+use atuin_client::ai_session::{AiSessionStore, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
-use client::{AnyOctavoClient, NopOctavoClient, OctavoClient};
+use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
+use tokio::sync::Notify;
 
 use crate::daemon::DaemonHandle;
 use crate::output_capture::OutputStore;
+
+/// Thread messages taken for Octavo before capture stores their records: they go once
+/// [`Self::start`] says the records are stored, so no upload reads the queue ahead of them.
+#[must_use = "unless started, queued messages wait for a later upload, and direct ones never go"]
+#[derive(Debug)]
+pub enum ThreadUpload {
+    /// None go: Octavo is off here, nobody is logged in, or they couldn't be queued.
+    Nothing,
+    /// Queued, for the engine this wakes to send.
+    Queued(Arc<Notify>),
+    /// Left out of the queue, as the account had Octavo off when last asked: uploaded once,
+    /// directly, and queued only if that fails for a reason that may pass and the mark has cleared
+    /// since.
+    Direct(DirectThreadUpload),
+}
+
+impl ThreadUpload {
+    /// Starts the upload, the messages' records stored.
+    pub fn start(self) {
+        match self {
+            Self::Nothing => {}
+            Self::Queued(wake) => wake.notify_one(),
+            Self::Direct(upload) => upload.start(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Octavo {
@@ -16,10 +44,13 @@ pub struct Octavo {
 }
 
 impl Octavo {
+    /// Opens the client for `settings`, reading queued outputs from `outputs` and queued thread
+    /// messages from `records`.
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
+        records: AiSessionStore,
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
@@ -27,7 +58,7 @@ impl Octavo {
             return Self::nop();
         }
 
-        match client::ActiveOctavoClient::open(settings, handle, outputs).await {
+        match client::ActiveOctavoClient::open(settings, handle, outputs, records).await {
             Ok(client) => Self {
                 client: client.into(),
             },
@@ -56,5 +87,11 @@ impl Octavo {
 
     pub async fn delete_history(&self, ids: &[HistoryId]) {
         self.client.delete_history(ids).await;
+    }
+
+    /// Queues the upload of `messages`, captured on this host, which goes once their records are
+    /// stored and the returned [`ThreadUpload`] started.
+    pub async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
+        self.client.queue_thread_messages(messages).await
     }
 }

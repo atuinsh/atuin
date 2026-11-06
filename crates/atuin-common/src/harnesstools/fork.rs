@@ -14,6 +14,8 @@
 //!   `atuin_forked_from` names the segment. Such a rollout holds only what came after the revert,
 //!   and names the rollout holding the rest in its `history_base`: with the original's rollout
 //!   here, the fork names the same, so it resumes with the whole history.
+//! - **Copilot**: its `session.start` names the original under `atuin`, a field Copilot keeps.
+//! - **Kiro**: the header's `parentSessionId`, as Kiro's own rewinds and tangents set it.
 //! - **pi**: the header's `parentSession`, the original's *file*, which must be on this machine.
 //! - **opencode**: `parentID` names a subagent's parent, and `opencode import` writes no fork link
 //!   (`fork_session_id` is a column of opencode 2.0's own session table, which import doesn't

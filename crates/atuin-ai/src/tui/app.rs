@@ -54,7 +54,6 @@ pub struct IoContext {
     pub edit_permissions: crate::edit_permissions::EditPermissionCache,
     pub snapshot_store: Option<crate::snapshots::SnapshotStore>,
     pub skill_registry: crate::skills::SkillRegistry,
-    pub user_context_cache: crate::user_context::UserContextCache,
 }
 
 /// The policy vocabulary. Mode-dependent resolution happens in `keymap()`
@@ -783,7 +782,6 @@ impl AiApp {
             io.client_ctx.clone(),
             skill_summaries,
             skill_overflow,
-            io.user_context_cache.clone(),
             self.settings.clone(),
         )));
     }
@@ -882,12 +880,6 @@ impl AiApp {
     #[must_use]
     fn resolve_slash_command(&self, command: &str) -> String {
         match command.trim() {
-            "/reload" => {
-                if let Some(io) = &self.io {
-                    io.user_context_cache.invalidate();
-                }
-                "Context files will be reloaded on the next request.".to_string()
-            }
             "/help" => {
                 let commands = self
                     .slash_registry
@@ -943,12 +935,9 @@ impl AiApp {
 
     /// Pull the next relevant tip for a starting turn.
     fn pull_tip(&mut self) -> Option<&'static Tip> {
-        let has_context_files =
-            self.io.as_ref().map(|io| io.user_context_cache.has_gathered()).unwrap_or(None);
         let tip_ctx = TipContext {
             settings: &self.settings,
             model_set: self.fsm.ctx.model.is_some(),
-            has_context_files,
         };
         self.tips.next(&tip_ctx)
     }
@@ -2103,12 +2092,11 @@ mod tests {
     fn builtin_takes_precedence_over_skill_with_same_name() {
         let mut registry = SlashCommandRegistry::default();
         let mut skill_names = HashSet::new();
-        registry
-            .register(crate::tui::slash::SlashCommand::new("reload", "A skill shadowing /reload"));
-        skill_names.insert("reload".to_string());
+        registry.register(crate::tui::slash::SlashCommand::new("help", "A skill shadowing /help"));
+        skill_names.insert("help".to_string());
         let app = AiApp::headless(AgentFsm::new(vec![], "t".into()), None, registry, skill_names);
 
-        assert!(matches!(app.dispatch_submit("/reload".into()), Event::SlashCommand { .. }));
+        assert!(matches!(app.dispatch_submit("/help".into()), Event::SlashCommand { .. }));
     }
 
     #[rstest]
