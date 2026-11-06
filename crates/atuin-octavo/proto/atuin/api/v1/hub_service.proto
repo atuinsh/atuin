@@ -567,8 +567,15 @@ message ListThreadMatchesResponse {
 }
 
 message GetThreadRequest {
-  // The thread's `Thread.id`. Logically required.
-  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+  option (buf.validate.message).cel = {
+    id: "get_thread_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
+  // The thread's `Thread.id`. Logically required, except through `share`, which reads the thread
+  // the share targets when it is left out.
+  UuidV7 thread_id = 1;
   // A share to read through instead of the calling user's own threads, failing with `NOT_FOUND`
   // (`SHARE_NOT_FOUND`) unless the caller may open it, as `GetShare` does. Through a share, a
   // thread's parent is unset unless the share holds it, and `child_count` counts only the threads
@@ -581,11 +588,17 @@ message GetThreadResponse {
 }
 
 message ListThreadMessagesRequest {
+  option (buf.validate.message).cel = {
+    id: "list_thread_messages_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
   reserved 1;
   reserved "thread";
 
-  // The thread's `Thread.id`. Logically required.
-  UuidV7 thread_id = 4 [(buf.validate.field).required = true];
+  // The thread's `Thread.id`, as `GetThreadRequest.thread_id`.
+  UuidV7 thread_id = 4;
   // The most messages to return in one page. At most 200; larger values are rejected. 0 means 50.
   uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
   // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
@@ -602,13 +615,22 @@ message ListThreadMessagesResponse {
 }
 
 message WatchThreadRequest {
+  option (buf.validate.message).cel = {
+    id: "watch_thread_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
   reserved 1;
   reserved "thread";
 
-  // The thread's `Thread.id`. Logically required.
-  UuidV7 thread_id = 2 [(buf.validate.field).required = true];
+  // The thread's `Thread.id`, as `GetThreadRequest.thread_id`.
+  UuidV7 thread_id = 2;
   // A share to watch the thread through, as `GetThreadRequest.share`.
   ShareRef share = 3;
+  // Opaque. A `ListThreadMessagesResponse.next_page_token` of this thread: the catch-up starts after
+  // that page. Empty catches up from the first message.
+  string page_token = 4;
 }
 
 // One message on a `WatchThread` stream.
