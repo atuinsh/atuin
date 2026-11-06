@@ -247,6 +247,30 @@ service HubService {
   //
   // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when the user has no share with this id.
   rpc DeleteShare(DeleteShareRequest) returns (DeleteShareResponse);
+
+  // Count what the members of the organization with this slug did over the request's days, as
+  // `TallyThreadActivity` counts a user's, together and by member.
+  //
+  // Counts every thread of every member, shared or not, and names none: no titles, directories,
+  // branches or text, only the names of the harnesses, models and tools they used. Fails with
+  // `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the organization, with
+  // `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for it, with
+  // `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know, or
+  // (`INVALID_ORG_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
+  // `DEADLINE_EXCEEDED` (`ORG_ACTIVITY_TIMEOUT`) when counting runs past its bound.
+  rpc TallyOrgActivity(TallyOrgActivityRequest) returns (TallyOrgActivityResponse);
+
+  // Return one page of the threads members have shared with the organization with this slug, the
+  // latest shared first. Each opens to the caller through its share.
+  //
+  // Pass `next_page_token` back as `page_token`, with the same request and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages; a page may hold fewer threads than
+  // `page_size` before then. Fails with `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user
+  // belongs to the organization, with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo
+  // is off for it, and with `INVALID_ARGUMENT` for a request out of the bounds below:
+  // `INVALID_ORG_THREADS_REQUEST` for its slug, `INVALID_PAGE_SIZE` for its page size.
+  rpc ListOrgThreads(ListOrgThreadsRequest) returns (ListOrgThreadsResponse);
 }
 
 message InsertHistoryRequest {
@@ -788,3 +812,73 @@ message DeleteShareRequest {
 }
 
 message DeleteShareResponse {}
+
+message ListOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // The most threads to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+}
+
+message ListOrgThreadsResponse {
+  // The threads on this page.
+  repeated OrgThread threads = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+// A thread a member has shared with an organization.
+message OrgThread {
+  // What opens it to the organization's members. Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+  // The shared thread itself, as its share reads it. Logically required.
+  Thread thread = 2 [(buf.validate.field).required = true];
+}
+
+message TallyOrgActivityRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // How many days to count, ending with today.
+  uint32 days = 2 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 90
+  }];
+  // The IANA time zone whose calendar days the counts fall into, such as `Europe/Berlin`. Today is
+  // the day it is there now.
+  string time_zone = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 64
+    not_contains: "\x00"
+  }];
+}
+
+message TallyOrgActivityResponse {
+  // What the members did together, counted as `TallyThreadActivity` counts a user's: a streak's
+  // day is one with a prompt from any member, and the peak counts all of their threads at once.
+  TallyThreadActivityResponse activity = 1;
+  // How many members had a message on each of `activity.days`, in the same order.
+  repeated uint32 daily_active_members = 2;
+  // How many members had a message over the counted days.
+  uint32 active_members = 3;
+  // Every member of the organization, most messages first, ties broken by username.
+  repeated OrgMemberActivity members = 4;
+}
+
+// One member's activity over the counted days.
+message OrgMemberActivity {
+  string username = 1;
+  // The counted days together.
+  ThreadActivityCounts counts = 2;
+  // Their messages on each of `TallyOrgActivityResponse.activity.days`, in the same order.
+  repeated uint64 daily_messages = 3;
+  // When their newest message was written, on any day; unset when they have none.
+  google.protobuf.Timestamp last_active_at = 4;
+}
