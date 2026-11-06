@@ -108,15 +108,34 @@ impl Sqlite {
         SqliteBuilder::memory()
     }
 
+    /// Most connections a pool on a file opens; each keeps its own page cache, and WAL serializes
+    /// writers anyway.
+    ///
+    /// Twice the widest steady fan-out over one pool (4: atuin-client's `DECODE_CONCURRENCY`, the
+    /// daemon's `SEARCH_CONCURRENCY`), since a sync's decodes run beside capture, the ai-session
+    /// projector and finishing commands, and a decode that times out acquiring is skipped. Sync's
+    /// packfile packing and downloads fan out 16 wide past it; a pool timeout there fails the
+    /// tick, which is retried.
+    const MAX_CONNECTIONS: u32 = 8;
+
+    /// How long an idle connection stays open, so a burst's connections close soon after it.
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
     async fn connect(
         opts: SqliteConnectOptions,
         timeout: Duration,
+        in_memory: bool,
     ) -> Result<Self, SqliteOpenOrCreateError> {
-        let pool = SqlitePoolOptions::new()
-            .acquire_timeout(timeout)
-            .connect_with(opts)
-            .await
-            .map_err(SqliteOpenOrCreateError::PoolCreateError)?;
+        let pool = SqlitePoolOptions::new().acquire_timeout(timeout);
+        // SQLite deletes an in-memory database with its last connection, so none is ever reaped:
+        // sqlx's defaults would close it after 10 idle minutes or 30 minutes of age.
+        let pool = if in_memory {
+            pool.idle_timeout(None).max_lifetime(None)
+        } else {
+            pool.max_connections(Self::MAX_CONNECTIONS).idle_timeout(Self::IDLE_TIMEOUT)
+        };
+        let pool =
+            pool.connect_with(opts).await.map_err(SqliteOpenOrCreateError::PoolCreateError)?;
 
         Ok(Self {
             info: Info::new_eager_future(pool.clone()),
