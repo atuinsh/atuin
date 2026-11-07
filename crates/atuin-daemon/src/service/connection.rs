@@ -36,7 +36,7 @@ pub enum FindError {
 
 impl Connection {
     /// How often to check whether a just-launched service answers yet.
-    const READY_POLL: Duration = Duration::from_millis(40);
+    pub(super) const READY_POLL: Duration = Duration::from_millis(40);
 
     /// The service answering at `address`, if any, whatever its build.
     pub(super) async fn at(address: DaemonAddress) -> Result<Option<Self>, FindError> {
