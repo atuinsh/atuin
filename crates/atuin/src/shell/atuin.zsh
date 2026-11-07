@@ -295,7 +295,9 @@ zle -N atuin-ai-resume-viins _atuin_ai_resume_viins
 zle -N _atuin_search_widget _atuin_search
 zle -N _atuin_up_search_widget _atuin_up_search
 
-(ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
+# `atuin init` sets this when search does not use the daemon, because the command would do nothing.
+[[ ${__atuin_skip_search_index-} = 1 ]] || (ATUIN_SHELL=zsh atuin __internal prepare-search-index >/dev/null 2>&1 &)
+unset __atuin_skip_search_index
 
 if [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] && [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
     # We're running in an old pty-proxy that expects OSC 133 markers. The outer
