@@ -35,9 +35,9 @@
 //! user and assistant turns alternate, starting with the user and ending with the assistant.
 //! Rows of one role in a row (two prompts whose reply was only tool calls, say) are merged into
 //! one turn. An assistant turn's calls are written in the target's own rows, each answered by
-//! its result before the turn goes on. Timestamps keep the original's, nudged forward where
-//! needed so every row is later than the one before (opencode orders messages by ids minted from
-//! their time).
+//! its result before the turn goes on. Timestamps keep the original's (each step of a turn the
+//! time of the row it was in), nudged forward where needed so every row is later than the one
+//! before (opencode orders messages by ids minted from their time).
 //!
 //! # The marker
 //!
@@ -325,12 +325,11 @@ fn continue_at(
                 rows.push(turn.at, Role::User, content, None);
             }
             Kind::Assistant => {
-                let at = turn.at;
                 // The calls ran where the session did, which a continuation on another machine
                 // resumes elsewhere.
                 let ran_in = original.original_cwd.as_deref().unwrap_or(&original.cwd);
                 for step in turn.steps() {
-                    rows.step(at, &step, ran_in, &original.cwd);
+                    rows.step(step.at, &step, ran_in, &original.cwd);
                 }
             }
         }
@@ -496,17 +495,19 @@ enum Item<'m> {
     Answered,
 }
 
-/// One side's turn: the rows of one role in a row, merged.
+/// One side's turn: the rows of one role in a row, merged, each item at its row's time.
 #[derive(Debug)]
 struct Turn<'m> {
     kind: Kind,
     at: OffsetDateTime,
-    items: Vec<Item<'m>>,
+    items: Vec<(OffsetDateTime, Item<'m>)>,
 }
 
-/// A stretch of an assistant's turn: what it said, then the calls it made.
-#[derive(Debug, Default)]
+/// A stretch of an assistant's turn, at the time of the row it starts in: what it said, then
+/// the calls it made.
+#[derive(Debug)]
 struct Step<'m> {
+    at: OffsetDateTime,
     parts: Vec<Part>,
     calls: Vec<(&'m ToolUse, &'m ToolResult)>,
 }
@@ -516,7 +517,7 @@ impl<'m> Turn<'m> {
         Self {
             kind,
             at,
-            items: parts.into_iter().map(Item::Part).collect(),
+            items: parts.into_iter().map(|p| (at, Item::Part(p))).collect(),
         }
     }
 
@@ -525,7 +526,7 @@ impl<'m> Turn<'m> {
         let parts: Vec<Part> = self
             .items
             .iter()
-            .filter_map(|item| match item {
+            .filter_map(|(_, item)| match item {
                 Item::Part(part) => Some(part.clone()),
                 Item::Call(..) | Item::Answered => None,
             })
@@ -537,19 +538,25 @@ impl<'m> Turn<'m> {
     /// called again.
     fn steps(self) -> Vec<Step<'m>> {
         let mut steps: Vec<Step<'m>> = Vec::new();
-        for item in self.items {
+        for (at, item) in self.items {
             match (item, steps.last_mut()) {
                 (Item::Answered, Some(step)) if !step.calls.is_empty() => {
-                    steps.push(Step::default());
+                    steps.push(Step {
+                        at,
+                        parts: Vec::new(),
+                        calls: Vec::new(),
+                    });
                 }
                 (Item::Answered, _) => {}
                 (Item::Part(part), Some(step)) if step.calls.is_empty() => step.parts.push(part),
                 (Item::Part(part), _) => steps.push(Step {
+                    at,
                     parts: vec![part],
                     calls: Vec::new(),
                 }),
                 (Item::Call(call, result), Some(step)) => step.calls.push((call, result)),
                 (Item::Call(call, result), None) => steps.push(Step {
+                    at,
                     parts: Vec::new(),
                     calls: vec![(call, result)],
                 }),
@@ -727,12 +734,13 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
             if items.is_empty() {
                 continue;
             }
+            let items = items.into_iter().map(|item| (m.timestamp, item));
             match turns.last_mut() {
                 Some(turn) if turn.kind == kind => turn.items.extend(items),
                 _ => turns.push(Turn {
                     kind,
                     at: m.timestamp,
-                    items,
+                    items: items.collect(),
                 }),
             }
         }
