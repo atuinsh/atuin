@@ -763,22 +763,26 @@ fn exec(plan: &ResumePlan) -> Result<()> {
     // would not resolve to. It is looked up as the check looked it up (a relative path against the
     // session's directory), and made absolute before changing directory, so a relative `PATH` entry
     // such as `.` finds what the check found; elsewhere the name is looked up as it was checked.
-    #[cfg(windows)]
+    use std::path::Path;
+
+    use atuin_common::executable::resolve_in_path;
     use atuin_common::path::AbsPathBuf;
 
-    #[cfg(windows)]
-    use crate::resume_tui::resumer;
-    #[cfg(windows)]
-    let program = match resumer::find_program(&resumer::program_to_check(plan)) {
-        Some(found) => AbsPathBuf::from_current_dir(found)?.into_path_buf(),
-        None => plan.program.clone().into(),
+    use crate::resume_tui::resumer::program_to_check;
+
+    let found = if cfg!(windows) {
+        let to_check = program_to_check(plan);
+        resolve_in_path(Path::new(&to_check)).map(AbsPathBuf::from_current_dir).transpose()?
+    } else {
+        None
     };
-    #[cfg(not(windows))]
-    let program = &plan.program;
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
     }
-    let mut command = std::process::Command::new(program);
+    let mut command = match &found {
+        Some(found) => std::process::Command::new(found),
+        None => std::process::Command::new(&plan.program),
+    };
     command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         // Keep $PWD in step, so harnesses that read it see the session's directory.

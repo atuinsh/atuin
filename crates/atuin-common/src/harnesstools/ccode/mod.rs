@@ -31,6 +31,14 @@ impl Harness for Ccode {
         "claude-code"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn program(&self) -> &'static str {
+        "claude"
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["claude"]
     }
@@ -54,7 +62,7 @@ impl Harness for Ccode {
             ));
         }
         let args = ["--resume".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "claude", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

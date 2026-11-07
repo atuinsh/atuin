@@ -24,6 +24,14 @@ impl Harness for Amp {
         "amp"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Amp"
+    }
+
+    fn program(&self) -> &'static str {
+        "amp"
+    }
+
     /// Amp loads every plugin in `~/.config/amp/plugins/` ([Plugin API]).
     ///
     /// [Plugin API]: https://ampcode.com/docs/plugin-api
@@ -45,7 +53,7 @@ impl Harness for Amp {
     /// works in the directory it runs from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let args = ["threads".to_owned(), "continue".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "amp", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     /// Never here: Amp's threads are on its servers.

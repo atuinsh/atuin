@@ -135,6 +135,10 @@ pub(crate) fn locate(root: &Path, id: &str) -> Option<PathBuf> {
 impl Sessions for CopilotSessions {
     type Listener = CopilotListener;
 
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        crate::fs::newest_modified(self.resolve_root())
+    }
+
     fn listener(&self) -> Result<CopilotListener, RuntimeError> {
         let root = self.resolve_root();
         if !root.is_dir() {

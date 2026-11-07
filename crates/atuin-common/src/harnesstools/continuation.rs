@@ -58,7 +58,6 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::note::{Part, clip, render, tool_note};
-use super::pi::Flavour;
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
@@ -136,23 +135,6 @@ impl Flattened {
     }
 }
 
-/// The harness's name as people know it.
-fn label(harness: AnyHarness) -> &'static str {
-    match harness {
-        AnyHarness::Amp(_) => "Amp",
-        AnyHarness::ClaudeCode(_) => "Claude Code",
-        AnyHarness::Codex(_) => "Codex",
-        AnyHarness::Copilot(_) => "Copilot",
-        AnyHarness::Grok(_) => "Grok Build",
-        AnyHarness::Kiro(_) => "Kiro",
-        AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(pi) => match pi.flavour() {
-            Flavour::Pi => "Pi",
-            Flavour::Omp => "omp",
-        },
-    }
-}
-
 /// The marker a continuation starts with: its first line names the session it continues
 /// (`Continued from <harness> session <id> (atuin id <atuin id>) via atuin.`, the harness by its
 /// [name](crate::harnesstools::Harness::name), without the atuin id when it isn't known); the
@@ -166,7 +148,7 @@ pub fn marker_text(source: AnyHarness, id: &str, atuin_id: Option<&str>) -> Stri
          Calls it couldn't carry are shown as notes in [brackets]. The files may have changed \
          since: check them before relying on what was done.",
         source.name(),
-        label(source),
+        source.display_name(),
     )
 }
 
