@@ -160,6 +160,30 @@ The address of the server to sync with!
 sync_address = "https://api.atuin.sh"
 ```
 
+### `sync_address_path`
+
+Default: unset
+
+Read the sync server address from a separate file, so you can keep the address
+outside a shared configuration file. The file must contain a single server
+address, such as `https://api.atuin.sh`.
+Surrounding whitespace, including a trailing newline, is ignored. An unreadable,
+empty, or invalid file causes a configuration error.
+
+```toml
+sync_address_path = "sync-address"
+```
+
+Relative paths resolve beside `config.toml`. Home directories and environment
+variables in the path expand as they do for other path settings. Set
+`ATUIN_SYNC_ADDRESS_PATH` to override the configured path.
+
+The file overrides `sync_address`. A direct `ATUIN_SYNC_ADDRESS` environment
+variable overrides both settings, without reading the file. Changes to the file
+take effect when settings are next loaded, for example after restarting the daemon.
+This keeps the address out of your shared config, but doesn't hide it from logs
+or resolved configuration output.
+
 ### `sync_frequency`
 
 Default: `5m`
@@ -649,8 +673,8 @@ When set to true, Atuin will default to immediately executing a command rather
 than the user having to press enter twice. Pressing tab will return to the
 shell and give the user a chance to edit.
 
-This technically defaults to true for new users, but false for existing. We
-have set `enter_accept = true` in the default config file. This is likely to
+This technically defaults to true for new users, but false for existing. We've
+set `enter_accept = true` in the default config file. This is likely to
 change to be the default for everyone in a later release.
 
 ```toml
