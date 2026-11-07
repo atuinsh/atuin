@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::harnesstools::note::command_line;
 
-mod script;
+pub(super) mod script;
 
 /// What a tool call touches.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

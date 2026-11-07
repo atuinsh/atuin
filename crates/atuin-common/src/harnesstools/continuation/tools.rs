@@ -10,6 +10,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+use crate::harnesstools::access::script::{self, Call};
 use crate::harnesstools::note::command_line;
 use crate::harnesstools::rehydrate::UNCAPTURED_OUTPUT;
 use crate::harnesstools::session::{ToolCallId, ToolResult, ToolUse};
@@ -229,6 +230,21 @@ impl Canonical {
                 path: string(&input, &["path"]),
             },
             _ => return None,
+        })
+    }
+
+    /// What the calls of a Codex `exec` script did, when they are all shell commands: one
+    /// command running each in turn, in a shell of its own as each call had.
+    fn shells(source: AnyHarness, calls: &[Call], ran_in: &Path) -> Option<Self> {
+        let commands = calls
+            .iter()
+            .map(|call| match Self::parse(source, &call.name, &call.input, ran_in)? {
+                Self::Shell { command } => Some(format!("({command}\n)")),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (commands.len() > 1).then(|| Self::Shell {
+            command: commands.join("\n"),
         })
     }
 
@@ -619,9 +635,20 @@ fn native(target: AnyHarness, name: &str) -> bool {
     names.contains(&name.to_ascii_lowercase().as_str())
 }
 
+/// The tool calls a Codex `exec` call's script makes (see the `script` module), when it was
+/// read whole and each ran once, in turn.
+fn script_calls(source: AnyHarness, call: &ToolUse) -> Option<Vec<Call>> {
+    let script = match (source, &call.input) {
+        (AnyHarness::Codex(_), Value::String(text)) if call.name == "exec" => script::calls(text),
+        _ => return None,
+    };
+    (script.whole && script.straight).then_some(script.calls)
+}
+
 /// `call` (made in `source`, in a session that ran in `ran_in`) and its `result` as `target`
 /// writes them, in a session resuming in `cwd`. A call kept as the tool it was, whose name is one of the target's own tools (which
-/// takes other input), is named for its source: `pi_edit`.
+/// takes other input), is named for its source: `pi_edit`. A Codex `exec` script making one call
+/// is carried as that call; one making several, as one shell command when they all are.
 pub(super) fn carry(
     source: AnyHarness,
     target: AnyHarness,
@@ -631,16 +658,22 @@ pub(super) fn carry(
     cwd: &Path,
     ids: &mut CallIds,
 ) -> (ToolUse, ToolResult) {
-    let (name, input) = Canonical::parse(source, &call.name, &call.input, ran_in)
+    let calls = script_calls(source, call);
+    let (name, input) = match calls.as_deref() {
+        Some([one]) => (&one.name, &one.input),
+        _ => (&call.name, &call.input),
+    };
+    let (name, input) = Canonical::parse(source, name, input, ran_in)
+        .or_else(|| Canonical::shells(source, calls.as_deref()?, ran_in))
         .and_then(|canonical| canonical.render(target, cwd))
         .map_or_else(
             || {
-                let name = if native(target, &call.name) {
-                    format!("{}_{}", source.name(), call.name)
+                let name = if native(target, name) {
+                    format!("{}_{}", source.name(), name)
                 } else {
-                    call.name.clone()
+                    name.clone()
                 };
-                (api_name(&name, "tool"), call.input.clone())
+                (api_name(&name, "tool"), input.clone())
             },
             |(name, input)| (name.to_owned(), input),
         );
@@ -795,6 +828,42 @@ mod tests {
         let here = Path::new("/work");
         let (call, _) = carry(source, CLAUDE, &call, &result, here, here, &mut CallIds::default());
         assert_eq!((call.name.as_str(), call.input), ("Read", want));
+    }
+
+    /// Codex 0.160+ makes its calls from a JavaScript `exec` script: one call is carried as that
+    /// call, several shell commands as one, and anything else as the script it was.
+    #[rstest]
+    #[case::shell(r#"text(await tools.exec_command({cmd: "cargo test", workdir: "/work"}));"#, CLAUDE, "Bash", json!({"command": "cargo test"}))]
+    #[case::shell_to_copilot(r#"await tools.exec_command({cmd: "ls", workdir: "/work/x"})"#, COPILOT, "bash", json!({"command": "cd x && ls"}))]
+    #[case::patch(r#"await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, CLAUDE, "apply_patch", json!({"input": "*** Begin Patch\n*** End Patch"}))]
+    #[case::patch_to_copilot(r#"await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, COPILOT, "codex_apply_patch", json!({"input": "*** Begin Patch\n*** End Patch"}))]
+    #[case::shells(r#"text(await tools.exec_command({cmd: "echo a", workdir: "/work"})); text(await tools.exec_command({cmd: "ls", workdir: "/work/x"}));"#, PI, "bash", json!({"command": "(echo a\n)\n(cd x && ls\n)"}))]
+    #[case::shells_ending_in_a_comment(r#"await tools.exec_command({cmd: "echo a # note"}); await tools.exec_command({cmd: "ls"})"#, PI, "bash", json!({"command": "(echo a # note\n)\n(ls\n)"}))]
+    #[case::shell_and_patch(r#"await tools.exec_command({cmd: "ls"}); await tools.apply_patch("*** Begin Patch\n*** End Patch")"#, CLAUDE, "exec", json!({"input": r#"await tools.exec_command({cmd: "ls"}); await tools.apply_patch("*** Begin Patch\n*** End Patch")"#}))]
+    #[case::branch(r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#, CLAUDE, "exec", json!({"input": r#"if (false) { await tools.exec_command({cmd: "touch done"}) }"#}))]
+    #[case::loop_(r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#, CLAUDE, "exec", json!({"input": r#"for (const d of ["a", "b"]) await tools.exec_command({cmd: "ls"})"#}))]
+    #[case::callback(r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#, CLAUDE, "exec", json!({"input": r#"["a"].map(() => tools.exec_command({cmd: "ls"}))"#}))]
+    #[case::method(r#"const o = { run() { tools.exec_command({cmd: "ls"}) } }"#, CLAUDE, "exec", json!({"input": r#"const o = { run() { tools.exec_command({cmd: "ls"}) } }"#}))]
+    #[case::not_whole(r"await tools.exec_command({cmd: process.argv[2]})", CLAUDE, "exec", json!({"input": r"await tools.exec_command({cmd: process.argv[2]})"}))]
+    fn codex_exec_scripts_are_carried_as_their_calls(
+        #[case] script: &str,
+        #[case] target: AnyHarness,
+        #[case] want_name: &str,
+        #[case] want_input: Value,
+    ) {
+        let call = ToolUse {
+            id: ToolCallId::from("call_1".to_owned()),
+            name: "exec".to_owned(),
+            input: json!(script),
+        };
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: json!("ok"),
+            error: false,
+        };
+        let (ran_in, cwd) = (Path::new("/work"), Path::new("/here"));
+        let (call, _) = carry(CODEX, target, &call, &result, ran_in, cwd, &mut CallIds::default());
+        assert_eq!((call.name.as_str(), call.input), (want_name, want_input));
     }
 
     #[rstest]
