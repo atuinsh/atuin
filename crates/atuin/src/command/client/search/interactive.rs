@@ -873,6 +873,9 @@ impl State {
         border_size: u16,
         preview_width: u16,
     ) -> u16 {
+        if preview_width <= border_size {
+            return 0;
+        }
         if settings.show_preview
             && settings.preview.strategy == PreviewStrategy::Auto
             && tab_index == 0
@@ -896,7 +899,7 @@ impl State {
                 ) + border_size * 2
             }
             // The '- 19' takes the characters before the command (duration and time) into account
-            else if length_current_cmd > preview_width - 19 {
+            else if length_current_cmd > preview_width.saturating_sub(19) {
                 std::cmp::min(
                     settings.max_preview_height,
                     (length_current_cmd + preview_width - 1 - border_size)
@@ -1213,7 +1216,7 @@ impl State {
 
         if !matches!(compactness, Compactness::Ultracompact) {
             let preview_width = match compactness {
-                Compactness::Full => preview_width - 2,
+                Compactness::Full => preview_width.saturating_sub(2),
                 _ => preview_width,
             };
             let preview = self.build_preview(
@@ -1424,7 +1427,11 @@ impl State {
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
                             .border_type(BorderType::Rounded)
-                            .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                            .title(format!(
+                                "{:─>width$}",
+                                "",
+                                width = style.inner_width.saturating_sub(2)
+                            )),
                     )
                 } else {
                     results_list.block(
@@ -1467,7 +1474,11 @@ impl State {
                         Block::default()
                             .borders(Borders::LEFT | Borders::RIGHT)
                             .border_type(BorderType::Rounded)
-                            .title(format!("{:─>width$}", "", width = style.inner_width - 2)),
+                            .title(format!(
+                                "{:─>width$}",
+                                "",
+                                width = style.inner_width.saturating_sub(2)
+                            )),
                     )
                 }
             }
@@ -1515,7 +1526,7 @@ impl State {
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
-                    .title(format!("{:─>width$}", "", width = chunk_width - 2)),
+                    .title(format!("{:─>width$}", "", width = chunk_width.saturating_sub(2))),
             ),
             _ => Paragraph::new(command)
                 .style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
@@ -2424,12 +2435,15 @@ mod tests {
     use atuin_client::settings::RequestedSearchMode;
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
+        Style,
     };
     use atuin_client::theme::ThemeManagerOptions;
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
     use atuin_common::time::UtcOffsetSpec;
     use atuin_common::userio::log::{Message, Severity};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::{fixture, rstest};
     use time::macros::{datetime, offset};
@@ -2437,7 +2451,7 @@ mod tests {
 
     use super::{
         Compactness, InputAction, InspectingState, InspectorView, KeymapSet, SearchModeState,
-        State, cd_command, selection_output,
+        State, StyleState, cd_command, selection_output,
     };
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
@@ -2628,6 +2642,83 @@ mod tests {
             ),
             expected
         );
+    }
+
+    // A three-column terminal leaves one column after the layout's horizontal margins.
+    #[rstest]
+    fn narrow_terminal_repro_full_style_input(state: State) {
+        let _input = state.build_input(
+            StyleState {
+                compactness: Compactness::Full,
+                invert: false,
+                inner_width: 1,
+            },
+            20,
+        );
+    }
+
+    #[rstest]
+    fn narrow_terminal_preview_sweep() {
+        for (strategy, command) in [
+            (PreviewStrategy::Auto, "echo first"),
+            (PreviewStrategy::Auto, "echo first\necho second"),
+            (PreviewStrategy::Static, "echo first"),
+            (PreviewStrategy::Static, "echo first\necho second"),
+            (PreviewStrategy::Fixed, "echo first"),
+        ] {
+            let results = [History::capture()
+                .timestamp(OffsetDateTime::UNIX_EPOCH)
+                .command(command)
+                .cwd("/")
+                .build()
+                .into()];
+            let settings = preview_settings(strategy, None);
+
+            for border_size in [0, 1] {
+                for preview_width in 0..=20 {
+                    eprintln!(
+                        "strategy={strategy:?}, border_size={border_size}, width={preview_width}, \
+                         command={command:?}"
+                    );
+                    let height = State::calc_preview_height(
+                        &settings,
+                        &results,
+                        0,
+                        0,
+                        Compactness::Compact,
+                        border_size,
+                        preview_width,
+                    );
+                    if preview_width <= border_size {
+                        assert_eq!(height, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::full_auto(Style::Full, PreviewStrategy::Auto, 3)]
+    #[case::compact_auto(Style::Compact, PreviewStrategy::Auto, 2)]
+    #[case::compact_static(Style::Compact, PreviewStrategy::Static, 2)]
+    fn narrow_terminal_draw(
+        mut state: State,
+        #[from(preview_corpus)] results: &[History],
+        #[case] style: Style,
+        #[case] strategy: PreviewStrategy,
+        #[case] width: u16,
+    ) {
+        let mut settings = preview_settings(strategy, None);
+        settings.style = style;
+        let mut themes = ThemeManagerOptions {
+            debug: true,
+            builtin_only: true,
+        }
+        .build();
+        let theme = themes.load_theme("(none)", None);
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+
+        terminal.draw(|f| state.draw(f, results, None, None, &settings, theme, false)).unwrap();
     }
 
     // Test when there's no results, scrolling up or down doesn't underflow
