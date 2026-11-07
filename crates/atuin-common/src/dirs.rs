@@ -102,7 +102,7 @@ const ATUIN_CONFIG_DIR_ITEMS: [&str; 2] = ["config.toml", "server.toml"];
 /// location for the *global* permissions file. [`config_path`] implements logic to avoid
 /// reinterpreting old `$HOME`-scoped files as global ones; this array contains all the affected
 /// items.
-const AI_ITEMS: [&str; 3] = ["permissions.ai.toml", "skills", "TERMINAL.md"];
+const AI_ITEMS: [&str; 2] = ["permissions.ai.toml", "skills"];
 
 /// Get the path of a config item.
 ///
@@ -111,7 +111,7 @@ const AI_ITEMS: [&str; 3] = ["permissions.ai.toml", "skills", "TERMINAL.md"];
 /// 1. If `child` is `config.toml` or `server.toml` and `ATUIN_CONFIG_DIR` is set,
 ///    `$ATUIN_CONFIG_DIR/child` is returned.
 /// 2. If `ATUIN_HOME` is set and valid (an absolute path), `$ATUIN_HOME/child` is returned.
-/// 3. If the first component of `child` is `permissions.ai.toml`, `skills`, or `TERMINAL.md`, and
+/// 3. If the first component of `child` is `permissions.ai.toml` or `skills`, and
 ///    `~/.atuin/config.toml` doesn't exist, `legacy_config_dir()/child`[^1] is returned.
 /// 4. If the first component of `child` exists in `~/.atuin`, `~/.atuin/child` is returned.
 /// 5. If the first component of `child` is `themes` and `ATUIN_THEME_DIR` is set,
@@ -677,14 +677,7 @@ mod tests {
     #[rstest]
     fn config_items_are_resolved_independently(
         homes: Homes,
-        #[values(
-            "config.toml",
-            "server.toml",
-            "TERMINAL.md",
-            "permissions.ai.toml",
-            "skills",
-            "themes"
-        )]
+        #[values("config.toml", "server.toml", "permissions.ai.toml", "skills", "themes")]
         item: &str,
         #[values(false, true)] in_legacy: bool,
         #[values(false, true)] in_new: bool,
@@ -734,7 +727,7 @@ mod tests {
     #[rstest]
     fn an_old_home_scoped_ai_file_is_not_the_global_one(
         homes: Homes,
-        #[values("permissions.ai.toml", "TERMINAL.md", "skills")] item: &str,
+        #[values("permissions.ai.toml", "skills")] item: &str,
     ) {
         create(&homes.new_home().joined(item));
         assert_eq!(homes.config_path(item, None), homes.legacy_config().joined(item));
@@ -749,7 +742,7 @@ mod tests {
     #[rstest]
     fn ai_items_do_without_a_home_dir_given_xdg_config_home(
         env: MockEnv,
-        #[values("permissions.ai.toml", "TERMINAL.md", "skills/foo/SKILL.md")] child: &str,
+        #[values("permissions.ai.toml", "skills/foo/SKILL.md")] child: &str,
     ) {
         let config: PathBuf = if cfg!(windows) {
             "c:\\xdg-config"
@@ -784,7 +777,6 @@ mod tests {
             ("server.toml", true, false, false),
             ("themes/dark.toml", false, true, false),
             ("permissions.ai.toml", false, false, true),
-            ("TERMINAL.md", false, false, true),
             ("skills/foo/SKILL.md", false, false, true)
         )]
         (child, relocated, theme, ai): (&str, bool, bool, bool),
@@ -875,7 +867,7 @@ mod tests {
     #[rstest]
     fn atuin_theme_dir_is_ignored_for_other_items(
         homes: Homes,
-        #[values("config.toml", "TERMINAL.md", "skills/foo/SKILL.md")] child: &str,
+        #[values("config.toml", "permissions.ai.toml", "skills/foo/SKILL.md")] child: &str,
     ) {
         homes.migrate();
         homes.set_theme_dir(&homes.tmp.path().join("theme-dir"));

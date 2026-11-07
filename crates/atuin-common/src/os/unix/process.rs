@@ -8,6 +8,21 @@ use std::time::Duration;
 use rustix::io::Errno;
 use rustix::process::{self, Pid, Signal};
 
+mod close_fds;
+
+/// Extension trait for [`std::process::Command`].
+pub trait CommandExt {
+    /// Make the child process not inherit any file descriptors except the standard streams, like
+    /// Python's `close_fds`.
+    fn close_fds(&mut self) -> &mut Self;
+}
+
+impl CommandExt for std::process::Command {
+    fn close_fds(&mut self) -> &mut Self {
+        close_fds::close_fds(self)
+    }
+}
+
 /// Try to convert a [`u32`] PID into a typed [`Pid`].
 ///
 /// Standard library functions like [`std::process::id`] use [`u32`], but functions in this module

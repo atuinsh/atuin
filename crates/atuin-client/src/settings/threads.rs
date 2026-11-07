@@ -76,6 +76,7 @@ pub struct AiSessionResume {
     pub omp: Option<String>,
     pub copilot: Option<String>,
     pub amp: Option<String>,
+    pub kiro: Option<String>,
 }
 
 impl AiSessionResume {
@@ -91,6 +92,7 @@ impl AiSessionResume {
             HarnessKind::Omp => self.omp.as_deref(),
             HarnessKind::Copilot => self.copilot.as_deref(),
             HarnessKind::Amp => self.amp.as_deref(),
+            HarnessKind::Kiro => self.kiro.as_deref(),
             HarnessKind::Unknown => None,
         }
     }

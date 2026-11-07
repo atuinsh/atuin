@@ -21,7 +21,7 @@ use super::{
     names,
 };
 
-const HEIGHT: u16 = 20;
+const HEIGHT: u16 = 22;
 const ACCENT: Color = Color::Green;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SYNC: bool = cfg!(feature = "sync");
@@ -113,27 +113,31 @@ async fn drive(
     match offer.filter(|offer| !offer.is_empty()) {
         Some(offer) if !ask_import => super::skip_import(&offer, &tx),
         Some(offer) => {
+            let mut import = Import::new(&offer);
+            // The screen doesn't know about the sign-in link, so wouldn't clear it.
+            terminal.clear()?;
+            let take = loop {
+                terminal.draw(|frame| import.draw(frame, &offer, found))?;
+                if let Some(key) = next_key().await?
+                    && let Some(take) = import.handle(key, &offer)
+                {
+                    break take;
+                }
+            };
+            super::skip_import(
+                &Offer {
+                    history: offer.history.filter(|_| take.history.is_none()),
+                    threads: offer.threads.filter(|_| take.threads.is_none()),
+                },
+                &tx,
+            );
             while let Ok(update) = updates.try_recv() {
                 running.update(update);
             }
-            running.offer = offer_lines(&offer, found);
-            loop {
-                running.show(terminal, tick)?;
-                let Some(key) = next_key().await? else {
-                    continue;
-                };
-                let ctrl_c =
-                    key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
-                if key.code == KeyCode::Enter {
-                    super::import(&offer, &tx).await;
-                    break;
-                }
-                if key.code == KeyCode::Esc || ctrl_c {
-                    super::skip_import(&offer, &tx);
-                    break;
-                }
+            running.show(terminal, tick)?;
+            if !take.is_empty() {
+                super::import(&take, &tx).await;
             }
-            running.offer.clear();
         }
         None => {}
     }
@@ -172,6 +176,8 @@ enum Row {
     Mcp,
     Sync,
     Server,
+    /// The button that goes on to set it all up.
+    Go,
 }
 
 impl Row {
@@ -180,7 +186,8 @@ impl Row {
         match self {
             Self::Shell | Self::Threads | Self::AgentHistory => Some("What should Atuin capture?"),
             Self::CtrlR | Self::UpArrow | Self::Mcp => Some("How do you want to search it?"),
-            Self::Sync | Self::Server => None,
+            Self::Sync | Self::Server => Some("Where should it sync?"),
+            Self::Go => None,
         }
     }
 }
@@ -233,7 +240,7 @@ impl Choose {
         let agents = THREADS && !found.agents.is_empty();
         let mut rows = vec![Row::Shell];
         if agents {
-            rows.extend([Row::Threads, Row::AgentHistory]);
+            rows.extend([Row::AgentHistory, Row::Threads]);
         }
         // The keys search shell history.
         if self.shell {
@@ -248,6 +255,7 @@ impl Choose {
                 rows.push(Row::Server);
             }
         }
+        rows.push(Row::Go);
         rows
     }
 
@@ -261,7 +269,8 @@ impl Choose {
         let at = rows.iter().position(|&row| row == self.row).unwrap_or(0);
 
         match key.code {
-            KeyCode::Enter => return self.plan().map(Chosen::Plan),
+            KeyCode::Enter if self.row == Row::Go => return self.plan().map(Chosen::Plan),
+            KeyCode::Enter if self.row == Row::Server => self.row = Row::Go,
             KeyCode::Backspace if self.row == Row::Server => {
                 self.server.pop();
             }
@@ -273,7 +282,7 @@ impl Choose {
             KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
                 self.row = rows[(at + 1).min(rows.len() - 1)];
             }
-            KeyCode::Char(' ' | 'l') | KeyCode::Right => self.change(1),
+            KeyCode::Enter | KeyCode::Char(' ' | 'l') | KeyCode::Right => self.change(1),
             KeyCode::Left | KeyCode::Char('h') => self.change(SYNC_CHOICES.len() - 1),
             _ => {}
         }
@@ -290,7 +299,7 @@ impl Choose {
             Row::UpArrow => self.up_arrow = !self.up_arrow,
             Row::Mcp => self.mcp = !self.mcp,
             Row::Sync => self.sync = (self.sync + by) % SYNC_CHOICES.len(),
-            Row::Server => {}
+            Row::Server | Row::Go => {}
         }
     }
 
@@ -328,6 +337,7 @@ impl Choose {
         lines.extend(found_lines(found));
 
         let mut heading = None;
+        let mut focus = 0;
         for (i, row) in self.rows(found).into_iter().enumerate() {
             if row.heading() != heading && row != Row::Server {
                 heading = row.heading();
@@ -339,31 +349,27 @@ impl Choose {
                 }
             }
             let at = row == self.row;
+            if at {
+                focus = lines.len();
+            }
             lines.push(match row {
-                Row::Shell => choice(at, self.shell, "Shell history", "every command you run"),
-                Row::Threads => {
-                    choice(at, self.threads, "Agent threads", "your conversations with your agents")
-                }
+                Row::Shell => choice(at, self.shell, "Shell history", "all your commands"),
+                Row::Threads => choice(
+                    at,
+                    self.threads,
+                    "Agent threads",
+                    "full agent sessions, resumable cross harness",
+                ),
                 Row::AgentHistory => choice(
                     at,
                     self.agent_history,
                     "Agent shell history",
-                    "every command your agents run",
+                    "all your agents' commands",
                 ),
-                Row::CtrlR => choice(
-                    at,
-                    self.ctrl_r,
-                    "Ctrl-R",
-                    "search your history, instead of your shell's",
-                ),
-                Row::UpArrow => choice(
-                    at,
-                    self.up_arrow,
-                    "Up arrow",
-                    "open search too, instead of the last command",
-                ),
+                Row::CtrlR => choice(at, self.ctrl_r, "Ctrl-R", "search shell history"),
+                Row::UpArrow => choice(at, self.up_arrow, "Up arrow", "also search shell history"),
                 Row::Mcp => {
-                    choice(at, self.mcp, "Agent search", "let your agents search it, over MCP")
+                    choice(at, self.mcp, "Agent search", "search history and threads over MCP")
                 }
                 Row::Sync => {
                     let about = match self.sync {
@@ -378,10 +384,12 @@ impl Choose {
                     } else {
                         value
                     };
-                    toggle(at, self.sync != 2, "Sync", vec![value, dim(format!("  {about}"))])
+                    let spans = vec![value, dim(format!("  {about}"))];
+                    toggle(at, None, self.sync != 2, "Sync", spans)
                 }
+                Row::Go => button(at, "Continue"),
                 Row::Server => {
-                    let mut spans = vec![Span::raw(" ".repeat(6)), pad("Address", at)];
+                    let mut spans = vec![Span::raw(" ".repeat(8)), pad("Address", at)];
                     if self.server.is_empty() && !at {
                         spans.push(dim("https://"));
                     } else {
@@ -398,16 +406,26 @@ impl Choose {
         lines.push(Line::default());
         lines.push(match self.error {
             Some(error) => Line::from(Span::raw(format!("  {error}")).yellow()),
-            None if self.row == Row::Server => hints(&[("enter", "set up"), ("esc", "quit")]),
+            None if self.row == Row::Go => {
+                hints(&[("enter", "continue"), ("↑↓", "move"), ("esc", "quit")])
+            }
+            None if self.row == Row::Server => hints(&[("enter", "next"), ("esc", "quit")]),
             None if self.row == Row::Sync => {
-                hints(&[("enter", "set up"), ("←→", "change"), ("↑↓", "move"), ("esc", "quit")])
+                hints(&[("enter", "change"), ("↑↓", "move"), ("esc", "quit")])
             }
-            None => {
-                hints(&[("enter", "set up"), ("space", "toggle"), ("↑↓", "move"), ("esc", "quit")])
-            }
+            None => hints(&[("enter", "toggle"), ("↑↓", "move"), ("esc", "quit")]),
         });
 
-        frame.render_widget(Paragraph::new(lines), frame.area());
+        // A short terminal can't show it all: scroll to keep the row they're on, and the two lines
+        // after it (on Continue, the hint), in sight. An error, on the last line, always shows.
+        let shown = if self.error.is_some() {
+            lines.len()
+        } else {
+            (focus + 3).min(lines.len())
+        };
+        let scroll = shown.saturating_sub(usize::from(frame.area().height));
+        let scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), frame.area());
     }
 }
 
@@ -437,8 +455,6 @@ enum Handled {
 struct Running {
     steps: Vec<(Step, Status)>,
     sign_in: SignIn,
-    /// What there is to import, while setup asks.
-    offer: Vec<Line<'static>>,
     /// Where the sign-in link was written, last frame.
     link_at: Option<(u16, u16)>,
 }
@@ -588,11 +604,6 @@ impl Running {
             }
         }
 
-        if !self.offer.is_empty() {
-            lines.push(Line::default());
-            lines.extend(self.offer.iter().cloned());
-            hint = Some(hints(&[("enter", "import"), ("esc", "skip")]));
-        }
         if let Some(hint) = hint {
             lines.push(Line::default());
             lines.push(hint);
@@ -660,49 +671,113 @@ fn found_lines(found: &Found) -> Vec<Line<'static>> {
     lines
 }
 
-/// "Import what's already here? / 48,210 commands from your zsh history / 353 threads from …"
-fn offer_lines(offer: &Offer, found: &Found) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from("  Import what's already here?")];
-    if let Some((shell, commands)) = offer.history {
-        lines.push(Line::from(vec![
-            Span::raw("    "),
-            Span::raw(count(commands)).bold(),
-            Span::raw(format!(" commands from your {shell} history")),
-        ]));
+/// The screen after sign-in: what to import of what's already here.
+struct Import {
+    history: bool,
+    threads: bool,
+    row: Row,
+}
+
+impl Import {
+    fn new(offer: &Offer) -> Self {
+        Self {
+            history: true,
+            threads: true,
+            row: Self::rows(offer)[0],
+        }
     }
-    if let Some(threads) = offer.threads {
-        let agents = names(&found.agents().into_iter().map(agent_name).collect::<Vec<_>>());
-        let noun = if threads == 1 {
-            " thread"
+
+    fn rows(offer: &Offer) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if offer.history.is_some() {
+            rows.push(Row::Shell);
+        }
+        if offer.threads.is_some() {
+            rows.push(Row::Threads);
+        }
+        rows.push(Row::Go);
+        rows
+    }
+
+    /// What they chose to import, once they have.
+    fn handle(&mut self, key: KeyEvent, offer: &Offer) -> Option<Offer> {
+        let ctrl_c =
+            key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
+        let rows = Self::rows(offer);
+        let at = rows.iter().position(|&row| row == self.row).unwrap_or(0);
+        match key.code {
+            KeyCode::Enter if self.row == Row::Go => {
+                return Some(Offer {
+                    history: offer.history.filter(|_| self.history),
+                    threads: offer.threads.filter(|_| self.threads),
+                });
+            }
+            KeyCode::Esc | KeyCode::Char('q') => return Some(Offer::default()),
+            _ if ctrl_c => return Some(Offer::default()),
+            KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+                self.row = rows[at.saturating_sub(1)];
+            }
+            KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+                self.row = rows[(at + 1).min(rows.len() - 1)];
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match self.row {
+                Row::Shell => self.history = !self.history,
+                Row::Threads => self.threads = !self.threads,
+                _ => {}
+            },
+            _ => {}
+        }
+        None
+    }
+
+    fn draw(&self, frame: &mut Frame<'_>, offer: &Offer, found: &Found) {
+        let mut lines = title();
+        lines.push(Line::from("  Import what's already here?".bold()));
+        if let Some((shell, commands)) = offer.history {
+            let about = format!("{} commands from {shell}", count(commands));
+            lines.push(choice(self.row == Row::Shell, self.history, "Shell history", about));
+        }
+        if let Some(threads) = offer.threads {
+            let agents = names(&found.agents().into_iter().map(agent_name).collect::<Vec<_>>());
+            let noun = if threads == 1 {
+                "thread"
+            } else {
+                "threads"
+            };
+            let about = format!("{} {noun} from {agents}", count(threads));
+            lines.push(choice(self.row == Row::Threads, self.threads, "Agent threads", about));
+        }
+        lines.push(Line::default());
+        lines.push(button(self.row == Row::Go, "Import"));
+        lines.push(Line::default());
+        lines.push(if self.row == Row::Go {
+            hints(&[("enter", "import"), ("↑↓", "move"), ("esc", "skip")])
         } else {
-            " threads"
-        };
-        lines.push(Line::from(vec![
-            Span::raw("    "),
-            Span::raw(count(threads)).bold(),
-            Span::raw(format!("{noun} from {agents}")),
-        ]));
+            hints(&[("enter", "toggle"), ("↑↓", "move"), ("esc", "skip")])
+        });
+        frame.render_widget(Paragraph::new(lines), frame.area());
     }
-    lines
 }
 
 /// A row of the first screen: a toggle, its name and what it means.
-fn choice(at: bool, on: bool, label: &'static str, about: &'static str) -> Line<'static> {
-    toggle(at, on, label, vec![dim(about)])
+fn choice(at: bool, on: bool, label: &'static str, about: impl Into<String>) -> Line<'static> {
+    toggle(at, Some(on), on, label, vec![dim(about)])
 }
 
-fn toggle(at: bool, on: bool, label: &'static str, about: Vec<Span<'static>>) -> Line<'static> {
-    let cursor = if at {
-        "› ".fg(ACCENT).bold()
-    } else {
-        Span::raw("  ")
+/// A row: a checkbox, if `checked` is one, its name and what it means, dim when not `on`.
+fn toggle(
+    at: bool,
+    checked: Option<bool>,
+    on: bool,
+    label: &'static str,
+    about: Vec<Span<'static>>,
+) -> Line<'static> {
+    let box_ = match checked {
+        Some(true) => "[✓] ".fg(ACCENT).bold(),
+        Some(false) => "[ ] ".dim(),
+        None => Span::raw("    "),
     };
-    let toggle = if on {
-        "● ".fg(ACCENT)
-    } else {
-        "○ ".dim()
-    };
-    let mut spans = vec![Span::raw("  "), cursor, toggle, pad(label, at)];
+    let mut spans = vec![Span::raw("  "), cursor(at), box_, pad(label, at)];
     spans.extend(about);
     let line = Line::from(spans);
     if on {
@@ -710,6 +785,25 @@ fn toggle(at: bool, on: bool, label: &'static str, about: Vec<Span<'static>>) ->
     } else {
         line.style(Style::default().add_modifier(Modifier::DIM))
     }
+}
+
+fn cursor(at: bool) -> Span<'static> {
+    if at {
+        "› ".fg(ACCENT).bold()
+    } else {
+        Span::raw("  ")
+    }
+}
+
+/// The button at the bottom of a screen, that does what it says.
+fn button(at: bool, label: &'static str) -> Line<'static> {
+    let text = Span::raw(format!(" {label} "));
+    let text = if at {
+        text.fg(Color::Black).bg(ACCENT).bold()
+    } else {
+        text.fg(ACCENT)
+    };
+    Line::from(vec![Span::raw("  "), cursor(at), text])
 }
 
 fn pad(label: &'static str, at: bool) -> Span<'static> {
@@ -725,7 +819,7 @@ fn dim(text: impl Into<String>) -> Span<'static> {
     Span::raw(text.into()).dim()
 }
 
-/// "enter set up · space change", the keys bold.
+/// "enter toggle · ↑↓ move", the keys bold.
 fn hints(keys: &[(&'static str, &'static str)]) -> Line<'static> {
     let mut spans = vec![Span::raw("  ")];
     for (i, (key, what)) in keys.iter().enumerate() {
@@ -778,8 +872,34 @@ mod tests {
     }
 
     #[rstest]
-    fn enter_takes_everything_found(found: Found) {
+    #[case::everything(&[KeyCode::Down, KeyCode::Down, KeyCode::Enter], true, true)]
+    #[case::enter_toggles(&[KeyCode::Enter, KeyCode::Down, KeyCode::Down, KeyCode::Enter], false, true)]
+    #[case::not_threads(&[KeyCode::Down, KeyCode::Char(' '), KeyCode::Down, KeyCode::Enter], true, false)]
+    #[case::esc_takes_nothing(&[KeyCode::Esc], false, false)]
+    fn import_takes_what_is_left_on(
+        #[case] keys: &[KeyCode],
+        #[case] history: bool,
+        #[case] threads: bool,
+    ) {
+        let offer = Offer {
+            history: Some(("zsh", 48210)),
+            threads: Some(353),
+        };
+        let mut import = Import::new(&offer);
+        let take = keys.iter().find_map(|&code| import.handle(KeyEvent::from(code), &offer));
+        assert_eq!(
+            take,
+            Some(Offer {
+                history: offer.history.filter(|_| history),
+                threads: offer.threads.filter(|_| threads),
+            })
+        );
+    }
+
+    #[rstest]
+    fn the_button_takes_everything_found(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Go;
         let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
             panic!("expected a plan");
         };
@@ -799,6 +919,19 @@ mod tests {
     }
 
     #[rstest]
+    fn continue_stays_in_sight_in_a_short_terminal(found: Found) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 12)).unwrap();
+        let mut choose = Choose::new(&found, &preset(&found));
+        while choose.row != Row::Go {
+            press(&mut choose, &found, &[KeyCode::Down]);
+        }
+        let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
+        let text: String = shown.content().iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("Continue") && text.contains("enter continue"));
+    }
+
+    #[rstest]
     fn no_agents_no_agent_rows(mut found: Found) {
         found.agents.clear();
         let choose = Choose::new(&found, &preset(&found));
@@ -811,7 +944,7 @@ mod tests {
     fn search_keys_come_with_shell_history(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
         assert!(choose.rows(&found).contains(&Row::UpArrow));
-        press(&mut choose, &found, &[KeyCode::Char(' ')]);
+        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
         assert!(!choose.shell);
         assert!(!choose.rows(&found).contains(&Row::CtrlR));
         assert!(!choose.rows(&found).contains(&Row::UpArrow));
@@ -823,9 +956,9 @@ mod tests {
         while choose.row != Row::UpArrow {
             press(&mut choose, &found, &[KeyCode::Down]);
         }
-        let Some(Chosen::Plan(plan)) =
-            press(&mut choose, &found, &[KeyCode::Char(' '), KeyCode::Enter])
-        else {
+        press(&mut choose, &found, &[KeyCode::Enter]);
+        choose.row = Row::Go;
+        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
             panic!("expected a plan");
         };
         assert!(plan.ctrl_r && !plan.up_arrow);
@@ -836,14 +969,22 @@ mod tests {
     fn own_server_needs_an_address(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
         choose.row = Row::Sync;
-        assert!(press(&mut choose, &found, &[KeyCode::Char(' ')]).is_none());
+        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
+        choose.row = Row::Go;
         assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
         assert_eq!(choose.row, Row::Server);
         assert!(choose.error.is_some());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, HEIGHT)).unwrap();
+        let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
+        let text: String = shown.content().iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert!(text.contains("Enter your server's address"));
 
         let typed: Vec<_> = "https://atuin.example.com".chars().map(KeyCode::Char).collect();
         press(&mut choose, &found, &typed);
-        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
+        let Some(Chosen::Plan(plan)) =
+            press(&mut choose, &found, &[KeyCode::Enter, KeyCode::Enter])
+        else {
             panic!("expected a plan");
         };
         assert_eq!(plan.sync, Sync::Server("https://atuin.example.com".into()));
@@ -857,6 +998,7 @@ mod tests {
         choose.agent_history = false;
         choose.mcp = false;
         choose.sync = 2;
+        choose.row = Row::Go;
         assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
         assert!(choose.error.is_some());
     }

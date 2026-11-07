@@ -14,8 +14,8 @@ isn't already, and offers to import the sessions your agents already have.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
-opencode, Pi and Amp) as threads into the encrypted record store, and syncs
-them like your history.
+Kiro, opencode, Pi and Amp) as threads into the encrypted record store, and
+syncs them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record
@@ -261,7 +261,8 @@ mouse = false
   child session is a subagent, a fork or a continuation as it captures it.
   Sessions captured by older versions don't say, and for Codex and opencode
   nearly all such children are subagents, so the picker treats them as such
-  (they still resume by id).
+  (they still resume by id). A Kiro subagent's id is the bare id Kiro files it
+  under, without the `sess_` prefix its parent's has.
 
 Once you choose a thread, with ++enter++ (or ++tab++ to edit the command
 first), Atuin asks where to resume it, under the thread in the list, the two
@@ -291,8 +292,9 @@ back.
   agent, with the same history, tool calls and all, and resumes that. The
   original is left as it is. The fork is linked to it the way the agent links
   its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Grok
-  Build's `parent_session_id`, Pi's `parentSession`; Copilot's start event gets a note it keeps; opencode gets a
-  line it keeps from the model), so it's
+  Build's `parent_session_id`, Kiro's `parentSessionId`, Pi's `parentSession`;
+  Copilot's start event gets a note it keeps; opencode gets a line it keeps
+  from the model), so it's
   grouped under the original, with an Atuin id of its own. It keeps the
   original's title. Pi names the original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
@@ -350,15 +352,17 @@ synced messages:
   `switched to @3f9a12bc's branch: 24 messages (your copy is at ...)`. Atuin
   never deletes these copies. The branch this copy was on stays in Atuin too,
   so forking it brings it back.
-  Claude Code, Codex, Copilot, Grok Build and Pi sessions can switch. These can only fork,
-  and get no switch line: a Codex session that was reverted, so its history spans
-  several files, or that Codex wrote in its older format; a Pi session file
+  Claude Code, Codex, Copilot, Grok Build, Kiro and Pi sessions can switch.
+  These can only fork, and get no switch line: a Codex session that was
+  reverted, so its history spans several files, or that Codex wrote in its
+  older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
   live in a database.
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, Copilot, and Codex where it keeps session locks, say which session
-they have open. Grok Build, opencode, Pi and other Codex installs don't, so Atuin treats a
+they have open. Kiro says while a turn runs (its header's status). Grok Build,
+opencode, Pi, Kiro between turns and other Codex installs don't, so Atuin treats a
 session as possibly open, and doesn't catch it up, while one of that agent's
 processes works in the session's directory or below it: the directory this
 copy records, or else where the session works on this machine. A process elsewhere
@@ -371,7 +375,9 @@ A session written back out from sync, or continued in another agent, resumes in
 the directory the session ran in when that exists here. Otherwise, when you're
 in a checkout of a repository with the same name, it resumes in the same place
 in that checkout (or at its root), and otherwise in the current directory. The
-picker says which.
+picker says which. A Kiro session Atuin writes opens in Kiro's default agent
+profile (`kiro-cli agent set-default`, else `vibe`): Kiro resumes a session in
+the profile its header names, whatever `--agent` says.
 
 In the chooser, ++up++ / ++down++ (or ++k++ / ++j++) move, ++f++ moves to the
 fork, a digit picks that line, and ++esc++ goes back to the list. ++enter++ does what the key that
@@ -393,8 +399,9 @@ The chooser still opens for a session its own agent can't resume.
 From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
-another (`claude-code`, `codex`, `copilot`, `grok`, `opencode`, `pi` or `omp`; `claude`
-is short for `claude-code` wherever Atuin takes an agent's name). `atuin resume
+another (`claude-code`, `codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi` or
+`omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name,
+and `kiro-cli` for `kiro`). `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest
@@ -440,7 +447,7 @@ mouse = true
 
 To resume an agent's sessions with a command of your own in place of the
 built-in one, give a template per agent under `[threads.resume]` (`claude`,
-`codex`, `copilot`, `grok`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these
+`codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi`, `omp` or `amp`). It runs after `cd -- <cwd> &&`, with these
 substituted:
 
 - `{id}`: the agent's own id for the session;

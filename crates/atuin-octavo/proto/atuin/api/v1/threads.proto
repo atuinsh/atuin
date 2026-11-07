@@ -3,6 +3,7 @@ syntax = "proto3";
 package atuin.api.v1;
 
 import "atuin/api/v1/common.proto";
+import "atuin/api/v1/share.proto";
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -343,6 +344,28 @@ message Thread {
   optional string provider = 17;
   // How many stored threads name this one as their parent.
   uint64 child_count = 18;
+  // The ids of the `Label`s its owner gave it. Empty through a share.
+  repeated UuidV7 label_ids = 22;
+}
+
+// A label its owner gives threads to sort them by, as GitHub labels issues.
+message Label {
+  // A UUIDv7 the owner's client mints. Logically required.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Unique among its owner's labels, ignoring case: up to 50 characters, without control characters
+  // or quotes, nor a space at either end.
+  string name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 50
+    pattern: "^[^ \"\\x00-\\x1f\\x7f-\\x9f]([^\"\\x00-\\x1f\\x7f-\\x9f]*[^ \"\\x00-\\x1f\\x7f-\\x9f])?$"
+  }];
+  // Its color, as six lowercase hex digits, such as `d73a4a`.
+  string color = 3 [(buf.validate.field).string.pattern = "^[0-9a-f]{6}$"];
+  // What it's for, up to 100 characters without control characters; empty for nothing.
+  string description = 4 [(buf.validate.field).string = {
+    max_len: 100
+    pattern: "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+  }];
 }
 
 // Which of the calling user's threads to list.
@@ -395,6 +418,18 @@ message ThreadFilter {
       not_contains: "\x00"
     }];
   }
+  // Only threads with a label of each of these names, ignoring case. Through a share, labels match
+  // no thread.
+  repeated string labels = 9 [(buf.validate.field).repeated = {
+    max_items: 20
+    items: {
+      string: {
+        min_len: 1
+        max_len: 50
+        pattern: "^[^ \"\\x00-\\x1f\\x7f-\\x9f]([^\"\\x00-\\x1f\\x7f-\\x9f]*[^ \"\\x00-\\x1f\\x7f-\\x9f])?$"
+      }
+    }
+  }];
 }
 
 // What `SearchThreads`, `TallyThreads` and `ListThreadMatches` look for: the threads `filter`
@@ -478,6 +513,9 @@ message ThreadHit {
   // How many messages of the thread holding the best message match, so a client can show `of <n>`
   // beside the message it opens. 0 for a hit on the title alone.
   uint64 message_matches = 7;
+  // The share that opens the hit to the caller. It targets `thread`, or the thread that `thread` was
+  // spawned from. It is set only on a search of what's shared with an organization.
+  Share share = 8;
 }
 
 // One value and how many matching threads have it.

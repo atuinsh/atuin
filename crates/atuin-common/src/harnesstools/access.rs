@@ -90,6 +90,8 @@ impl Access {
                 | "run_terminal_command"
                 | "execute_command"
                 | "run_command"
+                | "execute_bash"
+                | "execute_pwsh"
         ) {
             let command = match input.get("command").or_else(|| input.get("cmd")) {
                 Some(Value::String(line)) => Some(line.clone()),
@@ -144,6 +146,10 @@ impl Access {
                 | "patch"
                 | "create"
                 | "apply_diff"
+                // Kiro's: `fs_write` (`text`), `fs_append` and `str_replace` (`oldStr`, `newStr`).
+                | "fs_write"
+                | "fs_append"
+                | "str_replace"
         );
         if writes {
             access.writes = paths;
@@ -249,11 +255,17 @@ mod tests {
     #[case::claude_bash("Bash", json!({"command": "cat .env"}), shell("cat .env", None))]
     #[case::codex_argv("shell", json!({"command": ["bash", "-lc", "ls"], "workdir": "/w"}), shell("ls", Some("/w")))]
     #[case::codex_exec("exec_command", json!(r#"{"cmd":"git status","workdir":"/w"}"#), shell("git status", Some("/w")))]
+    #[case::kiro_bash("execute_bash", json!({"command": "cat .pgpass", "description": "Read the file", "cwd": "/w", "run_in_background": false}), shell("cat .pgpass", Some("/w")))]
+    #[case::kiro_bash_redirect("execute_bash", json!({"command": "echo A=1 > .env", "cwd": null}), Access { writes: vec![".env".into()], ..shell("echo A=1 > .env", None) })]
+    #[case::kiro_pwsh("execute_pwsh", json!({"command": "Get-Content .env"}), shell("Get-Content .env", None))]
     #[case::claude_read("Read", json!({"file_path": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::opencode_read("read", json!({"filePath": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::grep("Grep", json!({"pattern": "x", "path": "/w"}), reads(&["/w"]))]
     #[case::claude_write("Write", json!({"file_path": "/w/.env", "content": "A=1"}), writes(&["/w/.env"]))]
     #[case::pi_edit("edit", json!({"path": "a.rs", "edits": []}), writes(&["a.rs"]))]
+    #[case::kiro_fs_write("fs_write", json!({"path": "/w/.env", "text": "A=1"}), writes(&["/w/.env"]))]
+    #[case::kiro_fs_append("fs_append", json!({"path": ".env", "text": "B=2"}), writes(&[".env"]))]
+    #[case::kiro_str_replace("str_replace", json!({"path": ".env", "oldStr": "A=1", "newStr": "A=2"}), writes(&[".env"]))]
     #[case::mcp_write("mcp__fs__write_file", json!({"path": "a.txt", "content": ""}), writes(&["a.txt"]))]
     #[case::patch_freeform("apply_patch", json!("*** Begin Patch\n*** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch"), writes(&[".env"]))]
     #[case::patch_object("apply_patch", json!({"input": "*** Begin Patch\n*** Add File: k.pem\n*** End Patch"}), writes(&["k.pem"]))]

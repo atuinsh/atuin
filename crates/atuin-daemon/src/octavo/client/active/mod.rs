@@ -10,7 +10,7 @@ use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubSession, UserId};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
-use engine::{ThreadsRetryLater, ThreadsSent, UploadEngine};
+use engine::{UploadEngine, UploadRetryLater, Uploaded};
 use thiserror::Error;
 use tokio::sync::Notify;
 
@@ -197,7 +197,20 @@ impl DirectUploader {
             }
         };
 
-        match login.upload(history, Some(record_id)).await {
+        let entry = match pb::History::with_record(history, Some(record_id)) {
+            Ok(entry) => entry,
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    %id,
+                    "octavo will never accept this history entry; dropping it"
+                );
+                forget_output(&self.queue, login.user_id(), id).await;
+                return;
+            }
+        };
+
+        match login.upload_history(pb::HistoryBatch::one(entry)).await {
             Ok(()) => {
                 self.resume(login.user_id()).await;
                 // The entry's output may be queued already, waiting on it.
@@ -347,15 +360,15 @@ impl DirectThreadUpload {
 
         let user = login.user_id();
         match engine::upload_thread_messages(&login, messages).await {
-            Ok(ThreadsSent::Stored) => {
+            Ok(Uploaded::Stored) => {
                 uploader.resume(user).await;
             }
-            Ok(ThreadsSent::NoneStored | ThreadsSent::Nothing) => {}
-            Ok(ThreadsSent::Off) => {
+            Ok(Uploaded::NoneStored | Uploaded::Nothing) => {}
+            Ok(Uploaded::Off) => {
                 tracing::debug!("octavo is off for the account; dropping these thread messages");
                 mark_off(&uploader.queue, user).await;
             }
-            Err(ThreadsRetryLater { stored }) => {
+            Err(UploadRetryLater { stored }) => {
                 // A stored request shows the account has Octavo on, so the mark is stale and the
                 // rest goes up again; the stored ones repeat, which Octavo dedupes.
                 if stored {

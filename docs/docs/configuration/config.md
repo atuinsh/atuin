@@ -53,16 +53,16 @@ SQLite opens as written.
     Check whether you have any AI-related files in `~/.atuin`:
 
     ```sh
-    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
     ```
 
     If you do, please expand and follow this section:
 
     ??? note "Migrating home-scoped AI config"
 
-        In older installations, `permissions.ai.toml`, `skills`, or
-        `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
-        in newer installations, they are applied *globally*. The existence of
+        In older installations, `permissions.ai.toml` and `skills` in
+        `~/.atuin` are scoped to your home directory, whereas in newer
+        installations, they are applied *globally*. The existence of
         `~/.atuin/config.toml` is what determines whether the new or old
         behavior is used; if `~/.atuin/config.toml` exists, these items are
         interpreted as global.
@@ -79,8 +79,8 @@ SQLite opens as written.
         `~/.atuin` and `~/.config/atuin`:
 
         ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
-            -e TERMINAL.md | sort | uniq -d
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
+            sort | uniq -d
         ```
 
         If there are any such items, you must merge the items in
@@ -92,7 +92,7 @@ SQLite opens as written.
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+        -e themes -e skills -e permissions.ai.toml) ~/.atuin/
     ```
 
     Then, move your data:

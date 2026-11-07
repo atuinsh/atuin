@@ -1082,6 +1082,7 @@ const fn binary(agent: AnyHarness) -> &'static str {
         AnyHarness::Codex(_) => "codex",
         AnyHarness::Copilot(_) => "copilot",
         AnyHarness::Grok(_) => "grok",
+        AnyHarness::Kiro(_) => "kiro-cli",
         AnyHarness::Opencode(_) => "opencode",
         AnyHarness::Pi(pi) => pi.flavour().binary(),
     }
@@ -1094,6 +1095,7 @@ const fn agent_name(agent: AnyHarness) -> &'static str {
         AnyHarness::Codex(_) => "Codex",
         AnyHarness::Copilot(_) => "Copilot",
         AnyHarness::Grok(_) => "Grok Build",
+        AnyHarness::Kiro(_) => "Kiro",
         AnyHarness::Opencode(_) => "opencode",
         AnyHarness::Pi(pi) => pi.flavour().binary(),
     }
@@ -1109,6 +1111,7 @@ const fn harness_kind_name(harness: atuin_client::ai_session::HarnessKind) -> &'
         HarnessKind::Codex => "Codex",
         HarnessKind::Copilot => "Copilot",
         HarnessKind::Grok => "Grok Build",
+        HarnessKind::Kiro => "Kiro",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",

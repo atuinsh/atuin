@@ -28,7 +28,8 @@
 //!   (withheld by a policy, or over the size limit) gets [`UNCAPTURED_OUTPUT`] as its
 //!   `tool_result` content, which says so to the model. An edit's or write's result gets back
 //!   the record Claude Code shows its diff from (`toolUseResult.structuredPatch`) where capture
-//!   kept the patch, without the file as it was before, which is never synced.
+//!   kept the patch, without the file as it was before, which is never synced; a shell command
+//!   that changed files gets back its diffs (`toolUseResult.bashEditDiff`).
 //! - **Pasted images and documents**: capture keeps none of them, so they are not written back.
 //! - **Empty lines**: rows with nothing left to write (attachments, hook records, turn timings)
 //!   are skipped, and lines under them are linked to their nearest written ancestor.
@@ -57,7 +58,7 @@ use crate::harnesstools::rehydrate::{
 };
 use crate::harnesstools::resume;
 use crate::harnesstools::session::{
-    Change, Content, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
+    Change, Content, FilePatch, Patch, Role, StopReason, ToolResult, ToolUse, Usage,
 };
 use crate::path::PathBufExt as _;
 
@@ -532,17 +533,21 @@ fn tool_line(content: &[Content], calls: &HashMap<&str, &ToolUse>) -> Option<Val
     if blocks.is_empty() {
         return None;
     }
-    let edit = content.iter().find_map(|c| match c {
-        Content::Patch(patch) => edit_record(patch, calls.get(patch.call.as_ref()).copied()),
-        _ => None,
-    });
-    let record = edit.unwrap_or_else(|| {
-        let text = content.iter().find_map(|c| match c {
+    let text = content
+        .iter()
+        .find_map(|c| match c {
             Content::ToolResult(r) => r.output_text().map(|t| t.into_owned()),
             _ => None,
-        });
-        json!(text.unwrap_or_default())
+        })
+        .unwrap_or_default();
+    let edit = content.iter().find_map(|c| match c {
+        Content::Patch(patch) => match calls.get(patch.call.as_ref()).copied() {
+            Some(call) if call.name == "Bash" => Some(shell_record(patch, &text)),
+            call => edit_record(patch, call),
+        },
+        _ => None,
     });
+    let record = edit.unwrap_or_else(|| json!(text));
     Some(json!({
         "type": "user",
         "message": {"role": "user", "content": blocks},
@@ -550,14 +555,9 @@ fn tool_line(content: &[Content], calls: &HashMap<&str, &ToolUse>) -> Option<Val
     }))
 }
 
-/// The record Claude Code keeps of an edit's (or older `MultiEdit`'s) or write's result, from its
-/// patch and its `call`:
-/// what it shows the change with, on resume and when rewinding. The file as it was before is not
-/// synced (`originalFile` is null, as Claude Code writes it for a file too large to keep).
-fn edit_record(patch: &Patch, call: Option<&ToolUse>) -> Option<Value> {
-    let file = patch.files.first()?;
-    let hunks: Vec<Value> = file
-        .hunks
+/// A patch's hunks as Claude Code records them (jsdiff's `structuredPatch`).
+fn hunks_record(file: &FilePatch) -> Vec<Value> {
+    file.hunks
         .iter()
         .map(|h| {
             json!({
@@ -568,7 +568,48 @@ fn edit_record(patch: &Patch, call: Option<&ToolUse>) -> Option<Value> {
                 "lines": h.lines,
             })
         })
+        .collect()
+}
+
+/// The record Claude Code keeps of a shell command that changed files, from its patch and its
+/// output `text`: the diffs of the files it has hunks of or added or deleted (`bashEditDiff.files`),
+/// and the path of every file it changed.
+fn shell_record(patch: &Patch, text: &str) -> Value {
+    let (diffed, rest): (Vec<&FilePatch>, Vec<&FilePatch>) =
+        patch.files.iter().partition(|f| !f.hunks.is_empty() || f.change != Change::Update);
+    let files: Vec<Value> = diffed
+        .iter()
+        .map(|f| {
+            let mut file = json!({"filePath": f.path, "hunks": hunks_record(f)});
+            match f.change {
+                Change::Add => file["created"] = json!(true),
+                Change::Delete => file["deleted"] = json!(true),
+                Change::Update => {}
+            }
+            file
+        })
         .collect();
+    json!({
+        "stdout": text,
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false,
+        "bashEditDiff": {
+            "files": files,
+            "moreFiles": rest.len(),
+            "changedFiles": patch.files.iter().map(|f| &f.path).collect::<Vec<_>>(),
+        },
+    })
+}
+
+/// The record Claude Code keeps of an edit's (or older `MultiEdit`'s) or write's result, from its
+/// patch and its `call`:
+/// what it shows the change with, on resume and when rewinding. The file as it was before is not
+/// synced (`originalFile` is null, as Claude Code writes it for a file too large to keep).
+fn edit_record(patch: &Patch, call: Option<&ToolUse>) -> Option<Value> {
+    let file = patch.files.first()?;
+    let hunks = hunks_record(file);
     let input = call.map_or(&Value::Null, |c| &c.input);
     let written = call.is_some_and(|c| c.name == "Write") || file.change == Change::Add;
     // Older Claude Code's `MultiEdit`, several edits of one file.

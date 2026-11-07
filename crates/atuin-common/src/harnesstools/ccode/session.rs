@@ -452,7 +452,8 @@ pub struct CcodeMessage {
 }
 
 /// What capture reads of a tool's own record of its result (`toolUseResult`): the file an edit or
-/// write changed and its diff (`structuredPatch`), and nothing else. The rest of the record can
+/// write changed and its diff (`structuredPatch`), or the files a shell command changed and
+/// their diffs (`bashEditDiff`), and nothing else. The rest of the record can
 /// hold the whole file before and after (`originalFile`, `content`), which is never parsed.
 #[derive(Debug, Clone, Default)]
 struct ToolUseResult {
@@ -462,6 +463,8 @@ struct ToolUseResult {
     /// Kept as JSON until read: a record whose patch has a shape this build doesn't know still
     /// leaves the line readable.
     structured_patch: Option<Box<serde_json::Value>>,
+    /// Kept as JSON until read, as `structured_patch` is.
+    bash_edit_diff: Option<Box<serde_json::Value>>,
 }
 
 impl<'de> Deserialize<'de> for ToolUseResult {
@@ -486,6 +489,7 @@ impl<'de> Deserialize<'de> for ToolUseResult {
                         "type" => out.kind = text(map.next_value()?),
                         "filePath" => out.file_path = text(map.next_value()?),
                         "structuredPatch" => out.structured_patch = Some(map.next_value()?),
+                        "bashEditDiff" => out.bash_edit_diff = Some(map.next_value()?),
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -543,10 +547,77 @@ struct StructuredHunk {
     lines: Vec<String>,
 }
 
+/// The files a shell command changed (`bashEditDiff`): diffs of the first few (`files`, five in
+/// CC 2.1.311, each flagged `created` or `deleted` when it was), and the path of every one
+/// (`changedFiles`). A command Claude Code could not diff has `unavailable` and no files.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BashEditDiff {
+    files: Vec<BashFileDiff>,
+    #[serde(default)]
+    changed_files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BashFileDiff {
+    file_path: String,
+    hunks: Vec<StructuredHunk>,
+    #[serde(default)]
+    created: bool,
+    #[serde(default)]
+    deleted: bool,
+}
+
+impl From<StructuredHunk> for Hunk {
+    fn from(h: StructuredHunk) -> Self {
+        Self {
+            old_start: h.old_start,
+            old_lines: h.old_lines,
+            new_start: h.new_start,
+            new_lines: h.new_lines,
+            lines: h.lines,
+        }
+    }
+}
+
 impl ToolUseResult {
-    /// The file the call `call` changed, when the record has a diff of it (`Edit`, `MultiEdit`,
-    /// `Write`). A new file's diff is empty: its content is the call's input.
+    /// The files the call `call` changed, when the record has a diff of them: the one file of an
+    /// `Edit`, `MultiEdit` or `Write` (a new file's diff is empty: its content is the call's
+    /// input), or those of a shell command, where the ones past those Claude Code kept a diff of
+    /// have no hunks.
     fn patch(&self, call: &ToolCallId) -> Option<Patch> {
+        if let Some(diff) = &self.bash_edit_diff {
+            let diff: BashEditDiff = serde_json::from_value((**diff).clone()).ok()?;
+            let mut files: Vec<FilePatch> = diff
+                .files
+                .into_iter()
+                .map(|f| FilePatch {
+                    path: f.file_path,
+                    change: match (f.created, f.deleted) {
+                        (true, _) => Change::Add,
+                        (_, true) => Change::Delete,
+                        _ => Change::Update,
+                    },
+                    moved_to: None,
+                    hunks: f.hunks.into_iter().map(Hunk::from).collect(),
+                })
+                .collect();
+            for path in diff.changed_files {
+                if !files.iter().any(|f| f.path == path) {
+                    files.push(FilePatch {
+                        path,
+                        change: Change::Update,
+                        moved_to: None,
+                        hunks: Vec::new(),
+                    });
+                }
+            }
+            return (!files.is_empty()).then(|| Patch {
+                call: call.clone(),
+                files,
+            });
+        }
         let path = self.file_path.clone()?;
         let hunks: Vec<StructuredHunk> =
             serde_json::from_value((**self.structured_patch.as_ref()?).clone()).ok()?;
@@ -555,16 +626,7 @@ impl ToolUseResult {
         } else {
             Change::Update
         };
-        let hunks = hunks
-            .into_iter()
-            .map(|h| Hunk {
-                old_start: h.old_start,
-                old_lines: h.old_lines,
-                new_start: h.new_start,
-                new_lines: h.new_lines,
-                lines: h.lines,
-            })
-            .collect();
+        let hunks = hunks.into_iter().map(Hunk::from).collect();
         Some(Patch {
             call: call.clone(),
             files: vec![FilePatch {
@@ -2394,6 +2456,10 @@ mod tests {
         Some((Change::Add, vec![]))
     )]
     #[case::shell(serde_json::json!({"stdout": "ok", "stderr": ""}), None)]
+    #[case::shell_unknown_diff_shape(
+        serde_json::json!({"stdout": "ok", "bashEditDiff": {"files": "@@ -1 +1 @@"}}),
+        None
+    )]
     #[case::text(serde_json::json!("Error: rejected"), None)]
     #[case::unknown_patch_shape(
         serde_json::json!({"filePath": "/w/a.rs", "structuredPatch": "@@ -1 +1 @@"}),
@@ -2422,6 +2488,58 @@ mod tests {
         });
         assert_eq!(patch, expected);
         assert_eq!(m.role(), Role::Tool);
+    }
+
+    /// A shell command's record of its result keeps the diffs of the files it changed
+    /// (`bashEditDiff`), as Claude Code writes them (diffs of the first five, flagged `created` or
+    /// `deleted`, every path in `changedFiles`); the files past the diffs are kept without hunks.
+    #[rstest]
+    fn a_shell_commands_record_keeps_its_diffs() {
+        let record = serde_json::json!({"stdout": "", "stderr": "", "interrupted": false,
+            "isImage": false, "noOutputExpected": false, "bashEditDiff": {
+                "files": [{"filePath": "/w/a.rs", "hunks": [{"oldStart": 1, "oldLines": 2,
+                    "newStart": 1, "newLines": 2, "lines": [" a", "-b", "+c"]}]},
+                    {"filePath": "/w/new.txt", "hunks": [], "created": true},
+                    {"filePath": "/w/old.txt", "hunks": [{"oldStart": 1, "oldLines": 1,
+                    "newStart": 0, "newLines": 0, "lines": ["-x"]}], "deleted": true}],
+                "moreFiles": 1, "changedFiles": ["/w/a.rs", "/w/new.txt", "/w/old.txt", "/w/b.rs"]}});
+        let m = parse(&serde_json::json!({"type": "user", "uuid": "t1", "toolUseResult": record,
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": ""}]}}));
+        let patch = m.content().into_iter().find_map(|c| match c {
+            Content::Patch(patch) => Some(patch),
+            _ => None,
+        });
+        let file = |path: &str, change, hunks| FilePatch {
+            path: path.into(),
+            change,
+            moved_to: None,
+            hunks,
+        };
+        assert_eq!(
+            patch,
+            Some(Patch {
+                call: ToolCallId::from("toolu_1".to_owned()),
+                files: vec![
+                    file("/w/a.rs", Change::Update, vec![Hunk {
+                        old_start: 1,
+                        old_lines: 2,
+                        new_start: 1,
+                        new_lines: 2,
+                        lines: vec![" a".into(), "-b".into(), "+c".into()]
+                    }]),
+                    file("/w/new.txt", Change::Add, Vec::new()),
+                    file("/w/old.txt", Change::Delete, vec![Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 0,
+                        new_lines: 0,
+                        lines: vec!["-x".into()]
+                    }]),
+                    file("/w/b.rs", Change::Update, Vec::new()),
+                ],
+            })
+        );
     }
 
     /// What the user typed when rejecting a tool call is their turn (`userFeedback`, CC

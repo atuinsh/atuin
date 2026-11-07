@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use atuin_client::settings::Daemon as DaemonSettings;
+#[cfg(unix)]
+use atuin_common::os::unix::process::CommandExt as _;
 pub use platform::DaemonizeError;
 #[cfg(not(unix))]
 use windows as platform;
@@ -82,6 +84,13 @@ impl Backend for Subproc {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        // Prevent the daemon from inheriting open file descriptors. Bash 5.3 saves stdout to fd 254
+        // while expanding `${ ...; }` in PS0, which is exactly when our shell hook runs and
+        // autostarts the daemon. This causes pty-proxy to wait on this open fd forever and prevent
+        // the terminal from closing.
+        #[cfg(unix)]
+        service.close_fds();
         service.spawn().map_err(|err| BackendError::new(SubprocError::Launch(err)))?;
         Ok(())
     }

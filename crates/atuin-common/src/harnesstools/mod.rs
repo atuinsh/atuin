@@ -13,6 +13,7 @@ pub mod copilot;
 pub mod fork;
 pub mod grok;
 mod json_hooks;
+pub mod kiro;
 pub mod mcp;
 pub mod note;
 pub mod opencode;
@@ -27,6 +28,7 @@ use ccode::Ccode;
 use codex::Codex;
 use copilot::Copilot;
 use grok::Grok;
+use kiro::Kiro;
 use opencode::Opencode;
 use pi::Pi;
 use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
@@ -96,6 +98,7 @@ pub enum AnyHarness {
     Codex(Codex),
     Copilot(Copilot),
     Grok(Grok),
+    Kiro(Kiro),
     Opencode(Opencode),
     Pi(Pi),
 }
@@ -165,6 +168,7 @@ impl AnyHarness {
             Self::Codex(Codex),
             Self::Copilot(Copilot),
             Self::Grok(Grok),
+            Self::Kiro(Kiro),
             Self::Opencode(Opencode),
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),

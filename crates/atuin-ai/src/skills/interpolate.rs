@@ -1,4 +1,4 @@
-//! Parse `.atuin/TERMINAL.md` files and execute embedded commands.
+//! Execute shell commands embedded in skill files.
 //!
 //! Two interpolation syntaxes are supported:
 //!
@@ -83,7 +83,7 @@ fn parse_commands(source: &str) -> Vec<Command> {
     commands
 }
 
-/// Execute all commands in a context file and return the interpolated content.
+/// Execute all commands in a skill file and return the interpolated content.
 ///
 /// Commands are executed in parallel. Failed commands are replaced with an
 /// error marker so the AI has visibility into what went wrong.
@@ -169,7 +169,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[rstest]
     fn parse_inline_command() {
         let source = "Branch: !`git branch --show-current`";
         let cmds = parse_commands(source);
@@ -224,12 +224,14 @@ End.",
         "Just plain markdown with `code` and no bangs."
     )]
     #[case::multiple("A: !`echo one` B: !`echo two`", "A: one B: two")]
+    #[rstest]
     #[tokio::test]
     #[cfg(not(target_os = "windows"))]
     async fn interpolate_cases(#[case] source: &str, #[case] expected: &str) {
         assert_eq!(interpolate(source, "sh").await, expected);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn interpolate_failed_command_shows_error() {
         let source = "Result: !`exit 1`";

@@ -14,12 +14,14 @@ use crate::harnesstools::copilot::Copilot;
 use crate::harnesstools::copilot::session::CopilotSession;
 use crate::harnesstools::grok::Grok;
 use crate::harnesstools::grok::session::GrokSession;
+use crate::harnesstools::kiro::Kiro;
+use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, copilot, grok, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, kiro, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
@@ -27,6 +29,7 @@ pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
 pub const COPILOT: AnyHarness = AnyHarness::Copilot(Copilot);
 pub const GROK: AnyHarness = AnyHarness::Grok(Grok);
+pub const KIRO: AnyHarness = AnyHarness::Kiro(Kiro);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 /// The original's atuin id, as the picker passes it.
@@ -91,6 +94,19 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
         AnyHarness::Amp(_) => unreachable!("Amp keeps no transcript to read"),
+        AnyHarness::Kiro(_) => {
+            let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
+            let lines: Vec<_> = KiroSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("kiro/resumed.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
         AnyHarness::Copilot(_) => {
             let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
             let lines: Vec<_> = CopilotSession::open(
@@ -191,6 +207,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
         AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
             assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7);
@@ -209,9 +226,10 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         assert!(seen.insert(id), "{id} is used twice");
         match target {
             AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-            AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Grok(_) => {
-                assert!(uuid(id), "{id}");
-            }
+            AnyHarness::ClaudeCode(_)
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Grok(_)
+            | AnyHarness::Kiro(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -334,8 +352,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
                     ids(r, true)
                 })
                 .collect(),
-            // A line per call, then its output's.
-            AnyHarness::Codex(_) => {
+            // A row per call, then its result's.
+            AnyHarness::Codex(_) | AnyHarness::Kiro(_) => {
                 assert_eq!(m.content.len(), 1, "{m:?}");
                 ids(&rows[n + 1], true)
             }
@@ -357,8 +375,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -409,6 +427,15 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let id = SessionId::from(session.id.clone());
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Kiro(_) => {
+            let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
+            let sessions = root.join("sessions");
+            assert_eq!(kiro::session::locate(&sessions, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                KiroSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            // The header's title row is the session's, no row of the continuation.
+            rows_of(&lines).into_iter().filter(|r| !r.source_id.starts_with("syn-")).collect()
+        }
         AnyHarness::Copilot(_) => {
             let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(copilot::session::locate(root, &session.id), Some(path.clone()));
@@ -514,8 +541,8 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;

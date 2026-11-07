@@ -41,6 +41,7 @@ login-legacy-success = Logged in!
 account-hub-open-url = Open this URL to authenticate with Atuin Hub:
 account-hub-browser-opened = Opened your browser to authenticate with Atuin Hub. If it didn't open, visit:
 account-hub-waiting = Waiting for you to authorize in your browser… (Ctrl-C to cancel)
+account-hub-check-code = Check the page shows the code { $code }.
 login-key-important = IMPORTANT
 login-key-same-everywhere = If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.
 login-key-find = You can find your key by running 'atuin key' on the other machine.
@@ -408,6 +409,7 @@ login-key-verify-failed = could not verify encryption key against remote: { $err
 link-hub-open =
     { $instructions }
     { $url }
+    Check the page shows the code { $code }.
 daemon-deprecated = `atuin daemon` is deprecated, use `atuin daemon start`
 daemon-indexing-threads = Indexing threads in the background
 daemon-rebuilding-search-index = Rebuilding the daemon's search index in the background
@@ -486,6 +488,7 @@ hook-reload-hint-pi = Reload pi with `/reload` or restart pi.
 hook-reload-hint-omp = Reload omp with `/reload` or restart omp.
 hook-reload-hint-opencode = Restart opencode to load the plugin.
 hook-reload-hint-amp = Restart Amp to load the plugin.
+hook-reload-hint-kiro = Restart any running Kiro: it loads hooks when a session starts.
 hook-already-installed = { $harness }: hooks already installed, skipping
 hook-mcp-hint = To let { $name } search your history too, run `atuin mcp install { $name }`.
 history-output-failed = history output failed with: { $error }

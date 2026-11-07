@@ -1,5 +1,4 @@
 use std::fmt;
-use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 
 use atuin_client::ai_session::{
@@ -18,8 +17,8 @@ use uuid::Uuid;
 
 use super::content_block::{self, Block, file_patch};
 use super::{
-    CapturedThreadMessage, ContentBlock, HarnessSession, InsertThreadMessagesRequest, NotUuidV7,
-    ThreadMessage, ThreadParentKind, UuidV7, thread_message,
+    CapturedThreadMessage, ContentBlock, HarnessSession, NotUuidV7, ThreadMessage,
+    ThreadParentKind, UuidV7, thread_message,
 };
 
 /// The most one message may encode to, which holds the strings of its content to what Octavo
@@ -272,74 +271,6 @@ impl TryFrom<Message> for CapturedThreadMessage {
     }
 }
 
-/// The messages of one `InsertThreadMessages`: at most [`Self::MAX_MESSAGES`], encoding to at most
-/// 1 MiB unless the batch holds one. Only [`Self::batches`] builds one and [`Self::halves`] splits
-/// one, so no request past those limits goes up.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ThreadBatch(Vec<CapturedThreadMessage>);
-
-impl ThreadBatch {
-    /// The most messages one `InsertThreadMessages` takes.
-    pub const MAX_MESSAGES: NonZeroU32 = NonZeroU32::new(500).unwrap();
-    /// The most a batch of more than one message encodes to: its request goes up inside the default
-    /// 30s `network_timeout` at 0.28 Mbit/s, and a lone message of up to [`MAX_MESSAGE_BYTES`]
-    /// stays far under the 4 MiB a server may cap a request body at.
-    const MAX_BYTES: usize = 1 << 20;
-
-    /// `messages` in order, cut into batches.
-    #[must_use]
-    pub fn batches(messages: Vec<CapturedThreadMessage>) -> Vec<Self> {
-        let max_messages = Self::MAX_MESSAGES.get() as usize;
-        let mut batches: Vec<Self> = Vec::new();
-        let mut batch_bytes = 0;
-        for message in messages {
-            let len = Self::framed_len(&message);
-            match batches.last_mut() {
-                Some(Self(batch))
-                    if batch.len() < max_messages && batch_bytes + len <= Self::MAX_BYTES =>
-                {
-                    batch_bytes += len;
-                    batch.push(message);
-                }
-                _ => {
-                    batch_bytes = len;
-                    batches.push(Self(vec![message]));
-                }
-            }
-        }
-        batches
-    }
-
-    /// The batch in two, the earlier messages first, or the batch back whole when it holds one
-    /// message. Each half of a batch is one too.
-    pub fn halves(mut self) -> Result<(Self, Self), Self> {
-        if self.0.len() < 2 {
-            return Err(self);
-        }
-        let back = self.0.split_off(self.0.len() / 2);
-        Ok((self, Self(back)))
-    }
-
-    #[must_use]
-    pub fn messages(&self) -> &[CapturedThreadMessage] {
-        &self.0
-    }
-
-    /// What `message` adds to the `InsertThreadMessagesRequest` holding it, which has no other
-    /// field.
-    fn framed_len(message: &CapturedThreadMessage) -> usize {
-        let len = message.encoded_len();
-        // The tag of `messages`, field 1, takes a byte.
-        1 + prost::length_delimiter_len(len) + len
-    }
-}
-
-impl From<ThreadBatch> for InsertThreadMessagesRequest {
-    fn from(ThreadBatch(messages): ThreadBatch) -> Self {
-        Self { messages }
-    }
-}
-
 impl HarnessSession {
     /// `session`, the key of `field`, as Octavo names a thread, or `None` for a session of no known
     /// harness.
@@ -560,7 +491,7 @@ mod tests {
     use uuid::Builder;
 
     use super::*;
-    use crate::pb::{HostId, InsertThreadMessagesRequest};
+    use crate::pb::{HostId, InsertThreadMessagesRequest, ThreadBatch};
 
     /// A UUIDv7 told apart from others by `n`.
     fn v7(n: u8) -> Uuid {
@@ -1007,7 +938,7 @@ mod tests {
 
     const SMALL: usize = 16;
     const QUARTER: usize = ThreadBatch::MAX_BYTES / 4;
-    const MESSAGES: usize = ThreadBatch::MAX_MESSAGES.get() as usize;
+    const MESSAGES: usize = ThreadBatch::MAX_ITEMS.get() as usize;
 
     #[rstest]
     #[case::count_at_the_cap(vec![SMALL; MESSAGES], vec![MESSAGES])]
@@ -1023,16 +954,13 @@ mod tests {
 
         let batches = ThreadBatch::batches(messages.clone());
 
+        assert_eq!(batches.iter().map(|batch| batch.items().len()).collect::<Vec<_>>(), batch_lens);
         assert_eq!(
-            batches.iter().map(|batch| batch.messages().len()).collect::<Vec<_>>(),
-            batch_lens
-        );
-        assert_eq!(
-            batches.iter().flat_map(ThreadBatch::messages).cloned().collect::<Vec<_>>(),
+            batches.iter().flat_map(ThreadBatch::items).cloned().collect::<Vec<_>>(),
             messages
         );
         assert!(
-            batches.iter().filter(|batch| batch.messages().len() > 1).all(|batch| {
+            batches.iter().filter(|batch| batch.items().len() > 1).all(|batch| {
                 InsertThreadMessagesRequest::from(batch.clone()).encoded_len()
                     <= ThreadBatch::MAX_BYTES
             }),
