@@ -302,6 +302,23 @@ service HubService {
   // the user. The last three failures also end an open stream, within a heartbeat of the condition
   // starting.
   rpc WatchOrgThreads(WatchOrgThreadsRequest) returns (stream WatchOrgThreadsResponse);
+
+  // Return one page of search results from the threads shared with the organization with this slug.
+  // The results include the subagents that those threads spawned. The query works as it does in
+  // `SearchThreads`. Each hit's `share` is the share that opens the hit.
+  //
+  // A subagent's match is credited no further up than the shared thread that it was spawned from. A
+  // query that names a label matches nothing, because a share shows no labels.
+  //
+  // Fails as `SearchThreads` does. Also fails with `INVALID_ARGUMENT`
+  // (`INVALID_ORG_THREADS_REQUEST`) for a slug that is out of the bounds below. Also fails with
+  // `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the organization. Also fails
+  // with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for the organization.
+  rpc SearchOrgThreads(SearchOrgThreadsRequest) returns (SearchOrgThreadsResponse);
+
+  // Count the threads that `SearchOrgThreads` finds, and their most common values. The count works
+  // as `TallyThreads` does for the calling user's threads. Fails as `SearchOrgThreads` does.
+  rpc TallyOrgThreads(TallyOrgThreadsRequest) returns (TallyOrgThreadsResponse);
 }
 
 message InsertHistoryRequest {
@@ -912,6 +929,50 @@ message WatchOrgThreadsResponse {
     // Shows that the stream is still open.
     WatchThreadsHeartbeat heartbeat = 4;
   }
+}
+
+message SearchOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // Which threads to return.
+  ThreadQuery query = 2;
+  // How to sort them. Logically required.
+  ThreadOrder order = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // The most threads to return in one page. At most 50. Larger values are rejected. 0 means 20.
+  uint32 page_size = 4 [(buf.validate.field).uint32.lte = 50];
+  // Opaque. Copy the `next_page_token` of the previous page. Leave it empty for the first page.
+  string page_token = 5;
+}
+
+message SearchOrgThreadsResponse {
+  // The threads on this page, in `order`.
+  repeated ThreadHit hits = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // Which threads to count.
+  ThreadQuery query = 2;
+}
+
+message TallyOrgThreadsResponse {
+  // The count, and the most common values among them.
+  TallyThreadsResponse tally = 1;
 }
 
 // A thread a member has shared with an organization.
