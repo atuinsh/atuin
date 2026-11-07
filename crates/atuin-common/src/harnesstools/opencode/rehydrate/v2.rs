@@ -460,13 +460,25 @@ fn error(why: &str, stop: Option<&StopReason>) -> Value {
 /// keeps the diff in (`files[]`, `{file, patch, status}`).
 fn tool(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: i64) -> Value {
     // opencode's tool input is always an object.
-    let input = match &call.input {
+    let mut input = match &call.input {
         Value::Object(_) => call.input.clone(),
         other => Value::Object(Map::from_iter([("input".to_owned(), other.clone())])),
     };
+    // opencode 1.x's tools (a continuation's calls, a 1.x session's) as opencode 2's: its `bash`
+    // is `shell`, and its file tools name their file `path`, not `filePath`.
+    let name = if call.name == "bash" {
+        "shell"
+    } else {
+        call.name.as_str()
+    };
+    if matches!(name, "read" | "write" | "edit")
+        && let Some(file) = input.as_object_mut().and_then(|input| input.remove("filePath"))
+    {
+        input["path"] = file;
+    }
     let state = match result {
         // a command opencode 2 ran that failed: completed, its exit code in the metadata
-        Some(result) if result.error && call.name == "shell" && result.output.is_array() => json!({
+        Some(result) if result.error && name == "shell" && result.output.is_array() => json!({
             "status": "completed",
             "input": input,
             "content": content_of(&result.output),
@@ -497,7 +509,7 @@ fn tool(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: 
     json!({
         "type": "tool",
         "id": call.id.as_ref(),
-        "name": call.name,
+        "name": name,
         "state": state,
         "time": {"created": at, "ran": at, "completed": at},
     })
