@@ -29,7 +29,8 @@ pub struct Cmd;
 
 impl Cmd {
     pub async fn run(&self, db: &Sqlite, settings: &Settings) -> Result<()> {
-        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+        let now_instant = OffsetDateTime::now_utc();
+        let now = now_instant.to_offset(settings.timezone.offset_at(now_instant));
         if !now.date().is_halloween_season() {
             writeln!(io::stdout(), "{}", fl!("trick-or-treat-closed"))?;
             return Ok(());

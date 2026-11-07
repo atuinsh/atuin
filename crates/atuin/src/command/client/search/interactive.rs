@@ -1153,7 +1153,7 @@ impl State {
                     results,
                     self.keymap_mode,
                     &self.now,
-                    settings.timezone.0,
+                    settings.timezone.offset_at(OffsetDateTime::now_utc()),
                     indicator.as_str(),
                     theme,
                     history_highlighter,
@@ -1274,7 +1274,8 @@ impl State {
     }
 
     fn build_title(&self, settings: &Settings, theme: &Theme) -> Line<'static> {
-        let today = (self.now)().to_offset(settings.timezone.0);
+        let now = (self.now)();
+        let today = now.to_offset(settings.timezone.offset_at(now));
         let pumpkin = if today.date().is_halloween_season() {
             " 🎃"
         } else {
@@ -2539,7 +2540,7 @@ mod tests {
         #[case] pumpkin: bool,
     ) {
         let mut settings = Settings::utc();
-        settings.timezone = UtcOffsetSpec(offset);
+        settings.timezone = UtcOffsetSpec::Fixed(offset);
         let mut themes = ThemeManagerOptions {
             debug: false,
             builtin_only: true,
