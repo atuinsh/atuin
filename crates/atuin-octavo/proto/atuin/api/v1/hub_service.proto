@@ -260,8 +260,9 @@ service HubService {
   // `DEADLINE_EXCEEDED` (`ORG_ACTIVITY_TIMEOUT`) when counting runs past its bound.
   rpc TallyOrgActivity(TallyOrgActivityRequest) returns (TallyOrgActivityResponse);
 
-  // Return one page of the threads members have shared with the organization with this slug, the
-  // latest shared first. Each opens to the caller through its share.
+  // Return one page of the threads that members have shared with the organization with this slug.
+  // The most recently active threads come first. Each thread appears once, under its latest share.
+  // That share opens the thread to the caller.
   //
   // Pass `next_page_token` back as `page_token`, with the same request and within a day, for the
   // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
@@ -271,6 +272,36 @@ service HubService {
   // is off for it, and with `INVALID_ARGUMENT` for a request out of the bounds below:
   // `INVALID_ORG_THREADS_REQUEST` for its slug, `INVALID_PAGE_SIZE` for its page size.
   rpc ListOrgThreads(ListOrgThreadsRequest) returns (ListOrgThreadsResponse);
+
+  // Stream the threads that members have shared with the organization with this slug. The stream
+  // sends the most recently active threads first, and then each change.
+  //
+  // The stream starts with the first page that `ListOrgThreads` would return. It sends one `thread`
+  // for each row, and then `caught_up`.
+  //
+  // After `caught_up`, the stream sends a thread's `OrgThread` when the thread is first shared with
+  // the organization. It also sends one after a store changes the thread. It also sends one after a
+  // thread that names this thread as its parent is first stored or deleted. These updates cover
+  // threads past the first page. Each thread gets at most one update a second.
+  //
+  // The stream sends a `removed` for each shared thread that is deleted or is no longer open to the
+  // organization. The timing depends on the cause. A deleted thread is removed at once. A thread
+  // whose share is deleted or stops opening to the organization is removed within a second. A thread
+  // whose owner leaves the organization or loses Octavo is removed within a heartbeat.
+  //
+  // A thread can be shared again after a `removed`. A thread that changes while the page is read can
+  // come again after `caught_up`. Keep the newest `OrgThread` of each thread, by id.
+  //
+  // Sends a heartbeat after every 25 seconds without a message.
+  //
+  // Fails with `INVALID_ARGUMENT` (`INVALID_ORG_THREADS_REQUEST`) for a slug that is out of the
+  // bounds below. Fails with `INVALID_ARGUMENT` (`INVALID_PAGE_SIZE`) for a page size that is out of
+  // them. Fails with `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the
+  // organization. Fails with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for
+  // the organization. Fails with `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) while Octavo is off for
+  // the user. The last three failures also end an open stream, within a heartbeat of the condition
+  // starting.
+  rpc WatchOrgThreads(WatchOrgThreadsRequest) returns (stream WatchOrgThreadsResponse);
 }
 
 message InsertHistoryRequest {
@@ -692,21 +723,23 @@ message WatchThreadsResponse {
   }
 }
 
-// A thread of the user's that was deleted, or that changed so it no longer matches the filter.
-// Neither is ever undone.
+// A thread to leave out from now on. On `WatchThreads`, the thread is one of the user's that was
+// deleted, or that changed so that it no longer matches the filter. Neither of those is ever undone.
+// On `WatchOrgThreads`, the thread is no longer shared with the organization. A later `thread` can
+// bring it back.
 message WatchThreadsRemoved {
   // The thread's `Thread.id`.
   UuidV7 id = 1;
 }
 
-// Sent once the first page of a `WatchThreads` call has been.
+// Sent after the first page of a `WatchThreads` or `WatchOrgThreads` call.
 message WatchThreadsCaughtUp {
-  // The `page_token` for `ListThreads` to read the threads after the first page, or empty if there
-  // are none.
+  // The `page_token` that reads the threads after the first page. Pass it to `ListThreads`, or to
+  // `ListOrgThreads` on a `WatchOrgThreads` call. It is empty if there are no more threads.
   string next_page_token = 1;
 }
 
-// Sent to show a `WatchThreads` stream is still open.
+// Sent to show that a `WatchThreads` or `WatchOrgThreads` stream is still open.
 message WatchThreadsHeartbeat {}
 
 message DeleteThreadRequest {
@@ -852,6 +885,33 @@ message ListOrgThreadsResponse {
   repeated OrgThread threads = 1;
   // Opaque. Empty on the last page.
   string next_page_token = 2;
+}
+
+message WatchOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // The most threads to send before `caught_up`. At most 200. Larger values are rejected. 0 means
+  // 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+}
+
+// One message on a `WatchOrgThreads` stream.
+message WatchOrgThreadsResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // A thread shared with the organization, as it stands.
+    OrgThread thread = 1;
+    // A thread to leave out from now on.
+    WatchThreadsRemoved removed = 2;
+    // The first page has been sent.
+    WatchThreadsCaughtUp caught_up = 3;
+    // Shows that the stream is still open.
+    WatchThreadsHeartbeat heartbeat = 4;
+  }
 }
 
 // A thread a member has shared with an organization.
