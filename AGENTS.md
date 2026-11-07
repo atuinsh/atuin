@@ -95,6 +95,7 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
 - Use `#[cfg()]` only for code that actually needs conditional compilation; prefer `if cfg!()` otherwise.
+- Use `let _ = ...` rather than `_ = ...` except where an expression, rather than a statement, is needed.
 
 ## Writing style (comments, commit messages, prose)
 - Write plain, complete sentences. Keep articles and relative pronouns ("that", "which", "who").
