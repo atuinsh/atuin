@@ -3112,3 +3112,17 @@ async fn a_click_with_nothing_drawn_selects_nothing() {
     let up = mouse(&mut state, &s, MouseEventKind::Up(left), (9, 4));
     assert_eq!(up, InputAction::Continue);
 }
+
+#[rstest]
+fn successful_system_copy_also_copies_to_terminal() {
+    let mut terminal_copied = false;
+    super::copy_to_clipboards(
+        || Ok(()),
+        || {
+            terminal_copied = true;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(terminal_copied, "OSC 52 must also run when the system copy succeeds");
+}

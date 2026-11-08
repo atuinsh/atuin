@@ -1065,11 +1065,27 @@ fn set_clipboard(s: &str) -> Result<()> {
     let system = || -> Result<()> {
         let mut ctx = arboard::Clipboard::new()?;
         ctx.set_text(s.to_owned())?;
-        // Read it back so the clipboard owner keeps it after we exit.
-        ctx.get_text()?;
         Ok(())
     };
-    system().or_else(|_| Ok(terminal::copy(s)?))
+    copy_to_clipboards(system, || Ok(terminal::copy(s)?))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "clipboard",
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    )
+))]
+fn copy_to_clipboards(
+    system: impl FnOnce() -> Result<()>,
+    terminal: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let system_result = system();
+    // X11 loses the selection when its last clipboard owner is dropped. Send OSC 52 even
+    // after a successful system copy so the terminal can retain the text.
+    let terminal_result = terminal();
+    system_result.or(terminal_result)
 }
 
 #[cfg(not(all(
