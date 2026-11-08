@@ -296,11 +296,7 @@ pub fn compute(
 
         split_at_pipe(command)
             .iter()
-            .map(|l| {
-                let command = l.trim();
-                commands.insert(command);
-                command
-            })
+            .map(|l| l.trim())
             .collect::<Vec<_>>()
             .windows(ngram_size)
             .for_each(|w| {
@@ -389,6 +385,64 @@ mod tests {
         // non-empty history can still leave nothing to report, so callers have
         // to handle None rather than assuming history.is_empty() covers it
         assert!(compute(&settings, &history, 10, 1).is_none());
+    }
+
+    #[rstest]
+    #[case::pipeline(&["cat file | sort"], 1)]
+    #[case::repeated_pipeline(&["cat file | sort", "cat file | sort"], 1)]
+    #[case::shared_stage(&["cat file | sort", "cat file | head"], 2)]
+    #[case::stage_as_command(&["cat file | sort", "sort"], 2)]
+    #[case::repeated_command(&["sort", "sort"], 1)]
+    fn unique_commands_count_history_entries(
+        #[case] commands: &[&str],
+        #[case] expected_unique: usize,
+    ) {
+        let settings = Settings::utc();
+        let history = commands
+            .iter()
+            .map(|command| {
+                History::import()
+                    .timestamp(OffsetDateTime::now_utc())
+                    .command(*command)
+                    .build()
+                    .into()
+            })
+            .collect::<Vec<History>>();
+
+        let stats = compute(&settings, &history, 10, 1).unwrap();
+
+        assert_eq!(stats.total_commands, commands.len());
+        assert_eq!(stats.unique_commands, expected_unique);
+    }
+
+    #[rstest]
+    #[case(1, vec![(vec!["cat"], 2), (vec!["sort"], 2)])]
+    #[case(2, vec![(vec!["cat", "sort"], 2)])]
+    fn pipeline_rankings_are_independent_of_unique_command_counts(
+        #[case] ngram_size: usize,
+        #[case] expected_top: Vec<(Vec<&str>, usize)>,
+    ) {
+        let settings = Settings::utc();
+        let history = (0..2)
+            .map(|_| {
+                History::import()
+                    .timestamp(OffsetDateTime::now_utc())
+                    .command("cat file | sort")
+                    .build()
+                    .into()
+            })
+            .collect::<Vec<History>>();
+
+        let mut stats = compute(&settings, &history, 10, ngram_size).unwrap();
+        stats.top.sort();
+        let expected_top = expected_top
+            .into_iter()
+            .map(|(commands, count)| (commands.into_iter().map(str::to_owned).collect(), count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(stats.top, expected_top);
+        assert_eq!(stats.total_commands, 2);
+        assert_eq!(stats.unique_commands, 1);
     }
 
     #[fixture]
