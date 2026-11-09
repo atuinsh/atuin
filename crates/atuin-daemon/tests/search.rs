@@ -13,7 +13,7 @@ mod unix {
     use atuin_client::database::{Context, Sqlite};
     use atuin_client::history::{History, HistoryId};
     use atuin_client::record::sqlite_store::SqliteStore;
-    use atuin_client::settings::{FilterMode, Settings};
+    use atuin_client::settings::{CaseMatching, FilterMode, Settings};
     use atuin_common::filter::OrFilter;
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
@@ -166,6 +166,7 @@ mod unix {
             context: Some(context),
             shells: OrFilter::from_list(shells.iter().map(|s| s.to_string()).collect::<Vec<_>>())
                 .unwrap_or_default(),
+            case_matching: CaseMatching::Smart,
         };
         let mut stream = client.search(params).await.unwrap();
         let response = stream.message().await.unwrap().expect("expected response");

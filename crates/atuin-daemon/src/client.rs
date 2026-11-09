@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{CaseMatching, FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use atuin_common::userio::log::{Message, SINK};
@@ -43,8 +43,9 @@ use crate::grpc::versioning::{VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, RebuildIndexRequest,
-    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    CaseMatching as RpcCaseMatching, FilterMode as RpcFilterMode, PrepareIndexRequest,
+    RebuildIndexRequest, SearchCommandOutputRequest, SearchContext as RpcSearchContext,
+    SearchRequest, SearchResponse,
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
@@ -305,6 +306,7 @@ pub struct SearchParams {
     pub filter_mode: FilterMode,
     pub context: Option<Context>,
     pub shells: OrFilter<Vec<String>>,
+    pub case_matching: CaseMatching,
 }
 
 impl From<SearchParams> for SearchRequest {
@@ -319,6 +321,7 @@ impl From<SearchParams> for SearchRequest {
                 filter::Items::All => vec![],
                 filter::Items::Some(vec) => vec,
             },
+            case_matching: RpcCaseMatching::from(params.case_matching).into(),
         }
     }
 }
@@ -415,6 +418,16 @@ impl From<FilterMode> for RpcFilterMode {
             FilterMode::Directory => Self::Directory,
             FilterMode::Workspace => Self::Workspace,
             FilterMode::SessionPreload => Self::SessionPreload,
+        }
+    }
+}
+
+impl From<CaseMatching> for RpcCaseMatching {
+    fn from(case_matching: CaseMatching) -> Self {
+        match case_matching {
+            CaseMatching::Smart => Self::Smart,
+            CaseMatching::Ignore => Self::Ignore,
+            CaseMatching::Respect => Self::Respect,
         }
     }
 }

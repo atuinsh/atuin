@@ -259,6 +259,7 @@ impl Cmd {
                 include_duplicates: self.include_duplicates,
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
+                case_matching: settings.search.case_matching,
                 timezone: tz,
                 dialect: settings.dialect,
             };

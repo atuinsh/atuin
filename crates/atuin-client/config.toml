@@ -328,6 +328,17 @@ enter_accept = true
 ##   commands that have no recorded shell
 # shells = "auto"
 
+## How search treats uppercase letters in the query:
+##
+## - "smart": case-insensitive, unless a term has an uppercase letter. Prefix
+##   mode stays case-insensitive.
+## - "ignore": always case-insensitive
+## - "respect": always case-sensitive
+##
+## Applies to the prefix, fulltext, fuzzy and daemon-fuzzy modes and their
+## highlighting. Regex terms (r/...) aren't affected.
+# case_matching = "smart"
+
 [threads]
 ## Threads are your AI coding agents' sessions (Claude Code, Codex, opencode and Pi),
 ## captured by the daemon so you can search and resume them, here or on another machine.

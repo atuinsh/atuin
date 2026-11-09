@@ -574,6 +574,31 @@ pub struct OctavoDebug {
     pub address: Option<Url>,
 }
 
+/// How search treats the case of letters in the query.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaseMatching {
+    /// Case-insensitive, unless the query (or a term of it) contains an uppercase letter.
+    #[default]
+    Smart,
+    /// Always case-insensitive.
+    Ignore,
+    /// Always case-sensitive.
+    Respect,
+}
+
+impl CaseMatching {
+    /// Whether `term` should be matched case-sensitively.
+    #[must_use]
+    pub fn is_sensitive(self, term: &str) -> bool {
+        match self {
+            Self::Smart => term.contains(char::is_uppercase),
+            Self::Ignore => false,
+            Self::Respect => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Search {
     /// The list of enabled filter modes, in order of priority.
@@ -595,6 +620,9 @@ pub struct Search {
     ///
     /// One of: `"all"`, `"auto"`, or an array of strings.
     pub shells: Shells,
+
+    /// How the prefix, fulltext, fuzzy and daemon-fuzzy modes treat case.
+    pub case_matching: CaseMatching,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -810,6 +838,7 @@ impl Default for Search {
             frequency_score_multiplier: 1.0,
             frecency_score_multiplier: 1.0,
             shells: Default::default(),
+            case_matching: CaseMatching::default(),
         }
     }
 }
@@ -1675,6 +1704,7 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("search.shells", "auto")?
+            .set_default("search.case_matching", "smart")?
             .set_default("ai.session_continue_minutes", 60)?
             .set_default("ai.send_cwd", false)?
             .set_default("ai.opening.send_cwd", false)?
@@ -2057,8 +2087,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
-        SearchMode, Settings, UtcOffsetSpec,
+        AiEndpointProtocol, CaseMatching, ConfigFile, DbLocation, FileFormat, FilterMode,
+        RequestedSearchMode, SearchMode, Settings, UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2264,6 +2294,7 @@ mod tests {
     #[case::invalid_enum_variant("search_mode = \"invalid\"\n", "search_mode")]
     #[case::value_of_the_wrong_type("auto_sync = \"banana\"\n", "auto_sync")]
     #[case::invalid_nested_value("[search]\nfilters = [\"nope\"]\n", "search.filters")]
+    #[case::invalid_case_matching("[search]\ncase_matching = \"loud\"\n", "search.case_matching")]
     #[case::more_than_one_expanding_column(
         "[ui]\ncolumns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = \
          true }]\n",
@@ -2619,6 +2650,14 @@ mod tests {
             .expect("could not read legacy threads settings")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[rstest]
+    #[case::default("", CaseMatching::Smart)]
+    #[case::ignore("[search]\ncase_matching = \"ignore\"\n", CaseMatching::Ignore)]
+    #[case::respect("[search]\ncase_matching = \"respect\"\n", CaseMatching::Respect)]
+    fn search_case_matching(#[case] toml: &str, #[case] expected: CaseMatching) {
+        assert_eq!(parse_settings(toml).search.case_matching, expected);
     }
 
     #[cfg(feature = "octavo")]

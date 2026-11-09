@@ -20,7 +20,7 @@ use tracing::instrument;
 
 use super::history::History;
 use super::ordering;
-use super::settings::{Dialect, FilterMode, SearchMode, Settings};
+use super::settings::{CaseMatching, Dialect, FilterMode, SearchMode, Settings};
 use crate::history::{
     AuthorKind, AuthorPattern, CommandRuns, HistoryId, HistoryStats, KNOWN_AGENTS, ShellSession,
     all_user_author_filter,
@@ -70,6 +70,8 @@ pub struct OptFilters<'a> {
     pub timezone: UtcOffsetSpec,
     /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
     pub dialect: Dialect,
+    /// How the query's case is matched. Pass `settings.search.case_matching`.
+    pub case_matching: CaseMatching,
 }
 
 /// Build a query [`Context`] without requiring a live shell session.
@@ -740,12 +742,16 @@ impl Sqlite {
 
         let mut regexes = Vec::new();
         match search_mode {
+            // Prefix search has always ignored case, so only `respect` changes it.
+            DbSearchMode::Prefix if filter_options.case_matching == CaseMatching::Respect => {
+                sql.fuzzy_condition("command", format!("{query}*"), false, true, false)
+            }
             DbSearchMode::Prefix => sql.and_where_like_left("command", query.replace('*', "%")),
             DbSearchMode::FullText | DbSearchMode::Fuzzy => {
                 let mut is_or = false;
                 for token in QueryTokenizer::new(query) {
-                    // TODO smart case mode could be made configurable like in fzf
-                    let (is_glob, glob) = if token.has_uppercase() {
+                    // GLOB is case-sensitive, LIKE isn't (for ASCII).
+                    let (is_glob, glob) = if token.is_case_sensitive(filter_options.case_matching) {
                         (true, "*")
                     } else {
                         (false, "%")
@@ -1328,12 +1334,14 @@ pub enum QueryToken<'a> {
 }
 
 impl QueryToken<'_> {
-    pub fn has_uppercase(&self) -> bool {
+    /// Whether this term should match case-sensitively. Operators never do.
+    #[must_use]
+    pub fn is_case_sensitive(&self, case_matching: CaseMatching) -> bool {
         match self {
             Self::Match(term, _)
             | Self::MatchStart(term, _)
             | Self::MatchEnd(term, _)
-            | Self::MatchFull(term, _) => term.contains(char::is_uppercase),
+            | Self::MatchFull(term, _) => case_matching.is_sensitive(term),
             _ => false,
         }
     }
@@ -2183,6 +2191,40 @@ mod test {
         assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, expected)
             .await
             .unwrap();
+    }
+
+    #[rstest]
+    #[case::fuzzy_smart_lowercase(DbSearchMode::Fuzzy, CaseMatching::Smart, "ellie", 3)]
+    #[case::fuzzy_smart_uppercase(DbSearchMode::Fuzzy, CaseMatching::Smart, "Ellie", 1)]
+    #[case::fuzzy_ignore_uppercase(DbSearchMode::Fuzzy, CaseMatching::Ignore, "Ellie", 3)]
+    #[case::fuzzy_smart_lowercase_cd(DbSearchMode::Fuzzy, CaseMatching::Smart, "cd", 2)]
+    #[case::fuzzy_respect_lowercase(DbSearchMode::Fuzzy, CaseMatching::Respect, "cd", 1)]
+    #[case::fulltext_ignore_uppercase(DbSearchMode::FullText, CaseMatching::Ignore, "ELLIE", 3)]
+    #[case::fulltext_respect_lowercase(DbSearchMode::FullText, CaseMatching::Respect, "ellie", 2)]
+    #[case::prefix_smart_ignores_case(DbSearchMode::Prefix, CaseMatching::Smart, "CD", 2)]
+    #[case::prefix_ignore(DbSearchMode::Prefix, CaseMatching::Ignore, "CD", 2)]
+    #[case::prefix_respect_uppercase(DbSearchMode::Prefix, CaseMatching::Respect, "CD", 1)]
+    #[case::prefix_respect_lowercase(DbSearchMode::Prefix, CaseMatching::Respect, "cd", 1)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_search_case_matching(
+        #[case] mode: DbSearchMode,
+        #[case] case_matching: CaseMatching,
+        #[case] query: &str,
+        #[case] expected: usize,
+    ) {
+        let db =
+            db_with(&["ls /home/ellie", "cd /home/Ellie", "CD /TMP", "/home/ellie/.bin/rustup"])
+                .await;
+        let filters = OptFilters {
+            case_matching,
+            ..Default::default()
+        };
+
+        let results =
+            db.search(mode, FilterMode::Global, &new_context(), query, filters).await.unwrap();
+
+        let commands: Vec<&str> = results.iter().map(|h| h.command.as_str()).collect();
+        assert_eq!(commands.len(), expected, "{case_matching:?} {query:?}: {commands:?}");
     }
 
     #[rstest]

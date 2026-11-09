@@ -21,7 +21,9 @@ use atuin_client::database::{Context, Sqlite};
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{DiskUsageLimit, FilterMode, Settings};
+use atuin_client::settings::{
+    CaseMatching as SettingsCaseMatching, DiskUsageLimit, FilterMode, Settings,
+};
 use atuin_common::db::sqlite::Sqlite as CommonSqlite;
 use atuin_common::filter::OrFilter;
 use atuin_common::utils::uuid_v7;
@@ -30,7 +32,7 @@ use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::grpc::versioning::StrictVersionInterceptor;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::search::{CaseMatching, IndexFilterMode, SearchIndex};
 use atuin_daemon::server::STRICT_VERSION_LAYER;
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
@@ -401,7 +403,10 @@ impl TestEnv {
     /// Ids the live index returns for `query` (global filter, generous limit).
     pub async fn index_hits(&self, query: &str) -> Vec<HistoryId> {
         let index = self.index.read().await;
-        index.search(query, &IndexFilterMode::Global, 200, &self.history_db).await.collect()
+        index
+            .search(query, CaseMatching::Smart, &IndexFilterMode::Global, 200, &self.history_db)
+            .await
+            .collect()
     }
 
     /// Ids the Search RPC returns for `query`, i.e. what the TUI would show.
@@ -412,6 +417,7 @@ impl TestEnv {
             filter_mode: FilterMode::Global,
             context: None::<Context>,
             shells: OrFilter::all(),
+            case_matching: SettingsCaseMatching::Smart,
         };
         let mut stream = client.search(params).await.unwrap();
         let response = stream.message().await.unwrap().expect("search response");

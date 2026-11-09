@@ -12,6 +12,12 @@ enum FilterMode {
   SESSION_PRELOAD = 5;
 }
 
+enum CaseMatching {
+  SMART = 0; // Case-insensitive unless the query has an uppercase letter
+  IGNORE = 1;
+  RESPECT = 2;
+}
+
 message SearchContext {
   string session_id = 1;
   string cwd = 2;
@@ -26,6 +32,7 @@ message SearchRequest {
   FilterMode filter_mode = 3;
   SearchContext context = 4;
   repeated string shells = 5; // Which shells' commands to include
+  CaseMatching case_matching = 6;
 }
 
 message SearchResponse {
