@@ -47,6 +47,9 @@ pub trait SessionsExt {
     fn existing(
         &self,
     ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError>;
+
+    /// Forwards to [`Sessions::last_active`].
+    fn last_active(&self) -> Option<SystemTime>;
 }
 
 impl<S> SessionsExt for S
@@ -63,6 +66,10 @@ where
         &self,
     ) -> Result<BoxStream<'static, Result<AnySession, RuntimeError>>, RuntimeError> {
         Ok(Sessions::existing(self)?.map_ok(Into::into).boxed())
+    }
+
+    fn last_active(&self) -> Option<SystemTime> {
+        Sessions::last_active(self)
     }
 }
 

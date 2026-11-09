@@ -12,10 +12,12 @@ mod socket_holder;
 mod startup_lock;
 mod systemd;
 
+use std::ops::ControlFlow;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
+use atuin_common::futures::Backoff;
 use atuin_common::userio::log::RequestId;
 pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
@@ -137,7 +139,11 @@ impl ActiveService {
         let startup = pidfile.startup_lock(timeout);
         let _held = startup.acquire().await?;
 
-        match Self::find(settings).await {
+        let found = match Self::find(settings).await {
+            Ok(None) if pidfile.is_live() => Self::find_booting(settings, &pidfile, timeout).await,
+            found => found,
+        };
+        match found {
             Ok(Some(found)) => match found.ensure_our_build() {
                 Ok(()) => return Ok(found),
                 Err(newer) if newer.peer_is_newer() => return Err(ServiceFindError::Newer(newer)),
@@ -150,8 +156,9 @@ impl ActiveService {
                 }
             },
             Ok(None) => {}
-            // launchd holds the socket for an agent that can't start, such as one whose executable
-            // was removed. A service holding the pidfile may only be slow to boot, and killing it
+            // A socket with nothing behind it to answer, as launchd holds for an agent installed
+            // before agents bound their own that can't start, such as one whose executable was
+            // removed. A service holding the pidfile may only be slow to boot, and killing it
             // would leave the next client to kill the next one.
             Err(ServiceFindError::Find(FindError::Unresponsive(_))) if !pidfile.is_live() => {
                 backend.evict().await.map_err(|err| ReplaceError::Stop(err.into()))?;
@@ -170,10 +177,35 @@ impl ActiveService {
         })
     }
 
+    /// Find the service that a daemon holding the pidfile but not yet listening boots, as the
+    /// launchd agent that launchd starts at login may be when a shell first asks for it.
+    ///
+    /// The daemon takes the pidfile before it binds its socket, and launching another would only
+    /// wait for it to exit. Gives up once the daemon releases the pidfile, finding nothing, or
+    /// after `timeout`, finding it unresponsive.
+    async fn find_booting(
+        settings: &Settings,
+        pidfile: &Pidfile,
+        timeout: Duration,
+    ) -> Result<Option<Self>, ServiceFindError> {
+        Backoff::Constant(Connection::READY_POLL)
+            .retry(
+                || async {
+                    match Self::find(settings).await {
+                        Ok(None) if pidfile.is_live() => ControlFlow::Continue(()),
+                        found => ControlFlow::Break(found),
+                    }
+                },
+                timeout,
+            )
+            .await
+            .unwrap_or_else(|()| Err(FindError::Unresponsive(timeout).into()))
+    }
+
     /// Try to find the active service, if one exists, whatever its version.
     ///
-    /// It starts none itself, but connecting to the launchd agent's socket has launchd start the
-    /// agent if it isn't running.
+    /// It starts none itself, but connecting to the socket that launchd holds for an agent
+    /// installed before agents bound their own has launchd start the agent if it isn't running.
     ///
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, ServiceFindError> {
@@ -421,5 +453,61 @@ mod tests {
             panic!("a socket that never answers should be unresponsive");
         };
         assert_eq!(waited == ActiveService::timeout(settings.local_timeout), claimed);
+    }
+
+    /// A daemon that holds the pidfile but doesn't listen yet is waited on, not launched over. For
+    /// example, the launchd agent that launchd starts at login may not listen yet when a shell
+    /// first looks for it.
+    ///
+    /// The wait ends in one of three ways. If the daemon starts listening, the client finds it.
+    /// If the daemon releases the pidfile without ever listening, it died while it booted, and
+    /// the client finds nothing. If neither happens before the timeout, the daemon is
+    /// unresponsive. These cases cover the last two.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::released(Some(Duration::from_secs(1)))]
+    #[case::held(None)]
+    #[tokio::test(start_paused = true)]
+    async fn a_daemon_that_does_not_listen_yet_is_waited_on_while_it_holds_the_pidfile(
+        #[case] released_after: Option<Duration>,
+    ) {
+        const TIMEOUT: Duration = Duration::from_secs(5);
+
+        let dir = tempfile::tempdir().unwrap();
+        let env = MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
+        let mut settings = Settings::default();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(dir.path().join("atuin-daemon.pid")).unwrap();
+        // Nothing listens there yet.
+        settings.daemon.socket_path = Some(AbsPathBuf::new(dir.path().join("atuin.sock")).unwrap());
+        let pidfile = Pidfile::new(&settings.daemon.pidfile_path);
+        let info = PidfileInfo::current(&settings.daemon, RunMode::LaunchdAgent);
+        let daemon = pidfile.acquire(&info).unwrap();
+        let _releaser = tokio::spawn(async move {
+            match released_after {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending().await,
+            }
+            drop(daemon);
+        });
+
+        let started = tokio::time::Instant::now();
+        let found = ActiveService::find_booting(&settings, &pidfile, TIMEOUT).await;
+        let waited = started.elapsed();
+
+        match released_after {
+            Some(after) => {
+                assert!(matches!(found, Ok(None)), "nothing ever listened");
+                assert!(after <= waited && waited < TIMEOUT, "waited {waited:?}");
+            }
+            None => {
+                assert!(
+                    matches!(found, Err(ServiceFindError::Find(FindError::Unresponsive(TIMEOUT)))),
+                    "a daemon that holds the pidfile and never listens is unresponsive"
+                );
+                assert!(waited >= TIMEOUT, "gave up after {waited:?}");
+            }
+        }
     }
 }

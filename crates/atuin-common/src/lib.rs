@@ -8,6 +8,7 @@ pub mod dirs;
 pub mod docs;
 pub mod encryption;
 pub mod env;
+pub mod executable;
 pub mod filter;
 pub mod fs;
 pub mod futures;

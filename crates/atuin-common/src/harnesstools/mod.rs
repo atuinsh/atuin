@@ -29,6 +29,7 @@ use codex::Codex;
 use copilot::Copilot;
 use grok::Grok;
 use kiro::Kiro;
+use mcp::{InstallMcp, InstallMcpError};
 use opencode::Opencode;
 use pi::Pi;
 use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
@@ -52,6 +53,13 @@ pub trait Harness: std::fmt::Debug {
     fn alias_names(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// The harness's name as people know it. For example, setup says "Recording commands from Grok
+    /// Build".
+    fn display_name(&self) -> &'static str;
+
+    /// The command that runs the harness. It is looked up on `PATH`.
+    fn program(&self) -> &'static str;
 
     /// Install this harness's hooks on the current user's machine, returning the path written.
     ///
@@ -93,7 +101,7 @@ pub trait Harness: std::fmt::Debug {
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
 }
 
-#[enum_dispatch(Harness, SessionSync, ObservableExt)]
+#[enum_dispatch(Harness, SessionSync, ObservableExt, InstallMcp)]
 #[derive(Debug, Clone, Copy)]
 pub enum AnyHarness {
     Amp(Amp),

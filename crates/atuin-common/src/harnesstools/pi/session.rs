@@ -141,6 +141,19 @@ fn settings_session_dir(agent_dir: &Path) -> Option<PathBuf> {
 impl Sessions for PiSessions {
     type Listener = PiListener;
 
+    /// When pi and omp share the root, only this flavour's session files count. Otherwise, use of
+    /// the other agent would make this one look recently used.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let Some(flavour) = self.only(&root) else {
+            return crate::fs::newest_modified(root);
+        };
+        crate::fs::newest_modified_where(root, |entry| {
+            let path = entry.path();
+            PiListener::is_session_file(&path) && is_omp_file(&path) == (flavour == Flavour::Omp)
+        })
+    }
+
     fn listener(&self) -> Result<PiListener, RuntimeError> {
         let root = self.resolve_root();
         if !root.is_dir() {
@@ -1448,6 +1461,34 @@ mod tests {
             Flavour::Omp => "o",
         };
         assert_eq!(ids, vec![want.to_owned()]);
+    }
+
+    /// When pi and omp share a session directory, each one's last use counts only its own
+    /// sessions. Daily use of omp doesn't make an uninstalled pi look recently used.
+    #[rstest]
+    fn a_shared_session_dir_splits_last_active_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        let (pi, omp) = (dir.path().join("1_p.jsonl"), dir.path().join("2_o.jsonl"));
+        std::fs::write(&pi, header("p")).unwrap();
+        std::fs::write(&omp, slot + &header("o")).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let (pi_at, omp_at) = (at(1_000), at(2_000));
+        File::options().write(true).open(&pi).unwrap().set_modified(pi_at).unwrap();
+        File::options().write(true).open(&omp).unwrap().set_modified(omp_at).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let want = match flavour {
+            Flavour::Pi => pi_at,
+            Flavour::Omp => omp_at,
+        };
+        assert_eq!(sessions.last_active(), Some(want));
     }
 
     #[rstest]

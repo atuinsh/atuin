@@ -38,6 +38,14 @@ impl Harness for Grok {
         "grok"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Grok Build"
+    }
+
+    fn program(&self) -> &'static str {
+        "grok"
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["grok-build"]
     }
@@ -53,7 +61,7 @@ impl Harness for Grok {
     /// directory it is started from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let args = ["--resume".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "grok", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

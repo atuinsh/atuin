@@ -48,6 +48,7 @@ clap_complete = "4"
 clap_complete_nushell = "4"
 colored = "3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
+const_format = "0.2"
 crossterm = "0.29"
 crypto_secretbox = "0.1"
 daemonix = "0.1"

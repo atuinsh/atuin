@@ -32,6 +32,14 @@ impl Harness for Codex {
         "codex"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn program(&self) -> &'static str {
+        "codex"
+    }
+
     /// Install the hooks on the current active user's machine, trusted (see `hook_trust`).
     async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         // Codex reads Claude-Code-style hooks from $CODEX_HOME/hooks.json.
@@ -56,12 +64,10 @@ impl Harness for Codex {
     /// the session's directory or the current one when they differ.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let id = session::resume_id(&target.id);
-        Ok(resume::plan(
-            target,
-            CwdRequirement::Preferred,
-            "codex",
-            ["resume".to_owned(), id.to_owned()],
-        ))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), [
+            "resume".to_owned(),
+            id.to_owned(),
+        ]))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

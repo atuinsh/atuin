@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
 use atuin_client::settings::Settings;
-use atuin_common::harnesstools::{AnyHarness, Harness, mcp};
+use atuin_common::harnesstools::mcp::InstallMcp;
+use atuin_common::harnesstools::{AnyHarness, Harness};
 use atuin_common::userio;
 use clap::{Parser, Subcommand};
 use eyre::{Result, bail};
@@ -42,7 +43,7 @@ impl Cmd {
 
 async fn install_all() -> Result<()> {
     let found: Vec<_> =
-        AnyHarness::all().iter().copied().filter(|&harness| mcp::config_exists(harness)).collect();
+        AnyHarness::all().iter().copied().filter(InstallMcp::has_mcp_config).collect();
     if found.is_empty() {
         eprintln!(
             "No supported agent config files found. Use `atuin mcp install <agent>` to connect an \
@@ -79,7 +80,7 @@ async fn install_all() -> Result<()> {
 }
 
 async fn install(harness: AnyHarness) -> Result<()> {
-    mcp::install(harness).await?;
+    harness.install_mcp().await?;
     userio::log::info!("mcp-restart-harness", harness = harness.name());
     Ok(())
 }

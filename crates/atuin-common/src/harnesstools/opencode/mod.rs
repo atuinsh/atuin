@@ -48,6 +48,14 @@ impl Harness for Opencode {
         "opencode"
     }
 
+    fn display_name(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn program(&self) -> &'static str {
+        "opencode"
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self, _executable: &Path) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";
@@ -78,7 +86,7 @@ impl Harness for Opencode {
     /// session's own is the one to be in.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let args = ["--session".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "opencode", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

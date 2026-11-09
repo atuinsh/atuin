@@ -3,9 +3,11 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, IsTerminal, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
@@ -13,8 +15,13 @@ use atuin_client::settings::Settings;
 use atuin_common::dirs::home_dir;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
+use atuin_common::executable::is_executable_with_path_search;
+use atuin_common::harnesstools::mcp::InstallMcp as _;
+use atuin_common::harnesstools::session::any::{ObservableExt as _, SessionsExt as _};
 use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError};
 use atuin_common::path::PathBufExt as _;
+use atuin_common::sync::BlockingPool;
+use atuin_common::time::DurationExt as _;
 use clap::Parser;
 use colored::Colorize;
 use easy_cast::Conv;
@@ -614,8 +621,8 @@ async fn hook_agents(agents: &[AnyHarness], tx: &Updates) {
     let executable = atuin_common::os::process::current_exe();
     for agent in agents {
         match agent.install_hooks(&executable).await {
-            Ok(_) | Err(InstallHookError::AlreadyInstalled) => hooked.push(agent_name(*agent)),
-            Err(e) => failed.push(format!("{} ({e})", agent_name(*agent))),
+            Ok(_) | Err(InstallHookError::AlreadyInstalled) => hooked.push(agent.display_name()),
+            Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
         }
     }
     let done = (!hooked.is_empty()).then(|| format!("Recording commands from {}", names(&hooked)));
@@ -623,18 +630,89 @@ async fn hook_agents(agents: &[AnyHarness], tx: &Updates) {
 }
 
 async fn connect_agents(agents: &[AnyHarness], tx: &Updates) {
-    send(tx, Step::Mcp, Status::Running("Letting your agents search Atuin".into()));
+    let now = SystemTime::now();
+    let pool = BlockingPool::new(NonZeroUsize::MIN);
     let mut connected = Vec::new();
     let mut failed = Vec::new();
-    for agent in agents {
+    let mut connect = Vec::new();
+    for &agent in agents {
+        match McpAction::for_agent(agent, now, &pool).await {
+            McpAction::Connect => connect.push(agent),
+            McpAction::ReportMissing { command, ago } => failed.push(format!(
+                "{} (`{command}` isn't on your PATH, though it was used here {})",
+                agent.display_name(),
+                ago.display().days_ago(),
+            )),
+            McpAction::Skip => {}
+        }
+    }
+    if connect.is_empty() && failed.is_empty() {
+        return;
+    }
+    send(tx, Step::Mcp, Status::Running("Letting your agents search Atuin".into()));
+    for agent in &connect {
         // Its own process, as the agents' own `mcp add` commands print what they did.
         match quietly(&["mcp", "install", agent.name()]).await {
-            Ok(()) => connected.push(agent_name(*agent)),
-            Err(e) => failed.push(format!("{} ({e})", agent_name(*agent))),
+            Ok(()) => connected.push(agent.display_name()),
+            Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
         }
     }
     let done = (!connected.is_empty()).then(|| format!("{} can search Atuin", names(&connected)));
     send(tx, Step::Mcp, partial(done, &failed, "connect"));
+}
+
+/// How recently an agent must have written a session here for setup to report that its command is
+/// missing from `PATH`.
+///
+/// If the agent was used within this window, the user probably still uses it. In that case,
+/// something is more likely wrong with `PATH`. For example, the shell may not have picked up a new
+/// install yet. The user would want to know about that.
+///
+/// If the agent hasn't been used for longer, the user probably tried it and then uninstalled it.
+/// Reporting it on every run would only nag.
+const STILL_USED: Duration = Duration::from_hours(14 * 24);
+
+/// What setup does about connecting an agent to Atuin's MCP server.
+#[derive(Debug, PartialEq, Eq)]
+enum McpAction {
+    /// Setup connects the agent.
+    Connect,
+    /// Setup reports that the agent's command isn't on `PATH`. The agent was used here `ago`.
+    ReportMissing {
+        command: &'static str,
+        ago: Duration,
+    },
+    /// Setup leaves the agent alone and doesn't mention it. The agent's command isn't on `PATH`,
+    /// and the agent hasn't been used here recently.
+    Skip,
+}
+
+impl McpAction {
+    async fn for_agent(agent: AnyHarness, now: SystemTime, pool: &BlockingPool) -> Self {
+        let Some(command) = agent.mcp_program() else {
+            return Self::Connect;
+        };
+        if is_executable_with_path_search(command) {
+            return Self::Connect;
+        }
+        let sessions = agent.sessions(pool);
+        let last_active = tokio::task::spawn_blocking(move || sessions?.last_active());
+        let last_active = last_active.await.ok().flatten();
+        // A session with a timestamp in the future counts as brand new.
+        Self::without_command(
+            command,
+            last_active.map(|at| now.duration_since(at).unwrap_or_default()),
+        )
+    }
+
+    /// The action for an agent whose `command` isn't on `PATH`. The agent was last used here
+    /// `ago`.
+    fn without_command(command: &'static str, ago: Option<Duration>) -> Self {
+        match ago {
+            Some(ago) if ago < STILL_USED => Self::ReportMissing { command, ago },
+            _ => Self::Skip,
+        }
+    }
 }
 
 /// What worked, then what didn't.
@@ -899,12 +977,9 @@ async fn shell_history() -> Option<(&'static str, usize)> {
 /// The agents on this machine, with the threads each has here: those that have kept any, and
 /// those on `PATH`.
 async fn detect_agents() -> Vec<(AnyHarness, u64)> {
-    use atuin_common::harnesstools::session::any::{ObservableExt as _, SessionsExt as _};
-    use atuin_common::sync::BlockingPool;
     use futures_util::StreamExt;
 
-    let pool = BlockingPool::new(std::num::NonZeroUsize::new(4).expect("4 isn't 0"));
-    let path = atuin_common::env::var_os("PATH").unwrap_or_default();
+    let pool = BlockingPool::new(NonZeroUsize::new(4).expect("4 isn't 0"));
     let mut agents = Vec::new();
     for &agent in AnyHarness::all() {
         let threads = match agent.sessions(&pool).map(|sessions| sessions.existing()) {
@@ -913,7 +988,7 @@ async fn detect_agents() -> Vec<(AnyHarness, u64)> {
             }
             _ => None,
         };
-        let installed = std::env::split_paths(&path).any(|dir| dir.joined(binary(agent)).is_file());
+        let installed = is_executable_with_path_search(agent.program());
         if threads.is_some() || installed {
             agents.push((agent, u64::conv(threads.unwrap_or(0))));
         }
@@ -989,7 +1064,7 @@ async fn print_summary(plan: &Plan, found: &Found, steps: &[(Step, Status)]) {
                 println!(
                     "    {:<age$}  {:<11}  {}",
                     thread.age.dimmed(),
-                    harness_kind_name(thread.harness),
+                    thread.harness.harness().map_or("", |harness| harness.display_name()),
                     atuin_ai::commands::one_line(&thread.title, title),
                 );
             }
@@ -1076,50 +1151,6 @@ fn append_once(path: &Path, marker: &str, text: &str) -> io::Result<()> {
     OpenOptions::new().create(true).append(true).open(path)?.write_all(text.as_bytes())
 }
 
-const fn binary(agent: AnyHarness) -> &'static str {
-    match agent {
-        AnyHarness::Amp(_) => "amp",
-        AnyHarness::ClaudeCode(_) => "claude",
-        AnyHarness::Codex(_) => "codex",
-        AnyHarness::Copilot(_) => "copilot",
-        AnyHarness::Grok(_) => "grok",
-        AnyHarness::Kiro(_) => "kiro-cli",
-        AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(pi) => pi.flavour().binary(),
-    }
-}
-
-const fn agent_name(agent: AnyHarness) -> &'static str {
-    match agent {
-        AnyHarness::Amp(_) => "Amp",
-        AnyHarness::ClaudeCode(_) => "Claude Code",
-        AnyHarness::Codex(_) => "Codex",
-        AnyHarness::Copilot(_) => "Copilot",
-        AnyHarness::Grok(_) => "Grok Build",
-        AnyHarness::Kiro(_) => "Kiro",
-        AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(pi) => pi.flavour().binary(),
-    }
-}
-
-#[cfg(all(feature = "ai", feature = "daemon"))]
-const fn harness_kind_name(harness: atuin_client::ai_session::HarnessKind) -> &'static str {
-    use atuin_client::ai_session::HarnessKind;
-
-    match harness {
-        HarnessKind::Amp => "Amp",
-        HarnessKind::ClaudeCode => "Claude Code",
-        HarnessKind::Codex => "Codex",
-        HarnessKind::Copilot => "Copilot",
-        HarnessKind::Grok => "Grok Build",
-        HarnessKind::Kiro => "Kiro",
-        HarnessKind::Opencode => "opencode",
-        HarnessKind::Pi => "pi",
-        HarnessKind::Omp => "omp",
-        HarnessKind::Unknown => "",
-    }
-}
-
 /// "Claude Code, Codex and pi".
 fn names(names: &[&str]) -> String {
     match names.split_last() {
@@ -1187,6 +1218,30 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    const DAY: Duration = Duration::from_hours(24);
+    const JUST_INSIDE: Duration = STILL_USED.saturating_sub(Duration::from_secs(1));
+
+    #[rstest]
+    #[case::today(Some(Duration::ZERO), reported(Duration::ZERO))]
+    #[case::last_week(Some(7 * DAY), reported(7 * DAY))]
+    #[case::just_inside(Some(JUST_INSIDE), reported(JUST_INSIDE))]
+    #[case::just_outside(Some(STILL_USED), McpAction::Skip)]
+    #[case::months_ago(Some(90 * DAY), McpAction::Skip)]
+    #[case::no_sessions(None, McpAction::Skip)]
+    fn a_missing_agent_is_mentioned_only_while_still_used(
+        #[case] ago: Option<Duration>,
+        #[case] expected: McpAction,
+    ) {
+        assert_eq!(McpAction::without_command("grok", ago), expected);
+    }
+
+    const fn reported(ago: Duration) -> McpAction {
+        McpAction::ReportMissing {
+            command: "grok",
+            ago,
+        }
+    }
 
     #[rstest]
     #[case(0, "0")]

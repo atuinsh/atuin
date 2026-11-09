@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_common::harnesstools::Harness as _;
 use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::style::{Attribute, Print, SetAttribute};
@@ -17,8 +18,7 @@ use ratatui::{DefaultTerminal, Frame, TerminalOptions, Viewport};
 use tokio::sync::mpsc;
 
 use super::{
-    Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Update, agent_name, count, is_address,
-    names,
+    Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Update, count, is_address, names,
 };
 
 const HEIGHT: u16 = 22;
@@ -632,7 +632,8 @@ fn title() -> Vec<Line<'static>> {
 /// "Found 48,210 commands in your zsh history / and 353 threads from Claude Code and Codex."
 fn found_lines(found: &Found) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let agents = names(&found.agents().into_iter().map(agent_name).collect::<Vec<_>>());
+    let agents =
+        names(&found.agents().into_iter().map(|agent| agent.display_name()).collect::<Vec<_>>());
     let threads = found.threads();
 
     if let Some((shell, commands)) = found.history
@@ -738,7 +739,9 @@ impl Import {
             lines.push(choice(self.row == Row::Shell, self.history, "Shell history", about));
         }
         if let Some(threads) = offer.threads {
-            let agents = names(&found.agents().into_iter().map(agent_name).collect::<Vec<_>>());
+            let agents = names(
+                &found.agents().into_iter().map(|agent| agent.display_name()).collect::<Vec<_>>(),
+            );
             let noun = if threads == 1 {
                 "thread"
             } else {

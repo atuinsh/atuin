@@ -79,6 +79,17 @@ impl Harness for Pi {
         self.flavour.binary()
     }
 
+    fn display_name(&self) -> &'static str {
+        match self.flavour {
+            Flavour::Pi => "Pi",
+            Flavour::Omp => "omp",
+        }
+    }
+
+    fn program(&self) -> &'static str {
+        self.flavour.binary()
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self, _executable: &Path) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");
@@ -117,7 +128,7 @@ impl Harness for Pi {
             Some(path) => (CwdRequirement::Preferred, resume::path_arg(path)?),
             None => (CwdRequirement::Required, target.id.clone()),
         };
-        Ok(resume::plan(target, cwd, self.flavour.binary(), ["--session".to_owned(), session]))
+        Ok(resume::plan(target, cwd, self.program(), ["--session".to_owned(), session]))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

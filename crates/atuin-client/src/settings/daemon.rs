@@ -267,8 +267,7 @@ impl<'a> SocketPath<'a> {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_secure_temp_dir(dir.as_path())?;
-        Ok(())
+        create_secure_temp_dir(dir)
     }
 
     #[must_use]

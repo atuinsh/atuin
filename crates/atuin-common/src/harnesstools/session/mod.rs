@@ -310,6 +310,11 @@ pub trait Sessions {
 
     fn listener(&self) -> Result<Self::Listener, RuntimeError>;
 
+    /// When the harness last wrote a session under the root. This is the newest modification time
+    /// of the files that hold its sessions. It is `None` when the harness has kept no sessions
+    /// there. It reads the whole tree, so it is meant for one-off questions, not hot paths.
+    fn last_active(&self) -> Option<SystemTime>;
+
     /// One-shot scan of every session under the root. Yields `Err` for a directory, entry, or
     /// file-type read that fails mid-scan, so a caller (e.g. import) can report a partial scan
     /// rather than silently treating it as complete. The outer `Err` is only the root itself
@@ -346,6 +351,28 @@ mod tests {
     use crate::harnesstools::grok::session::GrokSession;
     use crate::harnesstools::pi::session::PiSession;
     use crate::harnesstools::session::model::{Content, MessageId, Role};
+
+    /// This test goes through the same dispatch that setup uses. It goes from the harness to its
+    /// sessions, and then to their root.
+    #[rstest]
+    fn last_active_reads_the_harness_sessions_directory() {
+        use crate::harnesstools::AnyHarness;
+        use crate::harnesstools::session::any::{ObservableExt as _, SessionsExt as _};
+        use crate::path::PathBufExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("GROK_HOME", dir.path());
+        let pool = BlockingPool::new(NonZeroUsize::new(1).unwrap());
+        let last_active = || AnyHarness::from_name("grok").unwrap().sessions(&pool)?.last_active();
+        assert_eq!(last_active(), None);
+
+        let session = dir.path().join("sessions").joined("workspace").joined("s.jsonl");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, "").unwrap();
+        let at = std::fs::metadata(&session).unwrap().modified().unwrap();
+        assert_eq!(last_active(), Some(at));
+    }
 
     #[derive(Debug, Clone)]
     struct StubMsg;

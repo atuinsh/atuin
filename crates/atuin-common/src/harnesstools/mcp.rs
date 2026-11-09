@@ -4,12 +4,21 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use enum_dispatch::enum_dispatch;
 use serde_json::{Value, json};
 
-use super::pi::Flavour;
-use super::{AnyHarness, codex, copilot, grok, kiro, opencode};
+use super::Harness;
+use super::amp::Amp;
+use super::ccode::Ccode;
+use super::codex::{self, Codex};
+use super::copilot::{self, Copilot};
+use super::grok::{self, Grok};
+use super::kiro::{self, Kiro};
+use super::opencode::{self, Opencode};
+use super::pi::{Flavour, Pi};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
+use crate::executable::resolve_in_path;
 use crate::path::{AbsPathBuf, PathBufExt as _};
 
 #[derive(Debug, thiserror::Error)]
@@ -44,71 +53,161 @@ pub enum InstallMcpError {
     NonUtf8Executable(PathBuf),
 }
 
-/// Whether the user config that the MCP installer edits already exists. This detects agents
-/// with existing configuration without starting their executables; it does not check whether
-/// the atuin server is registered.
-#[must_use]
-pub fn config_exists(harness: AnyHarness) -> bool {
-    config_path(harness).is_file()
+/// Registers atuin's MCP server (`atuin mcp`) with a harness at user scope.
+#[enum_dispatch]
+pub trait InstallMcp: Harness {
+    /// The user config that registration writes. Either the harness's own `mcp add` writes it, or
+    /// atuin does.
+    fn mcp_config_path(&self) -> PathBuf;
+
+    /// Whether [`Self::mcp_config_path`] exists. This detects agents that have a config without
+    /// starting their executables. It does not check whether the atuin server is registered.
+    fn has_mcp_config(&self) -> bool {
+        self.mcp_config_path().is_file()
+    }
+
+    /// The program that [`Self::install_mcp`] runs to register the server. That program has to be
+    /// on `PATH`. By default, it is the harness's own [`Harness::program`]. It is `None` for a
+    /// harness whose config atuin writes itself.
+    fn mcp_program(&self) -> Option<&'static str> {
+        Some(self.program())
+    }
+
+    /// Registers the server. Any `atuin` server that is already registered is replaced, so that a
+    /// rerun picks up a binary that has moved.
+    #[allow(async_fn_in_trait)]
+    async fn install_mcp(&self) -> Result<(), InstallMcpError>;
 }
 
-/// The user config written by the agent's `mcp add` command, or by us directly.
-fn config_path(harness: AnyHarness) -> PathBuf {
-    match harness {
-        AnyHarness::Amp(_) => home_dir().joined(".config").joined("amp").joined("settings.json"),
-        AnyHarness::ClaudeCode(_) => var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(
-            || home_dir().joined(".claude.json"),
-            |dir| PathBuf::from(dir).joined(".claude.json"),
-        ),
-        AnyHarness::Codex(_) => codex::home().joined("config.toml"),
-        AnyHarness::Copilot(_) => copilot::copilot_home().joined("mcp-config.json"),
-        AnyHarness::Grok(_) => grok::home().joined("config.toml"),
-        AnyHarness::Kiro(_) => kiro_config_path(&kiro::kiro_home()),
-        AnyHarness::Opencode(_) => opencode::config_dir().joined("opencode.json"),
-        AnyHarness::Pi(pi) => pi.flavour().agent_dir().joined("mcp.json"),
+impl InstallMcp for Amp {
+    fn mcp_config_path(&self) -> PathBuf {
+        home_dir().joined(".config").joined("amp").joined("settings.json")
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        // `amp mcp add` refuses a name that's taken.
+        remove(self.program(), &["mcp", "remove", "atuin"]).await;
+        run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
 }
 
-/// Register `atuin mcp` with `harness` at user scope, replacing any `atuin` server already there,
-/// so a rerun picks up a moved binary.
-pub async fn install(harness: AnyHarness) -> Result<(), InstallMcpError> {
-    let atuin = executable()?;
-    let atuin = atuin.as_str();
-    match harness {
-        // `amp mcp add` and `claude mcp add` refuse a name that's taken.
-        AnyHarness::Amp(_) => {
-            remove("amp", &["mcp", "remove", "atuin"]).await;
-            run("amp", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+impl InstallMcp for Ccode {
+    fn mcp_config_path(&self) -> PathBuf {
+        var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(
+            || home_dir().joined(".claude.json"),
+            |dir| PathBuf::from(dir).joined(".claude.json"),
+        )
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        // `claude mcp add` refuses a name that's taken.
+        remove(self.program(), &["mcp", "remove", "--scope", "user", "atuin"]).await;
+        run(self.program(), &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
+    }
+}
+
+impl InstallMcp for Codex {
+    fn mcp_config_path(&self) -> PathBuf {
+        codex::home().joined("config.toml")
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+}
+
+impl InstallMcp for Copilot {
+    fn mcp_config_path(&self) -> PathBuf {
+        copilot::copilot_home().joined("mcp-config.json")
+    }
+
+    /// `copilot mcp add` writes `~/.copilot/mcp-config.json`. It replaces any server that has the
+    /// same name.
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+}
+
+impl InstallMcp for Grok {
+    fn mcp_config_path(&self) -> PathBuf {
+        grok::home().joined("config.toml")
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+}
+
+impl InstallMcp for Kiro {
+    fn mcp_config_path(&self) -> PathBuf {
+        kiro_config_path(&kiro::kiro_home())
+    }
+
+    /// Atuin writes Kiro's config itself instead of running `kiro-cli`. The binary has a different
+    /// name on each platform, and the config file is plain JSON.
+    fn mcp_program(&self) -> Option<&'static str> {
+        None
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        install_kiro(&self.mcp_config_path(), &executable()?).await
+    }
+}
+
+impl InstallMcp for Opencode {
+    fn mcp_config_path(&self) -> PathBuf {
+        opencode::config_dir().joined("opencode.json")
+    }
+
+    /// Atuin writes opencode's config itself instead of running `opencode mcp add`. In opencode
+    /// 1.x, that command only prompts. In 2.0, it writes `mcp.servers`, which 2.0 doesn't load.
+    /// Both versions load `mcp.<name>`.
+    fn mcp_program(&self) -> Option<&'static str> {
+        None
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        install_opencode(&self.mcp_config_path(), &executable()?).await
+    }
+}
+
+impl InstallMcp for Pi {
+    fn mcp_config_path(&self) -> PathBuf {
+        self.flavour().agent_dir().joined("mcp.json")
+    }
+
+    /// omp has no `mcp add` command, so atuin writes [`Self::mcp_config_path`] itself. omp's own
+    /// `/mcp add` writes the same file.
+    fn mcp_program(&self) -> Option<&'static str> {
+        match self.flavour() {
+            Flavour::Pi => Some(self.program()),
+            Flavour::Omp => None,
         }
-        AnyHarness::ClaudeCode(_) => {
-            remove("claude", &["mcp", "remove", "--scope", "user", "atuin"]).await;
-            run("claude", &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
-        }
-        AnyHarness::Codex(_) => run("codex", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
-        // Writes `~/.copilot/mcp-config.json`, replacing a server of the name.
-        AnyHarness::Copilot(_) => {
-            run("copilot", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
-        }
-        AnyHarness::Grok(_) => run("grok", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
-        AnyHarness::Kiro(_) => install_kiro(&config_path(harness), atuin).await,
-        // Not `opencode mcp add`: 1.x's only prompts, and 2.0's writes `mcp.servers`, which 2.0
-        // doesn't load. Both load `mcp.<name>`.
-        AnyHarness::Opencode(_) => install_opencode(&config_path(harness), atuin).await,
-        AnyHarness::Pi(pi) => match pi.flavour() {
-            Flavour::Pi => run("pi", &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
-            // omp has no `mcp add`: its own `/mcp add` writes this file.
-            Flavour::Omp => {
-                let path = config_path(harness);
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = &executable()?;
+        match self.mcp_program() {
+            Some(program) => run(program, &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
+            None => {
                 let server = json!({"command": atuin, "args": ["mcp"]});
-                add_to_config(&path, json!({}), "mcpServers", server).await
+                add_to_config(&self.mcp_config_path(), json!({}), "mcpServers", server).await
             }
-        },
+        }
     }
 }
 
 /// Run `program` with `args` to remove a server, whether or not there is one to remove.
 async fn remove(program: &str, args: &[&str]) {
-    let _ = tokio::process::Command::new(program)
+    let Some(program) = resolve_in_path(Path::new(program)) else {
+        return;
+    };
+    let _ = tokio::process::Command::new(&*program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -146,17 +245,13 @@ fn launch_path(exe: PathBuf) -> PathBuf {
     }
 }
 
-/// Run `program` with `args`, letting it report what it did.
+/// Runs `program` with `args` and lets it report what it did. The program runs from the path that
+/// [`resolve_in_path`] finds, so that what runs is what the `PATH` check found. For example, on
+/// Windows, `claude` runs as `claude.cmd`.
 async fn run(program: &'static str, args: &[&str]) -> Result<(), InstallMcpError> {
-    let status = tokio::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .status()
-        .await
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => InstallMcpError::NotFound(program),
-            _ => err.into(),
-        })?;
+    let found = resolve_in_path(Path::new(program)).ok_or(InstallMcpError::NotFound(program))?;
+    let status =
+        tokio::process::Command::new(&*found).args(args).stdin(Stdio::null()).status().await?;
     if !status.success() {
         return Err(InstallMcpError::Failed(format!("{program} {}", args.join(" "))));
     }
@@ -237,6 +332,7 @@ mod tests {
 
     use super::*;
     use crate::env::mock::MockEnv;
+    use crate::harnesstools::AnyHarness;
 
     #[rstest::fixture]
     fn agent_home() -> (tempfile::TempDir, MockEnv) {
@@ -263,13 +359,13 @@ mod tests {
         let (dir, _env) = agent_home;
         let harness = AnyHarness::from_name(name).unwrap();
         let path = dir.path().join(relative);
-        assert_eq!(config_path(harness), path);
-        assert!(!config_exists(harness));
+        assert_eq!(harness.mcp_config_path(), path);
+        assert!(!harness.has_mcp_config());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         // Detection needs a file, not just an agent directory.
-        assert!(!config_exists(harness));
+        assert!(!harness.has_mcp_config());
         std::fs::write(&path, "").unwrap();
-        assert!(config_exists(harness));
+        assert!(harness.has_mcp_config());
     }
 
     #[rstest]
@@ -292,11 +388,11 @@ mod tests {
         env.set(variable, &custom);
         let harness = AnyHarness::from_name(name).unwrap();
         let path = custom.join(relative);
-        assert_eq!(config_path(harness), path);
-        assert!(!config_exists(harness));
+        assert_eq!(harness.mcp_config_path(), path);
+        assert!(!harness.has_mcp_config());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "").unwrap();
-        assert!(config_exists(harness));
+        assert!(harness.has_mcp_config());
     }
 
     /// A Homebrew-style install: `bin/atuin` links to the real executable.

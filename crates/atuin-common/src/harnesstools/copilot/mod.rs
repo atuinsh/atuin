@@ -32,6 +32,14 @@ impl Harness for Copilot {
         "copilot"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Copilot"
+    }
+
+    fn program(&self) -> &'static str {
+        "copilot"
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["github-copilot", "copilot-cli"]
     }
@@ -69,7 +77,7 @@ impl Harness for Copilot {
             ));
         }
         let args = [format!("--resume={}", target.id)];
-        Ok(resume::plan(target, CwdRequirement::None, "copilot", args))
+        Ok(resume::plan(target, CwdRequirement::None, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {

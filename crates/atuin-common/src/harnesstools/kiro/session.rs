@@ -222,6 +222,10 @@ pub(crate) fn read_log(path: &Path, bytes: &[u8]) -> Vec<KiroMessage> {
 impl Sessions for KiroSessions {
     type Listener = KiroListener;
 
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        crate::fs::newest_modified(self.resolve_root())
+    }
+
     fn listener(&self) -> Result<KiroListener, RuntimeError> {
         let root = self.resolve_root();
         if !root.is_dir() {
