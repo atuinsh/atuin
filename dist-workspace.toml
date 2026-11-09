@@ -31,8 +31,7 @@ github-attestations = true
 # don't depend on the host's libssl version. No-op on macOS/Windows.
 # self-update: only installer-installed binaries can self-update, so the
 # `atuin update` machinery is compiled into release artifacts only.
-# octavo: compiled in, but off until the user sets `octavo.enabled`.
-features = ["vendored-tls", "self-update", "octavo"]
+features = ["vendored-tls", "self-update"]
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"

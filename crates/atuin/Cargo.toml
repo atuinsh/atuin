@@ -54,14 +54,15 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
+    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Not a default feature until Octavo ships. Release artifacts build with it (dist enables it in
-# dist-workspace.toml), but it stays off until the user sets `octavo.enabled`.
+# Compiled in, but nothing reaches Octavo until the user sets `octavo.enabled`, which
+# `atuin config enable octavo` does.
 octavo = [
     "sync",
     "daemon",
