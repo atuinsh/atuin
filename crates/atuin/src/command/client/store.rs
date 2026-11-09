@@ -4,6 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
+use atuin_common::userio;
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
@@ -62,7 +63,7 @@ pub enum Cmd {
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
-        eprintln!("Failed to schedule a rebuild of the threads index: {err}");
+        userio::log::warn!("store-threads-invalidate-failed", error = err.to_string());
     }
 }
 
@@ -136,7 +137,7 @@ impl Cmd {
                 #[cfg(not(feature = "daemon"))]
                 let rewritten = store.compact().await?;
 
-                println!("Rewrote {rewritten} records");
+                userio::log::info!("store-compact-done", count = rewritten);
                 Ok(())
             }
             Self::Verify(verify) => verify.run(settings, store).await,

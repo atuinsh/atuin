@@ -65,7 +65,16 @@ fn last_word(text: &str) -> &str {
 #[rstest]
 fn capture_keeps_the_conversation_and_tool_calls(
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Copilot,
+        Agent::Grok,
+        Agent::Kiro,
+        Agent::Opencode,
+        Agent::Pi
+    )]
+    agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
     let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
@@ -150,7 +159,16 @@ fn capture_applies_the_history_and_output_filters_to_agent_commands(project: Tem
 fn capture_follows_a_transcript_exactly_once_across_restarts(
     mut machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi)] agent: Agent,
+    #[values(
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Copilot,
+        Agent::Grok,
+        Agent::Kiro,
+        Agent::Opencode,
+        Agent::Pi
+    )]
+    agent: Agent,
 ) {
     let turns: Vec<Turn> = (0..3).map(|_| Turn::new()).collect();
 
@@ -192,13 +210,16 @@ fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: Te
 /// alone until the agent goes on with it, and then captured whole; or until `atuin threads
 /// import` brings it in.
 #[rstest]
-fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
+fn capture_starts_when_the_config_turns_it_on(
+    project: TempDir,
+    #[values(Agent::Claude, Agent::Kiro)] agent: Agent,
+) {
     let mut machine = Machine::with_config("", "capture = false\n");
     machine.start_daemon();
     let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
-    let resumed = Transcript::create(machine.home(), Agent::Claude, project.path(), &old[..1]);
+    let resumed = Transcript::create(machine.home(), agent, project.path(), &old[..1]);
     let idle = [Turn::new()];
-    let untouched = Transcript::create(machine.home(), Agent::Claude, project.path(), &idle);
+    let untouched = Transcript::create(machine.home(), agent, project.path(), &idle);
     // Longer than the daemon takes to see a new transcript when capturing.
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
@@ -209,7 +230,7 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
     // Longer than the daemon takes to see the config change.
     std::thread::sleep(std::time::Duration::from_secs(3));
     let new = [Turn::new()];
-    let started = Transcript::create(machine.home(), Agent::Claude, project.path(), &new);
+    let started = Transcript::create(machine.home(), agent, project.path(), &new);
     machine.wait_until_said(&started.id, &said(&new));
 
     resumed.append(project.path(), &old[1..]);
@@ -224,9 +245,13 @@ fn capture_starts_when_the_config_turns_it_on(project: TempDir) {
 /// `cwd`.
 fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
     let id = transcript.id.as_str();
+    let resume_arg = format!("--resume={id}");
     let args = match transcript.agent {
         Agent::Claude => vec!["--resume", id],
         Agent::Codex => vec!["resume", id],
+        Agent::Copilot => vec![resume_arg.as_str()],
+        Agent::Grok => vec!["--resume", id],
+        Agent::Kiro => vec!["chat", "--resume-id", id],
         Agent::Opencode => vec!["--session", id],
         Agent::Pi => vec!["--session", transcript.path.to_str().unwrap()],
     };
@@ -242,12 +267,20 @@ fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
 /// A subagent isn't a session to resume, but the session it works for, which is listed as its
 /// parent: naming the subagent resumes that, saying so.
 #[rstest]
-fn a_subagent_resumes_as_the_session_it_works_for(machine: Machine, project: TempDir) {
+fn a_subagent_resumes_as_the_session_it_works_for(
+    machine: Machine,
+    project: TempDir,
+    #[values(Agent::Claude, Agent::Copilot, Agent::Kiro)] agent: Agent,
+) {
     let turns = [Turn::new()];
-    let parent = Transcript::create(machine.home(), Agent::Claude, project.path(), &turns);
-    let subagent = Transcript::claude_subagent(&parent, project.path(), &[Turn::new()]);
+    let parent = Transcript::create(machine.home(), agent, project.path(), &turns);
+    let subagent = match agent {
+        Agent::Claude => Transcript::claude_subagent(&parent, project.path(), &[Turn::new()]),
+        Agent::Kiro => Transcript::kiro_subagent(&parent, &[Turn::new()]),
+        _ => Transcript::copilot_subagent(&parent, &[Turn::new()]),
+    };
     machine.wait_until_said(&parent.id, &said(&turns));
-    let session = machine.wait_for_child(Agent::Claude, &parent.id);
+    let session = machine.wait_for_child(agent, &parent.id);
     assert_eq!(session["session_id"], subagent.id.as_str());
     assert_eq!(session["parent_kind"], "subagent");
 
@@ -300,6 +333,9 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 #[rstest]
 #[case::claude(Agent::Claude, "agent id")]
 #[case::codex(Agent::Codex, "agent id")]
+#[case::copilot(Agent::Copilot, "agent id")]
+#[case::grok(Agent::Grok, "agent id")]
+#[case::kiro(Agent::Kiro, "agent id")]
 #[case::opencode(Agent::Opencode, "agent id")]
 #[case::pi(Agent::Pi, "agent id")]
 #[case::by_atuin_id(Agent::Opencode, "atuin id")]
@@ -379,7 +415,8 @@ fn restored(agent: Agent) -> Restored {
 /// there carries on the same session -- nothing in it read twice -- which syncs back.
 #[rstest]
 fn a_session_from_another_machine_restores_as_the_same_session(
-    #[values(Agent::Claude, Agent::Codex, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -422,20 +459,24 @@ fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
 
     let downloaded = Regex::new(r"\d+/(\d+) up/down").unwrap();
     ai::wait_for("a sync to download the session", || {
-        let synced = here.run(&["sync"]);
+        let (_, synced) = succeeded(&common::Process::spawn(here.atuin(&["sync"])).wait());
         match downloaded.captures(&synced) {
             Some(counts) if &counts[1] != "0" => Ok(()),
             _ => Err(synced),
         }
     });
-    assert!(here.session(&original.id).is_some(), "not listed once synced");
+    let host = there.host_id().replace('-', "");
+    assert_eq!(there.session(&original.id).unwrap()["host"], host, "not its own machine's");
+    let listed = here.session(&original.id).expect("not listed once synced");
+    assert_eq!(listed["host"], host, "not the other machine's");
 }
 
 /// A copy behind the session's other machine catches up with it as it resumes, saying so, and
 /// once caught up resumes as it is.
 #[rstest]
 fn a_copy_behind_another_machine_catches_up_as_it_resumes(
-    #[values(Agent::Claude, Agent::Codex, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -468,7 +509,7 @@ fn a_copy_behind_another_machine_catches_up_as_it_resumes(
 /// restored copy): the copy goes on from the turn's last row, as the original does.
 #[rstest]
 fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
-    #[values(Agent::Claude, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)] agent: Agent,
     project: TempDir,
 ) {
     let server = SyncServer::start();
@@ -497,7 +538,8 @@ fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
 /// other machine's branch, keeping it whole as a backup.
 #[rstest]
 fn a_diverged_copy_resumes_only_as_chosen(
-    #[values(Agent::Claude, Agent::Codex, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let Restored {
         _server,
@@ -572,6 +614,9 @@ fn a_diverged_copy_resumes_only_as_chosen(
 #[case::claude_to_codex(Agent::Claude, Agent::Codex)]
 #[case::codex_to_claude(Agent::Codex, Agent::Claude)]
 #[case::pi_to_codex(Agent::Pi, Agent::Codex)]
+#[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
+#[case::grok_to_codex(Agent::Grok, Agent::Codex)]
+#[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case] to: Agent) {
     let Restored {
         _server,
@@ -618,7 +663,8 @@ fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case]
 fn forking_a_session_leaves_it_and_links_the_fork(
     machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Pi)] agent: Agent,
+    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    agent: Agent,
 ) {
     let turns = vec![Turn::new(), Turn::new()];
     let original = Transcript::create(machine.home(), agent, project.path(), &turns);
@@ -644,8 +690,18 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 #[rstest]
 #[case::claude_to_codex(Agent::Claude, Agent::Codex)]
 #[case::claude_to_pi(Agent::Claude, Agent::Pi)]
+#[case::claude_to_copilot(Agent::Claude, Agent::Copilot)]
+#[case::claude_to_kiro(Agent::Claude, Agent::Kiro)]
 #[case::codex_to_claude(Agent::Codex, Agent::Claude)]
+#[case::codex_to_kiro(Agent::Codex, Agent::Kiro)]
+#[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
+#[case::copilot_to_pi(Agent::Copilot, Agent::Pi)]
+#[case::claude_to_grok(Agent::Claude, Agent::Grok)]
+#[case::grok_to_claude(Agent::Grok, Agent::Claude)]
+#[case::grok_to_codex(Agent::Grok, Agent::Codex)]
+#[case::codex_to_grok(Agent::Codex, Agent::Grok)]
 #[case::codex_to_pi(Agent::Codex, Agent::Pi)]
+#[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 #[case::opencode_to_claude(Agent::Opencode, Agent::Claude)]
 #[case::opencode_to_codex(Agent::Opencode, Agent::Codex)]
 #[case::pi_to_claude(Agent::Pi, Agent::Claude)]
@@ -700,14 +756,14 @@ fn rebuilding_the_index_reproduces_it(machine: Machine, project: TempDir) {
     succeeded(&machine.resume(&[&ids[0], "--in", "codex", "--print"], machine.home()));
     let continued = machine.wait_for_child(Agent::Codex, &ids[0]);
     ids.push(continued["session_id"].as_str().unwrap().to_owned());
-    machine.wait_until_holds(&ids[4], &said(&turns));
+    machine.wait_until_holds(&ids[Agent::ALL.len()], &said(&turns));
 
     let index = |machine: &Machine| -> Vec<serde_json::Value> {
         ids.iter().map(|id| machine.show(id)).collect()
     };
     let before = index(&machine);
-    let out = machine.run(&["store", "rebuild", "threads"]);
-    assert!(out.contains("rebuilding"), "{out}");
+    let shown = common::messages(machine.atuin(&["store", "rebuild", "threads"]));
+    assert!(shown.contains("rebuilding"), "{shown}");
     // `threads` commands wait for the rebuild.
     assert_eq!(index(&machine), before);
 }

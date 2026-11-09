@@ -3,12 +3,13 @@
 // by tag/host
 
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
 use atuin_common::encryption::paseto_v4;
+use atuin_common::{db, userio};
 use atuin_domain::record::{
     Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordStatus, RecordTag,
     RecordVersion,
@@ -325,6 +326,24 @@ impl SqliteStore {
         Ok(res.into())
     }
 
+    /// The stored records among `ids`, in no particular order: an id not stored is left out.
+    #[instrument(level = "trace", skip_all, fields(ids = ids.len()), err)]
+    pub async fn get_many(
+        &self,
+        ids: &[RecordId],
+    ) -> Result<Vec<Record<paseto_v4::EncryptedData>>> {
+        // One JSON array, so any number of ids is one bind parameter.
+        let ids: Vec<String> = ids.iter().map(|id| id.as_hyphenated().to_string()).collect();
+        let res = db::query_as::<_, DbRecord>(sqlx::AssertSqlSafe(format!(
+            "select {STORE_COLUMNS} from store where id in (select value from json_each(?1))"
+        )))
+        .bind(serde_json::to_string(&ids)?)
+        .fetch_all(self.sqlite.pool())
+        .await?;
+
+        Ok(res.into_iter().map(Into::into).collect())
+    }
+
     #[instrument(level = "trace", skip_all, fields(id = ?id), err)]
     pub async fn delete(&self, id: RecordId) -> Result<()> {
         db::query("delete from store where id = ?1")
@@ -404,24 +423,45 @@ impl SqliteStore {
         Ok(0)
     }
 
-    /// The smallest `idx >= 0` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
+    /// The smallest `idx >= from` with no record for `(host, tag)`: Unlike `last().idx + 1`, this
     /// points at an interior hole when one exists.
-    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag), err)]
-    pub async fn first_gap(&self, series: &RecordSeriesKey) -> Result<RecordIdx> {
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, from = from), err)]
+    pub async fn first_gap(&self, series: &RecordSeriesKey, from: RecordIdx) -> Result<RecordIdx> {
         let gap: Option<i64> = db::query_scalar(
             "select min(idx) from (
-                 select idx + 1 as idx from store where host = ?1 and tag = ?2
+                 select idx + 1 as idx from store where host = ?1 and tag = ?2 and idx >= ?3
                  union
-                 select 0
+                 select ?3
              ) as candidates
-             where idx not in (select idx from store where host = ?1 and tag = ?2)",
+             where idx not in (select idx from store where host = ?1 and tag = ?2 and idx >= ?3)",
         )
         .bind(series.host_id.as_hyphenated().to_string())
         .bind(series.tag.as_str())
+        .bind(i64::conv(from))
         .fetch_one(self.sqlite.pool())
         .await?;
 
-        Ok(u64::conv(gap.unwrap_or(0)))
+        Ok(gap.map_or(from, u64::conv))
+    }
+
+    /// Get the total number of records in the given range.
+    #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, ?range), err)]
+    pub async fn count_in(
+        &self,
+        series: &RecordSeriesKey,
+        range: &Range<RecordIdx>,
+    ) -> Result<u64> {
+        let count: i64 = db::query_scalar(
+            "select count(*) from store where host = ?1 and tag = ?2 and idx >= ?3 and idx < ?4",
+        )
+        .bind(series.host_id.as_hyphenated().to_string())
+        .bind(series.tag.as_str())
+        .bind(i64::conv(range.start))
+        .bind(i64::conv(range.end))
+        .fetch_one(self.sqlite.pool())
+        .await?;
+
+        Ok(u64::conv(count))
     }
 
     #[instrument(level = "trace", skip_all, fields(host = ?series.host_id, tag = ?series.tag, idx, limit), err)]
@@ -660,7 +700,10 @@ impl SqliteStore {
             match record.clone().decrypt(key) {
                 Ok(_) => {}
                 Err(_) => {
-                    println!("Failed to decrypt {}, deleting", record.id.as_hyphenated());
+                    userio::log::info!(
+                        "record-store-decrypt-failed",
+                        id = record.id.as_hyphenated().to_string()
+                    );
 
                     self.delete(record.id).await?;
                 }
@@ -676,7 +719,7 @@ mod tests {
     use atuin_common::encryption::paseto_v4;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{
-        DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
+        DecryptedData, Host, HostId, Record, RecordId, RecordSeriesKey, RecordTag, RecordVersion,
     };
     use rstest::{fixture, rstest};
 
@@ -730,6 +773,20 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn get_many_leaves_a_missing_id_out(#[future(awt)] store: SqliteStore) {
+        let (first, second) = (record(), record());
+        store.push(&first).await.unwrap();
+        store.push(&second).await.unwrap();
+
+        let mut got = store.get_many(&[second.id, RecordId(uuid_v7()), first.id]).await.unwrap();
+        got.sort_by_key(|record| record.id);
+        let mut want = vec![first, second];
+        want.sort_by_key(|record| record.id);
+        assert_eq!(got, want);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn last(#[future(awt)] store: SqliteStore, record: Record<paseto_v4::EncryptedData>) {
         store.push(&record).await.unwrap();
         let last = store.last(&record.series_key()).await.unwrap();
@@ -762,19 +819,19 @@ mod tests {
         };
 
         // Empty stream -> frontier is 0.
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 0);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 0);
 
         // Contiguous 0,1,2 -> frontier is the next idx, 3.
         for idx in [0, 1, 2] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 3);
 
         // Add 4,5 but not 3: the frontier drops back to the hole, not the head + 1.
         for idx in [4, 5] {
             store.push(&at(idx)).await.unwrap();
         }
-        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone())).await.unwrap(), 3);
+        assert_eq!(store.first_gap(&RecordSeriesKey::new(host, tag.clone()), 0).await.unwrap(), 3);
     }
 
     #[rstest]

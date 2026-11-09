@@ -1,5 +1,6 @@
 use atuin_client::auth::{self, AuthClient, MutateResponse};
 use atuin_client::settings::Settings;
+use atuin_common::userio;
 use clap::Parser;
 use eyre::{Result, bail};
 use secrecy::{ExposeSecret, SecretString};
@@ -49,7 +50,7 @@ impl Cmd {
         meta.delete_session().await?;
         meta.delete_hub_session().await?;
 
-        println!("{}", fl!("delete-success"));
+        userio::log::info!("delete-success");
 
         Ok(())
     }

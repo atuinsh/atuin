@@ -1,8 +1,9 @@
 use atuin_client::settings::Settings;
+use atuin_common::userio;
 
 use crate::{SHA, VERSION};
 
-pub fn run(settings: &Settings) {
+pub async fn run(settings: &Settings) {
     let config_file = atuin_common::dirs::config_path("config.toml");
     let sever_config = atuin_common::dirs::config_path("server.toml");
 
@@ -26,36 +27,30 @@ pub fn run(settings: &Settings) {
 
     let general_info = format!("Version info:\nversion: {VERSION}\ncommit:  {SHA}");
 
-    let print_out = format!("{config_paths}\n\n{env_vars}\n{general_info}");
+    let host_id = match settings.host_id().await {
+        Ok(id) => id.0.as_simple().to_string(),
+        Err(err) => format!("unknown ({err})"),
+    };
+
+    let print_out =
+        format!("{config_paths}\n\n{env_vars}\n{general_info}\n\nHost info:\nhost id: {host_id}");
 
     println!("{print_out}");
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
-        println!("\n{}", shadowed_config_warning(&legacy, &config_file));
+        userio::log::warn!(
+            "info-shadowed-config",
+            legacy = legacy.display().to_string(),
+            active = config_file.display().to_string()
+        );
     }
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_data_dir(&settings.data_dir) {
-        println!("\n{}", shadowed_data_dir_warning(&legacy, &settings.data_dir));
+        userio::log::warn!(
+            "info-shadowed-data-dir",
+            legacy = legacy.display().to_string(),
+            active = settings.data_dir.display().to_string()
+        );
     }
-}
-
-/// Atuin reads `active`, so the settings in `legacy` do nothing.
-pub fn shadowed_config_warning(legacy: &std::path::Path, active: &std::path::Path) -> String {
-    format!(
-        "Warning: {} is ignored, because {} exists and Atuin reads that instead. Move your \
-         settings into it, or delete it to go back to the old one.",
-        legacy.display(),
-        active.display()
-    )
-}
-
-/// Atuin uses `active`, so the history and keys in `legacy` go unused.
-pub fn shadowed_data_dir_warning(legacy: &std::path::Path, active: &std::path::Path) -> String {
-    format!(
-        "Warning: {} is ignored, because {} exists and Atuin uses that instead. If your history \
-         is in the old one, move the new one somewhere else to go back to it.",
-        legacy.display(),
-        active.display()
-    )
 }
 
 fn fmt_env(name: &str) -> impl std::fmt::Display {

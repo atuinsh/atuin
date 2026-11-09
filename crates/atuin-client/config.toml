@@ -30,6 +30,11 @@
 ## possible values: prefix, fulltext, fuzzy, daemon-fuzzy
 # search_mode = "fuzzy"
 
+## whether `atuin init` binds ctrl-r and the up arrow to search
+## passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns them off either way
+# bind_ctrl_r = true
+# bind_up_arrow = true
+
 ## which search mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "search_mode"
 ## leave unspecified to use same mode set in "search_mode"
@@ -46,7 +51,7 @@
 # filter_mode_shell_up_key_binding = "global"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
-## in any directory within a git repository tree (default: true).
+## in any directory within a repository tree, Git or Jujutsu (default: true).
 ##
 ## To use workspace mode by default when available, set filter_mode to
 ## "workspace" or leave it unspecified and set search.filters to include
@@ -375,6 +380,7 @@ enter_accept = true
 [threads.resume]
 # claude = "claude --resume {id}"
 # codex = "codex resume {id}"
+# grok = "grok --resume {id}"
 # opencode = "opencode --session {id}"
 # pi = "pi --session {id}"
 

@@ -2,6 +2,7 @@ mod checkpoint;
 pub mod error;
 pub mod model;
 pub mod patch;
+pub mod pushed;
 pub mod synthetic;
 
 use std::future::Future;
@@ -184,6 +185,37 @@ pub(crate) async fn modified_after(
     modified.ok().map(drop)
 }
 
+/// The byte offset a read of the transcript at `path` resumes from for `from`: its position, if
+/// the line ending there is still the one `from` was taken after, else the transcript's start.
+pub(crate) async fn checkpoint_offset(path: &Path, pool: &BlockingPool, from: Checkpoint) -> u64 {
+    let at = path.to_path_buf();
+    let found = pool
+        .run(move || {
+            std::fs::File::open(at).and_then(|file| crate::io::Line::ending_at(&file, from.at))
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|found| found);
+    match found {
+        Ok(Some(line)) if from.names(&line.bytes) => from.at,
+        Ok(_) => {
+            tracing::debug!(
+                path = %path.display(),
+                "the checkpoint no longer names its line; reading from the start"
+            );
+            0
+        }
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                path = %path.display(),
+                "failed to read the line a checkpoint names; reading from the start"
+            );
+            0
+        }
+    }
+}
+
 pub trait Listener {
     type Session: Session;
 
@@ -278,6 +310,11 @@ pub trait Sessions {
 
     fn listener(&self) -> Result<Self::Listener, RuntimeError>;
 
+    /// When the harness last wrote a session under the root. This is the newest modification time
+    /// of the files that hold its sessions. It is `None` when the harness has kept no sessions
+    /// there. It reads the whole tree, so it is meant for one-off questions, not hot paths.
+    fn last_active(&self) -> Option<SystemTime>;
+
     /// One-shot scan of every session under the root. Yields `Err` for a directory, entry, or
     /// file-type read that fails mid-scan, so a caller (e.g. import) can report a partial scan
     /// rather than silently treating it as complete. The outer `Err` is only the root itself
@@ -311,8 +348,31 @@ mod tests {
     use super::*;
     use crate::harnesstools::ccode::session::CcodeSession;
     use crate::harnesstools::codex::session::CodexSession;
+    use crate::harnesstools::grok::session::GrokSession;
     use crate::harnesstools::pi::session::PiSession;
     use crate::harnesstools::session::model::{Content, MessageId, Role};
+
+    /// This test goes through the same dispatch that setup uses. It goes from the harness to its
+    /// sessions, and then to their root.
+    #[rstest]
+    fn last_active_reads_the_harness_sessions_directory() {
+        use crate::harnesstools::AnyHarness;
+        use crate::harnesstools::session::any::{ObservableExt as _, SessionsExt as _};
+        use crate::path::PathBufExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("GROK_HOME", dir.path());
+        let pool = BlockingPool::new(NonZeroUsize::new(1).unwrap());
+        let last_active = || AnyHarness::from_name("grok").unwrap().sessions(&pool)?.last_active();
+        assert_eq!(last_active(), None);
+
+        let session = dir.path().join("sessions").joined("workspace").joined("s.jsonl");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, "").unwrap();
+        let at = std::fs::metadata(&session).unwrap().modified().unwrap();
+        assert_eq!(last_active(), Some(at));
+    }
 
     #[derive(Debug, Clone)]
     struct StubMsg;
@@ -432,6 +492,7 @@ mod tests {
     enum JsonlHarness {
         Ccode,
         Codex,
+        Grok,
         Pi,
     }
 
@@ -446,6 +507,10 @@ mod tests {
                     .map_ok(|(at, _)| at)
                     .boxed(),
                 Self::Codex => CodexSession::open(id, path, pool)
+                    .messages_from(from)
+                    .map_ok(|(at, _)| at)
+                    .boxed(),
+                Self::Grok => GrokSession::open(id, path, pool)
                     .messages_from(from)
                     .map_ok(|(at, _)| at)
                     .boxed(),
@@ -477,7 +542,8 @@ mod tests {
         &[A], Some(Checkpoint::new(26, B.as_bytes())), vec![Checkpoint::new(13, A.as_bytes())])]
     #[tokio::test]
     async fn a_transcript_resumes_only_where_its_checkpoint_still_holds(
-        #[values(JsonlHarness::Ccode, JsonlHarness::Codex, JsonlHarness::Pi)] harness: JsonlHarness,
+        #[values(JsonlHarness::Ccode, JsonlHarness::Codex, JsonlHarness::Grok, JsonlHarness::Pi)]
+        harness: JsonlHarness,
         #[case] lines: &[&str],
         #[case] from: Option<Checkpoint>,
         #[case] expected: Vec<Checkpoint>,
@@ -493,14 +559,23 @@ pub mod any;
 
 use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
+use crate::harnesstools::copilot::session::CopilotMessage;
+use crate::harnesstools::grok::session::GrokMessage;
+use crate::harnesstools::kiro::session::KiroMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
+use crate::harnesstools::session::pushed::PushedMessage;
 
 #[enum_dispatch(Message)]
 #[derive(Debug, Clone)]
 pub enum AnyMessage {
     Ccode(CcodeMessage),
     Codex(CodexMessage),
+    Copilot(CopilotMessage),
+    Grok(GrokMessage),
+    Kiro(KiroMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
+    /// A message an agent pushed (`atuin threads push`).
+    Pushed(PushedMessage),
 }

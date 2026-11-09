@@ -1,0 +1,25 @@
+{
+  "info": {
+    "id": "01a18a39-82d5-7fc1-ae65-177c81cb02ff",
+    "cwd": "/work/proj"
+  },
+  "agent_id": "ag1.1d8281a3770648379a47f111a078e44a",
+  "attempt_id": "at1.d8a39b58a89b46ec929117c3025bf5c5",
+  "session_summary": "Run 'ls -la' and 'cat README.md' in the shell, then",
+  "created_at": "2026-10-30T00:33:07.291934173Z",
+  "updated_at": "2026-10-30T00:36:04.600801438Z",
+  "num_messages": 29,
+  "num_chat_messages": 6,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 2,
+  "chat_format_version": 1,
+  "session_kind": "headless",
+  "git_root_dir": "/work/proj/",
+  "request_id": "410a5c05-d37b-4897-b5ff-7c49e7fc79e8",
+  "grok_home": "/home/user/.grok",
+  "last_active_at": "2026-10-30T00:36:04.600801438Z",
+  "generated_title": "Run 'ls -la' and 'cat README.md' in the shell, then",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

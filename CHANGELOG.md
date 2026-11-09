@@ -2,6 +2,140 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.5
+
+### Bug Fixes
+
+- *(daemon)* Include pre-session history in session-preload search ([#4536](https://github.com/atuinsh/atuin/issues/4536))
+- *(deps)* Bump pulldown-cmark to 0.13.6 for RUSTSEC-2026-0433 ([#4631](https://github.com/atuinsh/atuin/issues/4631))
+- *(mcp)* Show the input schema on bad arguments, and accept query and a string as search terms ([#4640](https://github.com/atuinsh/atuin/issues/4640))
+- *(scripts)* Run scripts with process's original umask ([#4651](https://github.com/atuinsh/atuin/issues/4651))
+- *(threads)* Open written pi and omp sessions on one root, and on a model omp can use ([#4649](https://github.com/atuinsh/atuin/issues/4649))
+- *(threads)* Key a Grok tool result by its call, not its output ([#4652](https://github.com/atuinsh/atuin/issues/4652))
+
+
+### Features
+
+- *(ai)* Remove TERMINAL.md user context ([#4646](https://github.com/atuinsh/atuin/issues/4646))
+- *(api)* Delete a thread with its descendants, and refuse threads under a deleted one
+- *(client)* Load ai-session records by id
+- *(daemon)* Upload captured threads to octavo
+- *(devenv)* A dev shell with CI's toolchain and a sandboxed Atuin ([#4616](https://github.com/atuinsh/atuin/issues/4616))
+- *(setup)* New onboarding that asks what to capture and how to search it ([#4637](https://github.com/atuinsh/atuin/issues/4637))
+- *(setup)* Ask what to import on a screen of its own, with checkboxes and a button to continue ([#4650](https://github.com/atuinsh/atuin/issues/4650))
+- *(threads)* Add Grok Build session capture, resume, and sync ([#4583](https://github.com/atuinsh/atuin/issues/4583))
+- *(threads)* Capture Amp threads through a generic atuin threads push, and import them ([#4635](https://github.com/atuinsh/atuin/issues/4635))
+- *(threads)* Kiro CLI harness ([#4611](https://github.com/atuinsh/atuin/issues/4611))
+- *(threads)* Capture Kiro subagents as child sessions ([#4612](https://github.com/atuinsh/atuin/issues/4612))
+- *(threads)* Write, fork, continue into and sync Kiro sessions ([#4614](https://github.com/atuinsh/atuin/issues/4614))
+- *(threads)* Carry Kiro's write, edit and search tools, and fix its read offset ([#4633](https://github.com/atuinsh/atuin/issues/4633))
+- *(web)* Derive thread state and transcripts, and fake thread rpcs
+
+
+### Miscellaneous Tasks
+
+- Remove vestigial mentions of TERMINAL.md ([#4648](https://github.com/atuinsh/atuin/issues/4648))
+
+
+### Refactor
+
+- *(threads)* Replace manual enum dispatches with `enum_dispatch` ([#4639](https://github.com/atuinsh/atuin/issues/4639))
+
+
+### Testing
+
+- Keep two tests from reading the real environment ([#4617](https://github.com/atuinsh/atuin/issues/4617))
+
+## 18.24.4
+
+### Bug Fixes
+
+- *(ai-session)* Keep the objective of an opencode /goal ([#4599](https://github.com/atuinsh/atuin/issues/4599))
+- *(hooks)* Honour CLAUDE_CONFIG_DIR when installing Claude Code hooks ([#4597](https://github.com/atuinsh/atuin/issues/4597))
+- *(threads)* Open pi and omp sessions on the agent's default model ([#4598](https://github.com/atuinsh/atuin/issues/4598))
+- *(threads)* Take `claude` and `claude-code` alike wherever a harness is named ([#4602](https://github.com/atuinsh/atuin/issues/4602))
+- *(threads)* Restore a non-diverged session with no row before its parent ([#4604](https://github.com/atuinsh/atuin/issues/4604))
+
+
+### Features
+
+- *(cli)* Spooky atuin ([#4605](https://github.com/atuinsh/atuin/issues/4605))
+- *(threads)* Capture, search and resume GitHub Copilot CLI sessions ([#4567](https://github.com/atuinsh/atuin/issues/4567))
+- *(threads)* Capture Copilot subagents as child sessions ([#4568](https://github.com/atuinsh/atuin/issues/4568))
+- *(threads)* Write Copilot sessions: restore, catch up, switch, fork, continue ([#4580](https://github.com/atuinsh/atuin/issues/4580))
+- *(threads)* Name the recording host in threads JSON and atuin info ([#4600](https://github.com/atuinsh/atuin/issues/4600))
+- *(server)* Add support for X-Forwarded-For ([#4595](https://github.com/atuinsh/atuin/issues/4595))
+
+## 18.24.3
+
+### Bug Fixes
+
+- *(ai)* Parse history and output tool arguments with serde and reject unknown ones ([#4554](https://github.com/atuinsh/atuin/issues/4554))
+- *(client)* Keep the logging guard alive until the command finishes ([#4528](https://github.com/atuinsh/atuin/issues/4528))
+- *(daemon)* Build kv and scripts after a sync, not only history ([#4544](https://github.com/atuinsh/atuin/issues/4544))
+- *(daemon,sync)* Rebuild search index after `atuin sync` ([#4574](https://github.com/atuinsh/atuin/issues/4574))
+- *(deps)* Bump ctutils and tokio for RUSTSEC-2026-0385 and -0386 ([#4525](https://github.com/atuinsh/atuin/issues/4525))
+- *(deps)* Bump bandit to 1.14.0 and zstd to 0.14 for the open security advisories
+- *(deps)* Bump docs gitpython to 3.2.1 for GHSA-83vg-56qc-22m7 ([#4559](https://github.com/atuinsh/atuin/issues/4559))
+- *(deps)* Bump pulldown-cmark to 0.13.5 ([#4581](https://github.com/atuinsh/atuin/issues/4581))
+- *(docker)* Ship patched ca-certificates in the server image ([#4522](https://github.com/atuinsh/atuin/issues/4522))
+- *(i18n)* Say force *pull* in the store pull --force help ([#4523](https://github.com/atuinsh/atuin/issues/4523))
+- *(login)* Restart the daemon on the new key when login changes it ([#4555](https://github.com/atuinsh/atuin/issues/4555))
+- *(mcp)* Reject arguments a tool doesn't take instead of ignoring them ([#4553](https://github.com/atuinsh/atuin/issues/4553))
+- *(pty-proxy)* Don't auto-spawn on Linux virtual consoles ([#4564](https://github.com/atuinsh/atuin/issues/4564))
+- *(release)* Regenerate CONTRIBUTORS on every release ([#4561](https://github.com/atuinsh/atuin/issues/4561))
+- *(scripts)* Name the editor when launching it fails ([#4533](https://github.com/atuinsh/atuin/issues/4533))
+- *(server)* Check the password before deleting an account ([#4572](https://github.com/atuinsh/atuin/issues/4572))
+- *(sync)* Stop re-downloading history the server doesn't have
+- *(threads)* Stop reading claude code api-request blobs as messages ([#4538](https://github.com/atuinsh/atuin/issues/4538))
+- *(threads)* Keep opencode subagent prompts and other dropped content ([#4546](https://github.com/atuinsh/atuin/issues/4546))
+- *(threads)* Keep Claude Code recaps, safeguard notices, retried API errors and skill prompts ([#4547](https://github.com/atuinsh/atuin/issues/4547))
+- *(threads)* Keep omp python runs, file mentions, narration and subagent links ([#4548](https://github.com/atuinsh/atuin/issues/4548))
+- *(threads)* Keep codex subagent answers and voice transcripts, read compressed rollouts ([#4549](https://github.com/atuinsh/atuin/issues/4549))
+- *(threads)* Ignore enter_accept for resume ([#4573](https://github.com/atuinsh/atuin/issues/4573))
+- Undo i18n of `__internal` docs ([#4560](https://github.com/atuinsh/atuin/issues/4560))
+
+
+### Features
+
+- *(cli)* Categorized help via clap-couture ([#4384](https://github.com/atuinsh/atuin/issues/4384))
+- *(common)* Userio::log macros and sinks for user messages ([#4562](https://github.com/atuinsh/atuin/issues/4562))
+- *(dist)* Add a Windows MSI installer for atuin ([#4527](https://github.com/atuinsh/atuin/issues/4527))
+- *(mcp)* Install for all configured agents with `atuin mcp install` ([#4557](https://github.com/atuinsh/atuin/issues/4557))
+- *(search)* Add shell-up-key-binding keybinding condition ([#4552](https://github.com/atuinsh/atuin/issues/4552))
+- *(server)* Add admin commands to create, reset and delete users ([#4526](https://github.com/atuinsh/atuin/issues/4526))
+- *(threads)* Say how long writing the session file took before starting the harness ([#4537](https://github.com/atuinsh/atuin/issues/4537))
+- More correct numeric math ([#4585](https://github.com/atuinsh/atuin/issues/4585))
+
+
+### Miscellaneous Tasks
+
+- Skip nix build, illumos and package on mono's land/* builds ([#4551](https://github.com/atuinsh/atuin/issues/4551))
+- Move the Windows jobs to Buildkite ([#4571](https://github.com/atuinsh/atuin/issues/4571))
+
+
+### Performance
+
+- Improve search index performance ([#4586](https://github.com/atuinsh/atuin/issues/4586))
+
+
+### Refactor
+
+- *(client)* Report a wrong encryption key through a typed error ([#4529](https://github.com/atuinsh/atuin/issues/4529))
+- *(deps)* Bump axoupdater from 0.10.0 to 0.10.3 ([#4539](https://github.com/atuinsh/atuin/issues/4539))
+- *(deps)* Bump futures-util from 0.3.33 to 0.3.34 ([#4540](https://github.com/atuinsh/atuin/issues/4540))
+- *(deps)* Bump serde_json from 1.0.151 to 1.0.154 ([#4541](https://github.com/atuinsh/atuin/issues/4541))
+- *(deps)* Bump tokio-util from 0.7.19 to 0.7.20 ([#4542](https://github.com/atuinsh/atuin/issues/4542))
+- *(deps)* Bump serde_with from 3.21.0 to 3.24.0 ([#4543](https://github.com/atuinsh/atuin/issues/4543))
+- *(pty-proxy)* Clean up tty ownership checks ([#4565](https://github.com/atuinsh/atuin/issues/4565))
+
+
+### Testing
+
+- *(secrets)* Remove the redaction timing tests ([#4566](https://github.com/atuinsh/atuin/issues/4566))
+
+
+
 ## 18.24.2
 
 ### Bug Fixes

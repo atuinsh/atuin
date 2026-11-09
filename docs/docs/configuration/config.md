@@ -53,16 +53,16 @@ SQLite opens as written.
     Check whether you have any AI-related files in `~/.atuin`:
 
     ```sh
-    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills -e TERMINAL.md
+    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
     ```
 
     If you do, please expand and follow this section:
 
     ??? note "Migrating home-scoped AI config"
 
-        In older installations, `permissions.ai.toml`, `skills`, or
-        `TERMINAL.md` in `~/.atuin` are scoped to your home directory, whereas
-        in newer installations, they are applied *globally*. The existence of
+        In older installations, `permissions.ai.toml` and `skills` in
+        `~/.atuin` are scoped to your home directory, whereas in newer
+        installations, they are applied *globally*. The existence of
         `~/.atuin/config.toml` is what determines whether the new or old
         behavior is used; if `~/.atuin/config.toml` exists, these items are
         interpreted as global.
@@ -79,8 +79,8 @@ SQLite opens as written.
         `~/.atuin` and `~/.config/atuin`:
 
         ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills \
-            -e TERMINAL.md | sort | uniq -d
+        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
+            sort | uniq -d
         ```
 
         If there are any such items, you must merge the items in
@@ -92,7 +92,7 @@ SQLite opens as written.
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.ai.toml -e TERMINAL.md) ~/.atuin/
+        -e themes -e skills -e permissions.ai.toml) ~/.atuin/
     ```
 
     Then, move your data:
@@ -248,6 +248,16 @@ Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 filter_mode = "host"
 ```
 
+### `bind_ctrl_r` and `bind_up_arrow`
+
+Default: `true`
+
+Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+```toml
+bind_up_arrow = false
+```
+
 ### `search_mode_shell_up_key_binding`
 
 Default: `fuzzy`
@@ -293,10 +303,12 @@ inline_height_shell_up_key_binding = 10
 Default: `true`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
-activated when you're in a git repository.
+activated when you're in a Git or Jujutsu repository.
 
-With workspace filtering enabled, Atuin will filter for commands executed in any directory
-within a git repository tree.
+With workspace filtering enabled, Atuin filters commands executed in any directory
+within the repository tree. A plain Git worktree searches history under the main
+repository root. A Jujutsu workspace searches history under its own root, even when
+colocated with a Git worktree.
 
 Filter modes can still be toggled via ctrl-r.
 
@@ -722,7 +734,7 @@ keyboard_enhancement = false
 
 ### `filters`
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 

@@ -50,32 +50,39 @@ pub enum HookEvent {
     },
 }
 
-impl From<WireHookEvent> for Option<HookEvent> {
-    /// Reduce a decoded wire event to a [`HookEvent`], or `None` when we don't care about the given
-    /// event.
+/// The harness whose bare `tool_response` ends in the exit code.
+const KIRO: &str = "kiro";
+
+impl HookEvent {
+    /// Reduce a decoded wire event from `harness` (the name `atuin hook` was given) to a
+    /// [`HookEvent`], or `None` when we don't care about the given event.
     ///
     /// We **don't** care about:
-    ///   - Non-`Bash` tool invocations.
-    ///   - Tool invocations which are missing a `tool_use_id`.
-    fn from(wire: WireHookEvent) -> Self {
+    ///   - Non-shell tool invocations.
+    ///   - Tool invocations which are missing a `tool_use_id`, unless the session and the
+    ///     command can stand in for it ([`correlation_key`]).
+    ///   - Commands started in the background (Copilot's `mode: async`, Kiro's
+    ///     `run_in_background`): their end says only that they started, so recording one would
+    ///     give it the wrong exit and duration.
+    fn reduce(wire: WireHookEvent, harness: &str) -> Option<Self> {
         if matches!(wire.tool_name, WireToolName::Other) {
             return None;
         }
 
+        let (command, intent) = match wire.tool_input {
+            Some(input) if input.is_background() => return None,
+            Some(input) => (input.command, input.description),
+            None => (None, None),
+        };
         // Present but empty is as good as missing: a start could never be
         // matched to its end.
-        if wire.tool_use_id.is_empty() {
-            return None;
-        }
-        let tool_use_id = wire.tool_use_id;
+        let tool_use_id = match wire.tool_use_id.filter(|id| !id.is_empty()) {
+            Some(id) => id,
+            None => correlation_key(wire.session_id.as_deref()?, command.as_deref()?),
+        };
 
         match wire.hook_event_name {
             HookEventName::PreToolUse => {
-                let (command, intent) = match wire.tool_input {
-                    Some(input) => (input.command, input.description),
-                    None => (None, None),
-                };
-
                 // A missing or empty command has nothing to record.
                 let command = command.filter(|command| !command.is_empty())?;
 
@@ -85,11 +92,20 @@ impl From<WireHookEvent> for Option<HookEvent> {
                     tool_use_id,
                 })
             }
-            HookEventName::PostToolUse => Some(HookEvent::End {
-                tool_use_id,
-                exit: wire.tool_response.and_then(|response| response.exit_code()),
-                transcript: wire.transcript_path,
-            }),
+            HookEventName::PostToolUse => {
+                // Only Kiro's bare response ends in the exit code. Codex's is the output alone,
+                // with the exit in its transcript, so a line the command printed is never read
+                // as one.
+                let exit = wire.tool_response.and_then(|response| match harness {
+                    KIRO => response.kiro_exit_code(),
+                    _ => response.exit_code(),
+                });
+                Some(HookEvent::End {
+                    tool_use_id,
+                    exit: exit.or_else(|| wire.tool_result.and_then(|result| result.exit_code())),
+                    transcript: wire.transcript_path,
+                })
+            }
             // Failed: with the exit code its error starts with (`Exit code 2`), else 1.
             HookEventName::PostToolUseFailure => Some(HookEvent::End {
                 tool_use_id,
@@ -101,23 +117,31 @@ impl From<WireHookEvent> for Option<HookEvent> {
     }
 }
 
+/// What stands in for a `tool_use_id` an agent (Copilot, Kiro) doesn't send: the session and
+/// the command, which both the start and the end of a call carry. Two identical commands running
+/// at once in one session share a key, and the second to end closes the first's entry.
+fn correlation_key(session_id: &str, command: &str) -> String {
+    format!("{session_id}-{:016x}", xxhash_rust::xxh3::xxh3_64(command.as_bytes()))
+}
+
 /// The exit code a Claude Code failure's `error` starts with (`Exit code <n>`), if it does.
 fn failure_exit_code(error: &str) -> Option<i64> {
     error.lines().next()?.strip_prefix("Exit code ")?.trim().parse().ok()
 }
 
 impl HookEvent {
-    /// Parse a raw hook payload (the JSON an agent writes to stdin) into a [`HookEvent`], or `None`
-    /// when there is nothing to record.
+    /// Parse a raw hook payload (the JSON `harness` writes to stdin) into a [`HookEvent`], or
+    /// `None` when there is nothing to record. The harness name decides only what a bare
+    /// `tool_response` says (see [`Self::reduce`]).
     ///
     /// Well-formed JSON that doesn't fit the hook-event schema yields `Ok(None)`.
     ///
     /// Only *malformed* JSON (a syntax error or truncated input) is surfaced as a
     /// [`ParseError`]: an agent could never send that legitimately, so it signals
     /// a real fault worth seeing.
-    pub fn from_json_str(input: &str) -> Result<Option<Self>, ParseError> {
+    pub fn from_json_str(input: &str, harness: &str) -> Result<Option<Self>, ParseError> {
         match serde_json::from_str::<WireHookEvent>(input) {
-            Ok(wire) => Ok(wire.into()),
+            Ok(wire) => Ok(Self::reduce(wire, harness)),
             Err(err) if err.classify() == Category::Data => Ok(None),
             Err(err) => Err(ParseError::MalformedJson {
                 line: err.line(),
@@ -138,6 +162,25 @@ mod tests {
 
     fn non_nul(s: &str) -> NonNulStr {
         NonNulStr::new(s.to_owned()).unwrap()
+    }
+
+    /// The key the Copilot cases below correlate by.
+    fn copilot_key(command: &str) -> String {
+        correlation_key("25e51fe0-710a-4dfe-973e-caf8e2629ad7", command)
+    }
+
+    /// The key the Kiro cases below correlate by.
+    fn kiro_key(command: &str) -> String {
+        correlation_key("sess_0550199b-937b-4dd4-94e0-6901bd990fb0", command)
+    }
+
+    #[rstest]
+    fn the_correlation_key_is_the_session_and_the_commands_hash() {
+        let key = copilot_key("echo probe-hello; false");
+        assert!(key.starts_with("25e51fe0-710a-4dfe-973e-caf8e2629ad7-"), "{key}");
+        assert_eq!(key.len(), 36 + 1 + 16, "{key}");
+        assert_ne!(copilot_key("a"), copilot_key("b"));
+        assert_ne!(correlation_key("s", "a"), correlation_key("t", "a"));
     }
 
     #[rstest]
@@ -239,6 +282,42 @@ mod tests {
             transcript: Some("/w/.codex/sessions/2026/10/09/rollout-x.jsonl".into()),
         })
     )]
+    // Grok Build names its shell tool `run_terminal_command` and reports `exit_code` in snake_case.
+    #[case::grok_pre_tool_use(
+        json!({
+            "hookEventName": "pre_tool_use",
+            "hook_event_name": "PreToolUse",
+            "toolName": "run_terminal_command",
+            "tool_name": "run_terminal_command",
+            "toolInput": {"command": "cargo test", "description": "Run workspace tests"},
+            "tool_input": {"command": "cargo test", "description": "Run workspace tests"},
+            "toolUseId": "call_ok_1",
+            "tool_use_id": "call_ok_1",
+            "session_id": "01a18221-a7b8-75e0-b6ef-b2a5cc95d2c9",
+            "cwd": "/w"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("cargo test"),
+            intent: Some("Run workspace tests".into()),
+            tool_use_id: "call_ok_1".into(),
+        })
+    )]
+    #[case::grok_post_tool_use_nonzero_exit(
+        json!({
+            "hookEventName": "post_tool_use",
+            "hook_event_name": "PostToolUse",
+            "toolName": "run_terminal_command",
+            "tool_name": "run_terminal_command",
+            "tool_response": {"type": "Bash", "exit_code": 7, "output_for_prompt": "exit: 7\n"},
+            "tool_use_id": "call_fail_2",
+            "transcript_path": "/w/.grok/sessions/%2Fw/01a18221/updates.jsonl"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "call_fail_2".into(),
+            exit: Some(7),
+            transcript: Some("/w/.grok/sessions/%2Fw/01a18221/updates.jsonl".into()),
+        })
+    )]
     // Non-Bash tools are never recorded.
     #[case::non_bash_tool_skipped(
         json!({
@@ -249,7 +328,7 @@ mod tests {
         }),
         None
     )]
-    // A missing tool_use_id can't be correlated start↔end → skip.
+    // A missing tool_use_id can't be correlated start↔end without a session → skip.
     #[case::missing_tool_use_id_skipped(
         json!({
             "hook_event_name": "PreToolUse",
@@ -257,6 +336,67 @@ mod tests {
             "tool_input": {"command": "echo hi"}
         }),
         None
+    )]
+    // Copilot CLI 1.0.104 sends no tool_use_id: the session and the command correlate the
+    // start with the end, which carries the command again and the exit code in the output.
+    #[case::copilot_pre_tool_use(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "timestamp": "2026-10-27T18:25:31.292Z",
+            "cwd": "/tmp/copilot-play",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo probe-hello; false", "description": "Run probe echo command"}
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("echo probe-hello; false"),
+            intent: Some("Run probe echo command".into()),
+            tool_use_id: copilot_key("echo probe-hello; false"),
+        })
+    )]
+    #[case::copilot_post_tool_use(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "timestamp": "2026-10-27T18:25:31.430Z",
+            "cwd": "/tmp/copilot-play",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo probe-hello; false", "description": "Run probe echo command"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "probe-hello\n<shellId: 0 completed with exit code 1>"}
+        }),
+        Some(HookEvent::End { tool_use_id: copilot_key("echo probe-hello; false"), exit: Some(1), transcript: None })
+    )]
+    // A command Copilot started in the background (`mode: async`) is never recorded: its end
+    // comes when it starts. A real payload, Copilot CLI 1.0.104.
+    #[case::copilot_background_start_skipped(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Background sleep then echo", "mode": "async"}
+        }),
+        None
+    )]
+    #[case::copilot_background_end_skipped(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Background sleep then echo", "mode": "async"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "<command started in background with shellId: 1>"}
+        }),
+        None
+    )]
+    // A failing command is a `PostToolUse` too, its exit code in the trailer alone.
+    #[case::copilot_failed_command(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "25e51fe0-710a-4dfe-973e-caf8e2629ad7",
+            "tool_name": "Bash",
+            "tool_input": {"command": "exit 3", "description": "Run exit 3"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "\n<shellId: 0 completed with exit code 3>"}
+        }),
+        Some(HookEvent::End { tool_use_id: copilot_key("exit 3"), exit: Some(3), transcript: None })
     )]
     // An empty tool_use_id is treated the same as missing.
     #[case::empty_tool_use_id_skipped(
@@ -337,24 +477,172 @@ mod tests {
         }),
         None
     )]
+    /// The harness name only decides what a bare `tool_response` says, which none of these have.
     fn parses_agent_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
-        assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), expected);
+        assert_eq!(HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(), expected);
+    }
+
+    #[rstest]
+    // Kiro CLI 2.36.0 sends Claude Code's event with no tool_use_id, its shell tool named
+    // `execute_bash`, and a bare-string response ending in the exit code (real payloads).
+    #[case::kiro_pre_tool_use(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PreToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "date +%s%N", "description": "Get current Unix time in nanoseconds", "cwd": null, "run_in_background": false, "timeout": null}
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("date +%s%N"),
+            intent: Some("Get current Unix time in nanoseconds".into()),
+            tool_use_id: kiro_key("date +%s%N"),
+        })
+    )]
+    #[case::kiro_post_tool_use(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PostToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "date +%s%N", "description": "Get current Unix time in nanoseconds", "cwd": null, "run_in_background": false, "timeout": null},
+            "tool_response": "Output:\n1793383081798933000\n\n\nExit Code: 0"
+        }),
+        Some(HookEvent::End { tool_use_id: kiro_key("date +%s%N"), exit: Some(0), transcript: None })
+    )]
+    // A failing command is a `PostToolUse` too, its exit code at the end of the response (the
+    // response is as Kiro's transcript records it).
+    #[case::kiro_failed_command(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PostToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "python3 -m unittest -v 2>&1", "description": "Run the project unit tests verbosely", "cwd": null, "run_in_background": false, "timeout": null},
+            "tool_response": "Output:\ntest_mean (test_calc.CalcTest.test_mean) ... FAIL\n\nFAILED (failures=1)\n\n\nExit Code: 1"
+        }),
+        Some(HookEvent::End { tool_use_id: kiro_key("python3 -m unittest -v 2>&1"), exit: Some(1), transcript: None })
+    )]
+    // A call that never ran (denied, or its permission request failed) reports `Exit Code: -1`,
+    // which closes the entry its start opened.
+    #[case::kiro_command_that_never_ran(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PostToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "echo probe-hello", "cwd": null, "run_in_background": false, "timeout": null},
+            "tool_response": "Output:\nThe permission request failed before it was answered, so this call did not run; the user did not reject it.\n\nExit Code: -1"
+        }),
+        Some(HookEvent::End { tool_use_id: kiro_key("echo probe-hello"), exit: Some(-1), transcript: None })
+    )]
+    // A command Kiro runs in the background is never recorded: its end comes when it starts.
+    #[case::kiro_background_start_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PreToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Sleep then echo", "cwd": null, "run_in_background": true, "timeout": null}
+        }),
+        None
+    )]
+    #[case::kiro_background_end_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PostToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "execute_bash",
+            "tool_input": {"command": "sleep 30; echo late", "description": "Sleep then echo", "cwd": null, "run_in_background": true, "timeout": null},
+            "tool_response": "Output:\nStarted in background\n\n\nExit Code: 0"
+        }),
+        None
+    )]
+    // Windows's shell tool is the same tool.
+    #[case::kiro_pwsh_pre_tool_use(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PreToolUse",
+            "cwd": "C:\\kiro-play",
+            "tool_name": "execute_pwsh",
+            "tool_input": {"command": "Get-Date", "run_in_background": false}
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("Get-Date"),
+            intent: None,
+            tool_use_id: kiro_key("Get-Date"),
+        })
+    )]
+    // Kiro's other tools, and its session events, aren't recorded. The session events are real
+    // payloads: they carry no tool at all.
+    #[case::kiro_file_tool_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "PreToolUse",
+            "cwd": "/tmp/kiro-play",
+            "tool_name": "read_file",
+            "tool_input": {"path": "README.md"}
+        }),
+        None
+    )]
+    #[case::kiro_session_start_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "SessionStart",
+            "cwd": "/tmp/kiro-play"
+        }),
+        None
+    )]
+    #[case::kiro_user_prompt_submit_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/tmp/kiro-play",
+            "prompt": "I need the current unix time in nanoseconds from this machine: run the shell command 'date +%s%N' with your shell tool and report the exact number it prints."
+        }),
+        None
+    )]
+    #[case::kiro_stop_skipped(
+        json!({
+            "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
+            "hook_event_name": "Stop",
+            "cwd": "/tmp/kiro-play"
+        }),
+        None
+    )]
+    fn parses_kiro_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
+        assert_eq!(HookEvent::from_json_str(&input.to_string(), "kiro").unwrap(), expected);
     }
 
     /// Codex serializes `tool_response` as a bare string, unlike the object
     /// Claude Code sends. Dropping the completion leaves the history entry
     /// opened by the matching `PreToolUse` unfinished, so nothing is recorded
     /// when the daemon owns the store (issue #4169).
+    ///
+    /// Its exit code is in its transcript, never in that string: a command that prints
+    /// `Exit Code: 7` itself is not read as exit 7. Only Kiro's bare response ends that way.
     #[rstest]
-    #[case::string_tool_response(
+    #[case::codex_string_tool_response(
+        "codex",
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
         Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
     )]
-    fn completion_accepts_string_tool_response(
+    #[case::codex_output_that_prints_an_exit_code(
+        "codex",
+        r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"echo 'Exit Code: 7'"},"tool_response":"Exit Code: 7\n"}"#,
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
+    )]
+    #[case::kiro_output_ending_in_its_exit_code(
+        "kiro",
+        r#"{"hook_event_name":"PostToolUse","tool_name":"execute_bash","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"exit 7"},"tool_response":"Output:\n\n\n\nExit Code: 7"}"#,
+        Some(HookEvent::End { tool_use_id: correlation_key("example-session", "exit 7"), exit: Some(7), transcript: None })
+    )]
+    fn a_bare_tool_response_says_the_exit_for_kiro_alone(
+        #[case] harness: &str,
         #[case] input: &str,
         #[case] expected: Option<HookEvent>,
     ) {
-        assert_eq!(HookEvent::from_json_str(input).unwrap(), expected);
+        assert_eq!(HookEvent::from_json_str(input, harness).unwrap(), expected);
     }
 
     /// Well-formed JSON that isn't a hook event we model is skipped, not an
@@ -366,7 +654,7 @@ mod tests {
         r#"{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": 5, "tool_input": {"command": "ls"}}"#
     )]
     fn well_formed_non_events_are_skipped(#[case] input: &str) {
-        assert_eq!(HookEvent::from_json_str(input).unwrap(), None);
+        assert_eq!(HookEvent::from_json_str(input, "claude-code").unwrap(), None);
     }
 
     /// Malformed JSON is a genuine fault an agent could never send by design,
@@ -375,7 +663,7 @@ mod tests {
     #[case::not_json("not json")]
     #[case::truncated(r#"{"tool_name":"#)]
     fn malformed_json_is_an_error(#[case] input: &str) {
-        let err = HookEvent::from_json_str(input).unwrap_err();
+        let err = HookEvent::from_json_str(input, "claude-code").unwrap_err();
         let ParseError::MalformedJson { line, column, .. } = err;
 
         assert!(line >= 1 && column >= 1, "position should be 1-based, got {line}:{column}");
@@ -408,7 +696,7 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::Start {
                     command: NonNulStr::new(command).unwrap(),
                     intent: description,
@@ -431,7 +719,7 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::End { tool_use_id, exit: Some(exit), transcript: None })
             );
         }
@@ -451,15 +739,21 @@ mod tests {
             });
 
             prop_assert_eq!(
-                HookEvent::from_json_str(&input.to_string()).unwrap(),
+                HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
                 Some(HookEvent::End { tool_use_id, exit: Some(1), transcript: None })
             );
         }
 
-        /// Any tool other than Bash is skipped, whatever the event or fields.
+        /// Any tool other than a shell is skipped, whatever the event or fields.
         #[test]
-        fn non_bash_tool_is_always_skipped(
-            tool_name in r"[^\p{Cc}]+".prop_filter("must not be Bash", |s| s.as_str() != "Bash"),
+        fn non_shell_tool_is_always_skipped(
+            tool_name in r"[^\p{Cc}]+".prop_filter(
+                "must not be a shell tool",
+                |s| !matches!(
+                    s.as_str(),
+                    "Bash" | "run_terminal_command" | "execute_bash" | "execute_pwsh"
+                ),
+            ),
             event in proptest::sample::select(vec![
                 "PreToolUse", "PostToolUse", "PostToolUseFailure", "Frobnicate",
             ]),
@@ -473,7 +767,7 @@ mod tests {
                 "tool_use_id": tool_use_id,
             });
 
-            prop_assert_eq!(HookEvent::from_json_str(&input.to_string()).unwrap(), None);
+            prop_assert_eq!(HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(), None);
         }
     }
 }

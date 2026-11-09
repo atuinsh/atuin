@@ -13,7 +13,7 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Instrument as _, Level, debug, error, info, instrument, span, trace};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
@@ -21,7 +21,8 @@ use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
     FilterMode, IndexFilterMode, OutputSearchLine, OutputSearchMatch, PrepareIndexRequest,
-    PrepareIndexResponse, SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
+    PrepareIndexResponse, RebuildIndexRequest, RebuildIndexResponse, SearchCommandOutputRequest,
+    SearchIndex, SearchRequest, SearchResponse,
 };
 
 const RESULTS_LIMIT: usize = 200;
@@ -75,12 +76,12 @@ impl SearchComponent {
         index.read().await.rebuild_frecency(&settings.search);
     }
 
-    /// Rebuild the search index from the database, then its frecency map.
+    /// Populate the search index from the database, then its frecency map.
     ///
     /// The read guard is re-acquired per page rather than held across the whole load, so concurrent
     /// index operations aren't blocked while this does its expensive work.
     #[instrument(skip_all, level = Level::TRACE)]
-    async fn rebuild_index(
+    async fn populate_index(
         handle: &DaemonHandle,
         index: &RwLock<SearchIndex>,
     ) -> Result<(), eyre::Error> {
@@ -135,7 +136,7 @@ impl Component for SearchComponent {
             let shells =
                 handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
             index.write().await.shells = shells;
-            let _ = Self::rebuild_index(&handle_for_loader, &index).await.inspect_err(|err| {
+            let _ = Self::populate_index(&handle_for_loader, &index).await.inspect_err(|err| {
                 error!(?err, "failed to rebuild the index.");
             });
         }));
@@ -167,7 +168,7 @@ impl Component for SearchComponent {
                 }
             }
             // Events we don't care about
-            DaemonEvent::ShutdownRequested => {}
+            DaemonEvent::ShutdownRequested | DaemonEvent::LoggedIn => {}
         }
         Ok(())
     }
@@ -293,13 +294,15 @@ impl SearchSvc for SearchGrpcService {
                 };
 
                 // Perform the search
-                let history_ids: Vec<Vec<u8>> =
-                    span!(Level::TRACE, "daemon_search_query", %query, query_id).in_scope(|| {
-                        index
-                            .search(&query, &index_filter, RESULTS_LIMIT)
-                            .map(|id| id.into_bytes().to_vec())
-                            .collect()
-                    });
+                let history_ids: Vec<Vec<u8>> = async {
+                    index
+                        .search(&query, &index_filter, RESULTS_LIMIT, this.handle.history_db())
+                        .await
+                        .map(|id| id.into_bytes().to_vec())
+                        .collect()
+                }
+                .instrument(span!(Level::TRACE, "daemon_search_query", %query, query_id))
+                .await;
                 drop(index);
 
                 if tx
@@ -337,6 +340,43 @@ impl SearchSvc for SearchGrpcService {
             *self.index.write().await = index;
         }
         Ok(Response::new(PrepareIndexResponse {}))
+    }
+
+    async fn rebuild_index(
+        &self,
+        _request: Request<RebuildIndexRequest>,
+    ) -> Result<Response<RebuildIndexResponse>, Status> {
+        let index = self.index.clone();
+        let handle = self.handle.clone();
+
+        // TODO(#4052): This is inherently racy -- any add_history operations added between this
+        // .read() and the subsequent .write() are completely discarded from the new index.
+        //
+        // Using `tokio::spawn` so that a client that stops waiting for the response doesn't cancel
+        // the rebuild.
+        tokio::spawn(
+            async move {
+                let shells = index.read().await.shells.clone();
+                let search = handle.settings().await.search.clone();
+                let new_index = SearchIndex::from_db(shells, handle.history_db(), &search).await?;
+                info!(
+                    "Search index rebuild complete; {} unique commands",
+                    new_index.command_count()
+                );
+                *index.write().await = new_index;
+                Ok::<_, eyre::Report>(())
+            }
+            .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(eyre::Report::from)
+        .and_then(std::convert::identity)
+        .map_err(|e| {
+            error!("Failed to rebuild search index: {e:#}");
+            Status::internal("failed to rebuild the search index")
+        })?;
+
+        Ok(Response::new(RebuildIndexResponse {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE, name = "search_command_output_rpc")]
@@ -390,18 +430,17 @@ fn convert_filter_mode(
             IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
         }
         (FilterMode::Workspace, Some(ctx)) => {
-            if let Some(ref git_root) = ctx.git_root {
-                IndexFilterMode::Workspace(git_root.display_rich().trailing_slash(true).to_string())
+            if let Some(ref vcs_root) = ctx.vcs_root {
+                IndexFilterMode::Workspace(vcs_root.display_rich().trailing_slash(true).to_string())
             } else {
-                // Fall back to directory if no git root
+                // Fall back to directory if no repo root
                 IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
             }
         }
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
-            // SessionPreload is similar to Session - filter by session
-            IndexFilterMode::Session(ctx.session_id.clone())
+            IndexFilterMode::SessionPreload(ctx.session_id.clone())
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,

@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use atuin_client::ai_session::{Appended, HarnessKind, NativeSessionId};
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::any::{AnySession, AnySessions};
+use atuin_common::harnesstools::session::any::{
+    AnySession, AnySessions, ObservableExt as _, SessionExt as _, SessionsExt as _,
+};
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
 
@@ -224,7 +226,11 @@ mod tests {
     };
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
+    use atuin_common::harnesstools::copilot::session::CopilotSessions;
+    use atuin_common::harnesstools::kiro::session::KiroSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
+    use atuin_common::harnesstools::session::ParentKind;
+    use atuin_common::path::PathBufExt as _;
     use atuin_domain::record::HostId;
     use futures::StreamExt;
     use futures::future::BoxFuture;
@@ -436,6 +442,164 @@ mod tests {
         };
         let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
         assert_eq!(session.title.as_deref(), Some("Fix the parser"));
+    }
+
+    /// A Copilot session's name lives in the sidecar beside its log, and its directory and
+    /// branch in the log's first event: import carries all three onto the session.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_a_copilot_sessions_sidecar_and_context() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
+        let dir = root.path().join(id);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("events.jsonl"),
+            include_str!("../../../atuin-common/tests/fixtures/copilot/task-and-edit.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            include_str!(
+                "../../../atuin-common/tests/fixtures/copilot/task-and-edit.workspace.yaml"
+            ),
+        )
+        .unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            CopilotSessions::builder().root(root.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Copilot, sessions)
+            .collect()
+            .await;
+        assert_eq!(
+            sum_new(&progress),
+            13 + 1 + 4,
+            "the parent's rows and its title, and its subagent's rows"
+        );
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Copilot,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("atuin-sample-edit"));
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/copilot-play")));
+        assert_eq!(session.git_branch.as_deref(), Some("main"));
+
+        // The subagent is a session of its own, a child of the parent named for its agent.
+        let child = HarnessSession {
+            harness: HarnessKind::Copilot,
+            session: NativeSessionId::from("agent-toolu_01Cz14Gbx74QYDbB2WUL3D5T".to_owned()),
+        };
+        let subagent = sink.sidecar.get_session(&child).await.unwrap().unwrap();
+        assert_eq!(subagent.title.as_deref(), Some("count-lines"));
+        assert_eq!(subagent.parent.as_ref(), Some(&handle));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
+    }
+
+    /// A Kiro session's title, directory and model live in the header beside its log: import
+    /// carries them onto the session, and reads the rows the log holds.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_a_kiro_sessions_header_and_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
+        let dir = root.path().join("c15e787aea4828dd").joined(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("messages.jsonl"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/resumed.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("session.json"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/resumed.session.json"),
+        )
+        .unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            KiroSessions::builder().root(root.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Kiro, sessions)
+            .collect()
+            .await;
+        assert_eq!(sum_new(&progress), 19 + 1, "the conversation rows and the title");
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Kiro,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("Read README and Run Probe Command"));
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/kiro-play")));
+        assert_eq!(session.git_branch, None);
+    }
+
+    /// A Kiro subagent's log, under its parent's directory, is a session of its own: import
+    /// reads it beside the parent, a child named for its agent, working where the parent does.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_a_kiro_sessions_subagent() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "sess_d3a5510d-40b8-4a77-be1c-bf31a17f584d";
+        let subagent = "5d13f3d7-73ae-431d-847f-04729b40503e";
+        let dir = root.path().join("01fceef077f333f9").joined(id);
+        std::fs::create_dir_all(dir.join("sub-executions")).unwrap();
+        std::fs::write(
+            dir.join("messages.jsonl"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/compacted.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("session.json"),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/compacted.session.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sub-executions").joined(format!("{subagent}.jsonl")),
+            include_str!("../../../atuin-common/tests/fixtures/kiro/compacted.subagent.jsonl"),
+        )
+        .unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            KiroSessions::builder().root(root.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Kiro, sessions)
+            .collect()
+            .await;
+        assert_eq!(
+            sum_new(&progress),
+            25 + 1 + 7 + 1,
+            "the parent's rows and its title, and the subagent's rows and its name"
+        );
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Kiro,
+            session: NativeSessionId::from(id.to_owned()),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.title.as_deref(), Some("Read README and Run Unit Tests"));
+        assert_eq!(session.parent, None);
+
+        let child = HarnessSession {
+            harness: HarnessKind::Kiro,
+            session: NativeSessionId::from(subagent.to_owned()),
+        };
+        let subagent = sink.sidecar.get_session(&child).await.unwrap().unwrap();
+        assert_eq!(subagent.title.as_deref(), Some("kit-reviewer"));
+        assert_eq!(subagent.cwd.as_deref(), Some(Path::new("/work/20261008T150143Z-K18-v3")));
+        assert_eq!(subagent.parent.as_ref(), Some(&handle));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
     }
 
     #[cfg(unix)]

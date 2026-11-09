@@ -516,7 +516,7 @@ fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str)
         kept_from: None,
     };
     let mut lines = vec![header(3)];
-    lines.extend(rehydrate::lines(&session, &continuing, false));
+    lines.extend(rehydrate::lines(&session, &continuing, false, None));
     let path = write(&dir, &jsonl(&lines));
     let base = File::read(&path).unwrap().tip(&path);
     assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0003"));
@@ -587,7 +587,7 @@ fn a_switch_inside_a_merged_run_past_a_failed_call_keeps_its_text(dir: TempDir) 
         kept_from: None,
     };
     let mut lines = vec![header(3)];
-    lines.extend(rehydrate::lines(&session, &continuing, false));
+    lines.extend(rehydrate::lines(&session, &continuing, false, None));
     let path = write(&dir, &jsonl(&lines));
     let base = File::read(&path).unwrap().tip(&path);
     assert_eq!(base.tip_source_id.as_deref(), Some("aaaa0004"));

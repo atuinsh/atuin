@@ -13,14 +13,16 @@ version.workspace = true
 
 [dependencies]
 atuin-client = { workspace = true }
-atuin-common = { workspace = true, features = ["sqlite"] }
+atuin-common = { workspace = true, features = ["os", "sqlite"] }
 atuin-domain = { workspace = true }
 
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 eyre = { workspace = true }
+i18n-embed = { workspace = true }
 minijinja = { workspace = true }
 rmp = { workspace = true }
+rust-embed = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

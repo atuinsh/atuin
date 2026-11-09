@@ -12,7 +12,7 @@ pub struct HistoryImported {
     timestamp: time::OffsetDateTime,
     #[builder(setter(into))]
     command: String,
-    #[builder(default = "unknown".into(), setter(into))]
+    #[builder(default = Self::UNKNOWN_CWD.into(), setter(into))]
     cwd: String,
     #[builder(default = Self::DEFAULT_EXIT)]
     exit: i64,
@@ -35,6 +35,8 @@ pub struct HistoryImported {
 impl HistoryImported {
     pub const DEFAULT_EXIT: i64 = -1;
     pub const DEFAULT_DURATION: i64 = -1;
+    /// The directory of an imported command whose shell history didn't record one.
+    pub const UNKNOWN_CWD: &str = "unknown";
 }
 
 impl From<HistoryImported> for History {

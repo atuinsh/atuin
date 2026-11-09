@@ -4,10 +4,11 @@ use std::env::VarError;
 use std::ffi::OsString;
 use std::str::FromStr;
 
+use atuin_common::userio::log::UserFilterExt as _;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{ExporterBuildError, WithExportConfig as _};
 use tracing_subscriber::Layer;
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
@@ -90,7 +91,7 @@ impl OtelCtx {
         tracing_opentelemetry::layer()
             .with_tracer(self.provider.tracer(service_name))
             .with_context_activation(false)
-            .with_filter(LevelFilter::TRACE)
+            .with_filter(Targets::new().with_default(LevelFilter::TRACE).without_user_messages())
     }
 }
 

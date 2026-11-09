@@ -6,6 +6,7 @@ use std::time::Duration;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::futures::stream::chunk_by_bounded;
 use atuin_common::rmp::decode::Bytes;
+use atuin_common::userio;
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
@@ -18,7 +19,7 @@ use tracing::instrument;
 use tracing_futures::Instrument;
 
 use super::{History, HistoryId, Version};
-use crate::database::{Sqlite, current_context};
+use crate::database::{Sqlite, query_context};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
@@ -333,12 +334,7 @@ impl HistoryStore {
         }
 
         if skipped > 0 {
-            // library code that may run under the TUI or shell hooks, so no stderr here
-            warn!(
-                "skipped {skipped} history records that could not be decrypted or decoded. Run \
-                 `atuin store verify` to check your store, and `atuin store purge` to remove \
-                 broken records locally."
-            );
+            userio::log::warn!("history-records-skipped", skipped = skipped);
         }
 
         Ok(ret)
@@ -508,7 +504,9 @@ impl HistoryStore {
 
         pb.set_message("Fetching history from old database");
 
-        let context = current_context(settings).await?;
+        // The list is unfiltered, so this needs no shell session: `atuin sync` straight after an
+        // import, before the shell loads Atuin, has to work.
+        let context = query_context(settings).await?;
         let history = db.list([], &context, None, false, true, None).await?;
 
         pb.set_message("Fetching history already in store");
@@ -723,7 +721,7 @@ mod tests {
             cwd: "/".to_owned(),
             cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             host_id: "test".to_owned(),
-            git_root: None,
+            vcs_root: None,
         }
     }
 

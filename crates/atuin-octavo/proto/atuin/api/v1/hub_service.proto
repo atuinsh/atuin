@@ -4,18 +4,41 @@ package atuin.api.v1;
 
 import "atuin/api/v1/common.proto";
 import "atuin/api/v1/history.proto";
+import "atuin/api/v1/share.proto";
+import "atuin/api/v1/threads.proto";
 import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
 
 // The hub's user-facing API.
 service HubService {
-  // Store a finished command for the calling user if the history is not already stored.
+  // Store the calling user's finished commands that their history doesn't hold yet.
   //
-  // Otherwise fails with `ALREADY_EXISTS` (`HISTORY_ALREADY_EXISTS`), keeping what was stored.
+  // The history keeps one entry per id, the first stored, so a client can repeat a request or send
+  // entries another install already sent. Entries the user deleted are accepted and dropped. Fails
+  // with `INVALID_ARGUMENT` (`INVALID_HISTORY`), naming the first field at fault and storing none
+  // of the request, and with `RESOURCE_EXHAUSTED` when the request body, gRPC framing included, is
+  // over 10 MiB.
   rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
 
-  // Stream the calling user's history entries as they are stored, from when the call starts.
+  // Return one page of the calling user's history entries that match the filter, newest first by
+  // start time, then by id.
   //
-  // Entries stored before the call, or while no call is open, are not sent.
+  // Pass `next_page_token` back as `page_token`, with the same filter and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages.
+  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse);
+
+  // Count the calling user's history entries that match the filter, and their most common hosts,
+  // authors and working directories.
+  //
+  // Each list holds the top five values, most common first, ties broken by value, and ignores the
+  // filter's own field for it: under `host: "devbox"`, `hosts` still names the other hosts.
+  rpc TallyHistory(TallyHistoryRequest) returns (TallyHistoryResponse);
+
+  // Stream the calling user's entries that match the filter as they are stored.
+  //
+  // Sends a heartbeat once subscribed and after every 25 seconds without a message. Entries
+  // stored before the call are not sent.
   rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
 
   // Delete the calling user's history entry with this id, and keep it from being stored again.
@@ -36,23 +59,341 @@ service HubService {
   // Fails with `NOT_FOUND` (`HISTORY_OUTPUT_NOT_FOUND`) when none is stored.
   rpc GetHistoryOutput(GetHistoryOutputRequest) returns (GetHistoryOutputResponse);
 
+  // Store the calling user's thread messages that their threads don't hold yet, with the threads
+  // they name.
+  //
+  // A thread keeps one message per `source_id`, the first stored, so a client can repeat a request
+  // or send messages another install already sent. Messages of a thread the user deleted are
+  // accepted and dropped, and so are those of a thread naming a deleted thread as its parent,
+  // which is deleted from then on, along with any threads already stored under it. Fails with
+  // `INVALID_ARGUMENT` (`INVALID_THREAD_MESSAGES`), naming the first field at fault and storing
+  // none of the request, and with `RESOURCE_EXHAUSTED` when the request body, gRPC framing
+  // included, is over 10 MiB.
+  rpc InsertThreadMessages(InsertThreadMessagesRequest) returns (InsertThreadMessagesResponse);
+
+  // Return one page of the threads that match the filter, the calling user's own or those a share
+  // holds, the most recently active first.
+  //
+  // Pass `next_page_token` back as `page_token`, with the same filter and share and within a day,
+  // for the next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An
+  // empty `next_page_token` means there are no more pages. Takes a call without a token when it
+  // names a share.
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+
+  // Return one page of the calling user's threads that match the query, best match or most
+  // recently active first as `order` says.
+  //
+  // Without the filter's `include_subagents`, a subagent's match is credited to its nearest stored
+  // ancestor that isn't a subagent, or the topmost stored one when there is none. A query without
+  // words lists by its filter alone, most recently active first, whatever the order. `THREAD_ORDER_RECENT` orders as `ListThreads` does. Pages as
+  // `ListThreads` does, with the same query and order. Fails with `INVALID_ARGUMENT`
+  // (`INVALID_THREAD_QUERY`) for a query the hub can't use or an unspecified `order`, and with
+  // `DEADLINE_EXCEEDED` (`THREAD_SEARCH_TIMEOUT`) when the search takes too long: add a word or a
+  // filter.
+  rpc SearchThreads(SearchThreadsRequest) returns (SearchThreadsResponse);
+
+  // Count the calling user's threads that match the query, after crediting subagents' matches as
+  // `SearchThreads` does, and their most common harnesses, working directories, git branches and
+  // models.
+  //
+  // Each list holds the top five values, most common first, ties broken by value, and ignores the
+  // query filter's own field for it: under `harness: "codex"`, `harnesses` still names the other
+  // harnesses. Fails with `INVALID_ARGUMENT` (`INVALID_THREAD_QUERY`) for a query the hub can't
+  // use, and with `DEADLINE_EXCEEDED` (`THREAD_SEARCH_TIMEOUT`) when the count takes too long: add
+  // a word or a filter.
+  rpc TallyThreads(TallyThreadsRequest) returns (TallyThreadsResponse);
+
+  // Count what the calling user's agents did over the request's days, across all their threads:
+  // tokens, messages, tool calls, time spent working and waiting, lines changed, and when they ran.
+  //
+  // Fails with `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) while the user has Octavo off, and with
+  // `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know, or
+  // (`INVALID_THREAD_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
+  // `DEADLINE_EXCEEDED` (`THREAD_ACTIVITY_TIMEOUT`) when the count takes too long.
+  rpc TallyThreadActivity(TallyThreadActivityRequest) returns (TallyThreadActivityResponse);
+
+  // Return the ids of the messages of the calling user's thread that match the query's terms and
+  // roles, in transcript order.
+  //
+  // The query's filter and time range don't apply: the thread is already chosen. Fails with
+  // `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread, and with `INVALID_ARGUMENT`
+  // (`INVALID_THREAD_QUERY`) for a query the hub can't use.
+  rpc ListThreadMatches(ListThreadMatchesRequest) returns (ListThreadMatchesResponse);
+
+  // Return the thread with this id, the calling user's own or one a share holds.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user, or the share, has no such thread.
+  // Takes a call without a token when it names a share.
+  rpc GetThread(GetThreadRequest) returns (GetThreadResponse);
+
+  // Return one page of the messages of a thread, the calling user's own or one a share holds, in
+  // transcript order: by timestamp, then by id.
+  //
+  // A page may hold fewer than `page_size` messages when their content is large. Pages as
+  // `ListThreads` does, with the same thread. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the
+  // user, or the share, has no such thread. Takes a call without a token when it names a share.
+  rpc ListThreadMessages(ListThreadMessagesRequest) returns (ListThreadMessagesResponse);
+
+  // Stream a thread, the calling user's own or one a share holds: what is stored of it, then each
+  // change as it is stored.
+  //
+  // Sends the thread's `Thread`, a `child` for each stored thread naming it as their parent, and
+  // its messages in transcript order, then `caught_up`. From then on, sends each of its messages as
+  // it is stored, its `Thread` again after each store that changes it, and a `child` for each
+  // thread first stored naming it as their parent. A message stored during the catch-up is sent
+  // once, in the catch-up or after it, so one stored with an earlier timestamp can come after
+  // `caught_up`: place each by timestamp, then by id. Sends a heartbeat after every 25 seconds
+  // without a message. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user, or the share,
+  // has no such thread, or once the thread is deleted. Of the user's own thread, fails with
+  // `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) within a heartbeat of the user losing Octavo.
+  // Through a share, sends a `child` only for a thread the share holds, and fails with `NOT_FOUND`
+  // (`SHARE_NOT_FOUND`) once the share no longer opens: within a heartbeat of its owner losing
+  // Octavo, or of the caller or its owner leaving the organization it opens through, and at once
+  // when it is deleted or its audience changes so it no longer opens to the caller. Takes a call
+  // without a token when it names a share.
+  rpc WatchThread(WatchThreadRequest) returns (stream WatchThreadResponse);
+
+  // Stream the calling user's threads that match the filter: the most recently active of them, then
+  // each change as it is stored.
+  //
+  // Sends the first page `ListThreads` would return, a `thread` each, then `caught_up`. From then
+  // on, sends a matching thread's `Thread` after a store changes it or a thread naming it as its
+  // parent is first stored or deleted, past the first page too, at most once a second for each
+  // thread. Sends a `removed` for each of the user's threads deleted, and for each changed so it no
+  // longer matches, whether or not it was sent. A thread changed while the page is read may come
+  // again after `caught_up`, so keep each thread's newest `Thread`, by id.
+  // Sends a heartbeat after every 25 seconds without a message, and fails with
+  // `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) within a heartbeat of the user losing Octavo.
+  rpc WatchThreads(WatchThreadsRequest) returns (stream WatchThreadsResponse);
+
+  // Delete the calling user's thread with this handle and every thread descended from it, with
+  // their messages, and keep them from being stored again, along with any thread later naming one
+  // of them as its parent.
+  //
+  // A handle that names no stored thread is still remembered as deleted, so a client can repeat a
+  // deletion, or send it before the upload it races.
+  rpc DeleteThread(DeleteThreadRequest) returns (DeleteThreadResponse);
+
+  // Give the calling user's thread with this id exactly the labels of theirs among these. An id of
+  // no label of theirs, such as one deleted since the client read it, is left out.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread, and with
+  // `INVALID_ARGUMENT` (`INVALID_THREAD_LABELS`) for ids `SetThreadLabelsRequest` doesn't allow.
+  rpc SetThreadLabels(SetThreadLabelsRequest) returns (SetThreadLabelsResponse);
+
+  // List every label of the calling user's, in order of name.
+  rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse);
+
+  // Make a label for the calling user, under the id their client minted.
+  //
+  // Fails with `ALREADY_EXISTS` (`LABEL_EXISTS`) when they have a label of the name, ignoring case,
+  // or a label has the id, with `FAILED_PRECONDITION` (`TOO_MANY_LABELS`) when they have 2000
+  // labels already, and with `INVALID_ARGUMENT` (`INVALID_LABEL`) for a label `Label` doesn't allow.
+  rpc CreateLabel(CreateLabelRequest) returns (CreateLabelResponse);
+
+  // Rename, recolor or redescribe the calling user's label with this id, on every thread it's on.
+  //
+  // Fails with `NOT_FOUND` (`LABEL_NOT_FOUND`) when they have no such label, with `ALREADY_EXISTS`
+  // (`LABEL_EXISTS`) when another of theirs has the name, ignoring case, and with
+  // `INVALID_ARGUMENT` (`INVALID_LABEL`) for a label `Label` doesn't allow.
+  rpc UpdateLabel(UpdateLabelRequest) returns (UpdateLabelResponse);
+
+  // Delete the calling user's label with this id, taking it off every thread.
+  //
+  // Fails with `NOT_FOUND` (`LABEL_NOT_FOUND`) when they have no such label.
+  rpc DeleteLabel(DeleteLabelRequest) returns (DeleteLabelResponse);
+
   // Identify the user the call's token logs in.
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+
+  // Share the request's target, which the calling user owns, with the request's audience, under
+  // the request's id.
+  //
+  // Fails with `ALREADY_EXISTS` (`SHARE_ALREADY_EXISTS`) when a share has this id, so a client can
+  // repeat a creation it did not hear back from, with `NOT_FOUND` (`SHARE_TARGET_NOT_FOUND`) when
+  // the user owns nothing the target names, and with `NOT_FOUND` (`SHARE_ORG_NOT_FOUND`) when the
+  // user belongs to no organization with one of the audience's slugs.
+  rpc CreateShare(CreateShareRequest) returns (CreateShareResponse);
+
+  // The share the request names, if the caller may open it: with its link token, as a signed-in
+  // member of one of its organizations, or as its owner.
+  //
+  // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when there is no such share, the caller may not
+  // open it, or its owner no longer has Octavo. Takes a call without a token.
+  rpc GetShare(GetShareRequest) returns (GetShareResponse);
+
+  // Return one page of the calling user's shares, newest first.
+  //
+  // Pass `next_page_token` back as `page_token`, with the same request and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages.
+  rpc ListShares(ListSharesRequest) returns (ListSharesResponse);
+
+  // Give the link of one of the calling user's shares a new token. The old token stops opening it.
+  //
+  // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when the user has no share with this id, and with
+  // `NOT_FOUND` (`SHARE_LINK_NOT_FOUND`) when it has no link.
+  rpc RotateShareLink(RotateShareLinkRequest) returns (RotateShareLinkResponse);
+
+  // Change who one of the calling user's shares opens to. A link it keeps keeps its token, and a
+  // link it gains gets a new one.
+  //
+  // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when the user has no share with this id, and with
+  // `NOT_FOUND` (`SHARE_ORG_NOT_FOUND`) when the user belongs to no organization with one of the
+  // audience's slugs.
+  rpc SetShareAudience(SetShareAudienceRequest) returns (SetShareAudienceResponse);
+
+  // Delete one of the calling user's shares. Its link stops opening it.
+  //
+  // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when the user has no share with this id.
+  rpc DeleteShare(DeleteShareRequest) returns (DeleteShareResponse);
+
+  // Count what the members of the organization with this slug did over the request's days, as
+  // `TallyThreadActivity` counts a user's, together and by member.
+  //
+  // Counts every thread of every member, shared or not, and names none: no titles, directories,
+  // branches or text, only the names of the harnesses, models and tools they used. Fails with
+  // `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the organization, with
+  // `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for it, with
+  // `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know, or
+  // (`INVALID_ORG_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
+  // `DEADLINE_EXCEEDED` (`ORG_ACTIVITY_TIMEOUT`) when counting runs past its bound.
+  rpc TallyOrgActivity(TallyOrgActivityRequest) returns (TallyOrgActivityResponse);
+
+  // Return one page of the threads that members have shared with the organization with this slug.
+  // The most recently active threads come first. Each thread appears once, under its latest share.
+  // That share opens the thread to the caller.
+  //
+  // Pass `next_page_token` back as `page_token`, with the same request and within a day, for the
+  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
+  // `next_page_token` means there are no more pages; a page may hold fewer threads than
+  // `page_size` before then. Fails with `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user
+  // belongs to the organization, with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo
+  // is off for it, and with `INVALID_ARGUMENT` for a request out of the bounds below:
+  // `INVALID_ORG_THREADS_REQUEST` for its slug, `INVALID_PAGE_SIZE` for its page size.
+  rpc ListOrgThreads(ListOrgThreadsRequest) returns (ListOrgThreadsResponse);
+
+  // Stream the threads that members have shared with the organization with this slug. The stream
+  // sends the most recently active threads first, and then each change.
+  //
+  // The stream starts with the first page that `ListOrgThreads` would return. It sends one `thread`
+  // for each row, and then `caught_up`.
+  //
+  // After `caught_up`, the stream sends a thread's `OrgThread` when the thread is first shared with
+  // the organization. It also sends one after a store changes the thread. It also sends one after a
+  // thread that names this thread as its parent is first stored or deleted. These updates cover
+  // threads past the first page. Each thread gets at most one update a second.
+  //
+  // The stream sends a `removed` for each shared thread that is deleted or is no longer open to the
+  // organization. The timing depends on the cause. A deleted thread is removed at once. A thread
+  // whose share is deleted or stops opening to the organization is removed within a second. A thread
+  // whose owner leaves the organization or loses Octavo is removed within a heartbeat.
+  //
+  // A thread can be shared again after a `removed`. A thread that changes while the page is read can
+  // come again after `caught_up`. Keep the newest `OrgThread` of each thread, by id.
+  //
+  // Sends a heartbeat after every 25 seconds without a message.
+  //
+  // Fails with `INVALID_ARGUMENT` (`INVALID_ORG_THREADS_REQUEST`) for a slug that is out of the
+  // bounds below. Fails with `INVALID_ARGUMENT` (`INVALID_PAGE_SIZE`) for a page size that is out of
+  // them. Fails with `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the
+  // organization. Fails with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for
+  // the organization. Fails with `FAILED_PRECONDITION` (`OCTAVO_NOT_ENABLED`) while Octavo is off for
+  // the user. The last three failures also end an open stream, within a heartbeat of the condition
+  // starting.
+  rpc WatchOrgThreads(WatchOrgThreadsRequest) returns (stream WatchOrgThreadsResponse);
+
+  // Return one page of search results from the threads shared with the organization with this slug.
+  // The results include the subagents that those threads spawned. The query works as it does in
+  // `SearchThreads`. Each hit's `share` is the share that opens the hit.
+  //
+  // A subagent's match is credited no further up than the shared thread that it was spawned from. A
+  // query that names a label matches nothing, because a share shows no labels.
+  //
+  // Fails as `SearchThreads` does. Also fails with `INVALID_ARGUMENT`
+  // (`INVALID_ORG_THREADS_REQUEST`) for a slug that is out of the bounds below. Also fails with
+  // `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the organization. Also fails
+  // with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for the organization.
+  rpc SearchOrgThreads(SearchOrgThreadsRequest) returns (SearchOrgThreadsResponse);
+
+  // Count the threads that `SearchOrgThreads` finds, and their most common values. The count works
+  // as `TallyThreads` does for the calling user's threads. Fails as `SearchOrgThreads` does.
+  rpc TallyOrgThreads(TallyOrgThreadsRequest) returns (TallyOrgThreadsResponse);
 }
 
 message InsertHistoryRequest {
-  // Logically required.
-  History history = 1 [(buf.validate.field).required = true];
+  // At most 500. An empty request stores nothing.
+  repeated History entries = 1 [(buf.validate.field).repeated.max_items = 500];
 }
 
 message InsertHistoryResponse {}
 
-message WatchHistoryRequest {}
-
-message WatchHistoryResponse {
-  // An entry the user stored.
-  History history = 1 [(buf.validate.field).required = true];
+message SearchHistoryRequest {
+  // Which entries to return.
+  HistoryFilter filter = 1;
+  // The most entries to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
 }
+
+message SearchHistoryResponse {
+  // The entries on this page.
+  repeated History entries = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyHistoryRequest {
+  // Which entries to count.
+  HistoryFilter filter = 1;
+}
+
+message TallyHistoryResponse {
+  // How many entries match the filter.
+  uint64 total = 1;
+  // How many matching entries did not exit with status 0.
+  uint64 failed = 2;
+  // How many matching entries were decided by an agent.
+  uint64 by_agents = 3;
+  // The top five hosts among the entries the filter matches without its `host`, most common
+  // first, ties broken by value.
+  repeated HistoryTally hosts = 4;
+  // The top five authors among the entries the filter matches without its `author`, most common
+  // first, ties broken by value.
+  repeated HistoryTally authors = 5;
+  // The top five working directories among the entries the filter matches without its `cwd`,
+  // most common first, ties broken by value.
+  repeated HistoryTally cwds = 6;
+}
+
+// One value and how many matching entries have it.
+message HistoryTally {
+  // The value, such as a host name or a directory.
+  string value = 1;
+  // How many matching entries have this value.
+  uint64 count = 2;
+}
+
+message WatchHistoryRequest {
+  // Which entries to stream.
+  HistoryFilter filter = 1;
+}
+
+// One message on a `WatchHistory` stream.
+message WatchHistoryResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // An entry the user stored that matches the filter.
+    History history = 1;
+    // Shows the stream is still open.
+    WatchHistoryHeartbeat heartbeat = 2;
+  }
+}
+
+// Sent to show the stream is still open.
+message WatchHistoryHeartbeat {}
 
 message DeleteHistoryRequest {
   // The id of the entry to delete, as `History.id` gave it.
@@ -80,9 +421,607 @@ message GetHistoryOutputResponse {
   HistoryOutput output = 1 [(buf.validate.field).required = true];
 }
 
+message InsertThreadMessagesRequest {
+  // At most 500, whose contents' strings hold at most 4 MiB together. An empty request stores
+  // nothing.
+  repeated CapturedThreadMessage messages = 1 [(buf.validate.field).repeated.max_items = 500];
+}
+
+message InsertThreadMessagesResponse {}
+
+message ListThreadsRequest {
+  // Which threads to return.
+  ThreadFilter filter = 1;
+  // The most threads to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+  // A share to list the threads of, as `GetThreadRequest.share`. `filter` then narrows what the
+  // share holds.
+  ShareRef share = 4;
+}
+
+message ListThreadsResponse {
+  // The threads on this page.
+  repeated Thread threads = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message SearchThreadsRequest {
+  // Which threads to return.
+  ThreadQuery query = 1;
+  // How to sort them. Logically required.
+  ThreadOrder order = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // The most threads to return in one page. At most 50; larger values are rejected. 0 means 20.
+  uint32 page_size = 3 [(buf.validate.field).uint32.lte = 50];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 4;
+}
+
+message SearchThreadsResponse {
+  // The threads on this page, in `order`.
+  repeated ThreadHit hits = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyThreadsRequest {
+  // Which threads to count.
+  ThreadQuery query = 1;
+}
+
+message TallyThreadsResponse {
+  // How many threads match the query.
+  uint64 total = 1;
+  // The top five harnesses among the threads the query matches without its `harness`, most common
+  // first, ties broken by value.
+  repeated ThreadTally harnesses = 2;
+  // The top five starting working directories among the threads the query matches without its
+  // `cwd`, most common first, ties broken by value.
+  repeated ThreadTally cwds = 3;
+  // The top five starting git branches among the threads the query matches without its
+  // `git_branch`, most common first, ties broken by value.
+  repeated ThreadTally git_branches = 4;
+  // The top five starting models among the threads the query matches without its `model`, most
+  // common first, ties broken by value.
+  repeated ThreadTally models = 5;
+}
+
+message TallyThreadActivityRequest {
+  // How many days to count, ending with today.
+  uint32 days = 1 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 90
+  }];
+  // The IANA time zone whose calendar days the counts fall into, such as `Europe/Berlin`. Today is
+  // the day it is there now.
+  string time_zone = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 64
+    not_contains: "\x00"
+  }];
+}
+
+message TallyThreadActivityResponse {
+  // Each counted day, oldest first, ending with today.
+  repeated ThreadActivityDay days = 1;
+  // The counted days together.
+  ThreadActivityCounts totals = 2;
+  // As many days again, just before the counted ones, together.
+  ThreadActivityCounts previous_totals = 3;
+  // The messages of the counted days by hour of the week in the time zone: 168 values, the first
+  // for Monday from 00:00 to 01:00.
+  repeated uint64 messages_by_hour = 4;
+  // How many days in a row, ending today or yesterday, the user sent a prompt. Yesterday counts so
+  // that a streak isn't over before today's first prompt.
+  uint32 current_streak_days = 5;
+  // The most days in a row the user sent a prompt, over the last year.
+  uint32 longest_streak_days = 6;
+  // The counted day with the most messages, as `YYYY-MM-DD`, the earliest when several tie; unset
+  // when none has any.
+  optional string busiest_day = 7;
+  // The most threads, leaving out subagents, with a line in the same 15 minutes of the counted
+  // days.
+  uint32 peak_threads = 8;
+  // When the latest of those 15 minutes started; unset when no such thread has a line on those
+  // days.
+  google.protobuf.Timestamp peak_at = 9;
+  // The top ten harnesses of the counted days, most messages first, ties broken by name.
+  repeated ThreadActivityGroup harnesses = 10;
+  // The top ten models of the counted days, most messages first, ties broken by name. `threads`
+  // counts the threads that started with the model; the other counts cover the messages naming it,
+  // which a user's prompts and tool results don't.
+  repeated ThreadActivityGroup models = 11;
+  // The ten tools called most over the counted days, ties broken by name.
+  repeated ThreadActivityTool tools = 12;
+}
+
+// What some of a user's threads did over some time. A line copied from another thread, as a fork
+// starts with its parent's lines, counts once, in the thread it came from.
+message ThreadActivityCounts {
+  // The threads started, not counting subagents.
+  uint64 threads = 1;
+  // The messages with text, as `Thread.message_count` counts them.
+  uint64 messages = 2;
+  // The messages with text the user wrote to an agent. A subagent's prompts come from its parent
+  // agent, so they don't count.
+  uint64 prompts = 3;
+  // The messages that call a tool, as `Thread.tool_call_count` counts them.
+  uint64 tool_calls = 4;
+  // The messages holding a failed tool result.
+  uint64 tool_errors = 5;
+  // The model calls the user stopped.
+  uint64 stopped = 6;
+  // The model calls that ended at the token limit.
+  uint64 token_limited = 7;
+  // The messages holding a compaction summary.
+  uint64 compactions = 8;
+  // The tokens of the model calls, each call counted once. A count no call reported is 0.
+  TokenUsage usage = 9;
+  // How long agents spent between messages, in milliseconds, apart from `waiting_ms`. Threads
+  // running at once each count in full, and a gap of over 30 minutes counts as nobody working.
+  uint64 working_ms = 10;
+  // How long agents spent waiting on the user, in milliseconds: the time before each of `replies`.
+  uint64 waiting_ms = 11;
+  // The prompts that came within 30 minutes of the thread's last message, which `waiting_ms` adds
+  // up. Divide the two for the user's average time to reply.
+  uint64 replies = 12;
+  // The lines the threads' patches added.
+  uint64 lines_added = 13;
+  // The lines the threads' patches removed.
+  uint64 lines_removed = 14;
+  // How many files the threads' patches changed, a file patched twice counting twice.
+  uint64 file_edits = 15;
+}
+
+// One day of a user's agent activity.
+message ThreadActivityDay {
+  // The day in the request's time zone, as `YYYY-MM-DD`.
+  string date = 1;
+  ThreadActivityCounts counts = 2;
+}
+
+// One harness's or model's share of a user's agent activity.
+message ThreadActivityGroup {
+  string name = 1;
+  ThreadActivityCounts counts = 2;
+}
+
+// How often a user's agents called one tool.
+message ThreadActivityTool {
+  string name = 1;
+  uint64 calls = 2;
+}
+
+message ListThreadMatchesRequest {
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+  // What to match: only its `terms`, `prefix_last_term` and `roles` apply.
+  ThreadQuery query = 2;
+}
+
+message ListThreadMatchesResponse {
+  // The `ThreadMessage.id` of each matching message, in transcript order. At most 1,000.
+  repeated UuidV7 message_ids = 1;
+  // Whether more messages matched than `message_ids` holds.
+  bool truncated = 2;
+}
+
+message GetThreadRequest {
+  option (buf.validate.message).cel = {
+    id: "get_thread_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
+  // The thread's `Thread.id`. Logically required, except through `share`, which reads the thread
+  // the share targets when it is left out.
+  UuidV7 thread_id = 1;
+  // A share to read through instead of the calling user's own threads, failing with `NOT_FOUND`
+  // (`SHARE_NOT_FOUND`) unless the caller may open it, as `GetShare` does. Through a share, a
+  // thread's parent is unset unless the share holds it, and `child_count` counts only the threads
+  // it holds.
+  ShareRef share = 2;
+}
+
+message GetThreadResponse {
+  Thread thread = 1;
+}
+
+message ListThreadMessagesRequest {
+  option (buf.validate.message).cel = {
+    id: "list_thread_messages_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
+  reserved 1;
+  reserved "thread";
+
+  // The thread's `Thread.id`, as `GetThreadRequest.thread_id`.
+  UuidV7 thread_id = 4;
+  // The most messages to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+  // A share to read the thread through, as `GetThreadRequest.share`.
+  ShareRef share = 5;
+}
+
+message ListThreadMessagesResponse {
+  // The messages on this page.
+  repeated ThreadMessage messages = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message WatchThreadRequest {
+  option (buf.validate.message).cel = {
+    id: "watch_thread_request.thread_id_or_share"
+    message: "names a thread by its id or its share"
+    expression: "has(this.thread_id) || has(this.share)"
+  };
+
+  reserved 1;
+  reserved "thread";
+
+  // The thread's `Thread.id`, as `GetThreadRequest.thread_id`.
+  UuidV7 thread_id = 2;
+  // A share to watch the thread through, as `GetThreadRequest.share`.
+  ShareRef share = 3;
+  // Opaque. A `ListThreadMessagesResponse.next_page_token` of this thread: the catch-up starts after
+  // that page. Empty catches up from the first message.
+  string page_token = 4;
+}
+
+// One message on a `WatchThread` stream.
+message WatchThreadResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // The thread as it stands.
+    Thread thread = 1;
+    // One of the thread's messages.
+    ThreadMessage message = 2;
+    // A thread naming this one as its parent, which `WatchThread` can follow in turn.
+    WatchThreadChild child = 3;
+    // Everything stored before the call has been sent.
+    WatchThreadCaughtUp caught_up = 4;
+    // Shows the stream is still open.
+    WatchThreadHeartbeat heartbeat = 5;
+  }
+}
+
+// A thread naming the watched thread as its parent.
+message WatchThreadChild {
+  // The child's `Thread.id`.
+  UuidV7 id = 3;
+  // The harness session the child is.
+  HarnessSession session = 1;
+  // How the child relates to the watched thread; `THREAD_PARENT_KIND_UNSPECIFIED` when no message
+  // said.
+  ThreadParentKind kind = 2;
+}
+
+// Sent once everything stored before a `WatchThread` call has been.
+message WatchThreadCaughtUp {}
+
+// Sent to show a `WatchThread` stream is still open.
+message WatchThreadHeartbeat {}
+
+message WatchThreadsRequest {
+  // Which threads to stream.
+  ThreadFilter filter = 1;
+  // The most threads to send before `caught_up`. At most 200; larger values are rejected. 0 means
+  // 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+}
+
+// One message on a `WatchThreads` stream.
+message WatchThreadsResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // A thread that matches the filter, as it stands.
+    Thread thread = 1;
+    // A thread to leave out from now on.
+    WatchThreadsRemoved removed = 2;
+    // The first page has been sent.
+    WatchThreadsCaughtUp caught_up = 3;
+    // Shows the stream is still open.
+    WatchThreadsHeartbeat heartbeat = 4;
+  }
+}
+
+// A thread to leave out from now on. On `WatchThreads`, the thread is one of the user's that was
+// deleted, or that changed so that it no longer matches the filter. Neither of those is ever undone.
+// On `WatchOrgThreads`, the thread is no longer shared with the organization. A later `thread` can
+// bring it back.
+message WatchThreadsRemoved {
+  // The thread's `Thread.id`.
+  UuidV7 id = 1;
+}
+
+// Sent after the first page of a `WatchThreads` or `WatchOrgThreads` call.
+message WatchThreadsCaughtUp {
+  // The `page_token` that reads the threads after the first page. Pass it to `ListThreads`, or to
+  // `ListOrgThreads` on a `WatchOrgThreads` call. It is empty if there are no more threads.
+  string next_page_token = 1;
+}
+
+// Sent to show that a `WatchThreads` or `WatchOrgThreads` stream is still open.
+message WatchThreadsHeartbeat {}
+
+message DeleteThreadRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteThreadResponse {}
+
+message SetThreadLabelsRequest {
+  // The thread's `Thread.id`. Logically required.
+  UuidV7 thread_id = 1 [(buf.validate.field).required = true];
+  // The `Label.id`s of the thread's labels from now on, up to 20. Empty takes every label off.
+  repeated UuidV7 label_ids = 2 [(buf.validate.field).repeated.max_items = 20];
+}
+
+message SetThreadLabelsResponse {}
+
+message ListLabelsRequest {}
+
+message ListLabelsResponse {
+  repeated Label labels = 1;
+}
+
+message CreateLabelRequest {
+  // The label to make. Logically required.
+  Label label = 1 [(buf.validate.field).required = true];
+}
+
+message CreateLabelResponse {
+  Label label = 1;
+}
+
+message UpdateLabelRequest {
+  // The label as it is to be from now on, under its `id`. Logically required.
+  Label label = 1 [(buf.validate.field).required = true];
+}
+
+message UpdateLabelResponse {
+  Label label = 1;
+}
+
+message DeleteLabelRequest {
+  // The label's `Label.id`. Logically required.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteLabelResponse {}
+
 message WhoAmIRequest {}
 
 message WhoAmIResponse {
   // The calling user's id. Opaque, and stable for the life of the account.
   string user_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message CreateShareRequest {
+  // Client-generated; becomes `Share.id`.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Logically required.
+  ShareTarget target = 2 [(buf.validate.field).required = true];
+  // Logically required.
+  ShareAudience audience = 3 [(buf.validate.field).required = true];
+}
+
+message CreateShareResponse {
+  // Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+}
+
+message GetShareRequest {
+  // Logically required.
+  ShareRef share = 1 [(buf.validate.field).required = true];
+}
+
+message GetShareResponse {
+  // Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+}
+
+message ListSharesRequest {
+  reserved 1;
+  reserved "thread";
+
+  // Only the shares of this target; unset lists every share.
+  ShareTarget target = 4;
+  // The most shares to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+}
+
+message ListSharesResponse {
+  // The shares on this page.
+  repeated Share shares = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message RotateShareLinkRequest {
+  // The share, as `Share.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message RotateShareLinkResponse {
+  // The share, with its new link token. Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+}
+
+message SetShareAudienceRequest {
+  // The share, as `Share.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Logically required.
+  ShareAudience audience = 2 [(buf.validate.field).required = true];
+}
+
+message SetShareAudienceResponse {
+  // The share, with its new audience. Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteShareRequest {
+  // The share, as `Share.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteShareResponse {}
+
+message ListOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // The most threads to return in one page. At most 200; larger values are rejected. 0 means 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
+  string page_token = 3;
+}
+
+message ListOrgThreadsResponse {
+  // The threads on this page.
+  repeated OrgThread threads = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message WatchOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // The most threads to send before `caught_up`. At most 200. Larger values are rejected. 0 means
+  // 50.
+  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
+}
+
+// One message on a `WatchOrgThreads` stream.
+message WatchOrgThreadsResponse {
+  oneof event {
+    option (buf.validate.oneof).required = true;
+
+    // A thread shared with the organization, as it stands.
+    OrgThread thread = 1;
+    // A thread to leave out from now on.
+    WatchThreadsRemoved removed = 2;
+    // The first page has been sent.
+    WatchThreadsCaughtUp caught_up = 3;
+    // Shows that the stream is still open.
+    WatchThreadsHeartbeat heartbeat = 4;
+  }
+}
+
+message SearchOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // Which threads to return.
+  ThreadQuery query = 2;
+  // How to sort them. Logically required.
+  ThreadOrder order = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  // The most threads to return in one page. At most 50. Larger values are rejected. 0 means 20.
+  uint32 page_size = 4 [(buf.validate.field).uint32.lte = 50];
+  // Opaque. Copy the `next_page_token` of the previous page. Leave it empty for the first page.
+  string page_token = 5;
+}
+
+message SearchOrgThreadsResponse {
+  // The threads on this page, in `order`.
+  repeated ThreadHit hits = 1;
+  // Opaque. Empty on the last page.
+  string next_page_token = 2;
+}
+
+message TallyOrgThreadsRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // Which threads to count.
+  ThreadQuery query = 2;
+}
+
+message TallyOrgThreadsResponse {
+  // The count, and the most common values among them.
+  TallyThreadsResponse tally = 1;
+}
+
+// A thread a member has shared with an organization.
+message OrgThread {
+  // What opens it to the organization's members. Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
+  // The shared thread itself, as its share reads it. Logically required.
+  Thread thread = 2 [(buf.validate.field).required = true];
+}
+
+message TallyOrgActivityRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // How many days to count, ending with today.
+  uint32 days = 2 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 90
+  }];
+  // The IANA time zone whose calendar days the counts fall into, such as `Europe/Berlin`. Today is
+  // the day it is there now.
+  string time_zone = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_bytes: 64
+    not_contains: "\x00"
+  }];
+}
+
+message TallyOrgActivityResponse {
+  // What the members did together, counted as `TallyThreadActivity` counts a user's: a streak's
+  // day is one with a prompt from any member, and the peak counts all of their threads at once.
+  TallyThreadActivityResponse activity = 1;
+  // How many members had a message on each of `activity.days`, in the same order.
+  repeated uint32 daily_active_members = 2;
+  // How many members had a message over the counted days.
+  uint32 active_members = 3;
+  // Every member of the organization, most messages first, ties broken by username.
+  repeated OrgMemberActivity members = 4;
+}
+
+// One member's activity over the counted days.
+message OrgMemberActivity {
+  string username = 1;
+  // The counted days together.
+  ThreadActivityCounts counts = 2;
+  // Their messages on each of `TallyOrgActivityResponse.activity.days`, in the same order.
+  repeated uint64 daily_messages = 3;
+  // When their newest message was written, on any day; unset when they have none.
+  google.protobuf.Timestamp last_active_at = 4;
 }

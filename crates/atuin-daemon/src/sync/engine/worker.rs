@@ -31,6 +31,10 @@ const BACKOFF_FACTOR: NonZeroU32 = NonZeroU32::new(2).unwrap();
 /// How often the loop re-checks settings while periodic sync is disabled (`sync_frequency = 0`).
 const DISABLED_SYNC_POLL: Duration = Duration::from_secs(300);
 
+/// How often the loop checks for a sign-in while signed out: `atuin login` doesn't tell the
+/// daemon, and the first sync shouldn't wait out a whole interval.
+const SIGNED_OUT_POLL: Duration = Duration::from_secs(10);
+
 /// Owns everything the sync loop needs across ticks.
 pub struct Worker {
     handle: DaemonHandle,
@@ -183,7 +187,14 @@ impl Worker {
                 tracing::debug!("auto_sync disabled, skipping periodic sync tick");
             }
 
-            time::sleep(interval).await;
+            let wait = match settings.logged_in().await {
+                Ok(false) => SIGNED_OUT_POLL,
+                _ => interval,
+            };
+            tokio::select! {
+                () = time::sleep(wait) => {}
+                () = self.handle.sync_requested() => {}
+            }
         }
     }
 

@@ -19,7 +19,7 @@ use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerInfo, Tool, ToolAnnotations,
+    ServerConfig, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -78,14 +78,14 @@ Atuin also records AI agent sessions as threads. Use atuin_threads_search or atu
 
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
-fn server_info() -> ServerInfo {
-    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+fn server_info() -> ServerConfig {
+    ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("atuin", env!("CARGO_PKG_VERSION")))
         .with_instructions(SERVER_INSTRUCTIONS)
 }
 
 impl ServerHandler for AtuinMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         server_info()
     }
 
@@ -117,30 +117,32 @@ impl ServerHandler for AtuinMcp {
         let outcome = match request.name.as_ref() {
             "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
                 Ok(call) => call.execute(&self.db, &self.settings).await,
-                Err(e) => invalid_arguments(e),
+                Err(e) => invalid_arguments("atuin_history", e),
             },
             "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {
                 Ok(call) => call.execute().await,
-                Err(e) => invalid_arguments(e),
+                Err(e) => invalid_arguments("atuin_output", e),
             },
-            "atuin_output_search" => match parse::<AtuinOutputSearchToolCall>(arguments) {
-                Ok(call) => call.execute(&self.db, &self.settings).await,
-                Err(outcome) => outcome,
-            },
+            "atuin_output_search" => {
+                match parse::<AtuinOutputSearchToolCall>("atuin_output_search", arguments) {
+                    Ok(call) => call.execute(&self.db, &self.settings).await,
+                    Err(outcome) => outcome,
+                }
+            }
             "atuin_threads_search" | "atuin_ai_session_search" => {
-                match parse::<AtuinThreadsSearchToolCall>(arguments) {
+                match parse::<AtuinThreadsSearchToolCall>("atuin_threads_search", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,
                 }
             }
             "atuin_threads_list" | "atuin_ai_session_list" => {
-                match parse::<AtuinThreadsListToolCall>(arguments) {
+                match parse::<AtuinThreadsListToolCall>("atuin_threads_list", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,
                 }
             }
             "atuin_threads_read" | "atuin_ai_session_read" => {
-                match parse::<AtuinThreadsReadToolCall>(arguments) {
+                match parse::<AtuinThreadsReadToolCall>("atuin_threads_read", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
                     Err(outcome) => outcome,
                 }
@@ -163,13 +165,21 @@ impl ServerHandler for AtuinMcp {
     }
 }
 
-fn parse<T: serde::de::DeserializeOwned>(arguments: JsonObject) -> Result<T, ToolOutcome> {
-    serde_json::from_value(Value::Object(arguments)).map_err(invalid_arguments)
+fn parse<T: serde::de::DeserializeOwned>(
+    tool: &str,
+    arguments: JsonObject,
+) -> Result<T, ToolOutcome> {
+    serde_json::from_value(Value::Object(arguments)).map_err(|e| invalid_arguments(tool, e))
 }
 
-fn invalid_arguments(err: impl std::fmt::Display) -> ToolOutcome {
+/// Carries the tool's input schema, because a model that guessed the arguments often never saw
+/// it: clients like Claude Code defer MCP schemas until the model asks for them.
+fn invalid_arguments(tool: &str, err: impl std::fmt::Display) -> ToolOutcome {
+    let schema =
+        TOOLS.iter().find(|t| t.name == tool).map(|t| Value::Object((*t.input_schema).clone()));
     ToolOutcome::Error(format!(
-        "Invalid arguments: {err}. Check the tool's input schema and retry."
+        "Invalid arguments: {err}. Retry with arguments matching this input schema: {}",
+        schema.unwrap_or_default()
     ))
 }
 
@@ -218,11 +228,11 @@ fn tool_definitions() -> Vec<Tool> {
                 },
                 "description": "Optional search scope; the first entry is used and \
                     the default is 'global' (all history). 'workspace' limits to \
-                    commands run inside the current git repository, 'directory' to \
-                    the exact current working directory, 'host' to this machine, \
-                    'session' to the shell session that launched this server \
-                    (errors when it was not launched from a shell). Start global \
-                    and narrow only if results are noisy.",
+                    commands run inside the current repository, git or Jujutsu, \
+                    'directory' to the exact current working directory, 'host' to \
+                    this machine, 'session' to the shell session that launched this \
+                    server (errors when it was not launched from a shell). Start \
+                    global and narrow only if results are noisy.",
             },
             "limit": {
                 "type": "integer",
@@ -400,16 +410,26 @@ mod tests {
     #[rstest]
     fn unknown_arguments_are_rejected() {
         let args = |v: Value| v.as_object().unwrap().clone();
-        let Err(ToolOutcome::Error(err)) = parse::<AtuinThreadsReadToolCall>(args(json!({
-            "session_id": "latest",
-            "from_end": true,
-        }))) else {
+        let Err(ToolOutcome::Error(err)) = parse::<AtuinThreadsReadToolCall>(
+            "atuin_threads_read",
+            args(json!({
+                "session_id": "latest",
+                "from_end": true,
+            })),
+        ) else {
             panic!("from_end was accepted");
         };
         assert!(err.contains("`from_end`") && err.contains("`start`"), "{err}");
         assert!(
-            parse::<AtuinThreadsReadToolCall>(args(json!({"session_id": "x", "start": -10})))
-                .is_ok()
+            err.contains("Negative values count back from the end"),
+            "the schema is in the error: {err}"
+        );
+        assert!(
+            parse::<AtuinThreadsReadToolCall>(
+                "atuin_threads_read",
+                args(json!({"session_id": "x", "start": -10}))
+            )
+            .is_ok()
         );
         for tool in &tool_definitions()[2..] {
             assert_eq!(tool.input_schema["additionalProperties"], false, "{}", tool.name);
@@ -489,7 +509,7 @@ mod tests {
             );
         }
         assert!(
-            parse(json!({"terms": ["x"], "harness": "copilot"})).is_err(),
+            parse(json!({"terms": ["x"], "harness": "cursor"})).is_err(),
             "an unadvertised harness is rejected"
         );
     }

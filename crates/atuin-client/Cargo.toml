@@ -18,7 +18,8 @@ hub = ["reqwest"]
 daemon = []
 check-update = []
 octavo = []
-# Derive the protobuf enum traits on domain enums the daemon extern-paths into its codegen.
+# Derive the protobuf enum traits on domain enums the daemon and atuin-octavo extern-path into
+# their codegen.
 proto = ["dep:prost"]
 # Statically link (vendor) OpenSSL for native-tls instead of using the system
 # libssl. Used for portable release artifacts; a no-op on macOS/Windows.
@@ -41,6 +42,7 @@ enum_dispatch = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+i18n-embed = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
 libsqlite3-sys = { workspace = true }
@@ -51,6 +53,7 @@ prost = { workspace = true, optional = true }
 rand = { workspace = true }
 regex = { workspace = true }
 rmp-serde = { workspace = true }
+rust-embed = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }

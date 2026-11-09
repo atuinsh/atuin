@@ -20,12 +20,14 @@ pub(crate) mod builder;
 pub mod capture;
 pub mod store;
 
+pub use builder::HistoryImported;
 pub use capture::CommandCapture;
 
 /// Known AI agent author values. Used by [`History::is_agent`] to guess who ran a command when the
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
 /// [`AuthorPattern::AllUser`].
-pub const KNOWN_AGENTS: &[&str] = &["claude-code", "codex", "copilot", "omp", "opencode", "pi"];
+pub const KNOWN_AGENTS: &[&str] =
+    &["amp", "claude-code", "codex", "copilot", "grok", "kiro", "omp", "opencode", "pi"];
 
 /// The spelling of [`AuthorPattern::AllUser`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";
@@ -295,6 +297,39 @@ impl HistoryId {
     }
 }
 
+/// The ID and start time of a shell [session](History::session).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellSession {
+    pub id: Uuid,
+    pub start: OffsetDateTime,
+}
+
+impl ShellSession {
+    /// Parse a UUIDv7 session ID.
+    #[must_use]
+    pub fn parse(session: &str) -> Option<Self> {
+        // A session id is not guaranteed to be one of our UUIDv7s: ATUIN_SESSION comes from the
+        // environment, and a stray value whose version nibble reads as v1/v6/v7 can carry a
+        // timestamp far outside the unix-nanos range. Treat such a session as having no start time
+        // rather than overflowing.
+        let id = Uuid::parse_str(session).ok()?;
+        let (seconds, nanos) = id.get_timestamp()?.to_unix();
+        let start = i64::try_from(seconds)
+            .ok()?
+            .checked_mul(1_000_000_000)?
+            .checked_add(i64::from(nanos))?;
+
+        let start = OffsetDateTime::from_unix_timestamp_nanos(start.into()).ok()?;
+        Some(Self { id, start })
+    }
+
+    /// The [start](Self::start) time, represented as nanoseconds since the Unix epoch.
+    #[must_use]
+    pub fn start_unix_nanos(&self) -> i64 {
+        i64::conv(self.start.unix_timestamp_nanos())
+    }
+}
+
 /// Client-side history entry.
 ///
 /// Client stores data unencrypted, and only encrypts it before sending to the server.
@@ -350,6 +385,19 @@ pub struct HistoryStats {
     pub exits: Vec<(i64, i64)>,
     pub day_of_week: Vec<(String, i64)>,
     pub duration_over_time: Vec<(String, i64)>,
+}
+
+/// How often a command ran, and when it first and last did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandRuns {
+    pub command: String,
+    pub runs: u32,
+    /// How many of the runs exited non-zero, not counting the `-1` of a run whose exit is unknown.
+    pub failures: u32,
+    pub first: OffsetDateTime,
+    pub last: OffsetDateTime,
+    /// A directory the command ran in.
+    pub cwd: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -752,7 +800,9 @@ mod tests {
     use rstest::*;
     use time::macros::datetime;
 
-    use super::{AuthorKind, AuthorPattern, History, all_user_author_filter, is_known_agent};
+    use super::{
+        AuthorKind, AuthorPattern, History, ShellSession, all_user_author_filter, is_known_agent,
+    };
     use crate::history::Version;
     use crate::settings::Settings;
 
@@ -1083,5 +1133,19 @@ mod tests {
         } else {
             assert!(got.is_err(), "unexpected success deserializing as {decode_as}");
         }
+    }
+
+    /// `ATUIN_SESSION` comes from the environment: a stray value whose version nibble reads as a
+    /// timestamped UUID can carry a timestamp far outside the unix-nanos range, which must mean
+    /// "no start time" rather than an overflow.
+    #[rstest]
+    #[case::a_real_v7_session(atuin_common::utils::uuid_v7().to_string(), true)]
+    #[case::not_a_uuid("not-a-uuid".to_string(), false)]
+    #[case::out_of_range_timestamp("ffffffff-ffff-1fff-bfff-ffffffffffff".to_string(), false)]
+    fn shell_session_tolerates_hostile_session_ids(
+        #[case] session_id: String,
+        #[case] has_start: bool,
+    ) {
+        assert_eq!(ShellSession::parse(&session_id).is_some(), has_start);
     }
 }

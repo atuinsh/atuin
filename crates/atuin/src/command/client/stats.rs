@@ -1,13 +1,16 @@
+use std::io::{self, Write as _};
+
 use atuin_client::database::{Sqlite, current_context};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_client::theme::Theme;
-use atuin_history::stats::{compute, pretty_print};
+use atuin_history::stats::{compute, is_ignored, pretty_print};
 use clap::Parser;
 use eyre::Result;
 use interim::parse_date_string;
 use time::{Duration, OffsetDateTime, Time};
 use tracing::instrument;
 
+use super::halloween::HalloweenExt as _;
 use crate::i18n::fl;
 
 fn parse_ngram_size(s: &str) -> Result<usize, String> {
@@ -92,6 +95,19 @@ impl Cmd {
 
         if let Some(stats) = stats {
             pretty_print(stats, self.ngram_size, theme);
+        }
+
+        if now.date().is_halloween_season() {
+            let witching = history
+                .iter()
+                .filter(|h| {
+                    h.timestamp.to_offset(settings.timezone.0).hour() == 3
+                        && !is_ignored(settings, &h.command)
+                })
+                .count();
+            if witching > 0 {
+                writeln!(io::stdout(), "{}", fl!("stats-witching-hour", count = witching))?;
+            }
         }
 
         Ok(())

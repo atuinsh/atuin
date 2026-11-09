@@ -14,6 +14,9 @@ enum HarnessKind {
   HARNESS_KIND_OPENCODE = 4;
   HARNESS_KIND_PI = 5;
   HARNESS_KIND_OMP = 6;
+  HARNESS_KIND_GROK = 7;
+  HARNESS_KIND_AMP = 8;
+  HARNESS_KIND_KIRO = 9;
 }
 
 enum Role {

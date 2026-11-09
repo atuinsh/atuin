@@ -37,9 +37,9 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
-    Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
+    Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after, scan_sessions,
 };
-use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
@@ -140,6 +140,19 @@ fn settings_session_dir(agent_dir: &Path) -> Option<PathBuf> {
 
 impl Sessions for PiSessions {
     type Listener = PiListener;
+
+    /// When pi and omp share the root, only this flavour's session files count. Otherwise, use of
+    /// the other agent would make this one look recently used.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let Some(flavour) = self.only(&root) else {
+            return crate::fs::newest_modified(root);
+        };
+        crate::fs::newest_modified_where(root, |entry| {
+            let path = entry.path();
+            PiListener::is_session_file(&path) && is_omp_file(&path) == (flavour == Flavour::Omp)
+        })
+    }
 
     fn listener(&self) -> Result<PiListener, RuntimeError> {
         let root = self.resolve_root();
@@ -380,15 +393,23 @@ fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     if !matches!(header, Header::Session { .. }) {
         return Ok(header);
     }
-    let mut first = Vec::new();
-    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
-    let titled = crate::json::js::from_slice::<serde_json::Value>(&first)
-        .is_ok_and(|entry| entry["type"] == "title");
-    Ok(if titled == (flavour == Flavour::Omp) {
+    Ok(if starts_with_title_slot(path)? == (flavour == Flavour::Omp) {
         header
     } else {
         Header::Other
     })
+}
+
+/// Whether the file is omp's: omp's sessions start with their title slot, pi's never do.
+pub(crate) fn is_omp_file(path: &Path) -> bool {
+    starts_with_title_slot(path).unwrap_or(false)
+}
+
+fn starts_with_title_slot(path: &Path) -> io::Result<bool> {
+    let mut first = Vec::new();
+    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
+    Ok(crate::json::js::from_slice::<serde_json::Value>(&first)
+        .is_ok_and(|entry| entry["type"] == "title"))
 }
 
 /// The session id pi's own file naming (`<timestamp>_<id>.jsonl`, session-manager.ts
@@ -420,34 +441,9 @@ impl PiSession {
         }
     }
 
-    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
-    /// was taken after, else the transcript's start.
+    /// The byte offset to read from (see [`checkpoint_offset`]).
     async fn start(&self, from: Checkpoint) -> u64 {
-        let path = self.path.clone();
-        let found = self
-            .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
-            .await
-            .map_err(io::Error::other)
-            .and_then(|found| found);
-        match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
-            Ok(_) => {
-                tracing::debug!(
-                    path = %self.path.display(),
-                    "the checkpoint no longer names its line; reading from the start"
-                );
-                0
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    "failed to read the line a checkpoint names; reading from the start"
-                );
-                0
-            }
-        }
+        checkpoint_offset(&self.path, &self.pool, from).await
     }
 }
 
@@ -1465,6 +1461,34 @@ mod tests {
             Flavour::Omp => "o",
         };
         assert_eq!(ids, vec![want.to_owned()]);
+    }
+
+    /// When pi and omp share a session directory, each one's last use counts only its own
+    /// sessions. Daily use of omp doesn't make an uninstalled pi look recently used.
+    #[rstest]
+    fn a_shared_session_dir_splits_last_active_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        let (pi, omp) = (dir.path().join("1_p.jsonl"), dir.path().join("2_o.jsonl"));
+        std::fs::write(&pi, header("p")).unwrap();
+        std::fs::write(&omp, slot + &header("o")).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let (pi_at, omp_at) = (at(1_000), at(2_000));
+        File::options().write(true).open(&pi).unwrap().set_modified(pi_at).unwrap();
+        File::options().write(true).open(&omp).unwrap().set_modified(omp_at).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let want = match flavour {
+            Flavour::Pi => pi_at,
+            Flavour::Omp => omp_at,
+        };
+        assert_eq!(sessions.last_active(), Some(want));
     }
 
     #[rstest]

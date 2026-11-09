@@ -10,7 +10,9 @@ use eyre::{Context, Result};
 
 use crate::db::{Database, DbResult, DynDatabase, MySql, Postgres, Sqlite};
 
+mod client_ip;
 mod handlers;
+mod i18n;
 mod metrics;
 mod router;
 mod trace;

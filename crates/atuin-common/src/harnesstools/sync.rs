@@ -28,13 +28,18 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::harnesstools::AnyHarness;
+use enum_dispatch::enum_dispatch;
+
 use crate::harnesstools::rehydrate::{MERGED_FIELD, RehydrateMessage};
 use crate::harnesstools::session::synthetic::{SYNTHETIC, content_hash, synthetic_id};
 use crate::harnesstools::session::{Message, SessionId};
 
+mod amp;
 mod ccode;
 mod codex;
+mod copilot;
+mod grok;
+mod kiro;
 pub mod liveness;
 mod opencode;
 mod pi;
@@ -207,6 +212,7 @@ fn pid_note(pid: Option<u32>) -> String {
 }
 
 /// The harness side of fast-forwarding a session (see the module docs).
+#[enum_dispatch]
 pub trait SessionSync {
     /// What this machine's native copy of session `id` holds; `None` when it has none.
     #[allow(async_fn_in_trait)]
@@ -267,57 +273,6 @@ pub trait SessionSync {
         options: &AppendOptions<'_>,
         backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError>;
-}
-
-impl SessionSync for AnyHarness {
-    async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.local_tip(id).await,
-            Self::Codex(h) => h.local_tip(id).await,
-            Self::Opencode(h) => h.local_tip(id).await,
-            Self::Pi(h) => h.local_tip(id).await,
-        }
-    }
-
-    async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        match self {
-            Self::ClaudeCode(h) => h.is_live(id, cwd).await,
-            Self::Codex(h) => h.is_live(id, cwd).await,
-            Self::Opencode(h) => h.is_live(id, cwd).await,
-            Self::Pi(h) => h.is_live(id, cwd).await,
-        }
-    }
-
-    async fn append(
-        &self,
-        id: &str,
-        base: &LocalTip,
-        lines: &[RehydrateMessage],
-        options: &AppendOptions<'_>,
-    ) -> Result<AppendOutcome, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.append(id, base, lines, options).await,
-            Self::Codex(h) => h.append(id, base, lines, options).await,
-            Self::Opencode(h) => h.append(id, base, lines, options).await,
-            Self::Pi(h) => h.append(id, base, lines, options).await,
-        }
-    }
-
-    async fn replace(
-        &self,
-        id: &str,
-        base: &LocalTip,
-        branch: &[RehydrateMessage],
-        options: &AppendOptions<'_>,
-        backups: &Path,
-    ) -> Result<ReplaceOutcome, SyncError> {
-        match self {
-            Self::ClaudeCode(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Codex(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Opencode(h) => h.replace(id, base, branch, options, backups).await,
-            Self::Pi(h) => h.replace(id, base, branch, options, backups).await,
-        }
-    }
 }
 
 /// Refuse to write under a harness that is, or may be, writing the session itself.
@@ -502,7 +457,7 @@ fn backup_path(path: &Path, backups: &Path, at: time::OffsetDateTime, n: u32) ->
 /// to their parents, which sync places beside the tree (`Analysis::rows_for`), not on it. Codex
 /// links its content-keyed rows like any other.
 fn off_tree(m: &RehydrateMessage, links: Links) -> bool {
-    links == Links::Parents && m.source_id.starts_with(SYNTHETIC)
+    matches!(links, Links::Parents { .. }) && m.source_id.starts_with(SYNTHETIC)
 }
 
 /// Where branch `branch` (its rows root to head, along the tree, with the rows beside it that go
@@ -692,10 +647,14 @@ fn capture_key<M: Message + ?Sized>(
 /// How a harness's rows say what they follow on from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Links {
-    /// Each names its parent row (Claude Code, pi).
-    Parents,
+    /// Each names its parent row (Claude Code, pi), and rows keyed on their content (`syn-`:
+    /// titles) sit beside the tree. `chained`: a row naming no parent follows the one before
+    /// it (Copilot, whose rows captured before its reader linked them name none).
+    Parents {
+        chained: bool,
+    },
     /// Each names its parent row, or none and follows the one before it (Codex, whose rows
-    /// captured before capture linked them name none).
+    /// captured before capture linked them name none); content-keyed rows are linked like any.
     Chained,
     /// None names a row: they follow on in order (opencode).
     Linear,
@@ -717,12 +676,12 @@ fn check_segment(
     for row in lines {
         let id = row.source_id.as_str();
         let follows = match (links, row.parent_source_id.as_deref()) {
-            (Links::Linear, _) | (Links::Chained, None) => true,
+            (Links::Linear, _) | (Links::Chained | Links::Parents { chained: true }, None) => true,
             // A row beside the tree follows the row of the branch before it ([`past`]), which
             // the transcript may hold beside its lines (a title) rather than as one.
             _ if off_tree(row, links) => true,
             (_, Some(parent)) => seen.contains(parent) || base.is_tip(parent),
-            (Links::Parents, None) => false,
+            (Links::Parents { chained: false }, None) => false,
         };
         if !follows {
             return Err(SyncError::Unsupported(

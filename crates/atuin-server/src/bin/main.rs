@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 
+use atuin_common::userio::log::{SINK, UserFilterExt as _, UserLayer};
 use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;
@@ -37,10 +38,15 @@ async fn main() -> Result<()> {
     let cmd = Cmd::parse();
 
     // Warnings show without RUST_LOG, since that is how loading the settings reports what it
-    // ignored.
-    let filter =
-        EnvFilter::builder().with_default_directive(LevelFilter::WARN.into()).from_env_lossy();
-    tracing_subscriber::registry().with(fmt::layer()).with(filter).init();
+    // ignored. Messages for the operator, such as what an admin command did, show on the sink.
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy()
+        .without_user_messages();
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_filter(filter))
+        .with(UserLayer::new(&SINK))
+        .init();
 
     tracing::trace!(command = ?cmd, "server command");
 

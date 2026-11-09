@@ -37,6 +37,13 @@ impl<T: AsRef<str>> NonNulStr<T> {
     }
 }
 
+impl NonNulStr {
+    /// As [`String::truncate`]: what's left of a NUL-free string holds no NUL.
+    pub fn truncate(&mut self, new_len: usize) {
+        self.0.truncate(new_len);
+    }
+}
+
 impl<'a> NonNulStr<Cow<'a, str>> {
     /// Wrap `inner` with its NUL bytes removed, still borrowing it if it has none.
     pub fn stripping(inner: impl Into<Cow<'a, str>>) -> Self {
@@ -45,6 +52,18 @@ impl<'a> NonNulStr<Cow<'a, str>> {
             inner.to_mut().retain(|c| c != '\0');
         }
         Self(inner)
+    }
+}
+
+impl From<NonNulStr<Cow<'_, str>>> for NonNulStr {
+    fn from(text: NonNulStr<Cow<'_, str>>) -> Self {
+        Self(text.0.into_owned())
+    }
+}
+
+impl<T: Into<Self>> From<NonNulStr<T>> for String {
+    fn from(text: NonNulStr<T>) -> Self {
+        text.0.into()
     }
 }
 

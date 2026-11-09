@@ -1126,8 +1126,8 @@ impl Resumer for FakeResumer {
         self.plan_for(session, Some(native))
     }
 
-    /// Every other harness is installed. A session of a harness atuin can't read back (Copilot)
-    /// can't be continued anywhere.
+    /// Every other harness is installed. A session of a harness atuin doesn't know can't be
+    /// continued anywhere.
     fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
         if session.handle.harness.harness().is_none() {
             return Vec::new();
@@ -1166,7 +1166,7 @@ impl Resumer for FakeResumer {
         })
     }
 
-    /// Every harness atuin writes is installed.
+    /// Every harness is installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
         session.handle.harness.harness().is_some()
     }

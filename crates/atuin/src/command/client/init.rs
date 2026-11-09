@@ -1,4 +1,5 @@
 use atuin_client::settings::{Settings, Tmux};
+use atuin_common::userio;
 use clap::{Parser, ValueEnum};
 use eyre::Result;
 use tracing::instrument;
@@ -89,8 +90,8 @@ impl Cmd {
 
     fn to_options<'a>(&self, settings: &'a Settings) -> StaticInitOptions<'a> {
         StaticInitOptions {
-            enable_up_arrow: !self.disable_up_arrow,
-            enable_ctrl_r: !self.disable_ctrl_r,
+            enable_up_arrow: !self.disable_up_arrow && settings.bind_up_arrow,
+            enable_ctrl_r: !self.disable_ctrl_r && settings.bind_ctrl_r,
             enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
             enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
             tmux: &settings.tmux,
@@ -114,10 +115,7 @@ impl Cmd {
             Shell::Fish => atuin_pty_proxy::Shell::Fish,
             Shell::Nu => atuin_pty_proxy::Shell::Nu,
             Shell::Xonsh | Shell::PowerShell => {
-                eprintln!(
-                    "atuin: pty_proxy.enabled is set, but atuin pty-proxy does not support this \
-                     shell"
-                );
+                userio::log::warn!("init-pty-proxy-unsupported-shell");
                 return;
             }
         };
@@ -128,20 +126,14 @@ impl Cmd {
     #[cfg(not(all(feature = "pty-proxy", unix)))]
     fn pty_proxy_init(&self, settings: &Settings) {
         if settings.pty_proxy.enabled {
-            eprintln!(
-                "atuin: pty_proxy.enabled is set, but this build of atuin does not include \
-                 pty-proxy support"
-            );
+            userio::log::warn!("init-pty-proxy-not-built");
         }
     }
 
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings) -> Result<()> {
         if !settings.paths_ok() {
-            eprintln!(
-                "Atuin settings paths are broken. Disabling atuin shell hooks. Run `atuin doctor` \
-                 to diagnose."
-            );
+            userio::log::warn!("init-paths-broken");
             return Ok(());
         }
 

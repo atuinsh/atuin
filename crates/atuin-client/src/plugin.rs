@@ -119,7 +119,10 @@ impl Drop for UpdateOnWindowsContext {
         {
             // The update failed, roll back the current exe to its initial name.
             std::fs::rename(exe.with_file_name(Self::OLD_FILE_NAME), exe).unwrap_or_else(|e| {
-                eprintln!("Failed to roll back the update, you may need to reinstall Atuin: {e}");
+                atuin_common::userio::log::error!(
+                    "plugin-update-rollback-failed",
+                    error = e.to_string()
+                );
             });
         }
     }
@@ -127,16 +130,18 @@ impl Drop for UpdateOnWindowsContext {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
+    #[rstest]
     fn test_registry_creation() {
         let registry = OfficialPluginRegistry::new();
         assert!(registry.is_official_plugin("update"));
         assert!(!registry.is_official_plugin("nonexistent"));
     }
 
-    #[test]
+    #[rstest]
     fn test_get_plugin() {
         let registry = OfficialPluginRegistry::new();
         let plugin = registry.get_plugin("update");
@@ -144,7 +149,7 @@ mod tests {
         assert_eq!(plugin.unwrap().name, "update");
     }
 
-    #[test]
+    #[rstest]
     fn test_get_install_message() {
         let registry = OfficialPluginRegistry::new();
         let message = registry.get_install_message("update");

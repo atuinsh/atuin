@@ -82,8 +82,9 @@ pub enum Why {
 /// nothing [substantive](is_substantive) past where it leaves the line, and no summary standing in
 /// for the conversation, which the model is given as context) is no branch of its own, and is
 /// fast-forwarded from where it leaves it, as the agent would go on from there. Only for a harness
-/// whose rows name the row they follow (Claude Code, pi), where the rows appended hang from that
-/// row; any other reads its transcript in order, twig and all.
+/// whose rows name the row they follow (Claude Code, pi, Kiro, whose turns end on a reasoning
+/// marker a copy written elsewhere may lack), where the rows appended hang from that row; any
+/// other reads its transcript in order, twig and all.
 pub fn classify(
     analysis: &Analysis,
     harness: HarnessKind,
@@ -114,8 +115,18 @@ pub fn classify(
     }
     let path = analysis.path_to(head);
     let shared = path.iter().zip(&mine).take_while(|(a, b)| a.source_id == b.source_id).count();
-    let linked = matches!(harness, HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp);
-    let twig = linked && !mine[shared..].iter().any(|m| carries_conversation(m));
+    // The copy's rows past the shared line can be stepped over when the agent will not see them
+    // once it goes on from the shared row. One whose rows name the row before them follows that
+    // chain, so any twig without conversation drops out of its context; Kiro reads its log in
+    // order and would still see the twig, so only its reasoning markers, which give the model
+    // nothing back, may be stepped over.
+    let twig = match harness {
+        HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => {
+            !mine[shared..].iter().any(|m| carries_conversation(m))
+        }
+        HarnessKind::Kiro => mine[shared..].iter().all(|m| is_reasoning_marker(m)),
+        _ => false,
+    };
     let rest = &path[shared..];
     let holds_none = !rest.iter().any(|m| tip.known_source_ids.contains(m.source_id.as_ref()));
     if twig && holds_none && shared > 0 {
@@ -134,6 +145,13 @@ pub fn classify(
 fn carries_conversation(row: &Message) -> bool {
     is_substantive(&row.role, &row.content)
         || row.content.iter().any(|c| matches!(c, Content::Summary(_)))
+}
+
+/// Whether `row` only marks that the model reasoned, its reasoning withheld (Kiro's redacted
+/// `Reasoning` row). Only for the twig rule.
+fn is_reasoning_marker(row: &Message) -> bool {
+    !row.content.is_empty()
+        && row.content.iter().all(|c| matches!(c, Content::ReasoningSummary { .. }))
 }
 
 /// How many messages `rows` hold: prompts and assistant text, as a [`Head`] counts them.

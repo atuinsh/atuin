@@ -390,8 +390,14 @@ async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: Tes
 
     let index = env.index.read().await;
     assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");
-    assert_eq!(index.search("delete_me", &IndexFilterMode::Global, 10).count(), 0);
-    assert_eq!(index.search("keep_me", &IndexFilterMode::Global, 10).count(), 1);
+    assert_eq!(
+        index.search("delete_me", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
+        0
+    );
+    assert_eq!(
+        index.search("keep_me", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
+        1
+    );
 }
 
 #[rstest]
@@ -415,6 +421,12 @@ async fn journal_rebuild_reloads_index(#[future(awt)] env: TestEnv) {
     assert_eq!(env.active_rows().await, 2);
     let index = env.index.read().await;
     assert_eq!(index.command_count(), 2, "rebuild should repopulate the index from the store");
-    assert_eq!(index.search("first_cmd", &IndexFilterMode::Global, 10).count(), 1);
-    assert_eq!(index.search("second_cmd", &IndexFilterMode::Global, 10).count(), 1);
+    assert_eq!(
+        index.search("first_cmd", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
+        1
+    );
+    assert_eq!(
+        index.search("second_cmd", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
+        1
+    );
 }

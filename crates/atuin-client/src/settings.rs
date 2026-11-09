@@ -12,6 +12,7 @@ use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeT
 use atuin_common::time::{
     AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
+use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -561,6 +562,16 @@ pub struct Octavo {
     /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
     /// both on.
     pub upload_output: bool,
+    #[serde(rename = "__debug__", default, skip_serializing)]
+    pub debug: OctavoDebug,
+}
+
+/// Settings for pointing Octavo at a hub other than Atuin's, kept out of the docs on purpose.
+#[cfg(feature = "octavo")]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct OctavoDebug {
+    /// The gRPC address Octavo uploads to, honored only while `sync_address` is a self-hosted hub.
+    pub address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1069,6 +1080,11 @@ pub struct Settings {
     /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
     /// the hidden `--shell-up-key-binding` option was passed.
     pub shell_up_key_binding: bool,
+    /// Whether `atuin init` binds ctrl-r to search. `--disable-ctrl-r` turns it off either way.
+    pub bind_ctrl_r: bool,
+    /// Whether `atuin init` binds the up arrow to search. `--disable-up-arrow` turns it off either
+    /// way.
+    pub bind_up_arrow: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
@@ -1488,14 +1504,14 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
+    pub fn default_filter_mode(&self, has_vcs_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
             .or_else(|| {
                 self.search
                     .filters
                     .iter()
-                    .find(|x| match (x, git_root, self.workspaces) {
+                    .find(|x| match (x, has_vcs_root, self.workspaces) {
                         (FilterMode::Workspace, true, true) => true,
                         (FilterMode::Workspace, _, _) => false,
                         (_, _, _) => true,
@@ -1556,12 +1572,14 @@ impl Settings {
             match ShellExpanded::expand(&raw) {
                 Ok(_) => {}
                 Err(ExpandError::Empty) => {
-                    tracing::warn!("{key} is empty, so Atuin uses its default");
+                    userio::log::warn!("settings-path-empty", key = key);
                     emptied.push((key, default));
                 }
-                Err(err @ ExpandError::Variable { .. }) => tracing::warn!(
-                    "{key}: failed to expand {raw:?} ({err}), so Atuin uses it as written; write \
-                     $$ for a literal $"
+                Err(err @ ExpandError::Variable { .. }) => userio::log::warn!(
+                    "settings-path-unexpanded",
+                    key = key,
+                    raw = format!("{raw:?}"),
+                    error = err.to_string()
                 ),
             }
         }
@@ -1598,6 +1616,8 @@ impl Settings {
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
+            .set_default("bind_ctrl_r", true)?
+            .set_default("bind_up_arrow", true)?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
@@ -1690,8 +1710,14 @@ impl Settings {
     }
 
     /// The `ATUIN_*` environment variables, as a config source.
+    ///
+    /// `config` reads the process environment itself, past `atuin_common::env`, so a test's mock
+    /// environment is handed to it as the source instead.
     fn environment() -> Environment {
-        Environment::with_prefix("atuin").prefix_separator("_").separator("__")
+        Environment::with_prefix("atuin")
+            .prefix_separator("_")
+            .separator("__")
+            .source(atuin_common::env::mocked_vars().map(|vars| vars.into_iter().collect()))
     }
 
     /// Layers a config file over `builder`, with `env` on top of it again so that environment
@@ -2126,12 +2152,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::in_git_context(true, true, FilterMode::Workspace)]
-    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::in_vcs_repo(true, true, FilterMode::Workspace)]
+    #[case::not_in_vcs_repo(true, false, FilterMode::Host)]
     #[case::workspaces_disabled(false, true, FilterMode::Host)]
     fn workspace_filter_selection(
         #[case] workspaces: bool,
-        #[case] git_root: bool,
+        #[case] has_vcs_root: bool,
         #[case] expected: FilterMode,
     ) {
         let mut settings = super::Settings::default();
@@ -2144,7 +2170,7 @@ mod tests {
         ];
         settings.workspaces = workspaces;
 
-        assert_eq!(settings.default_filter_mode(git_root), expected);
+        assert_eq!(settings.default_filter_mode(has_vcs_root), expected);
     }
 
     /// The example config writes out the headers of tables whose keys are all commented out, so
@@ -2190,8 +2216,7 @@ mod tests {
 
     #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
-        use std::path::PathBuf;
-
+        let _env = config_env::default();
         let custom_dir = PathBuf::from("/custom/data/dir");
         let builder = Settings::builder_with_data_dir(&custom_dir)?;
         let config = builder.build()?;
@@ -2218,6 +2243,36 @@ mod tests {
         assert_eq!(daemon_pidfile_path, custom_dir.join("atuin-daemon.pid").to_str().unwrap());
         assert!(!daemon_autostart);
 
+        Ok(())
+    }
+
+    /// The builder takes `ATUIN_*` overrides, and `ATUIN_HOME`, from the environment a test mocks,
+    /// not from the process: whatever a developer's shell exports, the mock decides.
+    #[rstest]
+    #[case::exported_in_the_mock(true)]
+    #[case::unset_in_the_mock(false)]
+    fn the_builder_reads_the_mocked_environment(
+        config_env: MockEnv,
+        #[case] exported: bool,
+    ) -> Result<()> {
+        let stray = std::env::current_dir()?.joined("stray");
+        if exported {
+            config_env.set("ATUIN_DAEMON__SOCKET_PATH", stray.join("atuin.sock"));
+            config_env.set("ATUIN_HOME", stray.join("home"));
+        }
+
+        let config = Settings::builder_with_data_dir(Path::new("/custom/data/dir"))?.build()?;
+        let socket_path: Option<PathBuf> = config.get("daemon.socket_path")?;
+        let logs_dir: PathBuf = config.get("logs.dir")?;
+
+        let home = std::env::current_dir()?.joined("home");
+        if exported {
+            assert_eq!(socket_path, Some(stray.join("atuin.sock")));
+            assert_eq!(logs_dir, stray.join("home").joined("logs"));
+        } else {
+            assert_eq!(socket_path, None);
+            assert_eq!(logs_dir, home.joined(".atuin").joined("logs"));
+        }
         Ok(())
     }
 
@@ -2592,6 +2647,21 @@ mod tests {
             .expect("could not read legacy threads settings")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::set(
+        "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::absent("", None)]
+    fn octavo_debug_address_is_read_from_its_hidden_table(
+        #[case] toml: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let settings = parse_settings(toml);
+        assert_eq!(settings.octavo.debug.address, expected.map(|url| Url::parse(url).unwrap()));
     }
 
     #[rstest]

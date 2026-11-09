@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -8,6 +10,7 @@ use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
 };
+use itertools::Itertools as _;
 use tracing::{debug, warn};
 use typed_builder::TypedBuilder;
 
@@ -81,6 +84,29 @@ pub enum PushError {
     Store(#[from] eyre::Report),
 }
 
+/// Errors returned by [`AiSessionStore::load`] and [`AiSessionStore::page`].
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    #[error(transparent)]
+    Store(#[from] eyre::Report),
+}
+
+/// A record [`AiSessionStore::load`] or [`AiSessionStore::page`] read, as the store holds it now.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Loaded {
+    /// Its message, with the host from the record's envelope.
+    Message(Box<Message>),
+    /// Not stored: its push hasn't happened yet, or failed. Only [`AiSessionStore::load`] reports
+    /// it.
+    Missing,
+    /// Stored, but this build can't read it yet: under another key, or of a kind or version from a
+    /// later build.
+    Held,
+    /// Stored, and no build will read it: of another tag, retired, undecodable, or an api-request
+    /// blob.
+    Skipped,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
     #[error(transparent)]
@@ -107,17 +133,38 @@ impl AiSessionRecord {
     /// (named msgpack, without [`Message::atuin_id`]) is no longer read.
     pub const VERSION: RecordVersion = RecordVersion::V2;
 
-    /// The version this record is written as: [`Self::VERSION`], or v3 (the same body) for a
-    /// message naming a harness v2 readers don't know (omp), or with a field they don't
-    /// ([`Message::provider`]). Those can't decode it, and skip what they can't decode for good;
-    /// a version they don't know they hold until they're upgraded.
+    /// The version this record is written as, all with the same body: [`Self::VERSION`], or v3
+    /// for a message naming a harness v2 readers don't know (omp), or with a field they don't
+    /// ([`Message::provider`]), v4 for one naming a harness v3 readers don't know (Grok), or v5
+    /// for one naming a harness v4 readers don't know (Amp, and any added since). Readers skip
+    /// what they can't decode for good, and hold a version they don't know until they're
+    /// upgraded. v5 readers read a harness they don't know as [`HarnessKind::Unknown`], so later
+    /// harnesses need no version of their own.
     #[must_use]
     pub fn version(&self) -> RecordVersion {
         match self {
             Self::Message(msg) => {
-                let mut harnesses = std::iter::once(msg.session.harness)
-                    .chain(msg.parent.as_ref().map(|p| p.harness));
-                if harnesses.any(|h| h == HarnessKind::Omp) || msg.provider.is_some() {
+                let harnesses: Vec<_> = std::iter::once(msg.session.harness)
+                    .chain(msg.parent.as_ref().map(|p| p.harness))
+                    .collect();
+                let v4_knows = |h: &HarnessKind| {
+                    matches!(
+                        h,
+                        HarnessKind::Unknown
+                            | HarnessKind::ClaudeCode
+                            | HarnessKind::Codex
+                            | HarnessKind::Copilot
+                            | HarnessKind::Opencode
+                            | HarnessKind::Pi
+                            | HarnessKind::Omp
+                            | HarnessKind::Grok
+                    )
+                };
+                if !harnesses.iter().all(v4_knows) {
+                    RecordVersion::V5
+                } else if harnesses.contains(&HarnessKind::Grok) {
+                    RecordVersion::V4
+                } else if harnesses.contains(&HarnessKind::Omp) || msg.provider.is_some() {
                     RecordVersion::V3
                 } else {
                     Self::VERSION
@@ -151,7 +198,7 @@ impl AiSessionRecord {
         match version {
             RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
             RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
-            RecordVersion::V2 | RecordVersion::V3 => {
+            RecordVersion::V2 | RecordVersion::V3 | RecordVersion::V4 | RecordVersion::V5 => {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
@@ -291,21 +338,60 @@ impl AiSessionStore {
         }))
     }
 
-    /// Decrypt and decode `record` with `key`, and prepare it for the sidecar, which the caller
-    /// appends it to.
-    fn decode(key: &Key, record: &Record<EncryptedData>) -> Result<Projected, DbError> {
+    /// Each of `ids` once, in their order, with what the record store holds of it.
+    pub async fn load(&self, ids: &[RecordId]) -> Result<Vec<(RecordId, Loaded)>, LoadError> {
+        let records = self.store.get_many(ids).await?;
+        let key = self.key.clone();
+        let mut stored: HashMap<RecordId, Loaded> =
+            decode_parallel(records, move |record| (record.id, Self::decode(&key, &record).into()))
+                .await
+                .into_iter()
+                .collect();
+        Ok(ids
+            .iter()
+            .unique()
+            .map(|&id| (id, stored.remove(&id).unwrap_or(Loaded::Missing)))
+            .collect())
+    }
+
+    /// The first `limit` records of `series` in `range`, in order, each with its place in the
+    /// series.
+    ///
+    /// A place with no record (one sync has yet to download) has no entry.
+    pub async fn page(
+        &self,
+        series: &RecordSeriesKey,
+        range: Range<RecordIdx>,
+        limit: u64,
+    ) -> Result<Vec<(RecordIdx, RecordId, Loaded)>, LoadError> {
+        if range.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut records = self.store.next(series, range.start, limit).await?;
+        records.retain(|record| record.idx < range.end);
+        let key = self.key.clone();
+        Ok(decode_parallel(records, move |record| {
+            (record.idx, record.id, Self::decode(&key, &record).into())
+        })
+        .await)
+    }
+
+    /// Decrypt and decode `record` with `key`: its message, with the host from its envelope, or
+    /// whether a later read could get one.
+    fn decode(key: &Key, record: &Record<EncryptedData>) -> Decoded {
         if record.tag != RecordTag::AiSession {
-            return Ok(Projected::Skipped);
+            return Decoded::Skipped;
         }
 
         let id = record.id;
         let host = record.host.id;
 
-        // What a record that cannot be projected does to the watermark:
+        // What becomes of a record that yields no message (for the sidecar, a held one keeps the
+        // watermark below it):
         //
         // - One this key cannot decrypt is held: the key may be the stale one (the daemon loads it
         //   once, and `atuin login` or a rekey can re-encrypt the store under it), and the right
-        //   one projects it later. Passing it would lose it for good. A record no key will ever
+        //   one reads it later. Passing it would lose it for good. A record no key will ever
         //   decrypt (lost key, corrupted ciphertext) is held too, which costs replaying its
         //   series' later records on each reprojection, but never stops them projecting.
         // - One that decrypts but whose kind or version this build does not know is held until
@@ -319,45 +405,53 @@ impl AiSessionStore {
         //   authenticates it, so it is exactly what its writer wrote, and no retry reads it.
         if record.version == RecordVersion::V0 {
             debug!(id = %id.0, "skipping retired ai-session record");
-            return Ok(Projected::Skipped);
+            return Decoded::Skipped;
         }
         let decrypted = match record.decrypt(key) {
             Ok(decrypted) => decrypted,
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to decrypt ai-session record, holding it back");
-                return Ok(Projected::Held);
+                return Decoded::Held;
             }
         };
 
         let decoded = AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version);
         let AiSessionRecord::Message(msg) = match decoded {
             Ok(record) => record,
-            // Written by a newer build, which an upgrade will be able to project.
+            // Written by a newer build, which an upgrade will be able to read.
             Err(err @ (DecodeError::UnknownKind(_) | DecodeError::UnknownVersion(_))) => {
                 warn!(?err, id = %id.0, "unknown ai-session record kind or version, holding it back");
-                return Ok(Projected::Held);
+                return Decoded::Held;
             }
             Err(DecodeError::Retired(version)) => {
                 debug!(id = %id.0, version = version.as_str(), "skipping retired ai-session record");
-                return Ok(Projected::Skipped);
+                return Decoded::Skipped;
             }
             Err(err) => {
                 warn!(?err, id = %id.0, "failed to deserialize ai-session record, skipping");
-                return Ok(Projected::Skipped);
+                return Decoded::Skipped;
             }
         };
 
         if is_api_request_blob(&msg) {
             debug!(id = %id.0, "skipping a claude code api-request-blob row");
-            return Ok(Projected::Skipped);
+            return Decoded::Skipped;
         }
 
         // The record body never carries the host: its envelope does.
-        let msg = PreparedMessage::new(Message {
+        Decoded::Message(Box::new(Message {
             host: Some(host),
             ..msg
-        })?;
-        Ok(Projected::Append(Box::new(msg)))
+        }))
+    }
+
+    /// [`Self::decode`] `record`, and prepare it for the sidecar, which the caller appends it to.
+    fn project(key: &Key, record: &Record<EncryptedData>) -> Result<Projected, DbError> {
+        Ok(match Self::decode(key, record) {
+            Decoded::Message(msg) => Projected::Append(Box::new(PreparedMessage::new(*msg)?)),
+            Decoded::Held => Projected::Held,
+            Decoded::Skipped => Projected::Skipped,
+        })
     }
 
     /// Replay every record into the sidecar, whatever it already holds.
@@ -705,7 +799,7 @@ impl AiSessionStore {
         let records = self.store.next(series, from, REPROJECT_PAGE).await?;
         let key = self.key.clone();
         Ok(decode_parallel(records, move |record| {
-            (record.idx, record.id, Self::decode(&key, &record))
+            (record.idx, record.id, Self::project(&key, &record))
         })
         .await)
     }
@@ -759,6 +853,24 @@ fn is_api_request_blob(msg: &Message) -> bool {
         && matches!(msg.role, Role::User | Role::Assistant | Role::System | Role::Tool)
 }
 
+/// What a stored record holds for this build, as [`AiSessionStore::decode`] reads it.
+#[derive(Debug)]
+enum Decoded {
+    Message(Box<Message>),
+    Held,
+    Skipped,
+}
+
+impl From<Decoded> for Loaded {
+    fn from(decoded: Decoded) -> Self {
+        match decoded {
+            Decoded::Message(msg) => Self::Message(msg),
+            Decoded::Held => Self::Held,
+            Decoded::Skipped => Self::Skipped,
+        }
+    }
+}
+
 /// What replaying one record does to the sidecar.
 #[derive(Debug)]
 enum Projected {
@@ -799,8 +911,8 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{
-        AiSessionRecord, AiSessionStore, BuildError, DecryptedData, Host, Key, Record, RecordId,
-        RecordSeriesKey, RecordTag, RecordVersion, Reprojected, SqliteStore, Watermark,
+        AiSessionRecord, AiSessionStore, BuildError, DecryptedData, Host, Key, Loaded, Record,
+        RecordId, RecordSeriesKey, RecordTag, RecordVersion, Reprojected, SqliteStore, Watermark,
     };
     use crate::ai_session::{
         AiSessionDatabase, HarnessKind, HarnessSession, Message, NativeSessionId, SearchTerms,
@@ -1805,6 +1917,68 @@ mod tests {
         assert_eq!(count(&db, &session_named("v0")).await, None);
         assert_eq!(mark(&db, &s).await.map(|m| m.idx), Some(3));
         assert_eq!(s.reproject(&db).await.unwrap().replayed, 0);
+    }
+
+    /// `load` answers each id, in the order asked, with what the store holds of it.
+    #[rstest]
+    #[tokio::test]
+    async fn load_sorts_records_into_message_missing_held_and_skipped() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let handle = sample_handle();
+        let readable = message_in(&handle, 0, "text");
+        s.push(&readable).await.unwrap();
+        let held = message_in(&handle, 1, "text");
+        AiSessionStore::builder()
+            .store(store.clone())
+            .host_id(s.host_id)
+            .key(Key::from([1u8; 32]))
+            .build()
+            .push(&held)
+            .await
+            .unwrap();
+        let undecodable = RecordId(atuin_common::utils::uuid_v7());
+        let record = Record::builder()
+            .id(undecodable)
+            .host(Host::new(s.host_id))
+            .version(RecordVersion::V1)
+            .tag(RecordTag::AiSession)
+            .idx(2)
+            // A message kind, then a msgpack byte that is never valid.
+            .data(DecryptedData(vec![0, 0xc1]))
+            .build();
+        store.push(&record.encrypt(&key())).await.unwrap();
+        let missing = RecordId(atuin_common::utils::uuid_v7());
+
+        let loaded = s.load(&[held.id, missing, readable.id, undecodable]).await.unwrap();
+
+        let stored = Message {
+            host: Some(s.host_id),
+            ..readable.clone()
+        };
+        assert_eq!(loaded, [
+            (held.id, Loaded::Held),
+            (missing, Loaded::Missing),
+            (readable.id, Loaded::Message(Box::new(stored))),
+            (undecodable, Loaded::Skipped),
+        ]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn page_stops_at_the_end_of_its_range() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let [s] = <[_; 1]>::try_from(writers(&store, 1)).ok().unwrap();
+        let msgs: Vec<_> = (0..5).map(|i| message_in(&sample_handle(), i, "text")).collect();
+        for msg in &msgs {
+            s.push(msg).await.unwrap();
+        }
+        let series = RecordSeriesKey::new(s.host_id, RecordTag::AiSession);
+
+        let page = s.page(&series, 1..3, 10).await.unwrap();
+
+        let read: Vec<_> = page.into_iter().map(|(idx, id, _)| (idx, id)).collect();
+        assert_eq!(read, [(1, msgs[1].id), (2, msgs[2].id)]);
     }
 
     /// A reproject takes each row's host from its record's envelope, which the body never

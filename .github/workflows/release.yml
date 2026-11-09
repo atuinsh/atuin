@@ -131,6 +131,15 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Install pandoc"
+        uses: "pandoc/actions/setup@v1"
+        if: "runner.os == 'Windows'"
+        with:
+          "version": "3.12.1"
+      - name: "Generate the MSI license page"
+        if: "runner.os == 'Windows'"
+        run: "pandoc --from=commonmark --to=rtf --standalone --output=crates/atuin/wix/License.rtf LICENSE"
+        shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -55,7 +55,7 @@ const DAY_MILLIS: f64 = 86_400_000.0;
 
 /// The most a row stores of each usage count: far past any model call, and small enough that a
 /// session's totals, adding up millions of calls, never overflow.
-const MAX_ROW_TOKENS: u64 = 1 << 40;
+pub const MAX_ROW_TOKENS: u64 = 1 << 40;
 
 /// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
 const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
@@ -1569,6 +1569,9 @@ impl AiSessionDatabase {
             4 => Ok(HarnessKind::Opencode),
             5 => Ok(HarnessKind::Pi),
             6 => Ok(HarnessKind::Omp),
+            7 => Ok(HarnessKind::Grok),
+            8 => Ok(HarnessKind::Amp),
+            9 => Ok(HarnessKind::Kiro),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -2852,6 +2855,38 @@ mod tests {
             count("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'blocks'"),
             1
         );
+    }
+
+    /// Migration 5 empties what earlier builds projected, rows they read as an unknown harness
+    /// among it, and clears the watermarks, so the next reprojection names Kiro's rows.
+    #[rstest]
+    fn the_kiro_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 0, 'sess_1', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 0, 1, 'a', 0, 1, '[]');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        let generation = count("SELECT generation FROM projection_state");
+
+        conn.execute_batch(include_str!("migrations/0005_reproject_for_kiro.sql")).unwrap();
+
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
     fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
@@ -5091,6 +5126,29 @@ mod tests {
             session: NativeSessionId::from("nope".to_owned()),
         };
         assert!(db.rehydrate_session(&missing, here).await.unwrap().is_none());
+    }
+
+    /// A continuation from a machine whose clock is behind is stored before the rows it follows;
+    /// the transcript still has it after them (see `rehydrate::parent_order`).
+    #[rstest]
+    #[tokio::test]
+    async fn a_continuation_from_a_slow_clock_follows_its_parent() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let prompt = message_with(&s, 10, Role::User, vec![text("first")]);
+        let mut reply = message_with(&s, 11, Role::Assistant, vec![text("reply")]);
+        reply.parent_source_id = Some(SourceId::from("source-10".to_owned()));
+        let mut later_prompt = message_with(&s, 2, Role::User, vec![text("go on")]);
+        later_prompt.parent_source_id = Some(SourceId::from("source-11".to_owned()));
+        let mut later_reply = message_with(&s, 3, Role::Assistant, vec![text("went on")]);
+        later_reply.parent_source_id = Some(SourceId::from("source-2".to_owned()));
+        for m in [&prompt, &reply, &later_prompt, &later_reply] {
+            db.append(m).await.unwrap();
+        }
+
+        let session = db.rehydrate_session(&s, "/local".into()).await.unwrap().unwrap();
+        let ids: Vec<&str> = session.messages.iter().map(|m| m.source_id.as_str()).collect();
+        assert_eq!(ids, ["source-10", "source-11", "source-2", "source-3"]);
     }
 
     #[rstest]

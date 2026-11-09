@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use atuin_client::ai_session::{HarnessKind, Head, SourceId};
 use atuin_client::settings::{AiSessionResume, Settings};
-use atuin_common::env;
+use atuin_common::executable::is_executable_with_path_search;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use atuin_common::harnesstools::rehydrate::{
     ForkOf, RehydrateError, RehydrateMessage, RehydrateSession,
@@ -35,7 +35,7 @@ use atuin_common::path::PathBufExt as _;
 
 use super::ResumeContext;
 use super::catchup::{self, CatchUp, Held, Step, Why};
-use super::source::{SessionRow, SessionSource, harness_label};
+use super::source::{SessionRow, SessionSource, harness_arg, harness_label};
 
 /// Why a session can be viewed but not resumed here.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -410,7 +410,7 @@ impl Machine for ThisMachine {
     }
 
     fn installed(&self, program: &str) -> bool {
-        on_path(program)
+        is_executable_with_path_search(program)
     }
 
     async fn local_tip(
@@ -611,6 +611,13 @@ impl HarnessResumer {
         }
         // The harness decides first (a subagent is never resumable, whatever is on disk).
         harness.resume_plan(&target)?;
+        // Amp keeps its threads on its servers: there is no copy here to catch up or restore.
+        if let AnyHarness::Amp(_) = harness {
+            target.cwd = Some(resolve_cwd(session.cwd.as_deref(), &self.context).cwd);
+            let resume = Resume::ready(harness.resume(&target, template)?.prepare()?);
+            self.check_installed(&resume.plan)?;
+            return Ok((resume, None));
+        }
 
         let resume = match self.machine.locate(harness, id).await {
             Some(native) => {
@@ -687,6 +694,9 @@ impl Resumer for HarnessResumer {
         let Some(Copy { tip, dir }) = copy else {
             return ready(resume.plan, None);
         };
+        if !resume.catch_up {
+            return ready(resume.plan, None);
+        }
         let tip = match tip {
             Ok(Some(tip)) => Ok(tip),
             Ok(None) => {
@@ -866,13 +876,15 @@ impl Resumer for HarnessResumer {
         AnyHarness::all()
             .iter()
             .map(HarnessKind::from)
-            .filter(|kind| *kind != own && self.runs_here(*kind, session))
+            .filter(|kind| *kind != own && harness_arg(*kind).is_some())
+            .filter(|kind| self.runs_here(*kind, session))
             .collect()
     }
 
-    /// Every harness atuin writes forks (Copilot isn't one), when installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
-        self.runs_here(session.handle.harness, session)
+        // Forking writes the fork out as a transcript, which atuin can't for Amp.
+        session.handle.harness != HarnessKind::Amp
+            && self.runs_here(session.handle.harness, session)
     }
 
     async fn fork(
@@ -947,6 +959,9 @@ impl Resumer for HarnessResumer {
             from_kind.harness().ok_or(NotResumable::Unsupported(harness_label(from_kind)))?;
         let into = target.harness().ok_or(NotResumable::Unsupported(harness_label(target)))?;
         let fail = |e: String| NotResumable::Continue(harness_label(target), e);
+        if harness_arg(target).is_none() {
+            return Err(fail("atuin can't write its threads".to_owned()));
+        }
         if from_kind == target {
             return Err(fail("it's that agent's own session".to_owned()));
         }
@@ -1069,26 +1084,9 @@ fn in_checkout(original: &Path, context: &ResumeContext) -> Option<PathBuf> {
     })
 }
 
-/// Whether `program` can be run: a path to a file, or a file of that name in a `PATH` directory
-/// (executable, on unix; on Windows, also with any of the `PATHEXT` extensions, as `cmd` finds
-/// `cmd.exe`).
-pub fn on_path(program: &str) -> bool {
-    find_program(program).is_some()
-}
-
-/// The file [`on_path`] finds for `program`, so that what runs is what was checked: on Windows that
-/// is `claude.cmd` for `claude`, which spawning the bare name would not find.
-pub fn find_program(program: &str) -> Option<PathBuf> {
-    if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
-        return runnable(Path::new(program));
-    }
-    let paths = env::var_os("PATH")?;
-    std::env::split_paths(&paths).find_map(|dir| runnable(&dir.joined(program)))
-}
-
-/// The program a plan runs, as [`on_path`] should check it: a relative path such as
-/// `./bin/wrapper` names a file under the directory the command runs from, not the one the
-/// picker was opened in.
+/// The program a plan runs, as [`is_executable_with_path_search`] should check it: a relative
+/// path such as `./bin/wrapper` names a file under the directory the command runs from, not the
+/// one the picker was opened in.
 pub fn program_to_check(plan: &ResumePlan) -> String {
     let program = Path::new(&plan.program);
     let has_dir = plan.program.contains(std::path::MAIN_SEPARATOR) || plan.program.contains('/');
@@ -1097,34 +1095,6 @@ pub fn program_to_check(plan: &ResumePlan) -> String {
             cwd.join(program).to_string_lossy().into_owned()
         }
         _ => plan.program.clone(),
-    }
-}
-
-/// The file at `path`, if it can be run (on Windows, `path` with a `PATHEXT` extension also counts).
-fn runnable(path: &Path) -> Option<PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            .then(|| path.to_path_buf())
-    }
-    #[cfg(windows)]
-    {
-        if path.is_file() {
-            return Some(path.to_path_buf());
-        }
-        let extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-        extensions.split(';').filter(|ext| !ext.is_empty()).find_map(|ext| {
-            let mut with_ext = path.as_os_str().to_owned();
-            with_ext.push(ext);
-            let with_ext = PathBuf::from(with_ext);
-            with_ext.is_file().then_some(with_ext)
-        })
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        path.is_file().then(|| path.to_path_buf())
     }
 }
 
