@@ -19,7 +19,7 @@ use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
     Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerInfo, Tool, ToolAnnotations,
+    ServerConfig, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -78,14 +78,14 @@ Atuin also records AI agent sessions as threads. Use atuin_threads_search or atu
 
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
-fn server_info() -> ServerInfo {
-    ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+fn server_info() -> ServerConfig {
+    ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("atuin", env!("CARGO_PKG_VERSION")))
         .with_instructions(SERVER_INSTRUCTIONS)
 }
 
 impl ServerHandler for AtuinMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         server_info()
     }
 

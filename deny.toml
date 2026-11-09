@@ -19,6 +19,12 @@ ignore = [
     # No upstream patch. Runs only on client, no severe concern.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # The bundled SQLite (libsqlite3-sys < 0.39) can return stale memory when it opens a crafted
+    # database and `-wal` pair. The fix needs libsqlite3-sys 0.39, which sqlx 0.9.0 forbids
+    # (`<0.38`); sqlx main allows it (launchbadge/sqlx#4502) but has not released it. Atuin
+    # opens only files the same user's processes wrote. Remove this, and bump sqlx, rusqlite
+    # (0.41) and our own libsqlite3-sys range, once sqlx 0.9.1 ships.
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]
