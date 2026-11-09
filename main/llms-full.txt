@@ -525,7 +525,7 @@ At any time, you can open the TUI with the default keybindings of the up arrow, 
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
+While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) — the full history, this machine, the current directory, the current repository, or the current shell session.
 
 See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) page for more options.
 
@@ -589,10 +589,10 @@ The filter mode narrows the set of history Atuin searches. Cycle through the mod
 | host             | Only history from this machine                                               |
 | session          | Only history from the current shell session                                  |
 | directory        | Only history from the current directory                                      |
-| workspace        | Only history from anywhere in the current git repository                     |
+| workspace        | Only history from anywhere in the current repository, Git or Jujutsu         |
 | session-preload  | The current session, plus all global history from before the session started |
 
-Atuin skips `workspace` mode when you aren't inside a git repository or when [`workspaces = false`](https://docs.atuin.sh/configuration/config/#workspaces).
+Atuin skips `workspace` mode when you aren't inside a repository or when [`workspaces = false`](https://docs.atuin.sh/configuration/config/#workspaces). A plain Git worktree searches history under the main repository root. A Jujutsu workspace searches history under its own root, even when colocated with a Git worktree.
 
 To change which mode searches start in, set [`filter_mode`](https://docs.atuin.sh/configuration/config/#filter_mode). To remove modes from the ctrl-r rotation entirely, set [`search.filters`](https://docs.atuin.sh/configuration/config/#filters). The up arrow can start in a different mode than ctrl-r — see [`filter_mode_shell_up_key_binding`](https://docs.atuin.sh/configuration/config/#filter_mode_shell_up_key_binding).
 
@@ -1786,9 +1786,9 @@ inline_height_shell_up_key_binding = 10
 
 Default: `true`
 
-This flag enables a pseudo filter-mode named "workspace": the filter is automatically activated when you're in a git repository.
+This flag enables a pseudo filter-mode named "workspace": the filter is automatically activated when you're in a Git or Jujutsu repository.
 
-With workspace filtering enabled, Atuin will filter for commands executed in any directory within a git repository tree.
+With workspace filtering enabled, Atuin filters commands executed in any directory within the repository tree. A plain Git worktree searches history under the main repository root. A Jujutsu workspace searches history under its own root, even when colocated with a Git worktree.
 
 Filter modes can still be toggled via ctrl-r.
 
@@ -2133,7 +2133,7 @@ prefers_reduced_motion = false
 
 ### `filters`
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a repository or when `workspaces = false`. See [Filter mode](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 
