@@ -8,6 +8,7 @@ use fixedbitset::FixedBitSet;
 use jiff::{RoundMode, TimestampRound, Unit};
 use tracing::{error, instrument};
 
+use crate::search::CaseMatching;
 use crate::search::index::core::{CompiledFilter, IndexIdentity, SearchIndex};
 
 /// Which commands were run before a session started.
@@ -87,6 +88,7 @@ impl SessionPreload {
 #[must_use = "a pending search returns nothing until it's finished"]
 pub struct PendingSearch {
     query: String,
+    case_matching: CaseMatching,
     limit: usize,
     session: ShellSession,
     /// The index that the search began on.
@@ -103,11 +105,13 @@ impl PendingSearch {
     pub(super) fn new(
         index: &SearchIndex,
         query: &str,
+        case_matching: CaseMatching,
         limit: usize,
         session: ShellSession,
     ) -> Self {
         Self {
             query: query.to_owned(),
+            case_matching,
             limit,
             session,
             index: index.identity.clone(),
@@ -158,7 +162,12 @@ impl LoadedSearch {
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_search", fields(query = %self.pending.query))]
     pub(super) fn finish(self, index: &SearchIndex) -> impl Iterator<Item = HistoryId> + use<'_> {
         let filter = CompiledFilter::SessionPreload(self.session_preload(index));
-        index.search_compiled(&self.pending.query, &filter, self.pending.limit)
+        index.search_compiled(
+            &self.pending.query,
+            self.pending.case_matching,
+            &filter,
+            self.pending.limit,
+        )
     }
 
     /// Prepare the [`SessionPreload`] for this search on `index`.
@@ -238,7 +247,7 @@ mod tests {
         filter: &IndexFilterMode,
         db: &Sqlite,
     ) -> Vec<HistoryId> {
-        let mut results: Vec<_> = match index.search(query, filter, 10) {
+        let mut results: Vec<_> = match index.search(query, CaseMatching::Smart, filter, 10) {
             Ok(results) => results.collect(),
             Err(pending) => index.finish_search(pending.load(db).await).collect(),
         };
@@ -351,7 +360,7 @@ mod tests {
             db.save(&history).await.unwrap();
             index.add_history([&history]);
             let mut results: Vec<_> =
-                index.search("", &filter, 10).expect("still cached").collect();
+                index.search("", CaseMatching::Smart, &filter, 10).expect("still cached").collect();
             results.sort_unstable();
             assert_eq!(results, ids(&index, expected), "after adding {command} at {timestamp}");
         }
@@ -376,7 +385,7 @@ mod tests {
         index.add_history([&old]);
 
         // This search begins, and then "old" is run again. The new run is saved after the query.
-        let Err(pending) = index.search("", &filter, 10) else {
+        let Err(pending) = index.search("", CaseMatching::Smart, &filter, 10) else {
             panic!("nothing is cached yet");
         };
         let rerun = make_session_history("old", other, start + minutes(1), AuthorKind::User);
@@ -385,9 +394,12 @@ mod tests {
         db.save(&rerun).await.unwrap();
         assert_eq!(index.finish_search(loaded).count(), 0, "the query missed the run again");
 
-        assert!(index.search("", &filter, 10).is_err(), "the stale result isn't cached");
+        assert!(
+            index.search("", CaseMatching::Smart, &filter, 10).is_err(),
+            "the stale result isn't cached"
+        );
         assert_eq!(search_with_db(&index, "", &filter, &db).await, ids(&index, &["old"]));
-        assert!(index.search("", &filter, 10).is_ok(), "that one is cached");
+        assert!(index.search("", CaseMatching::Smart, &filter, 10).is_ok(), "that one is cached");
     }
 
     /// A sync drops the cached preload. A search that began before a sync doesn't cache its result
@@ -421,7 +433,7 @@ mod tests {
 
         // This search queries the database before the early run is deleted. It finishes after the
         // index was synced.
-        let Err(pending) = index.search("", &filter, 10) else {
+        let Err(pending) = index.search("", CaseMatching::Smart, &filter, 10) else {
             panic!("nothing is cached yet");
         };
         let loaded = pending.load(&db).await;
@@ -429,12 +441,18 @@ mod tests {
         index.sync_commands([remaining_runs(&[after], "old")], Timestamp::now());
         assert_eq!(index.finish_search(loaded).count(), 1, "its query found the deleted run");
 
-        assert!(index.search("", &filter, 10).is_err(), "the stale result isn't cached");
+        assert!(
+            index.search("", CaseMatching::Smart, &filter, 10).is_err(),
+            "the stale result isn't cached"
+        );
         assert!(search_with_db(&index, "", &filter, &db).await.is_empty());
-        assert!(index.search("", &filter, 10).is_ok(), "that one is cached");
+        assert!(index.search("", CaseMatching::Smart, &filter, 10).is_ok(), "that one is cached");
 
         index.sync_commands([remaining_runs(&[], "old")], Timestamp::now());
-        assert!(index.search("", &filter, 10).is_err(), "a sync drops the cache");
+        assert!(
+            index.search("", CaseMatching::Smart, &filter, 10).is_err(),
+            "a sync drops the cache"
+        );
     }
 
     /// A pending session-preload search can finish on a different index than the one it began on.
@@ -474,7 +492,7 @@ mod tests {
             None
         };
 
-        let Err(pending) = index.search("", &filter, 10) else {
+        let Err(pending) = index.search("", CaseMatching::Smart, &filter, 10) else {
             panic!("nothing is cached yet");
         };
         let mut loaded = pending.load(&db).await;
@@ -485,6 +503,9 @@ mod tests {
         let mut results: Vec<_> = finishing.finish_search(loaded).collect();
         results.sort_unstable();
         assert_eq!(results, ids(finishing, expected));
-        assert!(finishing.search("", &filter, 10).is_err(), "nothing is cached");
+        assert!(
+            finishing.search("", CaseMatching::Smart, &filter, 10).is_err(),
+            "nothing is cached"
+        );
     }
 }

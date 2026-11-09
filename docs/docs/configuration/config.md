@@ -716,6 +716,27 @@ The `filter_mode` setting selects the initial mode from this list. If `filter_mo
 filters = ["global", "host", "session", "directory"]
 ```
 
+### `case_matching`
+
+Atuin version: >= 18.25
+
+Default: `"smart"`
+
+How search treats uppercase letters in the query. Applies to the `prefix`, `fulltext`, `fuzzy` and `daemon-fuzzy` [search modes](#search_mode), and to the highlighting of matches. Regex terms that start with `r/` aren't affected.
+
+| Value  | Meaning |
+|--------|---------|
+| `"smart"` | Case-insensitive, unless a term has an uppercase letter. `prefix` mode stays case-insensitive. |
+| `"ignore"` | Always case-insensitive. |
+| `"respect"` | Always case-sensitive. |
+
+The `prefix`, `fulltext` and `fuzzy` modes run in SQLite, which only folds the case of ASCII letters. For example, `"ignore"` won't match `É` to `é` in those modes.
+
+```toml
+[search]
+case_matching = "ignore"
+```
+
 ### Score multipliers
 
 For the [`"daemon-fuzzy"` search mode](#search_mode), you can control the scoring of matched items. The system scores matches based on three numbers: frequency, recency, and frecency:

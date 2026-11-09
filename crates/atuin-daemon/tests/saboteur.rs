@@ -16,7 +16,7 @@ use std::borrow::Borrow;
 use atuin_client::history::store::BuildChunk;
 use atuin_client::history::{AuthorKind, History, HistoryId};
 use atuin_common::filter::OrFilter;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex, SearchIndexSettings};
+use atuin_daemon::search::{CaseMatching, IndexFilterMode, SearchIndex, SearchIndexSettings};
 use atuin_domain::record::{RecordId, RecordTag};
 use common::{TestEnv, history, history_at};
 use futures::StreamExt;
@@ -33,7 +33,7 @@ where
 
 /// Ids the index returns for `query` under no filter and a generous limit -- what the TUI shows.
 fn hits(index: &SearchIndex, query: &str) -> Vec<HistoryId> {
-    index.search(query, &IndexFilterMode::Global, 200).unwrap().collect()
+    index.search(query, CaseMatching::Smart, &IndexFilterMode::Global, 200).unwrap().collect()
 }
 
 /// Replay the records of `ids` into the history db chunk by chunk, the way the sync worker does.
