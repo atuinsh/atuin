@@ -18,6 +18,7 @@ mod unix {
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
     use atuin_daemon::{Daemon, DaemonHandle, OutputCaptureEngine};
+    use rstest::rstest;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
@@ -139,14 +140,14 @@ mod unix {
         (client, handle, tmp)
     }
 
-    fn context(cwd: &str, hostname: &str, session: &str, git_root: Option<&str>) -> Context {
+    fn context(cwd: &str, hostname: &str, session: &str, vcs_root: Option<&str>) -> Context {
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
             #[allow(deprecated)]
             cmd_origin: atuin_domain::record::CmdOrigin::parse_lenient(hostname),
             host_id: "test-host-id".to_string(),
-            git_root: git_root.map(Into::into),
+            vcs_root: vcs_root.map(Into::into),
         }
     }
 
@@ -189,6 +190,7 @@ mod unix {
         ids
     }
 
+    #[rstest]
     #[tokio::test]
     async fn filters_and_shell_switching_work_end_to_end() {
         // alpha: bash, host-a, session A, inside the workspace
@@ -225,7 +227,7 @@ mod unix {
             search(&mut client, query_id, "echo", FilterMode::Directory, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&gamma]), "directory filter");
 
-        // Workspace: everything under the git root.
+        // Workspace: everything under the repo root.
         query_id += 1;
         let results = search(
             &mut client,

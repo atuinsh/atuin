@@ -15,6 +15,7 @@ macOS, with Homebrew Bash on macOS.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
 - `e2e_sync`: `atuin sync` with a running daemon, between two machines on an
   in-process sync server: what it downloads is in the daemon's search at once.
+- `e2e_workspace`: history and search filters for Jujutsu workspaces and Git worktrees.
 - `e2e_ai_sessions`: AI agent sessions captured from each agent's transcripts,
   synced between two machines through an in-process sync server, and resumed:
   restored, caught up, forked, switched, or continued in another agent.
@@ -26,6 +27,16 @@ Pi do (`common/agents.rs`), and put stand-ins for those agents on `PATH` that
 print how they were run. Set `ATUIN_E2E_LOG` (an `ATUIN_LOG` filter) to have
 their daemons log more for a failure to show.
 
+The live Jujutsu workspace cases need `jj` 0.46.0 or later and Git 2.42.0 or later.
+They check colocation defaults, flags, configuration, and changes after creation.
+Run them with the filesystem-based cases:
+
+```sh
+cargo nextest run -p atuin --test e2e_workspace --run-ignored all
+```
+
+Atuin itself detects workspace roots from the filesystem. It doesn't run `jj`.
+
 ## Add a shell setup
 
 Copy a file in [shells/](shells/). `rstest` runs every PTY test against each
@@ -34,7 +45,7 @@ Copy a file in [shells/](shells/). `rstest` runs every PTY test against each
 - `shell`: executable on PATH; override with `ATUIN_E2E_<SHELL>`.
 - `args`: optional shell arguments.
 - `rc`: path relative to the temporary home.
-- `script`: rc contents. Set the prompt to `E2E_PROMPT> ` with no right prompt.
+- `script`: `rc` contents. Set the prompt to `E2E_PROMPT> ` with no right prompt.
 - `multiline_accept`: key to execute multiline input. Default: `"\r"`; ble.sh: `"\n"`.
 - `required_files`: environment variables and default file paths. Caller values
   override defaults; `$HOME` expands to the caller's home. Resolved paths are
