@@ -142,6 +142,20 @@ impl Shell {
     pub fn is_posixish(&self) -> bool {
         matches!(self, Self::Bash | Self::Fish | Self::Zsh)
     }
+
+    /// The value of `ATUIN_SHELL` that this shell's hooks use, if Atuin has hooks for this shell.
+    #[must_use]
+    pub const fn hook_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Bash => Some("bash"),
+            Self::Fish => Some("fish"),
+            Self::Zsh => Some("zsh"),
+            Self::Xonsh => Some("xonsh"),
+            Self::Nu => Some("nu"),
+            Self::Powershell => Some("powershell"),
+            Self::Sh | Self::Unknown => None,
+        }
+    }
 }
 
 #[must_use]
@@ -327,5 +341,22 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, ShellLookupError::RunCommand { .. }), "{err:?}");
         assert!(err.to_string().contains("\"atuin-definitely-not-a-real-command arg\""), "{err}");
+    }
+
+    #[rstest]
+    #[case::bash(Shell::Bash, Some("bash"))]
+    #[case::fish(Shell::Fish, Some("fish"))]
+    #[case::zsh(Shell::Zsh, Some("zsh"))]
+    #[case::xonsh(Shell::Xonsh, Some("xonsh"))]
+    #[case::nu(Shell::Nu, Some("nu"))]
+    #[case::powershell(Shell::Powershell, Some("powershell"))]
+    #[case::sh(Shell::Sh, None)]
+    #[case::unknown(Shell::Unknown, None)]
+    fn hook_name(#[case] shell: Shell, #[case] expected: Option<&str>) {
+        assert_eq!(shell.hook_name(), expected);
+        if let Some(name) = expected {
+            assert_eq!(shell.to_string(), name);
+            assert_eq!(Shell::from_string(name), shell);
+        }
     }
 }

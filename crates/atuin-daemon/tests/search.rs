@@ -90,7 +90,7 @@ mod unix {
         let scripts_db =
             atuin_scripts::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
 
-        let search_component = SearchComponent::new();
+        let search_component = SearchComponent::default();
         // This test exercises command search only; there is no output store, so the searcher is a
         // nop.
         let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());

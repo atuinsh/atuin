@@ -71,7 +71,7 @@ pub async fn boot(
     let _userio = SINK.push(userio.clone());
 
     // Create the components
-    let search_component = SearchComponent::new();
+    let search_component = SearchComponent::new(Arc::clone(&settings)).await;
     let blocking_pool = BlockingPool::new(MAX_BLOCKING_WORKERS);
 
     let output_capture = match settings.output.limits() {

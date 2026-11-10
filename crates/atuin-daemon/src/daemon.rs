@@ -421,7 +421,7 @@ impl Daemon {
 ///     .history_db(history_db)
 ///     .kv_db(kv_db)
 ///     .scripts_db(scripts_db)
-///     .component(SearchComponent::new())
+///     .component(SearchComponent::new(settings.clone()).await)
 ///     .build()
 ///     .await?;
 ///

@@ -5,15 +5,18 @@
 
 use std::pin::{Pin, pin};
 use std::sync::Arc;
+use std::time::Duration;
 
+use atuin_client::settings::Settings;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
+use atuin_common::shell::Shell;
 use eyre::Result;
 use futures::{StreamExt, TryStreamExt};
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{Instrument as _, Level, debug, error, info, instrument, span, trace};
+use tracing::{Instrument as _, Level, debug, error, info, instrument, span, trace, warn};
 
 use crate::daemon::{Component, DaemonHandle};
 use crate::events::DaemonEvent;
@@ -28,6 +31,8 @@ use crate::search::{
 const RESULTS_LIMIT: usize = 200;
 /// How often to rebuild the frecency map (in seconds).
 const FRECENCY_REFRESH_INTERVAL_SECS: u64 = 60;
+/// How long daemon startup waits for [`startup_shell`] before falling back to an "all" filter.
+const STARTUP_SHELL_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Search component - provides fuzzy search over command history.
 ///
@@ -44,11 +49,36 @@ pub struct SearchComponent {
 }
 
 impl SearchComponent {
-    /// Create a new search component.
-    #[must_use]
-    pub fn new() -> Self {
+    /// Create a new search component whose index starts out with the shells that `settings`
+    /// selects.
+    pub async fn new(settings: Arc<Settings>) -> Self {
+        // Build the initial shell filter from the settings. `startup_shell` can block, so run it on
+        // a blocking thread with a timeout.
+        //
+        // This is a best-effort guess: if our guess is wrong, the first search request (or
+        // prepare_index from the shell hooks) will rebuild the index with the right filter.
+        let get_shell_filter = tokio::task::spawn_blocking(move || {
+            settings.search.shells.to_filter_with(startup_shell).to_vec_filter()
+        });
+
+        let shells = match tokio::time::timeout(STARTUP_SHELL_TIMEOUT, get_shell_filter).await {
+            Ok(Ok(shells)) => shells,
+            Ok(Err(err)) => {
+                error!(?err, "building the startup shell filter panicked");
+                OrFilter::all()
+            }
+            Err(_) => {
+                warn!("timed out looking up the login shell; indexing commands from every shell");
+                OrFilter::all()
+            }
+        };
+
+        Self::with_shells(shells)
+    }
+
+    fn with_shells(shells: OrFilter<Vec<String>>) -> Self {
         Self {
-            index: Arc::new(RwLock::new(SearchIndex::default())),
+            index: Arc::new(RwLock::new(SearchIndex::new(shells))),
             handle: None,
             loader_handle: None,
             frecency_handle: None,
@@ -107,9 +137,36 @@ impl SearchComponent {
     }
 }
 
+/// The best guess at the shell that `search.shells = "auto"` refers to when the daemon starts.
+///
+/// If the daemon was autostarted by the shell hooks, we can use the value of `ATUIN_SHELL`.
+/// Otherwise (e.g., if started by systemd or launchd), we use the user's login shell as a best
+/// guess.
+///
+/// Looking up the login shell requires running a command, so this function blocks.
+fn startup_shell() -> Option<String> {
+    if let Ok(shell) = atuin_common::env::var("ATUIN_SHELL")
+        && !shell.is_empty()
+    {
+        debug!(shell, "using ATUIN_SHELL for the initial search index");
+        return Some(shell);
+    }
+
+    let login_shell = Shell::default_shell()
+        .inspect_err(|err| info!("could not look up the login shell: {err}"))
+        .ok()?;
+    let Some(shell) = login_shell.hook_name() else {
+        info!(%login_shell, "atuin has no hooks for the login shell");
+        return None;
+    };
+    debug!(shell, "using the login shell for the initial search index");
+    Some(shell.to_owned())
+}
+
 impl Default for SearchComponent {
+    /// A search component whose index starts out with commands from every shell.
     fn default() -> Self {
-        Self::new()
+        Self::with_shells(OrFilter::all())
     }
 }
 
@@ -129,13 +186,6 @@ impl Component for SearchComponent {
         let handle_for_loader = handle.clone();
 
         self.loader_handle = Some(tokio::spawn(async move {
-            // Build the initial shell filter from the settings. If `search.shells` is "auto", this
-            // will use the value of the `ATUIN_SHELL` environment variable. This variable might be
-            // correct if the daemon was autostarted by the shell hooks, but if it's unset or
-            // incorrect, we'll simply rebuild the index upon receipt of the first request.
-            let shells =
-                handle_for_loader.settings().await.search.shells.to_filter().to_vec_filter();
-            index.write().await.shells = shells;
             let _ = Self::populate_index(&handle_for_loader, &index).await.inspect_err(|err| {
                 error!(?err, "failed to rebuild the index.");
             });
