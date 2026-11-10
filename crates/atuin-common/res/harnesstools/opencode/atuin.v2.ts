@@ -63,6 +63,7 @@ interface ShellCreate {
 }
 
 interface Hooks {
+	location: { directory: string };
 	tool: {
 		hook(name: string, fn: (call: ToolCall) => void | Promise<void>): unknown;
 	};
@@ -130,12 +131,13 @@ async function startHistory(
 }
 
 // A rejected hook aborts opencode's tool call and discards the command's
-// output. A missing history entry is always the better failure.
+// output, so never rethrow -- a missing history entry is always the better
+// failure. But log so misconfigurations are diagnosable instead of vanishing.
 async function swallowFailures(work: () => void | Promise<void>): Promise<void> {
 	try {
 		await work();
-	} catch {
-		// Deliberately ignored.
+	} catch (error) {
+		console.warn(`atuin hook failed: ${error}`);
 	}
 }
 
@@ -158,7 +160,18 @@ function exitCodeOf(call: ToolCall): number {
 // recorded; so does one the user cancels, which is not recorded either. One
 // left running in the background (`status: "running"`) has not ended, and is
 // not recorded.
-function setup(ctx: Hooks) {
+async function setup(ctx: Hooks) {
+	// Verify atuin is reachable before registering hooks; without it every
+	// spawn would no-op silently for the life of the process.
+	const probe = await atuin(["--version"], ctx.location.directory);
+	if (probe.code !== 0) {
+		console.warn(
+			"atuin executable not found — opencode plugin disabled. " +
+				"Install atuin (https://atuin.sh) and make sure it is on your PATH.",
+		);
+		return;
+	}
+
 	// Commands proposed, keyed by tool call ID.
 	const proposed = new Map<string, Proposal>();
 

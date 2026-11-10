@@ -123,19 +123,48 @@ function exitCodeFrom(output: ToolOutput): number {
 	return 1;
 }
 
-// A rejected hook aborts opencode's tool call and discards the command's
-// output. A missing history entry is always the better failure.
-async function swallowFailures(work: () => void | Promise<void>): Promise<void> {
-	try {
-		await work();
-	} catch {
-		// Deliberately ignored.
-	}
-}
-
 // opencode treats every export of a plugin file as a plugin function and fails
 // to load the file if one is not, so keep this the only export.
-export const AtuinPlugin: Plugin = async ({ directory }) => {
+export const AtuinPlugin: Plugin = async ({ client, directory }) => {
+	// Verify atuin is reachable before registering hooks; without it every
+	// spawn would no-op silently for the life of the process.
+	const probe = await atuin(["--version"], directory);
+	if (probe.code !== 0) {
+		const message =
+			"atuin executable not found — opencode plugin disabled. " +
+			"Install atuin (https://atuin.sh) and make sure it is on your PATH.";
+		console.warn(message); // stderr too: visible without the log viewer
+		await client.app
+			.log({ body: { service: "atuin", level: "warn", message } })
+			.catch(() => {});
+		return {};
+	}
+	await client.app
+		.log({
+			body: { service: "atuin", level: "info", message: "atuin plugin initialized" },
+		})
+		.catch(() => {});
+
+	// A rejected hook aborts opencode's tool call and discards the command's
+	// output, so never rethrow -- a missing history entry is always the better
+	// failure. But log so misconfigurations are diagnosable in opencode's
+	// logs instead of vanishing.
+	async function swallowFailures(work: () => void | Promise<void>): Promise<void> {
+		try {
+			await work();
+		} catch (error) {
+			await client.app
+				.log({
+					body: {
+						service: "atuin",
+						level: "warn",
+						message: `atuin hook failed: ${error}`,
+					},
+				})
+				.catch(() => {});
+		}
+	}
+
 	// Commands opencode has proposed but is not yet cleared to run, keyed by
 	// tool call ID.
 	const proposed = new Map<string, Proposal>();
