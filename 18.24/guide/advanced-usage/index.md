@@ -12,10 +12,10 @@ The filter mode narrows the set of history Atuin searches. Cycle through the mod
 | host             | Only history from this machine                                               |
 | session          | Only history from the current shell session                                  |
 | directory        | Only history from the current directory                                      |
-| workspace        | Only history from anywhere in the current git repository                     |
+| workspace        | Only history from anywhere in the current repository, Git or Jujutsu         |
 | session-preload  | The current session, plus all global history from before the session started |
 
-Atuin skips `workspace` mode when you aren't inside a git repository or when [`workspaces = false`](https://docs.atuin.sh/configuration/config/#workspaces).
+Atuin skips `workspace` mode when you aren't inside a repository or when [`workspaces = false`](https://docs.atuin.sh/configuration/config/#workspaces). A plain Git worktree searches history under the main repository root. A Jujutsu workspace searches history under its own root, even when colocated with a Git worktree.
 
 To change which mode searches start in, set [`filter_mode`](https://docs.atuin.sh/configuration/config/#filter_mode). To remove modes from the ctrl-r rotation entirely, set [`search.filters`](https://docs.atuin.sh/configuration/config/#filters). The up arrow can start in a different mode than ctrl-r — see [`filter_mode_shell_up_key_binding`](https://docs.atuin.sh/configuration/config/#filter_mode_shell_up_key_binding).
 

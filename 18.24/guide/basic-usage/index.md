@@ -19,7 +19,7 @@ At any time, you can open the TUI with the default keybindings of the up arrow, 
 
 Once in the TUI, press enter to immediately execute a command, or press tab to insert it into your shell for editing.
 
-While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) — the full history, this machine, the current directory, the current git repository, or the current shell session.
+While searching in the TUI, you can narrow the search scope by pressing `ctrl-r` to cycle through [filter modes](https://docs.atuin.sh/guide/advanced-usage/#filter-mode) — the full history, this machine, the current directory, the current repository, or the current shell session.
 
 See the [advanced usage](https://docs.atuin.sh/guide/advanced-usage/index.md) page for more options.
 
