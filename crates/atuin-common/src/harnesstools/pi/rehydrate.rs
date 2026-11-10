@@ -51,7 +51,7 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::Flavour;
-use super::session::{default_root, is_omp_file, locate, new_session_dir};
+use super::session::{default_root, is_omp_session_file, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
     merge_uncaptured_runs, on_parent_cycles, record_merged,
@@ -244,16 +244,18 @@ fn last_started_model(sessions: &Path) -> Option<String> {
         }
     }
     files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    files.into_iter().filter(|(_, path)| is_omp_file(path)).take(LOOK_AT).find_map(|(_, path)| {
-        let raw = std::fs::read_to_string(path).ok()?;
-        raw.lines()
-            .rev()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|entry| entry["type"] == "model_change")
-            .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
-            .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
-            .find(|model| model.contains('/'))
-    })
+    files.into_iter().filter(|(_, path)| is_omp_session_file(path)).take(LOOK_AT).find_map(
+        |(_, path)| {
+            let raw = std::fs::read_to_string(path).ok()?;
+            raw.lines()
+                .rev()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|entry| entry["type"] == "model_change")
+                .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
+                .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
+                .find(|model| model.contains('/'))
+        },
+    )
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.

@@ -636,6 +636,14 @@ fn omp_without_a_default_opens_on_the_model_it_last_started_on() {
     at(&older, 1_000);
     at(&newer, 2_000);
     at(&written, 3_000);
+    // A subagent of the newer session ran on a model of its own. Its transcript has no title slot,
+    // and its model is not the one omp started a session on.
+    std::fs::create_dir(dir.join("newer")).unwrap();
+    let scout = dir.join("newer").joined("0-Scout.jsonl");
+    let header = json!({"type": "session", "version": 3, "id": "scout", "cwd": "/src/proj"});
+    let change = json!({"type": "model_change", "id": "3", "model": "cheap/scout"});
+    std::fs::write(&scout, format!("{header}\n{change}\n")).unwrap();
+    at(&scout, 3_500);
     // pi's sessions, newer still, in the same directory: no title slot, and pi's own shape.
     for n in 0..20 {
         let path = dir.join(format!("pi-{n}.jsonl"));
