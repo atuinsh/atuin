@@ -119,6 +119,95 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             redacted: "-H 'Authorization: Basic ****'",
         }],
     },
+    // The whole value goes, because any of a header's cookies can be the session. A value without
+    // `name=` is a cookie jar's path or not a cookie at all.
+    Pattern {
+        name: "Cookie",
+        regex: concat!(
+            r#"(?:"#,
+            word_start!(),
+            r#"(?i-u:cookie)["']?[ \t]*:|(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t])"#,
+            r#"[ \t\["']*(?<secret>[^\s=;"'\\]+=[^\r\n"'\\]{16,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "> Cookie: theme=dark; session=8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> Cookie: ****\n",
+            },
+            Test {
+                input: "< set-cookie: sid=8f2d0c1e9b7a4f6e8d2c; Path=/\n",
+                redacted: "< set-cookie: ****\n",
+            },
+            Test {
+                input: "curl -b 'sid=8f2d0c1e9b7a4f6e8d2c' https://x.test",
+                redacted: "curl -b '****' https://x.test",
+            },
+            // Escaped, in JSON.
+            Test {
+                input: r#""a\r\nCookie: sid=8f2d0c1e9b7a4f6e8d2c\r\nb""#,
+                redacted: r#""a\r\nCookie: ****\r\nb""#,
+            },
+            Test {
+                input: "curl -b /home/me/.cache/cookies.txt https://x.test",
+                redacted: "curl -b /home/me/.cache/cookies.txt https://x.test",
+            },
+            Test {
+                input: "cookie = request.cookies.get('session_identifier')",
+                redacted: "cookie = request.cookies.get('session_identifier')",
+            },
+            Test {
+                input: "> Cookie: theme=dark\n",
+                redacted: "> Cookie: theme=dark\n",
+            },
+        ],
+    },
+    // `Authorization` and `Proxy-Authorization` are redacted by their schemes above.
+    Pattern {
+        name: "Credential header",
+        regex: concat!(
+            word_start!(),
+            r#"(?i-u:api-key|x-(?:[a-z0-9]+-)*(?:apikey|auth|token|secret))["']?[ \t]*:[ \t"']*"#,
+            r#"(?<secret>[A-Za-z0-9._~+/=%-]{12,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "> X-Api-Key: 8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "curl -H 'X-Vault-Token: 8f2d0c1e9b7a4f6e8d2c' https://x.test",
+                redacted: "curl -H 'X-Vault-Token: ****' https://x.test",
+            },
+            Test {
+                input: "x-api-key: $API_KEY_VALUE_FROM_ENV",
+                redacted: "x-api-key: $API_KEY_VALUE_FROM_ENV",
+            },
+        ],
+    },
+    Pattern {
+        name: "Credential URL parameter",
+        regex: r#"[?&](?i-u:[a-z0-9_-]*(?:api[_-]?key|token|secret|passw(?:or)?d))=(?<secret>[^\s&"'\\<>`#${}]{12,})"#,
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "https://api.test/v1?a=1&access_token=8f2d0c1e9b7a4f6e8d2c&b=2",
+                redacted: "https://api.test/v1?a=1&access_token=****&b=2",
+            },
+            Test {
+                input: "https://api.test/v1?api_key=${API_KEY_VALUE}",
+                redacted: "https://api.test/v1?api_key=${API_KEY_VALUE}",
+            },
+            Test {
+                input: "https://example.test/search?q=token&page=2",
+                redacted: "https://example.test/search?q=token&page=2",
+            },
+        ],
+    },
     // gitleaks curl-auth-user
     Pattern {
         name: "curl user password",
