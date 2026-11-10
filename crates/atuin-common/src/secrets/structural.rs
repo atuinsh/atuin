@@ -126,7 +126,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
         regex: concat!(
             r#"(?:"#,
             word_start!(),
-            r#"(?i-u:cookie)["']?[ \t]*:|(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t])"#,
+            r#"(?i-u:cookie)["']?[ \t]*:|(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t]+\\?["'])"#,
             r#"[ \t\["']*(?<secret>[^\s=;"'\\]+=(?:\\?")?(?:=\\?"|\\?";|[^\r\n"'\\]){16,})"#
         ),
         prefilter: None,
@@ -175,6 +175,17 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             },
         ],
     },
+    // An unquoted value ends with its shell word, so the rest of the command stays.
+    Pattern {
+        name: "Unquoted curl cookie",
+        regex: r#"(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t]+(?<secret>[^\s=;"'\\]+=[^\s;"'\\]{16,})"#,
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[Test {
+            input: "curl -b sid=8f2d0c1e9b7a4f6e8d2c https://x.test",
+            redacted: "curl -b **** https://x.test",
+        }],
+    },
     // `Authorization` and `Proxy-Authorization` are redacted by their schemes above.
     Pattern {
         name: "Credential header",
@@ -217,6 +228,14 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             Test {
                 input: "https://api.test/v1?password=ab$8f2d0c1e9b7a4f6e8d2c",
                 redacted: "https://api.test/v1?password=****",
+            },
+            Test {
+                input: "https://api.test/v1?api_key=%2F8f2d0c1e9b7a4f6e8d2c",
+                redacted: "https://api.test/v1?api_key=****",
+            },
+            Test {
+                input: "https://api.test/v1?password=%DB_PASSWORD_VALUE%",
+                redacted: "https://api.test/v1?password=%DB_PASSWORD_VALUE%",
             },
             Test {
                 input: "https://api.test/v1?api_key=${API_KEY_VALUE}",
@@ -489,7 +508,7 @@ pub(super) fn is_placeholder(value: &str) -> bool {
     }
     let lower = value.to_ascii_lowercase();
     let reference = ["$", "%", "{{", "os.environ", "process.env", "env.", "env(", "env[", "getenv"];
-    if reference.iter().any(|r| lower.starts_with(r)) {
+    if reference.iter().any(|r| lower.starts_with(r)) && !is_percent_encoded(value) {
         return true;
     }
     if value.len() > 2
@@ -528,6 +547,13 @@ pub(super) fn is_placeholder(value: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Whether a value starts with a URL's percent escape. A value that also ends with `%` is a
+/// Windows variable reference, even when its name starts with two hex digits.
+fn is_percent_encoded(value: &str) -> bool {
+    let hex = |i| value.as_bytes().get(i).is_some_and(u8::is_ascii_hexdigit);
+    value.starts_with('%') && !value.ends_with('%') && hex(1) && hex(2)
 }
 
 /// [`is_placeholder`], or, unquoted, a type: what a name's value in code is far more often than
