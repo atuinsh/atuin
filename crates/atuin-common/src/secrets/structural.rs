@@ -127,7 +127,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             r#"(?:"#,
             word_start!(),
             r#"(?i-u:cookie)["']?[ \t]*:|(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t])"#,
-            r#"[ \t\["']*(?<secret>[^\s=;"'\\]+=[^\r\n"'\\]{16,})"#
+            r#"[ \t\["']*(?<secret>[^\s=;"'\\]+=(?:\\?")?(?:=\\?"|\\?";|[^\r\n"'\\]){16,})"#
         ),
         prefilter: None,
         #[cfg(test)]
@@ -143,6 +143,18 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             Test {
                 input: "curl -b 'sid=8f2d0c1e9b7a4f6e8d2c' https://x.test",
                 redacted: "curl -b '****' https://x.test",
+            },
+            Test {
+                input: "> Cookie: a=\"8f2d0c1e9b7a4f6e\"; sid=\"8f2d0c1e9b7a4f6e8d2c\"; b=c\n",
+                redacted: "> Cookie: ****\n",
+            },
+            Test {
+                input: r#"> Cookie: theme=dark; sid="8f2d0c1e9b7a4f6e8d2c""#,
+                redacted: r#"> Cookie: ****""#,
+            },
+            Test {
+                input: r#""Cookie: sid=\"8f2d0c1e9b7a4f6e8d2c\"\r\nb""#,
+                redacted: r#""Cookie: ****\"\r\nb""#,
             },
             // Escaped, in JSON.
             Test {
@@ -169,7 +181,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
         regex: concat!(
             word_start!(),
             r#"(?i-u:api-key|x-(?:[a-z0-9]+-)*(?:apikey|auth|token|secret))["']?[ \t]*:[ \t"']*"#,
-            r#"(?<secret>[A-Za-z0-9._~+/=%-]{12,})"#
+            r#"(?<secret>[^\s"'\\${<][^\s"'\\,;]{11,})"#
         ),
         prefilter: None,
         #[cfg(test)]
@@ -183,6 +195,10 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
                 redacted: "curl -H 'X-Vault-Token: ****' https://x.test",
             },
             Test {
+                input: "> X-Api-Key: a!8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
                 input: "x-api-key: $API_KEY_VALUE_FROM_ENV",
                 redacted: "x-api-key: $API_KEY_VALUE_FROM_ENV",
             },
@@ -190,13 +206,17 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "Credential URL parameter",
-        regex: r#"[?&](?i-u:[a-z0-9_-]*(?:api[_-]?key|token|secret|passw(?:or)?d))=(?<secret>[^\s&"'\\<>`#${}]{12,})"#,
+        regex: r#"[?&](?i-u:[a-z0-9_-]*(?:api[_-]?key|token|secret|passw(?:or)?d))=(?<secret>[^\s&"'\\<>`#${][^\s&"'\\<>`#]{11,})"#,
         prefilter: None,
         #[cfg(test)]
         tests: &[
             Test {
                 input: "https://api.test/v1?a=1&access_token=8f2d0c1e9b7a4f6e8d2c&b=2",
                 redacted: "https://api.test/v1?a=1&access_token=****&b=2",
+            },
+            Test {
+                input: "https://api.test/v1?password=ab$8f2d0c1e9b7a4f6e8d2c",
+                redacted: "https://api.test/v1?password=****",
             },
             Test {
                 input: "https://api.test/v1?api_key=${API_KEY_VALUE}",
