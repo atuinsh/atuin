@@ -17,7 +17,7 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
-octavo = []
+octavo = ["dep:mlua"]
 # Derive the protobuf enum traits on domain enums the daemon and atuin-octavo extern-path into
 # their codegen.
 proto = ["dep:prost"]
@@ -48,6 +48,7 @@ itertools = { workspace = true }
 libsqlite3-sys = { workspace = true }
 memchr = { workspace = true }
 minspan = { workspace = true }
+mlua = { workspace = true, optional = true }
 notify = { workspace = true }
 prost = { workspace = true, optional = true }
 rand = { workspace = true }

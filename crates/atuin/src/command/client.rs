@@ -53,6 +53,8 @@ mod store;
 mod trick_or_treat;
 #[cfg(feature = "self-update")]
 mod update;
+#[cfg(feature = "octavo")]
+mod workspace;
 mod wrapped;
 
 #[derive(Subcommand, Debug, Couture)]
@@ -170,6 +172,11 @@ pub enum Cmd {
     #[command(subcommand)]
     #[couture(category = "setup")]
     Config(config::Cmd),
+
+    #[cfg(feature = "octavo")]
+    #[command(subcommand, about = fl!("cmd-workspace"))]
+    #[couture(category = "setup")]
+    Workspace(workspace::Cmd),
 
     #[command(about = fl!("cmd-info"))]
     #[couture(category = "advanced")]
@@ -332,6 +339,8 @@ impl Cmd {
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&Arc::new(settings)).await,
+            #[cfg(feature = "octavo")]
+            Self::Workspace(workspace) => return workspace.run(),
             // Opens the databases itself, once no other daemon can be using them.
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
@@ -411,6 +420,9 @@ impl Cmd {
 
             #[cfg(feature = "daemon")]
             Self::Daemon(_) => unreachable!(),
+
+            #[cfg(feature = "octavo")]
+            Self::Workspace(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Threads(_) | Self::Resume(_) => unreachable!(),

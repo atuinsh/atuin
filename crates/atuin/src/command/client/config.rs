@@ -57,6 +57,10 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
+
+    #[cfg(feature = "octavo")]
+    #[command(about = fl!("cmd-config-types"), long_about = fl!("cmd-config-types", "long"))]
+    Types,
 }
 
 impl Cmd {
@@ -68,6 +72,11 @@ impl Cmd {
             Self::Enable(enable) => enable.run(settings).await,
             Self::Disable(disable) => disable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
+            #[cfg(feature = "octavo")]
+            Self::Types => {
+                print!("{}", atuin_client::lua_config::TYPES);
+                Ok(())
+            }
         }
     }
 }

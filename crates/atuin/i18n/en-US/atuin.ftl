@@ -138,6 +138,24 @@ cmd-config-print = Print all configuration values from your config.toml file in 
         Print all configuration values from your config.toml file in TOML format
 
         If a key is provided, only print the value of that key and all its children
+cmd-config-types = Print the Luau types of atuin.lua and .atuin.lua config files, for your editor
+    .long =
+        Print the Luau types of atuin.lua and .atuin.lua config files, for your editor. The types
+        are for files that start with `-- atuin:version=1`.
+
+        Save the output, say as ~/.atuin/atuin.d.luau, and list it in luau-lsp's
+        `luau-lsp.types.definitionFiles` setting. The table a config file assigns to
+        `atuin.config` then checks and completes as you write it.
+cmd-workspace = Set up the .atuin.lua config file of a project
+cmd-workspace-init = Create a .atuin.lua workspace config file in the current directory
+    .long =
+        Create a .atuin.lua config file in the current directory.
+
+        Pass --org to name organizations that own this workspace without being asked. It won't
+        replace an atuin.lua or .atuin.lua that's already there.
+arg-workspace-init-org = An organization to share the threads with, by slug. Repeat it to name more than one. Without it, you're asked.
+prompt-workspace-org = An organization that owns this project, by slug:
+workspace-init-created = Created { $path }
 arg-config-get-key = The configuration key to get
 arg-config-get-resolved = Print the value after defaults and overrides are applied
 arg-config-get-verbose = Print both the config file value and the resolved value
