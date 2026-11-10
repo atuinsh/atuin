@@ -192,7 +192,7 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
         regex: concat!(
             word_start!(),
             r#"(?i-u:api-key|x-(?:[a-z0-9]+-)*(?:apikey|auth|token|secret))["']?[ \t]*:[ \t"']*"#,
-            r#"(?<secret>[^\s"'\\${<][^\s"'\\,;]{11,})"#
+            r#"(?<secret>[^\s"'\\${<](?:[,;][^\s"'\\]|[^\s"'\\,;]){11,})"#
         ),
         prefilter: None,
         #[cfg(test)]
@@ -208,6 +208,14 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             Test {
                 input: "> X-Api-Key: a!8f2d0c1e9b7a4f6e8d2c\n",
                 redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "> X-Api-Key: a,8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "> x-api-key: 8f2d0c1e9b7a4f6e8d2c, b",
+                redacted: "> x-api-key: ****, b",
             },
             Test {
                 input: "x-api-key: $API_KEY_VALUE_FROM_ENV",
