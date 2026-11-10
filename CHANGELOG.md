@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.6
+
+### Bug Fixes
+
+- *(api)* Move to the fixed cowboy, cowlib and grpc_server
+- *(copilot)* Register the hook as exec/args so PowerShell can run it ([#4634](https://github.com/atuinsh/atuin/issues/4634))
+- *(daemon)* Close inherited fds before autostarting, fixing indefinite pty-proxy hang on shell exit ([#4668](https://github.com/atuinsh/atuin/issues/4668))
+- *(daemon)* Don't manage the socket with launchd ([#4669](https://github.com/atuinsh/atuin/issues/4669))
+- *(deps)* Bump rmcp for three advisories, and hold the SQLite one until sqlx allows the fix ([#4690](https://github.com/atuinsh/atuin/issues/4690))
+- *(setup)* Don't warn about uninstalled harnesses ([#4680](https://github.com/atuinsh/atuin/issues/4680))
+- *(threads)* Capture Claude Code shell edits' diffs, and keep the patch of a write that names atuin key ([#4670](https://github.com/atuinsh/atuin/issues/4670))
+- *(threads)* Fix mislabeling of omp child transcripts as Pi ([#4694](https://github.com/atuinsh/atuin/issues/4694))
+- Include workaround for buggy VTE versions ([#4679](https://github.com/atuinsh/atuin/issues/4679))
+
+
+### Features
+
+- *(search)* Support jj workspace filters ([#4457](https://github.com/atuinsh/atuin/issues/4457))
+- *(setup)* Sharper capture and search labels, and give sync its own section ([#4659](https://github.com/atuinsh/atuin/issues/4659))
+
+
+### Miscellaneous Tasks
+
+- Add "Writing style" section to AGENTS.md ([#4675](https://github.com/atuinsh/atuin/issues/4675))
+- Prefer `cfg!()` over `#[cfg()]` in AGENTS.md ([#4676](https://github.com/atuinsh/atuin/issues/4676))
+- Prefer `let _ = ...` over `_ = ...` in AGENTS.md ([#4678](https://github.com/atuinsh/atuin/issues/4678))
+
+
+### Refactor
+
+- *(deps)* Bump hyper-util from 0.1.20 to 0.1.21 ([#4626](https://github.com/atuinsh/atuin/issues/4626))
+- *(deps)* Bump unicode-normalization from 0.1.25 to 0.1.26 ([#4686](https://github.com/atuinsh/atuin/issues/4686))
+
+
+### Build
+
+- *(atuin)* Make octavo a default feature, still off at runtime ([#4693](https://github.com/atuinsh/atuin/issues/4693))
+- *(release)* Compile octavo into release artifacts, still off by default ([#4671](https://github.com/atuinsh/atuin/issues/4671))
+
 ## 18.24.5
 
 ### Bug Fixes
