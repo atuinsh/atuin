@@ -1,0 +1,61 @@
+name: Publish to WinGet
+
+# Submits each stable release to microsoft/winget-pkgs as Atuinsh.Atuin, with
+# both the MSI and the portable zip. release.yml calls this through dist's
+# `publish-jobs` once the GitHub release exists. dist does not call it for
+# prereleases.
+#
+# Requires a `WINGET_TOKEN` secret: a classic PAT with the `public_repo` scope.
+# komac opens the pull request from that account's fork of winget-pkgs. The
+# fork must already exist, since komac does not create it. A fine-grained
+# token can commit to the fork but cannot open the pull request.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  winget:
+    # Forks that push a release tag have no WinGet token.
+    if: github.repository == 'atuinsh/atuin'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # komac authenticates with WINGET_TOKEN alone.
+    permissions: {}
+    env:
+      # Pinned by checksum, since a release asset can be replaced after it is
+      # published. Bump both together from the release's SHA256SUMS.
+      KOMAC_VERSION: 2.17.2
+      KOMAC_SHA256: b03b020eec98acfb0b53e284a6e21815b884be33de6785b97e7a120f0e748966
+    steps:
+      - name: Install komac
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL -o komac.tar.gz \
+              "https://github.com/russellbanks/Komac/releases/download/v${KOMAC_VERSION}/komac-${KOMAC_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$KOMAC_SHA256  komac.tar.gz" | sha256sum --check --strict
+          tar -xzf komac.tar.gz komac
+
+      - name: Submit to winget-pkgs
+        env:
+          PLAN: ${{ inputs.plan }}
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          release=$(jq -c '.releases[] | select(.app_name == "atuin")' <<<"$PLAN")
+          version=$(jq -r .app_version <<<"$release")
+          mapfile -t urls < <(jq -r '
+              .hosting.github as $gh
+              | .artifacts[]
+              | select(test("-pc-windows-msvc\\.(msi|zip)$"))
+              | "\($gh.artifact_base_url)\($gh.artifact_download_path)/\(.)"
+          ' <<<"$release")
+          if [ "${#urls[@]}" -eq 0 ]; then
+            echo "::error::The plan has no Windows MSI or zip for atuin $version"
+            exit 1
+          fi
+
+          printf 'Submitting atuin %s with:\n' "$version"
+          printf '  %s\n' "${urls[@]}"
+          ./komac update Atuinsh.Atuin --version "$version" --urls "${urls[@]}" --submit
