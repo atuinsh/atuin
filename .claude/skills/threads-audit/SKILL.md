@@ -68,7 +68,7 @@ worktrees, on the lines that start with `worktree`. Pass each path after
 atuin threads list --style ndjson | jq -c --argjson base <base time> '
   ($base | todate | .[0:19]) as $since
   | select(.updated_at >= $since)
-  | select(.cwd as $c | $c != null and any($ARGS.positional[]; . == $c or ($c | startswith(. + "/"))))
+  | select(.cwd as $c | $c != null and any($ARGS.positional[]; . as $root | $root == $c or ($c | startswith($root + "/"))))
   | {id: .atuin_id, harness, host, branch: .git_branch, parent: .parent_atuin_id, title: (.title // .preview[0:80])}
 ' --args <worktree path> <worktree path>
 ```
