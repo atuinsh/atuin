@@ -833,14 +833,15 @@ mod tests {
         history_patterns, output_unsafe, redact, redaction_patterns, vendors,
     };
 
-    #[test]
-    fn redact_budget_scales_with_input_size() {
+    #[rstest]
+    #[case::empty(0, 1)]
+    #[case::one_megabyte(1024 * 1024, 1)]
+    #[case::just_over_one_megabyte(1024 * 1024 + 1, 2)]
+    #[case::five_megabytes(5 * 1024 * 1024, 5)]
+    fn redact_budget_scales_with_input_size(#[case] len: usize, #[case] megabytes: u32) {
         use super::{REDACT_BUDGET, redact_budget_for};
 
-        assert_eq!(redact_budget_for(0), REDACT_BUDGET);
-        assert_eq!(redact_budget_for(1024 * 1024), REDACT_BUDGET);
-        assert_eq!(redact_budget_for(1024 * 1024 + 1), REDACT_BUDGET * 2);
-        assert_eq!(redact_budget_for(5 * 1024 * 1024), REDACT_BUDGET * 5);
+        assert_eq!(redact_budget_for(len), REDACT_BUDGET * megabytes);
     }
 
     pub(super) struct Test {
