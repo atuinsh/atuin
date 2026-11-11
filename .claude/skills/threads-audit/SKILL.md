@@ -106,7 +106,7 @@ Read the prompts of each thread that came after the base commit:
 atuin threads show <id> --style json | jq -r --argjson base <base time> '
   ($base | todate | .[0:19]) as $since
   | .messages[] | select(.role == "user" and .timestamp >= $since)
-  | .timestamp + "  " + ([.content[] | select(.type == "text") | .text] | join(" ") | .[0:600])'
+  | .timestamp + "  " + ([.content[] | select(.type == "text") | .text] | join(" "))'
 ```
 
 An intent is a change the user asked for. Questions, and requests that only
