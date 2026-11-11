@@ -197,7 +197,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Sys
 wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
-yaml-rust2 = "0.11"
+yaml-rust2 = "0.13"
 zeroize = "1"
 zstd = "0.14"
 
