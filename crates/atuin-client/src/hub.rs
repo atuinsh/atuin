@@ -16,9 +16,10 @@ use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
 use atuin_common::userio;
 use atuin_domain::api::{
-    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
-    LinkAccountRequest,
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeRequest, CliCodeResponse, CliVerifyResponse,
+    ErrorResponse, LinkAccountRequest,
 };
+use atuin_domain::record::CmdHost;
 use eyre::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::header::USER_AGENT;
@@ -381,6 +382,9 @@ async fn request_code(address: &Url) -> Result<CliCodeResponse, HubError> {
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .json(&CliCodeRequest {
+            hostname: CmdHost::probe_current().into_inner(),
+        })
         .send()
         .await?;
     let resp = handle_resp_error(resp).await?;
