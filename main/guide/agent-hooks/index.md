@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Kiro CLI, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro CLI, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -18,6 +18,9 @@ atuin hook install copilot
 
 # Grok Build
 atuin hook install grok
+
+# Hermes Agent
+atuin hook install hermes
 
 # Kiro CLI
 atuin hook install kiro
@@ -39,24 +42,25 @@ AI coding agents support hook systems that notify external tools when they're ab
 
 When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
 
-| Agent       | Config file / extension                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------------- |
-| Claude Code | `~/.claude/settings.json`                                                                         |
-| Codex       | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml` |
-| Copilot     | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                       |
-| Grok Build  | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`)                             |
-| Kiro CLI    | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`)                             |
-| opencode    | `~/.config/opencode/plugins/atuin.ts`                                                             |
-| pi          | `~/.pi/agent/extensions/atuin.ts`                                                                 |
+| Agent        | Config file / extension                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code  | `~/.claude/settings.json`                                                                                                    |
+| Codex        | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml`                            |
+| Copilot      | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                                                  |
+| Grok Build   | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`)                                                        |
+| Hermes Agent | `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`), enabled in its `config.yaml` |
+| Kiro CLI     | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`)                                                        |
+| opencode     | `~/.config/opencode/plugins/atuin.ts`                                                                                        |
+| pi           | `~/.pi/agent/extensions/atuin.ts`                                                                                            |
 
 The hook lifecycle:
 
 1. **PreToolUse** -- the agent is about to run a Bash command. Atuin records the command, working directory, and timestamp (same as `history start`).
 1. **PostToolUse / PostToolUseFailure** -- the command finished. Atuin records the exit code and duration (same as `history end`).
 
-Atuin only captures shell tool invocations (`Bash`, or Kiro's `execute_bash`). It ignores other tool types (file writes, web fetches, etc.).
+Atuin only captures shell tool invocations (`Bash`, Kiro's `execute_bash`, or Hermes's `terminal`). It ignores other tool types (file writes, web fetches, etc.).
 
-Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing.
+Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing. Hermes loads a plugin too, which passes Hermes's own events to `atuin hook hermes`.
 
 ## Filtering by Author
 
@@ -90,7 +94,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `kiro`, `omp`, `opencode`, and `pi`.
+Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -133,6 +137,24 @@ atuin hook install grok
 This writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
 
 Grok Build also runs hooks from `~/.claude/settings.json` when Claude compatibility is enabled. Inside a Grok Build session, Atuin attributes inherited `atuin hook claude-code` events to `grok`, and skips them when native `grok` hooks are installed too so commands aren't recorded twice.
+
+### Hermes Agent
+
+```
+atuin hook install hermes
+```
+
+This writes Atuin's plugin to `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`) and runs `hermes plugins enable atuin`, which turns the plugin on in `config.yaml` and loads it into a running Hermes gateway, so nothing needs a restart. If `hermes` isn't on your `PATH`, or the command fails, the install says so and prints the command to run yourself.
+
+The plugin records each command Hermes's `terminal` tool runs, with author `hermes`. Hermes runs plugins in its gateway, not in your shell, which is why the plugin calls Atuin by the full path of the `atuin` that installed it (if you move Atuin, install again), and looks up the directory each command runs in, following the agent's `cd`s.
+
+Each Hermes profile is a home of its own, with its own plugins. The install picks the home as `hermes` does: `HERMES_HOME` if you have set it to a profile's directory, else the profile that `hermes profile use` made active, else `~/.hermes` (or the `HERMES_HOME` you set). To record another profile's commands, install into it too:
+
+```
+HERMES_HOME=~/.hermes/profiles/work atuin hook install hermes
+```
+
+Atuin records a command Hermes refused to run (blocked, or waiting for your approval) with the exit code `-1`. It doesn't record a command started in the background, nor one Hermes moved to the background after it ran too long, since neither reports an exit code.
 
 ### Kiro CLI
 
@@ -194,6 +216,9 @@ cat ~/.claude/settings.json | grep atuin
 # Codex
 cat ~/.codex/hooks.json | grep atuin
 
+# Hermes Agent
+hermes plugins list
+
 # Kiro CLI
 cat ~/.kiro/hooks/atuin.json
 
@@ -214,4 +239,4 @@ hooks.PostToolUse: already installed, skipping
 hooks.PostToolUseFailure: already installed, skipping
 ```
 
-For opencode and pi, reinstalling will also skip if the installed extension already matches the one for your agent's version.
+For opencode and pi, reinstalling will also skip if the installed extension already matches the one for your agent's version. For Hermes, it rewrites the plugin only if it has changed, and runs `hermes plugins enable atuin` again either way.
