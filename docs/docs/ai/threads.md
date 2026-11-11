@@ -204,6 +204,40 @@ atuin threads search "flaky test"
   first, rather than returning nothing.
 - `--harness` limits the search to one agent.
 
+## Auditing changes against your threads
+
+Git records what changed in a repository. Your threads record user intent, 
+in every agent. An agent can read both, and say whether the repository now 
+does what you asked.
+
+The `threads-audit` skill does that for the repository it runs in. Install it
+with the [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```shell
+npx skills add atuinsh/atuin --skill threads-audit
+# or
+bunx --bun skills add atuinsh/atuin --skill threads-audit
+```
+
+Then ask the agent to audit the threads. In Claude Code, that is
+`/threads-audit`. It covers the last 14 days, or the changes since the last tag
+with `/threads-audit since last release`.
+
+The audit reads the requests you made in the threads of that window, and the
+net changes git has for it. For each request, it says whether the changes
+meet it, meet it in part, don't meet it, or go against it. It also lists the
+changes in your own commits that no request accounts for. Its first line is
+`threads-audit: pass` or `threads-audit: attention`, so a release process can
+run it as a step.
+
+The audit covers only the threads of the person who runs it. Changes by other
+authors are counted, but not judged.
+
+The skill is one file,
+[`.claude/skills/threads-audit/SKILL.md`](https://github.com/atuinsh/atuin/blob/main/.claude/skills/threads-audit/SKILL.md).
+It only reads, and it runs nothing but `atuin threads`, `git` and `jq`. In an
+agent without skills, paste the file as a prompt.
+
 ## Resuming
 
 `atuin resume` (or a key you bind to it, see
