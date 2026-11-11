@@ -729,33 +729,86 @@ fn a_diverged_copy_resumes_only_as_chosen(
     assert!(!text.contains(&ours.reply), "our branch is still in it:\n{text}");
 }
 
-/// A Hermes fork of a continuation, restored on another machine and gone on with there, stays a
-/// fork of the continuation on both machines. The fork's first prompt opens with the continuation's
-/// marker, which names the Claude Code session it continued. The restored copy names its original
-/// as the fork did, so the reader there reads it as a fork, not as that continuation.
+/// A fork of a continuation, restored on another machine and gone on with there, stays a fork of
+/// the continuation on both machines. The fork's first rows carry the continuation's marker,
+/// which names the session it continued; capture there keeps the parent sync stored for the fork.
+/// opencode is left out: its stand-in can't import a restore.
 #[rstest]
-fn a_restored_hermes_fork_stays_a_fork(project: TempDir) {
+fn a_restored_fork_stays_a_fork(
+    project: TempDir,
+    #[values(
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Copilot,
+        Agent::Grok,
+        Agent::Hermes,
+        Agent::Kiro,
+        Agent::Pi
+    )]
+    agent: Agent,
+) {
     let server = SyncServer::start();
     let (there, here) = Machine::pair(&server);
     let turns = vec![Turn::new()];
-    let claude = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
-    there.wait_until_said(&claude.id, &said(&turns));
+    let from = if agent == Agent::Claude {
+        Agent::Codex
+    } else {
+        Agent::Claude
+    };
+    let original = Transcript::create(there.home(), from, project.path(), &turns);
+    there.wait_until_said(&original.id, &said(&turns));
 
-    succeeded(&there.resume(&[&claude.id, "--in", "hermes", "--print"], there.home()));
-    let continued = there.wait_for_child(Agent::Hermes, &claude.id);
+    succeeded(&there.resume(&[&original.id, "--in", agent.program(), "--print"], there.home()));
+    let continued = there.wait_for_child(agent, &original.id);
     let continued = continued["session_id"].as_str().unwrap().to_owned();
     there.wait_until_holds(&continued, &said(&turns));
     succeeded(&there.resume(&[&continued, "--fork", "--print"], there.home()));
-    let fork = there.wait_for_child(Agent::Hermes, &continued);
+    let fork = there.wait_for_child(agent, &continued);
     assert_eq!(fork["parent_kind"], "fork");
     let fork = fork["session_id"].as_str().unwrap().to_owned();
     here.wait_until_holds(&fork, &said(&turns));
 
     let (_, stderr) = succeeded(&here.resume(&[&fork, "--print"], here.home()));
     assert!(stderr.contains("restored the thread from sync"), "{stderr}");
-    let restored = Transcript::find(here.home(), Agent::Hermes, &fork).unwrap();
+    let restored = Transcript::find(here.home(), agent, &fork).unwrap();
     let more = Turn::new();
     restored.append(project.path(), std::slice::from_ref(&more));
+    let all = [said(&turns), said(std::slice::from_ref(&more))].concat();
+    here.wait_until_holds(&fork, &all);
+    there.wait_until_holds(&fork, &all);
+
+    for machine in [&here, &there] {
+        let session = machine.session(&fork).unwrap();
+        assert_eq!(session["parent_kind"], "fork", "{session:#}");
+        assert_eq!(session["parent"]["session_id"], continued.as_str(), "{session:#}");
+    }
+}
+
+/// A pi fork of a continuation, restored on another machine and gone on with there while capture
+/// was off, is imported there as the fork it is: its first prompt opens with the continuation's
+/// marker, and the parent sync stored for the fork stands over it, on both machines.
+#[rstest]
+fn an_imported_restored_fork_stays_a_fork(project: TempDir) {
+    let server = SyncServer::start();
+    let (there, here) = Machine::pair_as(&server, 1, ["capture = true\n", "capture = false\n"]);
+    let turns = vec![Turn::new()];
+    let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
+    there.wait_until_said(&original.id, &said(&turns));
+    succeeded(&there.resume(&[&original.id, "--in", "pi", "--print"], there.home()));
+    let continued = there.wait_for_child(Agent::Pi, &original.id);
+    let continued = continued["session_id"].as_str().unwrap().to_owned();
+    there.wait_until_holds(&continued, &said(&turns));
+    succeeded(&there.resume(&[&continued, "--fork", "--print"], there.home()));
+    let fork = there.wait_for_child(Agent::Pi, &continued);
+    let fork = fork["session_id"].as_str().unwrap().to_owned();
+    here.wait_until_holds(&fork, &said(&turns));
+
+    let (_, stderr) = succeeded(&here.resume(&[&fork, "--print"], here.home()));
+    assert!(stderr.contains("restored the thread from sync"), "{stderr}");
+    let restored = Transcript::find(here.home(), Agent::Pi, &fork).unwrap();
+    let more = Turn::new();
+    restored.append(project.path(), std::slice::from_ref(&more));
+    here.run(&["threads", "import"]);
     let all = [said(&turns), said(std::slice::from_ref(&more))].concat();
     here.wait_until_holds(&fork, &all);
     there.wait_until_holds(&fork, &all);

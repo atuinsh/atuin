@@ -9,6 +9,7 @@ use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
 
 use super::Sink;
+use super::engine::{Start, warm_once};
 use super::message_enricher::MessageEnricher;
 
 #[derive(Debug, Clone)]
@@ -111,16 +112,20 @@ impl SessionImporter {
             };
             let mut reads = existing
                 .map(|item| {
-                    let keeps_patches = sink.keeps_patches();
+                    let sink = sink.clone();
                     async move {
                         // A scan failure (unreadable directory/entry) is not a session; surface it
                         // so the summary reflects a partial backfill instead of a silent one.
                         let session = item.ok()?;
+                        let Some(enricher) = begun(&sink, kind, &session).await else {
+                            let session = NativeSessionId::from(session.id().to_string());
+                            return Some(Read { session, rows: Vec::new(), failed: 1 });
+                        };
                         // Decoding and enriching a session's lines is CPU work: on a blocking
                         // thread, as the runtime's is the daemon's every other request's. (Not the
                         // pool's: reading the session takes a worker of it.)
                         let read = tokio::task::spawn_blocking(move || {
-                            futures::executor::block_on(read(kind, keeps_patches, session))
+                            futures::executor::block_on(read(enricher, session))
                         });
                         match read.await {
                             Ok(read) => Some(read),
@@ -182,12 +187,34 @@ impl SessionImporter {
     }
 }
 
-/// Read `session` as live capture would: its rows, and how many of its lines failed to read.
-async fn read(kind: HarnessKind, keeps_patches: bool, session: AnySession) -> Read {
+/// An enricher set up to read `session` from its start, as live capture sets one up: with the
+/// parent stored for the session, which a continuation's marker its lines copy can't replace (a
+/// restored pi fork's first prompt carries one). `None` when the store can't say what that is:
+/// rows read without it could relink the session, so none are stored.
+async fn begun(sink: &Sink, kind: HarnessKind, session: &AnySession) -> Option<MessageEnricher> {
+    let mut enricher = MessageEnricher::new(kind).keeping_patches(sink.keeps_patches());
+    let sid = session.id();
+    let warmed = match sink.lock_ready().await {
+        Ok(locks) => warm_once(sink, &mut enricher, &sid, Start::Beginning, locks)
+            .await
+            .map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    match warmed {
+        Ok(()) => Some(enricher),
+        Err(e) => {
+            tracing::warn!(%e, session = %sid, "can't read an ai-session's stored parent; not importing it");
+            None
+        }
+    }
+}
+
+/// Read `session` as live capture would, with `enricher` set up for it ([`begun`]): its rows, and
+/// how many of its lines failed to read.
+async fn read(mut enricher: MessageEnricher, session: AnySession) -> Read {
     // One enricher per session: it carries that session's bookkeeping (title, timestamps,
     // parent, synthetic ids) across its lines, exactly as live capture does, so a backfilled row
     // matches the captured one.
-    let mut enricher = MessageEnricher::new(kind).keeping_patches(keeps_patches);
     let sid = session.id();
     let mut rows = Vec::new();
     let mut failed = 0u64;
@@ -329,6 +356,67 @@ mod tests {
         assert_eq!(sum_skipped(&second), 3);
         let after_second = sink.sidecar.get_session(&handle).await.unwrap().unwrap().message_count;
         assert_eq!(after_second, after_first);
+    }
+
+    /// A pi fork restored from sync without its link, and gone on with while capture was off, is
+    /// imported as the fork it is: its first prompt opens with the marker of the continuation it
+    /// was forked from, and the parent stored for the session stands over it.
+    #[rstest]
+    #[tokio::test]
+    async fn import_keeps_a_restored_forks_stored_parent() {
+        const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
+        let root = tempfile::tempdir().unwrap();
+        let codex = AnyHarness::from_name("codex").unwrap();
+        let marker = atuin_common::harnesstools::continuation::marker_text(codex, ORIGINAL, None);
+        let write = |parent_session: Option<&str>, turns: &[&str]| {
+            let mut header = serde_json::json!({"type": "session", "version": 3, "id": "fork"});
+            if let Some(parent) = parent_session {
+                header["parentSession"] =
+                    serde_json::json!(format!("/s/1690000000_{parent}.jsonl"));
+            }
+            let first = serde_json::json!({"type": "message", "id": "m0", "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": marker}, {"type": "text", "text": "go on"}],
+            }});
+            let rest = turns.iter().enumerate().map(|(i, text)| {
+                serde_json::json!({"type": "message", "id": format!("m{}", i + 1),
+                    "message": {"role": "user", "content": text}})
+            });
+            let lines: Vec<String> = std::iter::once(header)
+                .chain(std::iter::once(first))
+                .chain(rest)
+                .map(|line| line.to_string() + "\n")
+                .collect();
+            std::fs::write(root.path().join("1700000000_fork.jsonl"), lines.concat()).unwrap();
+        };
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let handle = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("fork".to_owned()),
+        };
+        let import = async || -> Vec<ImportProgress> {
+            SessionImporter::new(sink.clone(), pool())
+                .harness(HarnessKind::Pi, pi_sessions(root.path()))
+                .collect()
+                .await
+        };
+        let continuation = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("cont".to_owned()),
+        };
+
+        // The fork as pi's `/fork` wrote it, naming the continuation's file.
+        write(Some("cont"), &[]);
+        import().await;
+        // Restored without its link, then gone on with.
+        write(None, &["and then?"]);
+        let progress = import().await;
+
+        assert_eq!(sum_new(&progress), 1, "only the new turn");
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.parent, Some(continuation));
+        assert_eq!(session.parent_kind, Some(ParentKind::Fork));
     }
 
     /// Sessions stored a batch at a time are each credited with their own rows: one part stored

@@ -52,6 +52,14 @@ impl Harness for Opencode {
         "opencode"
     }
 
+    /// No, and it can't: opencode keeps no fork link of its own (`opencode import` writes none),
+    /// and atuin's, the fork's marker, is a row whose text capture doesn't keep, so sync never
+    /// carries it. Written again on a restore, the marker would need a part id of its own: a row
+    /// the other machine lacks, which capture would push as new.
+    fn restores_fork_links(&self) -> bool {
+        false
+    }
+
     fn program(&self) -> &'static str {
         "opencode"
     }

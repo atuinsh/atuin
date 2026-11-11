@@ -56,6 +56,23 @@ impl MessageEnricher {
         self.sessions.remove(session.as_ref());
     }
 
+    /// Set a session up for a transcript about to be read from its start. Every line replays, so
+    /// nothing of an earlier read carries over but the parent the session's stored `row` names,
+    /// which counts as one the harness named: a continuation's marker the lines carry can't
+    /// replace it. A restored fork written without its link (pi's) holds no parent of its own,
+    /// but its first prompt opens with the marker of the continuation it was forked from; the
+    /// parent sync stored for it is the fork's. A parent the lines name still replaces the stored
+    /// one, and with none stored a marker links the session as it did.
+    pub fn begin(&mut self, session: &SessionId, row: Option<&Session>) {
+        let parent = row.and_then(|r| r.parent.clone());
+        self.sessions.insert(session.to_string(), SessionState {
+            native_parent: parent.is_some(),
+            parent,
+            parent_kind: row.and_then(|r| r.parent_kind),
+            ..SessionState::default()
+        });
+    }
+
     /// Warm a session's bookkeeping from what the sidecar holds, for a transcript about to be
     /// read from past its start: its row (parent, and the title when no title change is
     /// stored), every title change its lines made (replayed, so each source's title is known
@@ -318,7 +335,8 @@ fn parse_synthetic(id: &SourceId) -> Option<(u64, u32)> {
 ///
 /// Warm for any session whose lines have all streamed past this run. A session resumed past its
 /// start (the engine's checkpoints) is warmed from the sidecar first, via
-/// [`MessageEnricher::resume`], or titles and synthetic ids would silently break after a restart.
+/// [`MessageEnricher::resume`], or titles and synthetic ids would silently break after a restart;
+/// one read from its start keeps only its stored parent ([`MessageEnricher::begin`]).
 #[derive(Default)]
 struct SessionState {
     /// The newest title from each source. The highest-ranked is stamped onto each captured
@@ -1216,6 +1234,89 @@ mod parser_contract {
             assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
             assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
         }
+    }
+
+    /// A pi fork as a restore without its link writes it: a header naming no parent, then the
+    /// first prompt it copied, opening with the marker of the continuation it was forked from.
+    /// With `parent_session`, the header names that session's file as pi's `/fork` does.
+    fn restored_pi_fork(parent_session: Option<&str>) -> Vec<AnyMessage> {
+        let mut header = serde_json::json!({"type": "session", "version": 3, "id": "fork",
+            "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"});
+        if let Some(parent) = parent_session {
+            header["parentSession"] = serde_json::json!(format!(
+                "/home/u/.pi/agent/sessions/--w--/2026-09-27T09-00-00-000Z_{parent}.jsonl"
+            ));
+        }
+        vec![
+            pi(&header),
+            pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                "timestamp": "2026-09-27T10:00:01Z",
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": marker()}, {"type": "text", "text": "go on"}]}})),
+        ]
+    }
+
+    /// A transcript read from its start keeps the parent stored for its session, as one the
+    /// harness named: the marker its first prompt carries doesn't replace it, so a fork restored
+    /// from sync stays the fork it was, and a continuation read again stays one. A parent the
+    /// lines name replaces it. With no stored row, or one naming no parent (a continuation's first
+    /// read), the marker links the session.
+    #[rstest]
+    #[case::restored_fork(Some(("0199cccc", ParentKind::Fork)), None, Some(("0199cccc", ParentKind::Fork)))]
+    #[case::continuation_read_again(
+        Some((ORIGINAL, ParentKind::Continuation)),
+        None,
+        Some((ORIGINAL, ParentKind::Continuation)),
+    )]
+    #[case::no_stored_row(None, None, Some((ORIGINAL, ParentKind::Continuation)))]
+    #[case::stored_without_a_parent(Some(("", ParentKind::Fork)), None, Some((ORIGINAL, ParentKind::Continuation)))]
+    #[case::the_lines_name_another(
+        Some(("0199cccc", ParentKind::Fork)),
+        Some("0199dddd"),
+        Some(("0199dddd", ParentKind::Fork)),
+    )]
+    fn a_read_from_the_start_keeps_the_stored_parent(
+        #[case] stored: Option<(&str, ParentKind)>,
+        #[case] named: Option<&str>,
+        #[case] want: Option<(&str, ParentKind)>,
+    ) {
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(HarnessKind::Pi);
+        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let harness_of = |id: &str| {
+            if id == ORIGINAL {
+                HarnessKind::Codex
+            } else {
+                HarnessKind::Pi
+            }
+        };
+        let row = stored.map(|(parent, kind)| {
+            Session::builder()
+                .handle(n.handle(&fork))
+                .parent((!parent.is_empty()).then(|| HarnessSession {
+                    harness: harness_of(parent),
+                    session: NativeSessionId::from(parent.to_owned()),
+                }))
+                .parent_kind((!parent.is_empty()).then_some(kind))
+                .started_at(ts)
+                .updated_at(ts)
+                .usage(atuin_common::harnesstools::session::Usage::default())
+                .build()
+        });
+        n.begin(&fork, row.as_ref());
+
+        let rows: Vec<Message> =
+            restored_pi_fork(named).iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let prompt = rows.last().unwrap();
+        assert_eq!(prompt.role, Role::User);
+        let want = want.map(|(parent, kind)| {
+            let parent = HarnessSession {
+                harness: harness_of(parent),
+                session: NativeSessionId::from(parent.to_owned()),
+            };
+            (parent, kind)
+        });
+        assert_eq!(prompt.parent.clone().zip(prompt.parent_kind), want);
     }
 
     /// How many lines lead up to the marker (Pi's header).

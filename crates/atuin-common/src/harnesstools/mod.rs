@@ -65,10 +65,10 @@ pub trait Harness: std::fmt::Debug {
     }
 
     /// Whether a restore of a session that is a fork writes the fork's link to the session it came
-    /// from, as the fork itself does. A restore is written from synced rows, which name no fork, so
-    /// without the link a reader that finds none falls back to what the rows say. For Hermes, that
-    /// is the continuation marker a fork of a continuation copies, and the restored fork would be
-    /// read as that continuation. The other harnesses' restores of forks write no link yet.
+    /// from, as the fork itself does. A restore is written from synced rows, which name no fork.
+    /// Capture keeps the restored copy a fork either way, as it takes the parent sync stored for a
+    /// session over a continuation's marker the rows carry, so the link is for the harness's own
+    /// view of the session. The other harnesses' restores of forks write no link.
     fn restores_fork_links(&self) -> bool {
         false
     }

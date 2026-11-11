@@ -177,9 +177,14 @@ impl Machine {
     /// running: the first's syncing as often as it can, the second's every `sync_frequency`
     /// seconds, or (0) never.
     pub fn pair_syncing(server: &SyncServer, sync_frequency: u32, threads: &str) -> (Self, Self) {
-        let one = Self::syncing(server, None, 1, threads);
+        Self::pair_as(server, sync_frequency, [threads, threads])
+    }
+
+    /// [`Self::pair_syncing`], each machine with its own `[threads]` settings.
+    pub fn pair_as(server: &SyncServer, sync_frequency: u32, threads: [&str; 2]) -> (Self, Self) {
+        let one = Self::syncing(server, None, 1, threads[0]);
         let key = one.run(&["key", "--base64"]).trim().to_owned();
-        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, threads);
+        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, threads[1]);
         (one, two)
     }
 

@@ -1205,14 +1205,14 @@ impl AiHarnessSessionCapture {
         let mut enricher = MessageEnricher::new(harness).keeping_patches(sink.keeps_patches());
         let handle = enricher.handle(session);
         let warmed =
-            engine::read_warm(&sink, &handle, sink.lock_ready().await?).await.map_err(|err| {
-                match err {
+            engine::read_warm(&sink, &handle, sink.lock_ready().await?, engine::Start::Resumed)
+                .await
+                .map_err(|err| match err {
                     engine::WarmError::Repair(err) => err,
                     engine::WarmError::Read(err) => AppendError::Sidecar(err),
                     #[cfg(test)]
                     engine::WarmError::Injected => AppendError::Aborted,
-                }
-            })?;
+                })?;
         // Without the content-addressed ids stored: a line without an id pushed again is the
         // same line, not the next one like it.
         enricher.resume(session, warmed.row.as_ref(), &warmed.titles, warmed.last.as_ref(), &[]);

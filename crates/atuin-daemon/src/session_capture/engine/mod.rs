@@ -407,9 +407,10 @@ impl Start {
 /// The checkpoint handed to each session `events()` has (re)opened and not yielded from since.
 type Opened = Arc<Mutex<HashMap<SessionId, Option<Checkpoint>>>>;
 
-/// Set a session's bookkeeping up for a fresh read of its transcript: empty for one read from
-/// the beginning, whose every line replays; warmed from the sidecar for one resumed past its
-/// start, which replays none of the lines before it.
+/// Set a session's bookkeeping up for a fresh read of its transcript from what the sidecar holds
+/// of it: for one read from the beginning, whose every line replays, only its stored parent
+/// ([`MessageEnricher::begin`]); for one resumed past its start, which replays none of the lines
+/// before it, everything they set up ([`MessageEnricher::resume`]).
 ///
 /// The sidecar is read as capture's dedup gate reads it: with the store ready, under capture's
 /// locks (see [`Sink::lock_ready`]), waiting out a rebuild or a forget of this host's rows, and
@@ -436,10 +437,6 @@ pub(super) async fn warm(
     start: Start,
 ) {
     enricher.restart(session);
-    if start == Start::Beginning {
-        return;
-    }
-    let handle = enricher.handle(session);
     let backoff = sink.warm_backoff();
     let mut state = sink.state.clone();
     let mut failures = 0;
@@ -452,17 +449,8 @@ pub(super) async fn warm(
             }
             continue;
         };
-        match read_warm(sink, &handle, locks).await {
-            Ok(warmed) => {
-                let Warmed {
-                    row,
-                    titles,
-                    last,
-                    synthetic,
-                } = warmed;
-                enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
-                return;
-            }
+        match warm_once(sink, enricher, session, start, locks).await {
+            Ok(()) => return,
             Err(e) => {
                 failures += 1;
                 let delay = backoff.delay(failures);
@@ -470,12 +458,38 @@ pub(super) async fn warm(
                     ?e,
                     %session,
                     ?delay,
-                    "failed to warm a resumed ai-session up from the sidecar; retrying"
+                    "failed to warm an ai-session up from the sidecar; retrying"
                 );
                 tokio::time::sleep(delay).await;
             }
         }
     }
+}
+
+/// One try of [`warm`], holding capture's `locks`: `session`'s bookkeeping set up in `enricher`
+/// for a read starting at `start`, or the error that kept it from being read. An import reads each
+/// session from its start this way too, so its rows name the parent capture's would.
+pub(super) async fn warm_once(
+    sink: &Sink,
+    enricher: &mut MessageEnricher,
+    session: &SessionId,
+    start: Start,
+    locks: CaptureLocks,
+) -> Result<(), WarmError> {
+    let handle = enricher.handle(session);
+    let Warmed {
+        row,
+        titles,
+        last,
+        synthetic,
+    } = read_warm(sink, &handle, locks, start).await?;
+    match start {
+        Start::Beginning => enricher.begin(session, row.as_ref()),
+        Start::Resumed => {
+            enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
+        }
+    }
+    Ok(())
 }
 
 /// What a resumed session's warm-up reads from the sidecar.
@@ -497,12 +511,14 @@ pub(super) enum WarmError {
     Injected,
 }
 
-/// Read what [`warm`] needs from the sidecar, holding capture's `locks` (released on return,
-/// whether the reads failed or not).
+/// Read what [`warm`] needs from the sidecar for a read starting at `start`, holding capture's
+/// `locks` (released on return, whether the reads failed or not): for one from the beginning, the
+/// session's row alone.
 pub(super) async fn read_warm(
     sink: &Sink,
     handle: &HarnessSession,
     (mut pending, local): CaptureLocks,
+    start: Start,
 ) -> Result<Warmed, WarmError> {
     // A row capture pushed but did not project is one of the session's the reads must see.
     #[cfg(test)]
@@ -511,6 +527,14 @@ pub(super) async fn read_warm(
     #[cfg(test)]
     inject(sink, WarmStep::Session).await?;
     let row = sink.sidecar.get_session(handle).await?;
+    if start == Start::Beginning {
+        return Ok(Warmed {
+            row,
+            titles: Vec::new(),
+            last: None,
+            synthetic: Vec::new(),
+        });
+    }
     #[cfg(test)]
     inject(sink, WarmStep::Last).await?;
     let last = sink.sidecar.last_message(handle).await?;
