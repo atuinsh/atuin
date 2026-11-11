@@ -234,17 +234,21 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     fi
     exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   elif [[ -n "${ZSH_VERSION:-}" ]]; then
-    # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
-    # invoked with -- and fall back to PATH lookup otherwise. Login shells
-    # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-    # strip it (${var#-}) before passing it along. ZSH_ARGZERO may also be
-    # a bare command name ("zsh") rather than a path; the :c modifier
-    # resolves that to an absolute path via $PATH, leaves an absolute path
-    # unchanged, and leaves an unresolvable name as-is.
+    # Prefer ZSH_ARGZERO (zsh 5.3+) when it names a path. Login shells set
+    # argv[0] to "-zsh"; strip the leading dash. A bare name ("zsh") is
+    # resolved via $PATH (:c). If that still is not a path -- $PATH can be
+    # empty this early in a login -- use $SHELL when it is absolute, then
+    # command -v (https://github.com/atuinsh/atuin/issues/4661).
+    __atuin_pty_proxy_zsh=
     if [[ -n ${ZSH_ARGZERO-} ]]; then
       __atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}
-    else
-      __atuin_pty_proxy_zsh=$(command -v zsh)
+    fi
+    if [[ $__atuin_pty_proxy_zsh != /* ]]; then
+      if [[ ${SHELL-} == /* ]]; then
+        __atuin_pty_proxy_zsh=$SHELL
+      else
+        __atuin_pty_proxy_zsh=$(command -v zsh)
+      fi
     fi
     __atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")
     if [[ -o login ]]; then
@@ -384,10 +388,12 @@ mod tests {
     fn init_scripts_forward_shell_path() {
         let posix = init_script(Shell::Bash);
         assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$BASH")"#));
-        // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
-        // dash present on login shells, then resolve a bare command name to
-        // an absolute path with the :c modifier before forwarding it.
+        // zsh: capture ZSH_ARGZERO, strip the login-shell dash, resolve a
+        // bare name with :c, then $SHELL (if absolute) or command -v when
+        // that is still not a path.
         assert!(posix.contains(r"__atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}"));
+        assert!(posix.contains(r"[[ $__atuin_pty_proxy_zsh != /* ]]"));
+        assert!(posix.contains(r"[[ ${SHELL-} == /* ]]"));
         assert!(posix.contains(r"__atuin_pty_proxy_zsh=$(command -v zsh)"));
         assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")"#));
 
