@@ -6,9 +6,9 @@ description: Audit whether the changes in this repository match what was asked o
 # Threads audit
 
 Atuin captures each coding agent session as a thread. The prompts in the
-threads say what was intended. Git says what changed. Audit the two against
-each other, as a whole: the question is whether the repository now does what
-was asked, not whether each commit has a thread. Only read: change no files,
+threads say what was intended. Git says what changed. Audit the two as a whole.
+Check the repository against the requests. Do not require a thread for each
+commit. Only read: change no files,
 and make no commits.
 
 The audit surveys every thread and every commit of the window. It doesn't
