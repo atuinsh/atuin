@@ -728,6 +728,16 @@ pub const REDACT_BUDGET: Duration = if cfg!(debug_assertions) {
     Duration::from_millis(250)
 };
 
+/// [`REDACT_BUDGET`] for one megabyte, scaled by how many megabytes `len` occupies
+/// (rounded up, at least one). A 4.5 MiB paste on a slow aarch64 builder would
+/// otherwise exceed the flat budget and be replaced with a timeout placeholder
+/// (https://github.com/atuinsh/atuin/issues/4673).
+#[must_use]
+pub fn redact_budget_for(len: usize) -> Duration {
+    let megabytes = u32::try_from(len.div_ceil(1024 * 1024)).unwrap_or(u32::MAX).max(1);
+    REDACT_BUDGET.saturating_mul(megabytes)
+}
+
 /// [`redact`], taking out what the user's own patterns (`[security] redact_patterns`) match too:
 /// a pattern's `secret` group where it names one, else all it matches.
 #[derive(Clone, Debug)]
@@ -822,6 +832,16 @@ mod tests {
         REDACTED, REDACTION, Redactor, SECRET_GROUP, VENDOR_REGEXES, contains_secret,
         history_patterns, output_unsafe, redact, redaction_patterns, vendors,
     };
+
+    #[test]
+    fn redact_budget_scales_with_input_size() {
+        use super::{REDACT_BUDGET, redact_budget_for};
+
+        assert_eq!(redact_budget_for(0), REDACT_BUDGET);
+        assert_eq!(redact_budget_for(1024 * 1024), REDACT_BUDGET);
+        assert_eq!(redact_budget_for(1024 * 1024 + 1), REDACT_BUDGET * 2);
+        assert_eq!(redact_budget_for(5 * 1024 * 1024), REDACT_BUDGET * 5);
+    }
 
     pub(super) struct Test {
         pub(super) input: &'static str,

@@ -145,7 +145,7 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
             let redactor = Arc::clone(&redactor);
             let redacted = tokio::task::spawn_blocking(move || {
                 let redact = |output: &mut String| match redactor
-                    .redact_within(output, atuin_common::secrets::REDACT_BUDGET)
+                    .redact_within(output, atuin_common::secrets::redact_budget_for(output.len()))
                 {
                     Some(Cow::Borrowed(_)) => true,
                     Some(Cow::Owned(redacted)) => {
