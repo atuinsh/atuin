@@ -71,9 +71,11 @@ Hermes keeps every session in one database, `state.db` in its home
 (`$HERMES_HOME`, else `~/.hermes`), and one more for each profile
 (`profiles/<name>/state.db`). Atuin reads them all, but only coding work
 becomes a thread: sessions from the `hermes` command line, its TUI, Desktop,
-ACP and one-shot (`-q`) runs. Atuin leaves out gateway chats (Telegram and the
-rest), scheduled jobs and subagents. It opens the database only for each read and
-closes it again, so it never stops Hermes's own maintenance.
+ACP and one-shot (`-q`) runs, and the subagents those sessions delegate to
+(`delegate_task`), each a child of the session it works for. Atuin leaves out
+gateway chats (Telegram and the rest), scheduled jobs, and their subagents. It
+opens the database only for each read and closes it again, so it never stops
+Hermes's own maintenance.
 
 When you `/undo`, `/retry` or edit a turn, the turn it drops stays in the
 thread, as a branch the conversation left. A compaction keeps each message

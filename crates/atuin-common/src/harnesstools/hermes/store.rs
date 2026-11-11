@@ -16,7 +16,7 @@
 //! optional ones are probed first: Hermes only ever adds columns, so a store an older Hermes wrote
 //! reads as far as its columns allow, and a column it lacks reads as `NULL`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -45,10 +45,52 @@ const IOERR_BACKOFF: Duration = Duration::from_millis(50);
 
 /// The sessions that are coding work, which become threads: Hermes's CLI, TUI, ACP and one-shot
 /// runs, which before v0.22 were stored under their own `source`, and since are `local` sessions
-/// with the surface in `created_source`. Gateway platforms (Telegram and the rest), cron, kanban,
-/// tool runs and subagents are not.
+/// with the surface in `created_source`. Gateway platforms (Telegram and the rest), cron, kanban
+/// and tool runs are not. Subagents are threads by the session they work for (see
+/// [`Store::sessions`]).
 const CODING_SOURCES: &str = "'cli', 'tui', 'acp', 'oneshot'";
 const CODING_LOCAL_SOURCES: &str = "'cli', 'tui', 'acp', 'desktop'";
+
+/// How far a chain of subagents is followed up to the session it works for: deeper than Hermes
+/// nests them (its `delegation.max_spawn_depth` defaults to 1), so only a loop in a broken store
+/// reaches it.
+const MAX_DELEGATION_DEPTH: u32 = 64;
+
+/// The sessions of `rows` that are threads: those marked coding, and each subagent whose
+/// delegator is one, at any depth. Every row is settled once, with the chain that led to it, so
+/// this is linear in the rows; a loop of delegators, or one leading out of `rows` (a gateway
+/// chat, a session Hermes deleted), is no thread.
+fn threads(rows: Vec<(bool, SessionRow)>) -> Vec<SessionRow> {
+    let index: HashMap<&str, usize> =
+        rows.iter().enumerate().map(|(i, (_, row))| (row.id.as_str(), i)).collect();
+    let mut settled: Vec<Option<bool>> =
+        rows.iter().map(|(coding, _)| coding.then_some(true)).collect();
+    for start in 0..rows.len() {
+        let mut chain = Vec::new();
+        let mut at = Some(start);
+        let thread = loop {
+            let Some(i) = at else {
+                break false;
+            };
+            if let Some(thread) = settled[i] {
+                break thread;
+            }
+            if chain.contains(&i) {
+                break false;
+            }
+            chain.push(i);
+            at = rows[i].1.delegated_by.as_deref().and_then(|d| index.get(d).copied());
+        };
+        for i in chain {
+            settled[i] = Some(thread);
+        }
+    }
+    drop(index);
+    rows.into_iter()
+        .zip(settled)
+        .filter_map(|((_, row), thread)| thread.unwrap_or(false).then_some(row))
+        .collect()
+}
 
 /// The stores under the Hermes home `root`: its own, then each profile's. An `Err` is a
 /// `profiles` directory, or an entry of it, that can't be read, so a scan can say it is partial;
@@ -128,6 +170,8 @@ pub struct SessionRow {
     pub parent: Option<String>,
     /// The parent's `end_reason`: `compression` makes this session its continuation.
     pub parent_end_reason: Option<String>,
+    /// For a subagent (`delegate_task`'s child), the session that delegated to it.
+    pub delegated_by: Option<String>,
     pub started_at: f64,
     pub ended_at: Option<f64>,
     pub last_activity_at: Option<f64>,
@@ -334,6 +378,11 @@ impl Store {
     }
 
     fn session_select(&self) -> String {
+        self.session_select_with("")
+    }
+
+    /// [`Self::session_select`] with `extra` (`, <expr> AS <name>`...) among its columns.
+    fn session_select_with(&self, extra: &str) -> String {
         let pick = |name: &str| self.columns.pick("sessions", "s", name);
         let parent_end = if self.columns.sessions.contains("parent_session_id")
             && self.columns.sessions.contains("end_reason")
@@ -343,10 +392,15 @@ impl Store {
         } else {
             "NULL AS parent_end_reason"
         };
+        let delegated_by = format!(
+            "CASE WHEN s.source = 'subagent' THEN {} END AS delegated_by",
+            self.delegator()
+        );
         format!(
-            "SELECT s.id AS id, {}, {}, {}, {}, {}, {}, {parent_end}, s.started_at AS started_at, \
-             {}, {}, (SELECT max(m.id) FROM messages m WHERE m.session_id = s.id) AS tip, (SELECT \
-             max(m.timestamp) FROM messages m WHERE m.session_id = s.id) AS tip_at FROM sessions s",
+            "SELECT s.id AS id, {}, {}, {}, {}, {}, {}, {parent_end}, {delegated_by}, \
+             s.started_at AS started_at, {}, {}, (SELECT max(m.id) FROM messages m WHERE \
+             m.session_id = s.id) AS tip, (SELECT max(m.timestamp) FROM messages m WHERE \
+             m.session_id = s.id) AS tip_at{extra} FROM sessions s",
             pick("title"),
             pick("title_source"),
             pick("cwd"),
@@ -368,6 +422,7 @@ impl Store {
             model_config: row.try_get("model_config")?,
             parent: row.try_get("parent_session_id")?,
             parent_end_reason: row.try_get("parent_end_reason")?,
+            delegated_by: row.try_get("delegated_by")?,
             started_at: row.try_get("started_at")?,
             ended_at: row.try_get("ended_at")?,
             last_activity_at: row.try_get("last_activity_at")?,
@@ -376,20 +431,56 @@ impl Store {
         })
     }
 
-    /// Every coding session in the store.
+    /// The SQL (on `sessions` as `s`) for the session a subagent's `s` works for: Hermes's own
+    /// rule (its v33 migration), `model_config._delegate_from`, else `parent_session_id`. A
+    /// subagent whose parent is gone names none Hermes keeps (`__orphaned__`).
+    fn delegator(&self) -> String {
+        let has = |name: &str| self.columns.sessions.contains(name);
+        let delegate = has("model_config").then_some(
+            "(CASE WHEN json_valid(s.model_config) THEN json_extract(s.model_config, \
+             '$._delegate_from') END)",
+        );
+        let parent = has("parent_session_id").then_some("s.parent_session_id");
+        match (delegate, parent) {
+            (Some(delegate), Some(parent)) => format!("COALESCE({delegate}, {parent})"),
+            (Some(only), None) | (None, Some(only)) => only.to_owned(),
+            (None, None) => "NULL".to_owned(),
+        }
+    }
+
+    /// Every session in the store that is a thread: each coding session (see
+    /// [`CODING_SOURCES`]), and each subagent working, at any depth, for one (see [`threads`]).
+    /// A gateway chat's or a cron job's subagents are not.
     pub async fn sessions(&mut self) -> Result<Vec<SessionRow>, sqlx::Error> {
+        let coding = self.coding();
         let sql = format!(
-            "{} WHERE {} ORDER BY s.started_at, s.id",
+            "{} WHERE {coding} OR s.source = 'subagent' ORDER BY s.started_at, s.id",
+            self.session_select_with(&format!(", {coding} AS is_coding")),
+        );
+        let rows = query::<Sqlite>(AssertSqlSafe(sql)).fetch_all(&mut self.conn).await?;
+        let rows = rows
+            .iter()
+            .map(|row| Ok((row.try_get::<bool, _>("is_coding")?, Self::session_of(row)?)))
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        Ok(threads(rows))
+    }
+
+    /// Session `id`, `None` when the store has no such session or it is no thread. It walks up
+    /// from `id` to the session it works for, one lookup a step, rather than find every thread.
+    pub async fn session(&mut self, id: &str) -> Result<Option<SessionRow>, sqlx::Error> {
+        let up = format!(
+            "WITH RECURSIVE up(id, delegator, depth) AS (SELECT s.id, CASE WHEN s.source = \
+             'subagent' THEN {delegator} END, 0 FROM sessions s WHERE s.id = ?1 UNION ALL SELECT \
+             s.id, CASE WHEN s.source = 'subagent' THEN {delegator} END, up.depth + 1 FROM \
+             sessions s JOIN up ON s.id = up.delegator WHERE up.depth < {MAX_DELEGATION_DEPTH}) ",
+            delegator = self.delegator(),
+        );
+        let sql = format!(
+            "{up}{} WHERE s.id = ?1 AND EXISTS (SELECT 1 FROM up JOIN sessions s ON s.id = up.id \
+             WHERE up.delegator IS NULL AND {})",
             self.session_select(),
             self.coding()
         );
-        let rows = query::<Sqlite>(AssertSqlSafe(sql)).fetch_all(&mut self.conn).await?;
-        rows.iter().map(Self::session_of).collect()
-    }
-
-    /// Coding session `id`, `None` when the store has no such session or it is no coding one.
-    pub async fn session(&mut self, id: &str) -> Result<Option<SessionRow>, sqlx::Error> {
-        let sql = format!("{} WHERE s.id = ?1 AND {}", self.session_select(), self.coding());
         let row =
             query::<Sqlite>(AssertSqlSafe(sql)).bind(id).fetch_optional(&mut self.conn).await?;
         row.as_ref().map(Self::session_of).transpose()
@@ -608,5 +699,48 @@ impl Store {
         .fetch_optional(&mut self.conn)
         .await?;
         Ok(found.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    fn row(id: &str, delegated_by: Option<&str>) -> SessionRow {
+        SessionRow {
+            id: id.to_owned(),
+            title: None,
+            title_source: None,
+            cwd: None,
+            model: None,
+            model_config: None,
+            parent: None,
+            parent_end_reason: None,
+            delegated_by: delegated_by.map(str::to_owned),
+            started_at: 0.0,
+            ended_at: None,
+            last_activity_at: None,
+            tip: None,
+            tip_at: None,
+        }
+    }
+
+    /// A subagent is a thread when its chain of delegators reaches a coding session, whatever
+    /// order the rows come in; one whose chain leaves the rows, or loops, is not.
+    #[rstest]
+    fn a_subagent_is_a_thread_when_its_chain_reaches_a_coding_session() {
+        let rows = vec![
+            (false, row("deep", Some("mid"))),
+            (false, row("mid", Some("top"))),
+            (true, row("top", None)),
+            (false, row("of-a-chat", Some("chat"))),
+            (false, row("loop-a", Some("loop-b"))),
+            (false, row("loop-b", Some("loop-a"))),
+            (false, row("untagged", None)),
+        ];
+        let found: Vec<String> = threads(rows).into_iter().map(|row| row.id).collect();
+        assert_eq!(found, ["deep", "mid", "top"]);
     }
 }

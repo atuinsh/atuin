@@ -372,6 +372,41 @@ impl Transcript {
         transcript
     }
 
+    /// A Hermes subagent `parent` delegated to (`delegate_task`), working in `cwd`: a session of
+    /// its own in the parent's store, with Hermes's id format for it, `source` `subagent`, and the
+    /// parent named in `model_config._delegate_from` and `parent_session_id`.
+    pub fn hermes_subagent(parent: &Self, cwd: &Path, turns: &[Turn]) -> Self {
+        assert_eq!(parent.agent, Agent::Hermes);
+        let started = tick();
+        let transcript = Self {
+            agent: Agent::Hermes,
+            id: format!("20261109_{}_{}", &short()[..6], &short()[..6]),
+            path: parent.path.clone(),
+        };
+        let db = hermes_open(&transcript.path);
+        let config =
+            json!({"_delegate_from": parent.id, "_subagent_id": format!("sa-0-{}", &short()[..8])});
+        hermes_insert(
+            &db,
+            "sessions",
+            &json!({
+                "id": transcript.id,
+                "source": "subagent",
+                "created_source": "subagent",
+                "model": "xiaomi/mimo-v2.5-pro",
+                "model_config": config.to_string(),
+                "parent_session_id": parent.id,
+                "started_at": secs(started),
+                "cwd": cwd,
+                "last_activity_at": secs(started),
+                "profile_name": hermes_profile(&transcript.path).unwrap_or_else(|| "default".to_owned()),
+            }),
+        );
+        drop(db);
+        transcript.append(cwd, turns);
+        transcript
+    }
+
     /// A Claude Code subagent `parent` spawned, working in `cwd`: its own transcript beside the
     /// parent's, whose lines name the parent's session.
     pub fn claude_subagent(parent: &Self, cwd: &Path, turns: &[Turn]) -> Self {

@@ -409,7 +409,7 @@ async fn a_rotated_compaction_continues_its_parent() {
 
 #[rstest]
 #[tokio::test]
-async fn only_coding_sessions_are_threads() {
+async fn only_coding_sessions_and_their_subagents_are_threads() {
     let dir = tempfile::tempdir().unwrap();
     store_in(dir.path(), &[SCHEMA, PROBE, COMPACTION]).await;
     let sessions = HermesSessions::builder().home(dir.path()).pool(pool()).build();
@@ -422,13 +422,160 @@ async fn only_coding_sessions_are_threads() {
         DELEGATOR,
         FAILED,
         RESUMED,
+        SUBAGENT,
         TOOL_ERROR,
         "local-compacted",
         "local-desktop",
     ];
     want.sort_unstable();
     assert_eq!(found, want);
-    assert!(!found.iter().any(|id| id == SUBAGENT), "subagents come later");
+}
+
+/// Every row of a subagent, its title row too, names the session that delegated to it.
+#[rstest]
+#[tokio::test]
+async fn a_subagents_rows_name_the_session_it_works_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    let messages = read(&db, SUBAGENT).await;
+    assert!(!messages.is_empty());
+    for message in &messages {
+        assert_eq!(message.parent_session().as_ref().map(AsRef::as_ref), Some(DELEGATOR));
+        assert_eq!(message.parent_kind(), Some(ParentKind::Subagent));
+    }
+    let delegator = read(&db, DELEGATOR).await;
+    assert!(delegator.iter().all(|m| m.parent_session().is_none()));
+}
+
+/// A subagent `delegate_task` starts while capture runs is reported as it appears, a child of the
+/// session it works for.
+#[rstest]
+#[tokio::test]
+async fn the_listener_reports_a_subagent_as_it_appears() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, COMPACTION]).await;
+    let listener = HermesListener {
+        root: dir.path().to_path_buf(),
+        profile_scan: Duration::from_millis(100),
+    };
+    let (tx, mut watched) = tokio::sync::mpsc::unbounded_channel();
+    let listening = tokio::spawn(async move {
+        let mut sessions = Box::pin(listener.watch());
+        while let Some(session) = sessions.next().await {
+            let _ = tx.send(session.unwrap());
+        }
+    });
+    let mut reported = async || {
+        tokio::time::timeout(Duration::from_secs(10), watched.recv())
+            .await
+            .expect("a session is reported")
+            .unwrap()
+    };
+    for _ in 0..4 {
+        reported().await;
+    }
+
+    let mut writer = connect(&db).await;
+    execute(
+        &mut writer,
+        r#"INSERT INTO sessions (id, source, model_config, parent_session_id, started_at)
+               VALUES ('sa-live', 'subagent', '{"_delegate_from": "local-desktop"}', 'local-desktop', 9.0);
+           INSERT INTO messages (id, session_id, role, content, timestamp)
+               VALUES (900, 'sa-live', 'user', 'count the lines', 9.0);"#,
+    )
+    .await;
+    let child = reported().await;
+    assert_eq!(child.id().as_ref(), "sa-live");
+    let rows: Vec<HermesMessage> = child.read().try_collect().await.unwrap();
+    assert_eq!(rows[0].parent_session().as_ref().map(AsRef::as_ref), Some("local-desktop"));
+    assert_eq!(rows[0].parent_kind(), Some(ParentKind::Subagent));
+    writer.close().await.unwrap();
+    listening.abort();
+}
+
+/// A subagent is a thread when the session it works for is one, however deep, and whichever
+/// field names that session (`_delegate_from`, or before v0.23's re-tagging only
+/// `parent_session_id`); not a gateway chat's subagent, nor one Hermes marked orphaned.
+#[rstest]
+#[tokio::test]
+async fn a_subagent_is_a_thread_by_the_session_it_works_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    let mut writer = connect(&db).await;
+    let delegate = |from: &str| format!(r#"'{{"_delegate_from": "{from}"}}'"#);
+    execute(
+        &mut writer,
+        &format!(
+            "INSERT INTO sessions (id, source, model_config, parent_session_id, started_at) VALUES
+                 ('tg-chat', 'telegram', NULL, NULL, 1.0),
+                 ('sa-of-chat', 'subagent', {}, 'tg-chat', 2.0),
+                 ('sa-nested', 'subagent', {}, '{SUBAGENT}', 3.0),
+                 ('sa-untagged', 'subagent', NULL, '{DELEGATOR}', 4.0),
+                 ('sa-orphaned', 'subagent', {}, NULL, 5.0);",
+            delegate("tg-chat"),
+            delegate(SUBAGENT),
+            delegate("__orphaned__"),
+        ),
+    )
+    .await;
+    writer.close().await.unwrap();
+    let sessions = HermesSessions::builder().home(dir.path()).pool(pool()).build();
+    let found: Vec<String> =
+        sessions.existing().unwrap().map_ok(|s| s.id().to_string()).try_collect().await.unwrap();
+    for id in ["sa-nested", "sa-untagged"] {
+        assert!(found.iter().any(|f| f == id), "{id} is a thread: {found:?}");
+    }
+    for id in ["tg-chat", "sa-of-chat", "sa-orphaned"] {
+        assert!(!found.iter().any(|f| f == id), "{id} is no thread: {found:?}");
+    }
+    // One session asked for walks up its own chain, and comes to the same answer.
+    let mut store = Store::open(&db).await.unwrap();
+    for (id, thread) in [
+        (SUBAGENT, true),
+        ("sa-nested", true),
+        ("sa-untagged", true),
+        ("tg-chat", false),
+        ("sa-of-chat", false),
+        ("sa-orphaned", false),
+    ] {
+        assert_eq!(store.session(id).await.unwrap().is_some(), thread, "{id}");
+    }
+    store.close().await;
+}
+
+/// Finding the threads stays linear in the store's sessions: a store a busy cron job fills in a
+/// month (every run is a session) lists in well under a second, where walking every chain from
+/// every thread took seconds at a tenth the size.
+#[rstest]
+#[tokio::test]
+async fn a_large_store_lists_its_threads_quickly() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    let mut writer = connect(&db).await;
+    execute(
+        &mut writer,
+        r"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+           INSERT INTO sessions (id, source, created_source, model_config, parent_session_id, started_at)
+           SELECT 's' || i,
+                  CASE i % 4 WHEN 0 THEN 'cron' WHEN 1 THEN 'oneshot' ELSE 'subagent' END,
+                  CASE i % 4 WHEN 0 THEN 'cron' WHEN 1 THEN 'oneshot' ELSE 'subagent' END,
+                  CASE WHEN i % 4 > 1 THEN json_object('_delegate_from', 's' || (i - i % 4 + 1)) END,
+                  CASE WHEN i % 4 > 1 THEN 's' || (i - i % 4 + 1) END,
+                  i
+           FROM n;",
+    )
+    .await;
+    writer.close().await.unwrap();
+
+    let started = std::time::Instant::now();
+    let mut store = Store::open(&db).await.unwrap();
+    let threads = store.sessions().await.unwrap();
+    let one = store.session("s19998").await.unwrap();
+    store.close().await;
+    // 5,000 one-shot runs and their 10,000 subagents, besides the probe's.
+    assert!(threads.len() > 15_000, "{}", threads.len());
+    assert!(one.is_some());
+    assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
 }
 
 #[rstest]
@@ -452,6 +599,7 @@ fn a_title_ranks_by_who_wrote_it(
         model_config: None,
         parent: None,
         parent_end_reason: None,
+        delegated_by: None,
         started_at: 0.0,
         ended_at: None,
         last_activity_at: None,

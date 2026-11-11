@@ -543,8 +543,9 @@ mod tests {
         assert_eq!(session.git_branch, None);
     }
 
-    /// Hermes keeps every session in one `state.db`: import reads its coding sessions (not the
-    /// subagent the probe delegated to), with each one's directory and the rows the store holds.
+    /// Hermes keeps every session in one `state.db`: import reads its coding sessions, with each
+    /// one's directory and the rows the store holds, and the subagent the probe delegated to, a
+    /// child of the session that delegated.
     #[rstest]
     #[tokio::test]
     async fn import_reads_hermes_sessions_from_its_store() {
@@ -578,8 +579,8 @@ mod tests {
             .harness(HarnessKind::Hermes, sessions)
             .collect()
             .await;
-        // Rows 1-22 and 27-28: the subagent's 23-26 are left out.
-        assert_eq!(sum_new(&progress), 24);
+        // Rows 1-28: the subagent's are 23-26.
+        assert_eq!(sum_new(&progress), 28);
 
         let handle = HarnessSession {
             harness: HarnessKind::Hermes,
@@ -589,11 +590,20 @@ mod tests {
         };
         let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
         assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/hermes-play/work")));
+        let delegator = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from(
+                "local-56e64527431b680fad9f17881150e9234ddbca30777b3d57949bd767d30315e1".to_owned(),
+            ),
+        };
         let subagent = HarnessSession {
             harness: HarnessKind::Hermes,
             session: NativeSessionId::from("20261109_094652_9ca0a5".to_owned()),
         };
-        assert!(sink.sidecar.get_session(&subagent).await.unwrap().is_none());
+        let subagent = sink.sidecar.get_session(&subagent).await.unwrap().unwrap();
+        assert_eq!(subagent.parent.as_ref(), Some(&delegator));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
+        assert_eq!(subagent.cwd.as_deref(), Some(Path::new("/tmp/hermes-play/work")));
     }
 
     /// A Kiro subagent's log, under its parent's directory, is a session of its own: import

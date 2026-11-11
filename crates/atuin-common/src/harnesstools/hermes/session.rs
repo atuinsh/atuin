@@ -11,9 +11,12 @@
 //!
 //! **Which sessions.** Only coding work becomes a thread: the CLI, TUI, ACP and one-shot (`-q`)
 //! runs, and since v0.22 the `local` sessions those surfaces (and Desktop) create (see
-//! `store` for the one place the lists live). Gateway platforms, cron, kanban,
-//! tool runs and subagents are not read; subagents (`source = 'subagent'`) are a follow-up. A
-//! session that carries on one Hermes ended for compression (its parent's `end_reason` is
+//! `store` for the one place the lists live). Gateway platforms, cron, kanban and
+//! tool runs are not read. A subagent (`source = 'subagent'`, the session `delegate_task` runs a
+//! task in) is a thread of its own when the session it works for is one, at any depth, naming
+//! that session as a [`ParentKind::Subagent`] on every row: Hermes records which session
+//! delegated in `model_config._delegate_from`, else `parent_session_id`. A session that carries
+//! on one Hermes ended for compression (its parent's `end_reason` is
 //! `compression`, the rotating layout from before in-place compaction) is a session of its own,
 //! naming that parent as a [`ParentKind::Continuation`].
 //!
@@ -431,8 +434,9 @@ struct Context {
     cwd: Option<PathBuf>,
     model: Option<String>,
     provider: Option<String>,
-    /// The session this one continues, after a compaction that rotated it.
-    continues: Option<SessionId>,
+    /// The session this one belongs to: for a subagent, the session that delegated to it; for a
+    /// rotated compaction's continuation, the session it carries on.
+    parent: Option<(SessionId, ParentKind)>,
 }
 
 impl Context {
@@ -441,11 +445,14 @@ impl Context {
             cwd: row.cwd.as_deref().filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
             model: row.model.clone().filter(|model| !model.is_empty()),
             provider: row.provider(),
-            continues: row
-                .parent
-                .clone()
-                .filter(|_| row.parent_end_reason.as_deref() == Some("compression"))
-                .map(SessionId::from),
+            parent: match &row.delegated_by {
+                Some(delegator) => Some((SessionId::from(delegator.clone()), ParentKind::Subagent)),
+                None => row
+                    .parent
+                    .clone()
+                    .filter(|_| row.parent_end_reason.as_deref() == Some("compression"))
+                    .map(|parent| (SessionId::from(parent), ParentKind::Continuation)),
+            },
         }
     }
 }
@@ -822,7 +829,7 @@ impl HermesMessage {
             kind: Kind::Title { id, change, at },
             parent: None,
             context: Arc::new(Context {
-                continues: context.continues.clone(),
+                parent: context.parent.clone(),
                 ..Context::default()
             }),
         }
@@ -1014,11 +1021,11 @@ impl Message for HermesMessage {
     }
 
     fn parent_session(&self) -> Option<SessionId> {
-        self.context.continues.clone()
+        self.context.parent.as_ref().map(|(parent, _)| parent.clone())
     }
 
     fn parent_kind(&self) -> Option<ParentKind> {
-        self.context.continues.as_ref().map(|_| ParentKind::Continuation)
+        self.context.parent.as_ref().map(|(_, kind)| *kind)
     }
 
     fn title(&self) -> Option<TitleChange> {
