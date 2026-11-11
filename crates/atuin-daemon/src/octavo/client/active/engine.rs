@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -14,9 +14,10 @@ use atuin_domain::record::{HostId, RecordId, RecordIdx, RecordSeriesKey, RecordT
 use atuin_octavo::hub::{HubCallError, HubClient, HubLogin};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{
-    PendingHistoryUpload, PendingOutputUpload, PendingThreadMessageUpload, ThreadBackfill,
-    UploadQueue,
+    NotSent, PendingHistoryUpload, PendingOpen, PendingOutputUpload, PendingThreadMessageUpload,
+    QueueError, ThreadBackfill, UploadQueue,
 };
+use atuin_octavo::shares::Configs;
 use futures::StreamExt;
 use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
@@ -25,6 +26,7 @@ use tokio::task::JoinHandle;
 use tonic::Code;
 use uuid::Uuid;
 
+use super::gate::{Cleared, CloseHalt, Closes, Opening, Rows};
 use super::{clear_off, forget_output, is_off, mark_off};
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
@@ -37,14 +39,16 @@ const BACKOFF: Backoff = Backoff::Exponential {
     factor: NonZeroU32::new(2).unwrap(),
 };
 
-/// How long a queued output, or a queued thread message, waits to reach Octavo before it's
-/// dropped.
+/// How long a queued output, a queued thread message or a queued thread share waits to reach Octavo
+/// before it's dropped.
 ///
 /// An output waits while its entry is unfinished on this machine or missing from Octavo. The
 /// entry is then in flight on the direct path, which gives up after `network_timeout` (30s by
 /// default), or never coming: refused, stored under another login, or never uploaded. An output
 /// that cannot be read from local storage waits out the same hour. A thread message waits while
-/// its record isn't stored: capture queues it just before the push, which may fail.
+/// its record isn't stored: capture queues it just before the push, which may fail. A thread share
+/// waits while its thread isn't stored, whose messages normally go ahead of it, so that thread's
+/// were refused or dropped, or the user deleted it; its next message queues the share afresh.
 const ORPHAN_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How a woken pass waits for the wakes to stop. Capture stores a Claude Code reply as a row per
@@ -58,9 +62,9 @@ const DEBOUNCE: Debounce = Debounce {
 /// The most records one pass reads of a backfill: as many as one `InsertThreadMessages` takes.
 const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_ITEMS.get() as u64;
 
-/// How long one pass can spend on history or command output uploads, to prevent starving thread
-/// uploads.
-const PASS_BUDGET: Duration = Duration::from_secs(5);
+/// How long one pass can spend on history uploads, command output uploads or thread shares, each,
+/// to prevent starving thread uploads.
+pub(super) const PASS_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub struct UploadEngine {
@@ -75,6 +79,7 @@ impl UploadEngine {
         outputs: Arc<OutputStore>,
         records: AiSessionStore,
         wake: Arc<Notify>,
+        configs: Configs,
     ) -> Self {
         let events = handle.subscribe();
         let inner = EngineInner {
@@ -85,6 +90,7 @@ impl UploadEngine {
             records,
             wake,
             logins: Notify::new(),
+            configs,
         };
 
         Self {
@@ -154,6 +160,8 @@ struct EngineInner {
     wake: Arc<Notify>,
     /// Notified at each `atuin login`, which sends a pass that failed, or one waiting, at once.
     logins: Notify,
+    /// Who threads are shared with.
+    configs: Configs,
 }
 
 impl EngineInner {
@@ -258,16 +266,23 @@ impl EngineInner {
     }
 
     /// Sends `login`'s queued thread messages and up to a page of backfill, then queued history
-    /// entries, then (only after all history is done) command output, all up to the first
-    /// [`Halt::Off`].
+    /// entries, then (only after all history is done) command output, then thread shares, all up
+    /// to the first [`Halt::Off`].
     ///
-    /// History and command output uploads are bounded by [`PASS_BUDGET`].
+    /// History uploads, command output uploads and thread shares are each bounded by
+    /// [`PASS_BUDGET`].
     async fn send_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
         let threads = self.send_threads(login).await?;
         let commands = match self.send_history(login).await? {
             NextPass::Waiting => self.send_outputs(login, settings).await?,
             n @ NextPass::Now => n,
         };
+        // Last, as a share waits for its thread's messages and must hold up no upload. One that
+        // may go later waits for the next pass rather than backing off: a wake can't cut a backoff
+        // short, so the thread messages it brings would wait it out too.
+        if matches!(self.send_thread_shares(login).await, Err(Halt::Off)) {
+            return Err(Halt::Off);
+        }
 
         Ok(if [threads, commands].into_iter().any(|n| n == NextPass::Now) {
             NextPass::Now
@@ -448,6 +463,10 @@ impl EngineInner {
                 Loaded::Missing => missing.push(id),
             }
         }
+        // Those that must wait stay queued for the next pass.
+        let Cleared { ready, waiting } = self.clear(login, messages).await?;
+        let waiting: HashSet<_> = waiting.into_iter().collect();
+        settled.retain(|id| !waiting.contains(id));
 
         self.queue.hold_thread_messages(user, held).await.map_err(|err| {
             tracing::warn!(?err, "failed to hold unreadable thread messages; retrying later");
@@ -465,7 +484,7 @@ impl EngineInner {
             }
         }
 
-        let sent = upload_thread_messages(login, converted(messages).await).await?;
+        let sent = upload_thread_messages(login, converted(ready).await).await?;
         match sent {
             Uploaded::Stored => {
                 clear_off(&self.queue, user).await;
@@ -492,6 +511,92 @@ impl EngineInner {
             return self.halt_if_off(login).await;
         }
         Ok(())
+    }
+
+    /// Sends `login`'s queued thread shares for up to [`PASS_BUDGET`], up to the first that fails
+    /// for a reason that may pass, as one the budget cuts short does.
+    ///
+    /// A share cut short goes again, which Octavo takes as a repeat even if it stored the first.
+    async fn send_thread_shares(&self, login: &HubLogin) -> Result<(), Halt> {
+        let opening = Opening::of(&self.queue, login).await?;
+        let narrowed = opening.look_again(&self.configs).await?.narrow().await?;
+        // First, so no share opens to an organization one of its thread's directories keeps out.
+        let deadline = tokio::time::Instant::now() + PASS_BUDGET;
+        let sent = Closes::of(&self.queue, login).send(deadline).await?;
+        for open in narrowed.pending(sent).await? {
+            let sent = tokio::time::timeout_at(deadline, self.send_thread_share(login, open)).await;
+            sent.unwrap_or(Err(Halt::RetryLater))?;
+        }
+        Ok(())
+    }
+
+    async fn send_thread_share(&self, login: &HubLogin, open: PendingOpen<'_>) -> Result<(), Halt> {
+        let sent = match open.send().await {
+            Ok(sent) => sent,
+            Err(refused) => return self.unshared(login, *refused).await,
+        };
+        clear_off(&self.queue, login.user_id()).await;
+        for org_slug in sent.skipped() {
+            self.warn_once_of_skipped_org(login, org_slug).await;
+        }
+        Ok(sent.settle().await?)
+    }
+
+    /// Settles an open Octavo didn't take as its answer says.
+    async fn unshared(
+        &self,
+        login: &HubLogin,
+        NotSent { pending, error }: NotSent<PendingOpen<'_>>,
+    ) -> Result<(), Halt> {
+        let user = login.user_id();
+        match error {
+            HubCallError::ThreadNotStored(_) => {
+                // Octavo refuses an account with it off before it looks for the thread, so this
+                // answer finds Octavo on, as a stored share does.
+                clear_off(&self.queue, user).await;
+                pending.expire(ORPHAN_AFTER).await?;
+                Ok(())
+            }
+            HubCallError::OctavoOff(_) => {
+                tracing::debug!("octavo is off for the account; leaving its thread shares queued");
+                mark_off(&self.queue, user).await;
+                Err(Halt::Off)
+            }
+            error if error.is_permanent() => {
+                let orgs = pending.orgs();
+                tracing::warn!(?error, ?orgs, "octavo refused to share a thread; dropping it");
+                Ok(pending.give_up().await?)
+            }
+            error => {
+                tracing::warn!(?error, "failed to share a thread on octavo; retrying later");
+                Err(Halt::RetryLater)
+            }
+        }
+    }
+
+    /// Splits `messages` into those that may go up now and the ids of those that must wait (see
+    /// [`gate`](super::gate)).
+    async fn clear(&self, login: &HubLogin, messages: Vec<Message>) -> Result<Cleared, Halt> {
+        let rows = Rows::new(&self.queue, login.user_id(), messages);
+        let closing = rows.record_dirs(&self.configs).await?.narrow().await?;
+        let sent =
+            Closes::of(&self.queue, login).send(tokio::time::Instant::now() + PASS_BUDGET).await?;
+        Ok(closing.clear(sent).await?)
+    }
+
+    async fn warn_once_of_skipped_org(&self, login: &HubLogin, org_slug: &str) {
+        let news = self.queue.note_skipped_org(login.user_id(), org_slug).await;
+        // Unable to tell, it warns: a repeat beats never saying so.
+        if news.unwrap_or_else(|err| {
+            tracing::warn!(?err, "failed to note a skipped organization");
+            true
+        }) {
+            tracing::warn!(
+                org = org_slug,
+                "a config file's orgs names an organization this account isn't a member of; not \
+                 sharing threads with it"
+            );
+        }
     }
 
     /// Fixes the bound of each of `login`'s backfills that has none just past its series' tail.
@@ -598,8 +703,15 @@ impl EngineInner {
                 Loaded::Missing | Loaded::Skipped => {}
             }
         }
+        // Those that must wait go to the queue, which looks at them again, so the backfill moves on.
+        let Cleared { ready, waiting } = match self.clear(login, messages).await {
+            Ok(cleared) => cleared,
+            Err(Halt::Off) => return Ok(Uploaded::Off),
+            Err(Halt::RetryLater) => return Err(UploadRetryLater { stored: false }),
+        };
 
         let queued = async {
+            self.queue.push_thread_messages(user, waiting).await?;
             self.queue.push_thread_messages(user, held.iter().copied()).await?;
             self.queue.hold_thread_messages(user, held).await
         };
@@ -608,7 +720,7 @@ impl EngineInner {
             UploadRetryLater { stored: false }
         })?;
 
-        upload_thread_messages(login, converted(messages).await).await
+        upload_thread_messages(login, converted(ready).await).await
     }
 
     async fn advance_backfill(
@@ -761,6 +873,22 @@ impl EngineInner {
 }
 
 /// `messages` as Octavo takes them, less those it never will, which are dropped with a warning.
+impl From<QueueError> for Halt {
+    fn from(err: QueueError) -> Self {
+        tracing::warn!(?err, "failed to read or write the octavo upload queue; retrying later");
+        Self::RetryLater
+    }
+}
+
+impl From<CloseHalt> for Halt {
+    fn from(halt: CloseHalt) -> Self {
+        match halt {
+            CloseHalt::Off => Self::Off,
+            CloseHalt::Queue(err) => err.into(),
+        }
+    }
+}
+
 pub(super) async fn converted(messages: Vec<Message>) -> Vec<pb::CapturedThreadMessage> {
     let converted = map_parallel(messages, |message| {
         let id = message.id;

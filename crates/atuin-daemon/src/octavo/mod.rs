@@ -2,10 +2,13 @@ mod client;
 
 use std::sync::Arc;
 
-use atuin_client::ai_session::{AiSessionStore, Message};
+use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_domain::record::RecordId;
+pub use atuin_octavo::hub::UserId;
+#[cfg(test)]
+pub use client::RecordingOctavoClient;
 use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
 use tokio::sync::Notify;
 
@@ -19,8 +22,11 @@ use crate::output_capture::OutputStore;
 pub enum ThreadUpload {
     /// None go: Octavo is off here, nobody is logged in, or they couldn't be queued.
     Nothing,
-    /// Queued, for the engine this wakes to send.
-    Queued(Arc<Notify>),
+    /// Queued under `user`, for the engine `wake` wakes to send.
+    Queued {
+        wake: Arc<Notify>,
+        user: UserId,
+    },
     /// Left out of the queue, as the account had Octavo off when last asked: uploaded once,
     /// directly, and queued only if that fails for a reason that may pass and the mark has cleared
     /// since.
@@ -28,11 +34,21 @@ pub enum ThreadUpload {
 }
 
 impl ThreadUpload {
+    /// The user the messages go to Octavo as, if they go.
+    #[must_use]
+    pub fn user(&self) -> Option<&UserId> {
+        match self {
+            Self::Nothing => None,
+            Self::Queued { user, .. } => Some(user),
+            Self::Direct(upload) => Some(upload.user()),
+        }
+    }
+
     /// Starts the upload, the messages' records stored.
     pub fn start(self) {
         match self {
             Self::Nothing => {}
-            Self::Queued(wake) => wake.notify_one(),
+            Self::Queued { wake, .. } => wake.notify_one(),
             Self::Direct(upload) => upload.start(),
         }
     }
@@ -76,6 +92,13 @@ impl Octavo {
         }
     }
 
+    #[cfg(test)]
+    pub fn recording(client: RecordingOctavoClient) -> Self {
+        Self {
+            client: client.into(),
+        }
+    }
+
     pub async fn push_history(&self, history: &History, record_id: RecordId) {
         self.client.push_history(history, record_id).await;
     }
@@ -93,5 +116,16 @@ impl Octavo {
     /// stored and the returned [`ThreadUpload`] started.
     pub async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         self.client.queue_thread_messages(messages).await
+    }
+
+    /// Hears that a capture as it happens, not an import, stored a row of `session`, whose thread
+    /// `sidecar` holds and `user` uploads: its config files may share it. Never waits.
+    pub fn consider_sharing(
+        &self,
+        user: UserId,
+        session: HarnessSession,
+        sidecar: &AiSessionDatabase,
+    ) {
+        self.client.consider_sharing(user, session, sidecar);
     }
 }

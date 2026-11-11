@@ -1,16 +1,23 @@
+mod auto_share;
 mod engine;
+mod gate;
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::ai_session::{AiSessionStore, Message};
+use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
+use atuin_common::dirs;
 use atuin_domain::record::RecordId;
-use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubSession, UserId};
+use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubLogin, HubSession, UserId};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
+use atuin_octavo::shares::Configs;
+use auto_share::AutoSharer;
 use engine::{UploadEngine, UploadRetryLater, Uploaded};
+use gate::{Cleared, CloseHalt, Closes, Rows};
 use thiserror::Error;
 use tokio::sync::Notify;
 
@@ -30,6 +37,7 @@ pub enum OpenActiveOctavoClientError {
 #[derive(Debug)]
 pub struct ActiveOctavoClient {
     uploader: Arc<DirectUploader>,
+    auto_sharer: AutoSharer,
     _engine: UploadEngine,
 }
 
@@ -43,6 +51,8 @@ impl ActiveOctavoClient {
         let queue = UploadQueue::open(settings.octavo_queue_path()).await?;
         let hub = HubClient::new(settings)?;
         let wake = Arc::new(Notify::new());
+        // Without a home, the user has no config of their own.
+        let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
         let engine = UploadEngine::spawn(
             queue.clone(),
             hub.clone(),
@@ -50,15 +60,20 @@ impl ActiveOctavoClient {
             outputs,
             records,
             wake.clone(),
+            configs.clone(),
         );
 
+        let uploader = Arc::new(DirectUploader {
+            hub,
+            handle,
+            queue,
+            wake,
+            configs,
+        });
+
         Ok(Self {
-            uploader: Arc::new(DirectUploader {
-                hub,
-                handle,
-                queue,
-                wake,
-            }),
+            auto_sharer: AutoSharer::spawn(Arc::clone(&uploader)),
+            uploader,
             _engine: engine,
         })
     }
@@ -142,7 +157,14 @@ impl OctavoClient for ActiveOctavoClient {
         if !self.uploader.queue(session.user_id(), Queued::ThreadMessages(ids)).await {
             return ThreadUpload::Nothing;
         }
-        ThreadUpload::Queued(self.uploader.wake.clone())
+        ThreadUpload::Queued {
+            wake: self.uploader.wake.clone(),
+            user: session.user_id().clone(),
+        }
+    }
+
+    fn consider_sharing(&self, user: UserId, session: HarnessSession, sidecar: &AiSessionDatabase) {
+        self.auto_sharer.consider(user, session, sidecar);
     }
 }
 
@@ -172,6 +194,8 @@ struct DirectUploader {
     handle: DaemonHandle,
     queue: UploadQueue,
     wake: Arc<Notify>,
+    /// Who threads are shared with.
+    configs: Configs,
 }
 
 impl DirectUploader {
@@ -303,6 +327,28 @@ impl DirectUploader {
         true
     }
 
+    /// Those of `messages` that may go up now, cleared as the engine clears them (see
+    /// [`gate`]). The rest are dropped, as messages captured while the account is marked off get
+    /// one try.
+    async fn clear(
+        &self,
+        login: &HubLogin,
+        messages: Vec<Message>,
+    ) -> Result<Vec<Message>, CloseHalt> {
+        let rows = Rows::new(&self.queue, login.user_id(), messages);
+        let closing = rows.record_dirs(&self.configs).await?.narrow().await?;
+        let deadline = tokio::time::Instant::now() + engine::PASS_BUDGET;
+        let sent = Closes::of(&self.queue, login).send(deadline).await?;
+        let Cleared { ready, waiting } = closing.clear(sent).await?;
+        if !waiting.is_empty() {
+            tracing::debug!(
+                dropped = waiting.len(),
+                "not uploading thread messages whose threads can't be cleared now"
+            );
+        }
+        Ok(ready)
+    }
+
     /// The hub session logged in now, or `None` with Octavo left alone when there's none to use.
     async fn session(&self, settings: &Settings) -> Option<HubSession> {
         match self.hub.session(settings).await {
@@ -334,6 +380,10 @@ pub struct DirectThreadUpload {
 }
 
 impl DirectThreadUpload {
+    pub fn user(&self) -> &UserId {
+        self.session.user_id()
+    }
+
     /// Uploads the messages, whose records are stored, without waiting on the network.
     ///
     /// A daemon that exits while the upload is in flight loses only these messages' upload.
@@ -348,7 +398,6 @@ impl DirectThreadUpload {
             session,
             messages,
         } = self;
-        let ids: Vec<_> = messages.iter().map(|message| message.id).collect();
         let login = match uploader.hub.login_as(session, &settings) {
             Ok(login) => login,
             Err(err) => {
@@ -356,9 +405,18 @@ impl DirectThreadUpload {
                 return;
             }
         };
-        let messages = engine::converted(messages).await;
-
         let user = login.user_id();
+        let ready = match uploader.clear(&login, messages).await {
+            Ok(ready) => ready,
+            Err(CloseHalt::Off) => return,
+            Err(CloseHalt::Queue(err)) => {
+                tracing::warn!(?err, "failed to read the octavo share queue; not uploading these");
+                return;
+            }
+        };
+        let ids: Vec<_> = ready.iter().map(|message| message.id).collect();
+        let messages = engine::converted(ready).await;
+
         match engine::upload_thread_messages(&login, messages).await {
             Ok(Uploaded::Stored) => {
                 uploader.resume(user).await;

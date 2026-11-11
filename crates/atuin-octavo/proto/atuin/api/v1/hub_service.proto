@@ -243,6 +243,23 @@ service HubService {
   // audience's slugs.
   rpc SetShareAudience(SetShareAudienceRequest) returns (SetShareAudienceResponse);
 
+  // Open the calling user's thread with this harness session to each of the request's organizations
+  // they belong to, beside whoever its newest share opens to. A thread without a share gets one,
+  // without a link. It opens a thread to an organization once, so a repeat of a request changes
+  // nothing, even once the user has closed the thread to one: a retry can't undo that.
+  //
+  // Answers with the slugs it left out. Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user
+  // has no such thread, as until the thread's first message is stored.
+  rpc ShareThreadWithOrgs(ShareThreadWithOrgsRequest) returns (ShareThreadWithOrgsResponse);
+
+  // Close the calling user's thread with this harness session, in each of its shares, to the
+  // request's organizations `ShareThreadWithOrgs` opened it to, as the thread went where their
+  // members mustn't follow. It closes a thread to an organization once, and `ShareThreadWithOrgs`
+  // never opens it to one after, so neither a repeat nor a late request to open it changes it.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the user has no such thread.
+  rpc CloseThreadToOrgs(CloseThreadToOrgsRequest) returns (CloseThreadToOrgsResponse);
+
   // Delete one of the calling user's shares. Its link stops opening it.
   //
   // Fails with `NOT_FOUND` (`SHARE_NOT_FOUND`) when the user has no share with this id.
@@ -877,6 +894,45 @@ message SetShareAudienceResponse {
   // The share, with its new audience. Logically required.
   Share share = 1 [(buf.validate.field).required = true];
 }
+
+message ShareThreadWithOrgsRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  // The organizations, by slug, matched without regard to case.
+  repeated string org_slugs = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {
+        min_len: 1
+        not_contains: "\x00"
+      }
+    }
+  }];
+}
+
+message ShareThreadWithOrgsResponse {
+  // Those of the request's `org_slugs` the user belongs to no organization with.
+  repeated string skipped_org_slugs = 1;
+}
+
+message CloseThreadToOrgsRequest {
+  // Logically required.
+  HarnessSession thread = 1 [(buf.validate.field).required = true];
+  // The organizations, by slug, matched without regard to case.
+  repeated string org_slugs = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {
+        min_len: 1
+        not_contains: "\x00"
+      }
+    }
+  }];
+}
+
+message CloseThreadToOrgsResponse {}
 
 message DeleteShareRequest {
   // The share, as `Share.id` gives it.

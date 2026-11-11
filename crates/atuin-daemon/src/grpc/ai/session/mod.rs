@@ -27,7 +27,7 @@ use crate::grpc::ai::session::pb::{
 use crate::grpc::common::pb as common;
 use crate::grpc::common::pb::Lagged;
 use crate::session_capture::{
-    AiHarnessSessionCapture, AppendError, ImportProgress, RebuildError, SessionTailEvent,
+    AiHarnessSessionCapture, AppendError, ImportProgress, Origin, RebuildError, SessionTailEvent,
 };
 
 #[derive(Clone)]
@@ -276,6 +276,7 @@ impl GrpcService for Service {
             while let Some(PushMessagesRequest {
                 session,
                 lines: batch,
+                imported,
             }) = batches.message().await?
             {
                 let session =
@@ -284,8 +285,13 @@ impl GrpcService for Service {
                     Some((handle, capture)) => (handle, capture),
                     None => {
                         let id = SessionId::from(String::from(session.session.clone()));
-                        let capture =
-                            self.capture.push(session.harness, &id).await.map_err(failed)?;
+                        let origin = if imported {
+                            Origin::Import
+                        } else {
+                            Origin::Live
+                        };
+                        let capture = self.capture.push(session.harness, &id, origin);
+                        let capture = capture.await.map_err(failed)?;
                         let (handle, capture) = push.insert((session.clone(), capture));
                         (handle, capture)
                     }

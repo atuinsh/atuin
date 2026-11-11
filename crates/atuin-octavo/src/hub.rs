@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_client::lua_config::OrgSlug;
 use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -38,6 +39,8 @@ pub enum HubCallError {
     OutputTooLarge(#[from] OutputTooLarge),
     #[error("the hub has not stored the history entry yet")]
     HistoryNotStored(#[source] tonic::Status),
+    #[error("the hub has not stored the thread yet")]
+    ThreadNotStored(#[source] tonic::Status),
     #[error("Octavo needs a hub login; run `atuin login`")]
     NotLoggedIn,
     #[error("the hub login was saved without its user, which the next upload pass learns")]
@@ -91,6 +94,7 @@ impl HubCallError {
             | Self::HubChanged(_)
             | Self::InvalidToken(_)
             | Self::HistoryNotStored(_)
+            | Self::ThreadNotStored(_)
             | Self::NoUserId
             // Until the account has Octavo again.
             | Self::OctavoOff(_) => false,
@@ -99,20 +103,18 @@ impl HubCallError {
 }
 
 /// A hub user's id, as `WhoAmI` names it. Opaque.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserId(String);
 
 impl UserId {
     #[must_use]
+    pub fn new(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-#[cfg(test)]
-impl UserId {
-    pub(crate) fn new(id: &str) -> Self {
-        Self(id.to_owned())
     }
 }
 
@@ -338,6 +340,68 @@ impl HubLogin {
             .await
             .map_err(HubCallError::from)?;
         Ok(())
+    }
+
+    /// Opens `thread` to `orgs`, returning the slugs of those the user belongs to none with, which
+    /// it leaves out.
+    ///
+    /// Fails with [`HubCallError::ThreadNotStored`] until the thread is stored.
+    pub(crate) async fn share_thread_with_orgs(
+        &self,
+        thread: &pb::HarnessSession,
+        orgs: &[OrgSlug],
+    ) -> Result<Vec<String>, HubCallError> {
+        let request = self.caller.request(pb::ShareThreadWithOrgsRequest {
+            thread: Some(thread.clone()),
+            org_slugs: orgs.iter().map(ToString::to_string).collect(),
+        });
+
+        match self.caller.service.clone().share_thread_with_orgs(request).await {
+            Ok(response) => Ok(response.into_inner().skipped_org_slugs),
+            Err(status) if status.code() == Code::NotFound => {
+                Err(HubCallError::ThreadNotStored(status))
+            }
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    /// Closes `thread` to those of `orgs` [`Self::share_thread_with_orgs`] opened it to, which it
+    /// never opens it to again.
+    ///
+    /// Fails with [`HubCallError::ThreadNotStored`] until the thread is stored.
+    pub(crate) async fn close_thread_to_orgs(
+        &self,
+        thread: &pb::HarnessSession,
+        orgs: &[OrgSlug],
+    ) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::CloseThreadToOrgsRequest {
+            thread: Some(thread.clone()),
+            org_slugs: orgs.iter().map(ToString::to_string).collect(),
+        });
+
+        match self.caller.service.clone().close_thread_to_orgs(request).await {
+            Ok(_response) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => {
+                Err(HubCallError::ThreadNotStored(status))
+            }
+            Err(status) => Err(status.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl HubLogin {
+    /// A login as `user` to a hub nobody answers at, for a test that never calls it.
+    pub(crate) fn offline(user: &str) -> Self {
+        let channel = Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        Self {
+            caller: Caller {
+                service: HubServiceClient::new(channel),
+                authorization: MetadataValue::from_static("Bearer offline"),
+                timeout: Duration::from_secs(1),
+            },
+            user_id: UserId::new(user),
+        }
     }
 }
 

@@ -5,6 +5,7 @@
 //! long string to make atuin allocate far past the VM's memory limit.
 
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 
@@ -66,10 +67,26 @@ impl<'de> Visitor<'de> for OrgsVisitor {
 }
 
 /// An organization's slug, as the hub takes one: 2 to 32 letters, digits, `-` and `_`. It doesn't
-/// start or end with `-`, or hold `--`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, DeserializeFromStr)]
+/// start or end with `-`, or hold `--`. Slugs are equal whatever their case, as the hub's are.
+#[derive(Debug, Clone, AsRef, Display, DeserializeFromStr)]
 #[as_ref(str)]
 pub struct OrgSlug(String);
+
+impl PartialEq for OrgSlug {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(&other.0)
+    }
+}
+
+impl Eq for OrgSlug {}
+
+impl Hash for OrgSlug {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for byte in self.0.bytes() {
+            state.write_u8(byte.to_ascii_lowercase());
+        }
+    }
+}
 
 impl OrgSlug {
     /// The hub's limits, from `api/lib/atuin_hub/orgs/organization.ex`.
@@ -109,6 +126,7 @@ pub enum OrgSlugError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::iter;
 
     use proptest::prelude::*;
@@ -145,6 +163,17 @@ mod tests {
     #[case::not_ascii("acmé", OrgSlugError::Format("acmé".to_owned()))]
     fn a_slug_the_hub_wouldnt_take_says_why(#[case] slug: &str, #[case] expected: OrgSlugError) {
         assert_eq!(slug.parse::<OrgSlug>(), Err(expected));
+    }
+
+    #[rstest]
+    #[case::same("acme", "acme", true)]
+    #[case::cased("acme", "ACMe", true)]
+    #[case::other("acme", "globex", false)]
+    fn slugs_are_equal_whatever_their_case(#[case] a: &str, #[case] b: &str, #[case] equal: bool) {
+        let (a, b): (OrgSlug, OrgSlug) = (a.parse().expect("a slug"), b.parse().expect("a slug"));
+
+        assert_eq!(a == b, equal);
+        assert_eq!(HashSet::from([a]).contains(&b), equal);
     }
 
     #[rstest]

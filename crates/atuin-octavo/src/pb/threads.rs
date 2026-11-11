@@ -272,6 +272,23 @@ impl TryFrom<Message> for CapturedThreadMessage {
 }
 
 impl HarnessSession {
+    /// `session` as Octavo names its thread, or `None` for one it never stores: of no known harness,
+    /// or with a session id it refuses.
+    #[must_use]
+    pub fn of_thread(session: DomainHarnessSession) -> Option<Self> {
+        Self::from_captured(Field::ThreadSessionId, session).ok().flatten()
+    }
+
+    /// The thread whose share holds `message`: its parent for a subagent's, else its own.
+    #[must_use]
+    pub fn sharing(message: &Message) -> Option<Self> {
+        let thread = match (&message.parent, message.parent_kind) {
+            (Some(parent), Some(ParentKind::Subagent)) => parent.clone(),
+            _ => message.session.clone(),
+        };
+        Self::of_thread(thread)
+    }
+
     /// `session`, the key of `field`, as Octavo names a thread, or `None` for a session of no known
     /// harness.
     fn from_captured(

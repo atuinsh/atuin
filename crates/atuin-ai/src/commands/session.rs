@@ -23,6 +23,7 @@ use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{
     ImportSessionsEvent, import_sessions_event, tail_sessions_event,
 };
+use atuin_daemon::session_capture::Origin;
 use chrono::{DateTime, Utc};
 use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
@@ -603,7 +604,7 @@ fn import_amp(client: &mut AiClient) -> impl Stream<Item = Result<ImportSessions
                     harness: HarnessKind::Amp,
                     session: id.clone().into(),
                 };
-                client.push_messages(handle, batches(lines)).await
+                client.push_messages(handle, batches(lines), Origin::Import).await
             }
             .await;
             let reply = match pushed {
@@ -1180,7 +1181,7 @@ async fn push(client: &mut AiClient, harness: HarnessKind, session: String) -> R
         harness,
         session: session.into(),
     };
-    let reply = client.push_messages(handle, batches(lines)).await?;
+    let reply = client.push_messages(handle, batches(lines), Origin::Live).await?;
     let (pushed, duplicates) = (reply.pushed, reply.duplicates);
     println!("pushed {pushed}, already had {duplicates}");
     Ok(())

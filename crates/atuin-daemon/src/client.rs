@@ -48,6 +48,7 @@ use crate::search::{
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
+use crate::session_capture::Origin;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {
@@ -629,11 +630,13 @@ impl AiClient {
         &mut self,
         session: HarnessSession,
         batches: Vec<Vec<String>>,
+        origin: Origin,
     ) -> Result<PushMessagesReply> {
         let session = AgentHarnessSession::from(session);
         let requests = batches.into_iter().map(move |lines| PushMessagesRequest {
             session: Some(session.clone()),
             lines,
+            imported: origin == Origin::Import,
         });
         Ok(self.client.push_messages(futures::stream::iter(requests)).await?.into_inner())
     }
@@ -760,7 +763,7 @@ mod rebuild_tests {
     use super::AiClient;
     use crate::grpc::AiSessionService;
     use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+    use crate::session_capture::{AiHarnessSessionCapture, Origin, StoreState};
 
     /// A client of an AI-session service over a real socket, in the given recovery state.
     async fn serve(state: StoreState) -> (AiClient, watch::Sender<StoreState>, tempfile::TempDir) {
@@ -796,7 +799,7 @@ mod rebuild_tests {
         };
         let untimed = r#"{"v":1,"id":"m1","role":"user","content":[{"type":"text","text":"hi"}]}"#;
         let batches = vec![vec![untimed.to_owned()], vec!["not a message".to_owned()]];
-        assert!(client.push_messages(handle.clone(), batches).await.is_err());
+        assert!(client.push_messages(handle.clone(), batches, Origin::Live).await.is_err());
 
         let stored: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
         assert_eq!(stored.len(), 1);

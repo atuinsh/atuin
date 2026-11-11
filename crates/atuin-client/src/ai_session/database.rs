@@ -619,6 +619,20 @@ impl AiSessionDatabase {
         Ok(ids.into_iter().map(SourceId::from).collect())
     }
 
+    /// Each directory the session's rows name, once, the one named first first.
+    pub async fn directories(&self, session: &HarnessSession) -> Result<Vec<PathBuf>, DbError> {
+        let dirs: Vec<String> = db::query_scalar(
+            "SELECT (SELECT value FROM interned WHERE id = cwd) FROM messages WHERE session = \
+             (SELECT id FROM sessions WHERE harness = ? AND session_id = ?) AND cwd IS NOT NULL \
+             GROUP BY cwd ORDER BY MIN(timestamp), MIN(rowid)",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(dirs.into_iter().map(PathBuf::from).collect())
+    }
+
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
     /// source's current title again.
     pub async fn title_changes(
@@ -1937,7 +1951,7 @@ impl QueryTerms {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use atuin_common::db;
     use atuin_common::db::sqlite::Sqlite;
@@ -2412,6 +2426,29 @@ mod tests {
         assert_eq!(output_of(&db, "a").await, a_expected);
         assert_eq!(output_of(&db, "b").await, b_expected);
         assert_eq!(output_of(&db, "c").await, 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn directories_names_each_one_once_in_the_order_rows_reached_it() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let other = handle(HarnessKind::ClaudeCode, "other");
+        for (session, at, cwd) in [
+            (&session, 3, Some("/work")),
+            (&session, 1, Some("/fork")),
+            (&session, 2, None),
+            (&session, 4, Some("/fork")),
+            (&other, 0, Some("/elsewhere")),
+        ] {
+            let mut m = message_in(session, at, "x");
+            m.cwd = cwd.map(PathBuf::from);
+            db.append(&m).await.unwrap();
+        }
+
+        let dirs = db.directories(&session).await.unwrap();
+
+        assert_eq!(dirs, [PathBuf::from("/fork"), PathBuf::from("/work")]);
     }
 
     #[rstest]

@@ -53,6 +53,9 @@ impl SessionCaptureEngine {
     /// it changes after, then whole. The rest, sessions nobody touches since, are history, which
     /// is `atuin threads import`'s to bring in.
     pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool, since: SystemTime) -> Self {
+        // Before any listener reads, so no row it catches up on is taken for one written since.
+        #[cfg(feature = "octavo")]
+        sink.capturing_since(since);
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {

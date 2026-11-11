@@ -16,6 +16,10 @@ use thiserror::Error;
 use crate::hub::UserId;
 use crate::pb;
 
+mod shares;
+
+pub use self::shares::{NotSent, PendingClose, PendingOpen, QueuedThread, SentClose, SentOpen};
+
 const PAGE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();
 const HISTORY_PAGE_SIZE: NonZeroU32 = pb::HistoryBatch::MAX_ITEMS;
 /// As many as one `InsertThreadMessages` takes, so a page of small messages is one request.

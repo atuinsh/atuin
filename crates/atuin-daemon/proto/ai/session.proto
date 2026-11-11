@@ -157,6 +157,9 @@ message PushMessagesRequest {
   ai.agent.HarnessSession session = 1;
   // One message each, as JSON in the shape `atuin threads push` reads.
   repeated string lines = 2;
+  // Whether the push brings in a past thread (`atuin threads import`) rather than one as it
+  // happens, so that no config file shares its thread. The first batch's says, for the whole push.
+  bool imported = 3;
 }
 
 message PushMessagesReply {
