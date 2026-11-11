@@ -48,7 +48,10 @@
 //! `agent_note`), which the model reads with the first prompt and the user never sees. Pi has no such line: the only
 //! lines it sends the model that nobody typed (`custom_message`, summaries) each become a user
 //! message of their own, two user messages in a row. So there the marker is the first text block
-//! of the first prompt, a short first line the user sees too. Capture reads it back as the
+//! of the first prompt, a short first line the user sees too. So it is in Hermes, which keeps no
+//! system row. Its only rows that the model reads and nobody sees carry
+//! `display_metadata.model_only`, and they are scaffolding its reader leaves out. So the first
+//! prompt is Hermes's multimodal parts, with the marker first. Capture reads it back as the
 //! session's parent ([`continued_from_message`]).
 
 use std::collections::{HashMap, HashSet};
@@ -97,17 +100,6 @@ const MARKER_ATUIN_ID: &str = " (atuin id ";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("nothing to continue: the session has no messages")]
 pub struct NothingToContinue;
-
-/// Why a session can't be continued in a target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ContinueError {
-    #[error(transparent)]
-    NothingToContinue(#[from] NothingToContinue),
-    /// The target's transcripts are never written by atuin
-    /// ([`Harness::writes_transcripts`](crate::harnesstools::Harness::writes_transcripts)).
-    #[error("{0} sessions can't be written")]
-    Unwritable(&'static str),
-}
 
 /// A session to continue in another harness, and what was left out of it.
 #[derive(Clone, Debug)]
@@ -282,14 +274,13 @@ pub fn flattened(original: &RehydrateSession) -> Result<Flattened, NothingToCont
 
 /// `original`, recorded by `source`, as a new session of `target` resuming in `original.cwd`.
 /// Its marker names `original`'s atuin id too, when given. Refused, whatever the target, when
-/// `original` has no conversation to carry over; and whatever the original, for a target whose
-/// transcripts atuin never writes.
+/// `original` has no conversation to carry over.
 pub fn continue_in(
     source: AnyHarness,
     original: &RehydrateSession,
     atuin_id: Option<&str>,
     target: AnyHarness,
-) -> Result<Continuation, ContinueError> {
+) -> Result<Continuation, NothingToContinue> {
     continue_at(source, original, atuin_id, target, OffsetDateTime::now_utc())
 }
 
@@ -300,13 +291,10 @@ fn continue_at(
     atuin_id: Option<&str>,
     target: AnyHarness,
     now: OffsetDateTime,
-) -> Result<Continuation, ContinueError> {
-    if !target.writes_transcripts() {
-        return Err(ContinueError::Unwritable(target.name()));
-    }
+) -> Result<Continuation, NothingToContinue> {
     let (turns, flattened) = turns(&original.messages);
     let Some(start) = turns.first().map(|t| t.at) else {
-        return Err(NothingToContinue.into());
+        return Err(NothingToContinue);
     };
     let ids = Ids::new(target, now);
     let id = ids.session();
@@ -322,10 +310,10 @@ fn continue_at(
         step: None,
     };
     let marker = marker_text(source, &original.id, atuin_id);
-    // pi has no line the model reads that the user didn't type but its own user message: the
-    // marker is the first block of the first prompt (see the module docs).
-    let pi = matches!(target, AnyHarness::Pi(_));
-    if pi {
+    // pi and Hermes have no line the model reads that the user didn't type but its own user
+    // message. So the marker is the first block of the first prompt, as the module docs say.
+    let in_prompt = matches!(target, AnyHarness::Pi(_) | AnyHarness::Hermes(_));
+    if in_prompt {
         rows.last -= Duration::milliseconds(1);
     } else {
         rows.push(start, Role::System, vec![Content::Text(marker.clone())], None);
@@ -334,7 +322,7 @@ fn continue_at(
         match turn.kind {
             Kind::User => {
                 let mut content = vec![Content::Text(turn.render())];
-                if pi && rows.rows.is_empty() {
+                if in_prompt && rows.rows.is_empty() {
                     content.insert(0, Content::Text(marker.clone()));
                 }
                 rows.push(turn.at, Role::User, content, None);
@@ -450,7 +438,7 @@ impl Rows {
         let (calls, results): (Vec<_>, Vec<_>) = step
             .calls
             .iter()
-            .map(|(call, result)| {
+            .flat_map(|(call, result)| {
                 tools::carry(self.source, self.target, call, result, ran_in, cwd, &mut self.calls)
             })
             .unzip();
@@ -460,15 +448,13 @@ impl Rows {
         }
         let calling = Some(StopReason::ToolUse);
         match self.target {
-            AnyHarness::Hermes(_) => unreachable!(
-                "refused by continue_at and fork: Hermes transcripts are never written"
-            ),
-            // Copilot answers each call with a result event of its own, as pi does.
+            // Copilot and Hermes answer each call with a result row of its own, as pi does.
             AnyHarness::Amp(_)
             | AnyHarness::ClaudeCode(_)
             | AnyHarness::Pi(_)
             | AnyHarness::Copilot(_)
-            | AnyHarness::Grok(_) => {
+            | AnyHarness::Grok(_)
+            | AnyHarness::Hermes(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -795,13 +781,20 @@ impl Ids {
     }
 
     /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's, Grok Build's and
-    /// Pi's time-ordered), a Kiro `sess_<uuid>`, or an opencode `ses_` id, which sort newest
-    /// first.
+    /// Pi's time-ordered), a Kiro `sess_<uuid>`, an opencode `ses_` id, which sort newest first,
+    /// or Hermes's own for a session it starts, `YYYYMMDD_HHMMSS_<6 hex>`. Hermes's time is
+    /// local; atuin's is UTC, and only the shape matters.
     fn session(&self) -> String {
         match self.target {
-            AnyHarness::Hermes(_) => unreachable!(
-                "refused by continue_at and fork: Hermes transcripts are never written"
-            ),
+            AnyHarness::Hermes(_) => {
+                let at = self.now.to_offset(time::UtcOffset::UTC);
+                let stamp = at
+                    .format(time::macros::format_description!(
+                        "[year][month][day]_[hour][minute][second]"
+                    ))
+                    .expect("a UTC time formats");
+                format!("{stamp}_{}", &Uuid::new_v4().as_simple().to_string()[..6])
+            }
             AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => {
                 Uuid::new_v4().to_string()
             }
@@ -820,13 +813,11 @@ impl Ids {
     /// content-keyed `syn-` id, which its writer leaves off the line as Codex itself does for a
     /// message it names no id; an opencode `prt_` part id, in time order (rows of one message,
     /// the marker and the first prompt, are read in id order); a pi entry id (8 hex digits,
-    /// unique in the session).
+    /// unique in the session); a Hermes `message_uid`, 32 hex digits as Hermes mints them.
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::Hermes(_) => unreachable!(
-                    "refused by continue_at and fork: Hermes transcripts are never written"
-                ),
+                AnyHarness::Hermes(_) => Uuid::new_v4().as_simple().to_string(),
                 AnyHarness::Amp(_)
                 | AnyHarness::ClaudeCode(_)
                 | AnyHarness::Copilot(_)

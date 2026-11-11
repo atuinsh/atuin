@@ -1,18 +1,66 @@
-//! Running the `hermes` CLI for the setup steps that should go through Hermes's own writers:
-//! `plugins enable` (which also loads the plugin into a running gateway) and `config set`
-//! (which keeps the comments in `config.yaml`).
+//! Running the `hermes` CLI for what should go through Hermes's own writers. `plugins enable` also
+//! loads the plugin into a running gateway. `config set` keeps the comments in `config.yaml`. The
+//! plugin's `atuin import` is how atuin writes a session, which `rehydrate` describes.
 
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use super::home::InstallHome;
 use crate::executable::resolve_in_path;
 
+/// How long a run may take: an import may first start a gateway, which loads every plugin and
+/// opens the store.
+const RUN_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// What a run of `hermes` printed, and how it exited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CliOutput {
+    /// The exit code; `None` when a signal ended it.
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl CliOutput {
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+
+    /// The last line it printed, for an error: stderr first, where Hermes says what went wrong.
+    #[must_use]
+    pub fn last_line(&self) -> String {
+        [&self.stderr, &self.stdout]
+            .iter()
+            .flat_map(|text| text.lines().rev())
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map_or_else(
+                || self.code.map_or_else(|| "killed".to_owned(), |code| format!("exit {code}")),
+                str::to_owned,
+            )
+    }
+}
+
 /// Runs `hermes` with arguments, against one Hermes home. A trait so that tests can stand in
 /// for Hermes.
 pub trait HermesCli {
+    /// Run `hermes` with `args`, stdin closed, and hand back what it printed.
     #[allow(async_fn_in_trait)]
-    async fn run(&self, args: &[&str]) -> Result<(), HermesCliError>;
+    async fn output(&self, args: &[&str]) -> Result<CliOutput, HermesCliError>;
+
+    /// [`Self::output`], for a command whose output is kept back, since it would land in the
+    /// middle of `atuin setup`'s; a failure carries its last line.
+    #[allow(async_fn_in_trait)]
+    async fn run(&self, args: &[&str]) -> Result<(), HermesCliError> {
+        let output = self.output(args).await?;
+        if output.success() {
+            Ok(())
+        } else {
+            Err(HermesCliError::Failed(output.last_line()))
+        }
+    }
 
     /// What a user would type to run the same: for when [`Self::run`] fails.
     fn command_line(&self, args: &[&str]) -> String;
@@ -26,6 +74,9 @@ pub enum HermesCliError {
     /// The command exited non-zero, with the last line it printed.
     #[error("`hermes` failed: {0}")]
     Failed(String),
+
+    #[error("`hermes` took longer than {} seconds", RUN_TIMEOUT.as_secs())]
+    TimedOut,
 
     #[error("could not run `hermes`")]
     Io(
@@ -55,28 +106,23 @@ impl HermesCommand {
 }
 
 impl HermesCli for HermesCommand {
-    /// Hermes's output is kept back, since it would land in the middle of `atuin setup`'s; a
-    /// failure carries its last line.
-    async fn run(&self, args: &[&str]) -> Result<(), HermesCliError> {
+    async fn output(&self, args: &[&str]) -> Result<CliOutput, HermesCliError> {
         let hermes = resolve_in_path(Path::new("hermes")).ok_or(HermesCliError::NotFound)?;
-        let output = tokio::process::Command::new(&*hermes)
+        let mut command = tokio::process::Command::new(&*hermes);
+        command
             .args(self.profile_args())
             .args(args)
             .env("HERMES_HOME", self.home.path())
             .stdin(Stdio::null())
-            .output()
-            .await?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let printed = [&output.stderr, &output.stdout].map(|bytes| String::from_utf8_lossy(bytes));
-        let last_line = printed
-            .iter()
-            .flat_map(|text| text.lines().rev())
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map_or_else(|| output.status.to_string(), str::to_owned);
-        Err(HermesCliError::Failed(last_line))
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(RUN_TIMEOUT, command.output())
+            .await
+            .map_err(|_| HermesCliError::TimedOut)??;
+        Ok(CliOutput {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
     }
 
     fn command_line(&self, args: &[&str]) -> String {
@@ -94,22 +140,43 @@ impl HermesCli for HermesCommand {
 /// A stand-in for `hermes`, which tests never run.
 #[cfg(test)]
 pub(super) mod fake {
+    use std::collections::VecDeque;
+
     use parking_lot::Mutex;
 
-    use super::{HermesCli, HermesCliError};
+    use super::{CliOutput, HermesCli, HermesCliError};
 
-    /// Records what it is asked to run, and says `hermes` is missing when built with
-    /// [`Self::missing`].
-    #[derive(Debug, Default)]
+    /// What a [`FakeHermes`] does when run.
+    pub type Reply = Box<dyn Fn(&[&str]) -> Result<CliOutput, HermesCliError> + Send + Sync>;
+
+    /// Records what it is asked to run, and answers each run with the next of the replies it was
+    /// built with by [`Self::replying`]. Without one, a run prints nothing and succeeds. Built with
+    /// [`Self::missing`], it says `hermes` is missing.
+    #[derive(Default)]
     pub struct FakeHermes {
         calls: Mutex<Vec<Vec<String>>>,
+        replies: Mutex<VecDeque<Reply>>,
         missing: bool,
+    }
+
+    impl std::fmt::Debug for FakeHermes {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FakeHermes").field("calls", &self.calls).finish_non_exhaustive()
+        }
     }
 
     impl FakeHermes {
         pub fn missing() -> Self {
             Self {
                 missing: true,
+                ..Self::default()
+            }
+        }
+
+        /// A Hermes answering its runs, in order, with `replies`.
+        pub fn replying(replies: impl IntoIterator<Item = Reply>) -> Self {
+            Self {
+                replies: Mutex::new(replies.into_iter().collect()),
                 ..Self::default()
             }
         }
@@ -126,12 +193,18 @@ pub(super) mod fake {
     }
 
     impl HermesCli for FakeHermes {
-        async fn run(&self, args: &[&str]) -> Result<(), HermesCliError> {
+        async fn output(&self, args: &[&str]) -> Result<CliOutput, HermesCliError> {
             self.calls.lock().push(args.iter().map(|&arg| arg.to_owned()).collect());
             if self.missing {
-                Err(HermesCliError::NotFound)
-            } else {
-                Ok(())
+                return Err(HermesCliError::NotFound);
+            }
+            let reply = self.replies.lock().pop_front();
+            match reply {
+                Some(reply) => reply(args),
+                None => Ok(CliOutput {
+                    code: Some(0),
+                    ..CliOutput::default()
+                }),
             }
         }
 

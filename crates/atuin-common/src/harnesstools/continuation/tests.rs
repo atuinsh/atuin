@@ -221,7 +221,19 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
+        // `YYYYMMDD_HHMMSS_<6 hex>`, as Hermes names a session it starts.
+        AnyHarness::Hermes(_) => {
+            let parts: Vec<&str> = id.split('_').collect();
+            let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+            assert!(
+                parts.len() == 3
+                    && digits(parts[0], 8)
+                    && digits(parts[1], 6)
+                    && parts[2].len() == 6
+                    && parts[2].bytes().all(|b| b.is_ascii_hexdigit()),
+                "{id}"
+            );
+        }
         AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
         AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
@@ -241,7 +253,9 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         assert!(seen.insert(id), "{id} is used twice");
         match target {
             AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-            AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
+            AnyHarness::Hermes(_) => {
+                assert!(id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+            }
             AnyHarness::ClaudeCode(_)
             | AnyHarness::Copilot(_)
             | AnyHarness::Grok(_)
@@ -274,9 +288,9 @@ fn api_name(name: &str) -> bool {
 /// user's turns text, the assistant's text and calls, each call answered by its result in the
 /// rows the target writes them in; nothing reasoning.
 fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &RehydrateSession) {
-    // A line of its own (the harness's), or pi's first prompt's first block.
+    // A line of the harness's own, or the first block of pi's and Hermes's first prompt.
     let (marker, rows) = match target {
-        AnyHarness::Pi(_) => (&s.messages[0], s.messages.as_slice()),
+        AnyHarness::Pi(_) | AnyHarness::Hermes(_) => (&s.messages[0], s.messages.as_slice()),
         _ => s.messages.split_first().expect("a marker"),
     };
     let [Content::Text(text), ..] = marker.content.as_slice() else {
@@ -287,7 +301,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     assert_eq!((harness.name(), id), (source.name(), original));
     let linked = continued_from_row(marker);
     assert_eq!(linked, Some((source.name(), original.to_owned())));
-    if !matches!(target, AnyHarness::Pi(_)) {
+    if !matches!(target, AnyHarness::Pi(_) | AnyHarness::Hermes(_)) {
         assert_eq!(marker.role, Role::System);
     }
 
@@ -357,12 +371,13 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
         }
         let answered: Vec<String> = match target {
             AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-            AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
-            AnyHarness::Grok(_) | AnyHarness::Pi(_) | AnyHarness::Copilot(_) => rows
-                [n + 1..=n + called.len()]
+            AnyHarness::Grok(_)
+            | AnyHarness::Hermes(_)
+            | AnyHarness::Pi(_)
+            | AnyHarness::Copilot(_) => rows[n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);
@@ -393,7 +408,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
     #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -444,7 +459,18 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let id = SessionId::from(session.id.clone());
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
+        AnyHarness::Hermes(_) => {
+            let lines = hermes::rehydrate::tests::written(root, session).await;
+            assert_eq!(
+                hermes::session::locate(root, &session.id).await,
+                Some(root.join("state.db"))
+            );
+            // The title row is the session's, no row of the continuation.
+            rows_of(&lines)
+                .into_iter()
+                .filter(|r| r.role != Role::Other("atuin-title".into()))
+                .collect()
+        }
         AnyHarness::Kiro(_) => {
             let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
             let sessions = root.join("sessions");
@@ -560,7 +586,7 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
     #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -885,7 +911,7 @@ fn a_pasted_marker_is_no_link(#[case] paste: fn(&str) -> String) {
 /// merely quotes a marker keeps it.
 #[rstest]
 fn a_continuations_marker_is_not_carried_on(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, OPENCODE, PI)] target: AnyHarness,
 ) {
     let old = marker_text(CLAUDE, "4bd6b5bd-7d34-4a39-a2d6-2e6f6a6c0b1d", Some(ATUIN_ID));
     let original = session_of("orig", vec![
@@ -920,7 +946,7 @@ fn a_continuations_marker_is_not_carried_on(
 #[case::only_blank(vec![msg(Role::User, vec![text("  ")], 1)])]
 fn an_empty_session_is_not_continued(
     #[case] messages: Vec<RehydrateMessage>,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, OPENCODE, PI)] target: AnyHarness,
 ) {
     let original = session_of("orig", messages);
     let err = continue_in(CODEX, &original, Some(ATUIN_ID), target).unwrap_err();
@@ -1197,18 +1223,4 @@ fn each_model_call_is_a_step_and_the_assistant_ends() {
         r#"Tool: c2 -> "ok""#,
         r#"Assistant: "[the original session stopped here]""#,
     ]);
-}
-
-/// Hermes sessions are never written: a continuation into Hermes is refused before anything is
-/// minted, whatever the source.
-#[rstest]
-#[tokio::test]
-async fn a_continuation_into_hermes_is_refused(
-    #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] source: AnyHarness,
-) {
-    let original = recorded(source).await;
-    assert_eq!(
-        continue_in(source, &original, Some(ATUIN_ID), HERMES).unwrap_err(),
-        ContinueError::Unwritable("hermes")
-    );
 }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::json_hooks::HookStyle;
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
@@ -84,8 +84,8 @@ impl Harness for Copilot {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

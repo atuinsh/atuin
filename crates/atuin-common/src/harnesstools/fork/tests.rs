@@ -16,8 +16,9 @@ use crate::harnesstools::grok::session::GrokSession;
 use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, database, opencode_import};
 use crate::harnesstools::pi::session::PiSession;
+use crate::harnesstools::session::synthetic::SYNTHETIC;
 use crate::harnesstools::session::{Content, Message, ParentKind, Role, Session, SessionId};
-use crate::harnesstools::{ccode, codex, copilot, grok, kiro, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi};
 
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
@@ -61,7 +62,10 @@ async fn written(
     let id = SessionId::from(session.id.clone());
     match harness {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
-        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
+        AnyHarness::Hermes(_) => {
+            let lines = hermes::rehydrate::tests::written(root, session).await;
+            (rows_of(&lines), links(&session.id, &lines))
+        }
         AnyHarness::Kiro(_) => {
             let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =
@@ -152,7 +156,7 @@ fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] harness: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] harness: AnyHarness,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let original = recorded(harness).await;
@@ -187,10 +191,16 @@ async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
         said_rows.remove(at);
         assert!(ids(&rows).is_disjoint(&ids(&restored)));
     } else {
-        // Bar the rows keyed on the session itself (its header, its title).
+        // Bar the rows keyed on the session itself: its header and its title. Hermes's titles
+        // are unique, so a fork's title goes on its lineage, and its title row is keyed on that.
         let (fork, restored) = (ids(&rows), ids(&restored));
-        let session =
-            |id: &&String| *id == &forked.id || *id == &original.id || id.starts_with("atuin-");
+        let hermes_title = |id: &str| {
+            matches!(harness, AnyHarness::Hermes(_))
+                && id.starts_with(&format!("{SYNTHETIC}title-"))
+        };
+        let session = |id: &&String| {
+            *id == &forked.id || *id == &original.id || id.starts_with("atuin-") || hermes_title(id)
+        };
         let differ: Vec<_> =
             fork.symmetric_difference(&restored).filter(|id| !session(id)).collect();
         assert!(differ.is_empty(), "{differ:?}");
@@ -316,18 +326,4 @@ async fn an_opencode_fork_of_only_replies_names_its_original() {
     let (rows, links) = written(OPENCODE, dir.path(), &forked).await;
     assert_eq!(rows[0].content, vec![Content::Text(marker)]);
     assert_eq!(links, vec![(original.id.clone(), ParentKind::Fork)]);
-}
-
-/// Hermes sessions are never written: a Hermes session is not forked, whatever its rows.
-#[rstest]
-#[tokio::test]
-async fn a_hermes_session_is_not_forked() {
-    let original = recorded(HERMES).await;
-    assert!(!original.messages.is_empty());
-    let of = ForkOf {
-        id: original.id.clone(),
-        atuin_id: Some(ATUIN_ID.to_owned()),
-        path: None,
-    };
-    assert!(fork(HERMES, &original, of, None).is_none());
 }

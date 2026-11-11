@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:zstd", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:yaml-rust2", "dep:zstd", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -101,6 +101,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 # Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
 xxhash-rust = { workspace = true, optional = true }
+yaml-rust2 = { workspace = true, optional = true }
 zeroize = { workspace = true }
 # Codex compresses the rollouts of threads left a week (`.jsonl.zst`).
 zstd = { workspace = true, optional = true }

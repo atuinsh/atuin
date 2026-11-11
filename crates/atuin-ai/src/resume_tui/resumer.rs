@@ -24,7 +24,7 @@ use atuin_client::settings::{AiSessionResume, Settings};
 use atuin_common::executable::is_executable_with_path_search;
 use atuin_common::harnesstools::continuation::{self, Flattened};
 use atuin_common::harnesstools::rehydrate::{
-    ForkOf, RehydrateError, RehydrateMessage, RehydrateSession,
+    ForkOf, RehydrateError, RehydrateMessage, RehydrateSession, Rehydrated,
 };
 pub use atuin_common::harnesstools::resume::{ResumeError, ResumePlan, ResumeTarget, quote};
 use atuin_common::harnesstools::sync::{
@@ -35,7 +35,7 @@ use atuin_common::path::PathBufExt as _;
 
 use super::ResumeContext;
 use super::catchup::{self, CatchUp, Held, Step, Why};
-use super::source::{SessionRow, SessionSource, harness_arg, harness_label};
+use super::source::{Relation, SessionRow, SessionSource, harness_arg, harness_label};
 
 /// Why a session can be viewed but not resumed here.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -65,11 +65,6 @@ pub enum NotResumable {
     #[error(transparent)]
     Empty(#[from] continuation::NothingToContinue),
 
-    /// A restore of, or a fork or continuation into, a harness whose sessions atuin never
-    /// writes.
-    #[error("atuin can't write {0} sessions")]
-    Unwritable(&'static str),
-
     #[error(transparent)]
     Harness(#[from] ResumeError),
 }
@@ -86,6 +81,8 @@ pub struct Resume {
     pub catch_up: bool,
     /// Whether an agent here has the session open, or may have.
     pub live: bool,
+    /// What restoring or catching the session up said, to tell the user once it resumes.
+    pub note: Option<String>,
 }
 
 impl Resume {
@@ -96,6 +93,15 @@ impl Resume {
             restore: None,
             catch_up: false,
             live: false,
+            note: None,
+        }
+    }
+
+    /// A session ready to resume with `plan`, and `note` to tell once it does.
+    pub fn noted(plan: ResumePlan, note: Option<String>) -> Self {
+        Self {
+            note,
+            ..Self::ready(plan)
         }
     }
 }
@@ -106,6 +112,14 @@ pub struct Restore {
     pub cwd: PathBuf,
     /// Why that isn't the directory the session ran in, when it isn't.
     pub note: Option<String>,
+}
+
+/// A session that [`Resumer::restore`] restored from sync, ready to resume with `plan`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restored {
+    pub plan: ResumePlan,
+    /// The status line: `restored the thread from sync`, and what else to know of it.
+    pub status: String,
 }
 
 /// What a template's `{path}` shows as in the plan for a session not yet restored: its
@@ -220,7 +234,7 @@ pub trait Resumer: Send + Sync {
         source: &dyn SessionSource,
         session: &SessionRow,
         restore: &Restore,
-    ) -> Result<ResumePlan, NotResumable>;
+    ) -> Result<Restored, NotResumable>;
 
     /// Bring this machine's copy of `session` to `head` (one of its heads; the newest when
     /// `None`) from what `source` holds of it, and plan resuming it ([`super::catchup`]): restore
@@ -235,7 +249,8 @@ pub trait Resumer: Send + Sync {
         let resume = self.plan(session).await?;
         let (plan, status) = match &resume.restore {
             Some(restore) => {
-                (self.restore(source, session, restore).await?, Some(restored(restore)))
+                let restored = self.restore(source, session, restore).await?;
+                (restored.plan, Some(restored.status))
             }
             None => (resume.plan, None),
         };
@@ -315,7 +330,7 @@ pub trait Machine: Send + Sync {
         &self,
         harness: AnyHarness,
         session: &RehydrateSession,
-    ) -> Result<PathBuf, RehydrateError>;
+    ) -> Result<Rehydrated, RehydrateError>;
 
     /// Whether `program` can be run here.
     fn installed(&self, program: &str) -> bool;
@@ -373,11 +388,21 @@ pub trait Machine: Send + Sync {
 
 /// What the status line says of a session restored as `restore`: that it was, and why it resumes
 /// where it does, when that isn't where it ran.
-fn restored(restore: &Restore) -> String {
-    match &restore.note {
-        Some(note) => format!("restored the thread from sync; {note}"),
-        None => "restored the thread from sync".to_owned(),
+/// The status line of a session restored as `restore` planned, `written` saying what its writer
+/// left out, if anything.
+fn restored(restore: &Restore, written: Option<&str>) -> String {
+    let mut status = "restored the thread from sync".to_owned();
+    for note in [restore.note.as_deref(), written].into_iter().flatten() {
+        status.push_str("; ");
+        status.push_str(note);
     }
+    status
+}
+
+/// `notes` that say anything, joined as a status line's tail: `; ` between them.
+fn joined<'a>(notes: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    let notes: Vec<&str> = notes.into_iter().flatten().collect();
+    (!notes.is_empty()).then(|| notes.join("; "))
 }
 
 /// How long [`ThisMachine`] spent writing session files, if it wrote any.
@@ -405,7 +430,7 @@ impl Machine for ThisMachine {
         &self,
         harness: AnyHarness,
         session: &RehydrateSession,
-    ) -> Result<PathBuf, RehydrateError> {
+    ) -> Result<Rehydrated, RehydrateError> {
         let started = Instant::now();
         let written = harness.rehydrate(session).await;
         if written.is_ok() {
@@ -538,22 +563,24 @@ impl HarnessResumer {
     }
 
     /// Write `data` out as a transcript of `kind` (`failed` says why that failed), and plan
-    /// resuming it in `data.cwd`.
+    /// resuming it in `data.cwd`. With the plan comes the writer's [`Rehydrated::note`] of what
+    /// it left out, if anything.
     async fn write_out(
         &self,
         kind: HarnessKind,
         data: &RehydrateSession,
         failed: impl FnOnce(String) -> NotResumable + Send,
-    ) -> Result<ResumePlan, NotResumable> {
+    ) -> Result<(ResumePlan, Option<String>), NotResumable> {
         let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
-        let native = match self.machine.rehydrate(harness, data).await {
-            Ok(path) | Err(RehydrateError::AlreadyExists(path)) => path,
+        let written = match self.machine.rehydrate(harness, data).await {
+            Ok(written) => written,
+            Err(RehydrateError::AlreadyExists(path)) => Rehydrated::at(path),
             Err(e) => return Err(failed(e.to_string())),
         };
-        let target = ResumeTarget::new(&data.id).with_cwd(&data.cwd).with_native_path(native);
+        let target = ResumeTarget::new(&data.id).with_cwd(&data.cwd).with_native_path(written.path);
         let plan = harness.resume(&target, self.templates.template(kind))?.prepare()?;
         self.check_installed(&plan)?;
-        Ok(plan)
+        Ok((plan, written.note))
     }
 
     /// [`Resumer::restore`], along `head` (see [`restored_session`]).
@@ -563,26 +590,54 @@ impl HarnessResumer {
         session: &SessionRow,
         restore: &Restore,
         head: Option<&SourceId>,
-    ) -> Result<ResumePlan, NotResumable> {
-        let (data, _) = restored_session(source, session, &restore.cwd, head)
+    ) -> Result<Restored, NotResumable> {
+        let one_branch = catchup::writes_one_branch(session.handle.harness);
+        let (mut data, _) = restored_session(source, session, &restore.cwd, head, one_branch)
             .await
             .map_err(|e| NotResumable::Restore(format!("{e:#}")))?;
-        self.write_out(session.handle.harness, &data, NotResumable::Restore).await
+        data.fork_of = restored_fork_of(session);
+        let (plan, written) =
+            self.write_out(session.handle.harness, &data, NotResumable::Restore).await?;
+        Ok(Restored {
+            plan,
+            status: restored(restore, written.as_deref()),
+        })
     }
 }
 
-/// `session` as `source` holds it, to be written out and resumed in `cwd`: along `head` (or, for
-/// a session that diverged, its newest head) when there is one ([`catchup::branch_rows`]), so no
-/// other branch's messages come with it; else every row synced of it. With it, the head it was
+/// The session that `session` was forked from, for a restore of it to name as a fork names it, when
+/// its harness writes that link on a restore. A fork is of a session of its own harness, so only
+/// such a parent counts. `None` for any other session, and for a harness whose restores write no
+/// fork link, as [`Harness::restores_fork_links`] says.
+///
+/// [`Harness::restores_fork_links`]: atuin_common::harnesstools::Harness::restores_fork_links
+fn restored_fork_of(session: &SessionRow) -> Option<ForkOf> {
+    let kind = session.handle.harness;
+    let parent = session.parent.as_ref().filter(|parent| parent.harness == kind)?;
+    let links = kind.harness().is_some_and(|harness| harness.restores_fork_links());
+    (links && session.relation == Relation::Fork).then(|| ForkOf {
+        id: parent.session.to_string(),
+        atuin_id: None,
+        path: None,
+    })
+}
+
+/// `session` as `source` holds it, to be written out and resumed in `cwd`, along one branch when
+/// [`catchup::branch_rows`] picks one, so no other branch's messages come with it. That branch is
+/// `head`, else the newest head when the session diverged or `one_branch` is set. Otherwise it
+/// holds every row synced of it. With it, the head it was
 /// written along, if any.
 async fn restored_session(
     source: &dyn SessionSource,
     session: &SessionRow,
     cwd: &Path,
     head: Option<&SourceId>,
+    one_branch: bool,
 ) -> eyre::Result<(RehydrateSession, Option<Head>)> {
     let mut data = source.rehydrate(&session.handle, cwd).await?;
-    let Some((rows, along)) = catchup::branch_rows(source, &session.handle, head).await? else {
+    let Some((rows, along)) =
+        catchup::branch_rows(source, &session.handle, head, one_branch).await?
+    else {
         return Ok((data, None));
     };
     data.messages = rows;
@@ -646,18 +701,13 @@ impl HarnessResumer {
                     .or_else(|| local_dir(session.cwd.as_deref(), &self.context));
                 let live = self.machine.is_live(harness, id, dir.as_deref()).await;
                 let resume = Resume {
-                    // A copy atuin never writes resumes as it is.
-                    catch_up: harness.writes_transcripts(),
+                    catch_up: true,
                     live: live != Liveness::NotLive,
                     ..Resume::ready(harness.resume(&target, template)?.prepare()?)
                 };
                 (resume, Some(Copy { tip, dir }))
             }
             None => {
-                // No copy to resume as it is, and none can be written.
-                if !harness.writes_transcripts() {
-                    return Err(NotResumable::Unwritable(harness.name()));
-                }
                 let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
                 target.cwd = Some(restore.cwd.clone());
                 // The transcript is only written once the user accepts the restore.
@@ -673,15 +723,6 @@ impl HarnessResumer {
     }
 }
 
-impl From<continuation::ContinueError> for NotResumable {
-    fn from(err: continuation::ContinueError) -> Self {
-        match err {
-            continuation::ContinueError::NothingToContinue(empty) => Self::Empty(empty),
-            continuation::ContinueError::Unwritable(harness) => Self::Unwritable(harness),
-        }
-    }
-}
-
 #[async_trait]
 impl Resumer for HarnessResumer {
     async fn plan(&self, session: &SessionRow) -> Result<Resume, NotResumable> {
@@ -693,7 +734,7 @@ impl Resumer for HarnessResumer {
         source: &dyn SessionSource,
         session: &SessionRow,
         restore: &Restore,
-    ) -> Result<ResumePlan, NotResumable> {
+    ) -> Result<Restored, NotResumable> {
         self.restore_along(source, session, restore, None).await
     }
 
@@ -707,8 +748,8 @@ impl Resumer for HarnessResumer {
         let (resume, copy) = self.plan_here(session).await?;
         let ready = |plan, status| Ok(CatchUp::Ready { plan, status });
         if let Some(restore) = &resume.restore {
-            let plan = self.restore_along(source, session, restore, head).await?;
-            return ready(plan, Some(restored(restore)));
+            let restored = self.restore_along(source, session, restore, head).await?;
+            return ready(restored.plan, Some(restored.status));
         }
         let Some(Copy { tip, dir }) = copy else {
             return ready(resume.plan, None);
@@ -721,8 +762,8 @@ impl Resumer for HarnessResumer {
             Ok(None) => {
                 // Gone since it was located: restored, as a copy that isn't here is.
                 let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
-                let plan = self.restore_along(source, session, &restore, head).await?;
-                return ready(plan, Some(restored(&restore)));
+                let restored = self.restore_along(source, session, &restore, head).await?;
+                return ready(restored.plan, Some(restored.status));
             }
             Err(e) => Err(e),
         };
@@ -894,19 +935,15 @@ impl Resumer for HarnessResumer {
         }
         AnyHarness::all()
             .iter()
-            .filter(|harness| harness.writes_transcripts())
             .map(HarnessKind::from)
             .filter(|kind| *kind != own && harness_arg(*kind).is_some())
             .filter(|kind| self.runs_here(*kind, session))
             .collect()
     }
 
-    /// Every harness atuin writes forks, when installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
-        // Forking writes the fork out as a transcript, which atuin can't for Amp, nor for a
-        // harness it only reads.
+        // Forking writes the fork out as a transcript, which atuin can't for Amp.
         session.handle.harness != HarnessKind::Amp
-            && session.handle.harness.harness().is_some_and(|h| h.writes_transcripts())
             && self.runs_here(session.handle.harness, session)
     }
 
@@ -918,14 +955,12 @@ impl Resumer for HarnessResumer {
     ) -> Result<Forked, NotResumable> {
         let kind = session.handle.harness;
         let harness = kind.harness().ok_or(NotResumable::Unsupported(harness_label(kind)))?;
-        if !harness.writes_transcripts() {
-            return Err(NotResumable::Unwritable(harness.name()));
-        }
         let fail = |e: String| NotResumable::Fork(e);
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
         // Restored as a resume would restore it (along its newest head, when it diverged), should
         // pi need it written out below.
-        let (mut original, _) = restored_session(source, session, &restore.cwd, None)
+        let one_branch = catchup::writes_one_branch(kind);
+        let (mut original, _) = restored_session(source, session, &restore.cwd, None, one_branch)
             .await
             .map_err(|e| fail(format!("{e:#}")))?;
         // Checked before anything is written. A fork of no conversation is refused, as a
@@ -947,7 +982,7 @@ impl Resumer for HarnessResumer {
             AnyHarness::Pi(_) => Some(match self.machine.locate(harness, id).await {
                 Some(path) => path,
                 None => match self.machine.rehydrate(harness, &original).await {
-                    Ok(path) | Err(RehydrateError::AlreadyExists(path)) => path,
+                    Ok(Rehydrated { path, .. }) | Err(RehydrateError::AlreadyExists(path)) => path,
                     Err(e) => return Err(fail(format!("restoring the original: {e}"))),
                 },
             }),
@@ -964,12 +999,12 @@ impl Resumer for HarnessResumer {
         };
         let forked = fork::fork(harness, &original, of, from.tip.as_deref())
             .ok_or_else(|| fail(NO_TIP.to_owned()))?;
-        let plan = self.write_out(kind, &forked, fail).await?;
+        let (plan, written) = self.write_out(kind, &forked, fail).await?;
         Ok(Forked {
             harness: kind,
             id: forked.id,
             plan,
-            note: restore.note,
+            note: joined([restore.note.as_deref(), written.as_deref()]),
         })
     }
 
@@ -993,7 +1028,7 @@ impl Resumer for HarnessResumer {
         }
         let restore = resolve_cwd(session.cwd.as_deref(), &self.context);
         // Along one branch, as a restore or a fork is: never every branch's messages at once.
-        let (original, along) = restored_session(source, session, &restore.cwd, head)
+        let (original, along) = restored_session(source, session, &restore.cwd, head, false)
             .await
             .map_err(|e| fail(format!("{e:#}")))?;
         let atuin_id = session.atuin_id.to_string();
@@ -1001,13 +1036,13 @@ impl Resumer for HarnessResumer {
         // Checked before anything is written.
         let planned = ResumeTarget::new(&continued.session.id).with_cwd(&continued.session.cwd);
         self.check_installed(&self.unwritten_plan(into, target, &planned)?)?;
-        let plan = self.write_out(target, &continued.session, fail).await?;
+        let (plan, written) = self.write_out(target, &continued.session, fail).await?;
         Ok(Continued {
             target,
             plan,
             flattened: continued.flattened,
             along: along.map(|head| catchup::host_label(&head, &self.context.host_id)),
-            note: restore.note,
+            note: joined([restore.note.as_deref(), written.as_deref()]),
         })
     }
 }

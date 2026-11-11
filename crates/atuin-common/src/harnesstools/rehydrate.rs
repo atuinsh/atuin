@@ -58,6 +58,24 @@ pub struct ForkOf {
     pub path: Option<PathBuf>,
 }
 
+/// A session written out by [`Harness::rehydrate`](crate::harnesstools::Harness::rehydrate).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rehydrated {
+    /// Where it went, as [`Harness::locate`](crate::harnesstools::Harness::locate) finds it.
+    pub path: PathBuf,
+    /// What the writer had to leave out for the harness to take it, for the user to read beside
+    /// the status line: `trimmed 11 tool outputs to fit Hermes's 5 MiB import limit`.
+    pub note: Option<String>,
+}
+
+impl Rehydrated {
+    /// Written out whole, at `path`.
+    #[must_use]
+    pub const fn at(path: PathBuf) -> Self {
+        Self { path, note: None }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RehydrateError {
     #[error("{0} sessions can't be rehydrated")]

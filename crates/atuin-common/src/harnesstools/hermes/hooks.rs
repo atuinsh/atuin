@@ -1,6 +1,7 @@
 //! Atuin's plugin for Hermes Agent: `<home>/plugins/atuin/`, a `plugin.yaml` and an
 //! `__init__.py` whose `pre_tool_call` and `post_tool_call` hooks hand each `terminal` call to
-//! `atuin hook hermes` (see the plugin's own docs).
+//! `atuin hook hermes`, and whose `hermes atuin import` command is how atuin writes a session
+//! into the store. The plugin's own docs, and `rehydrate`, say more.
 //!
 //! A plugin rather than Hermes's shell hooks: those need the user's consent per command line,
 //! recorded in a file, and their payload has no cwd. Hermes loads a plugin from the home's
@@ -264,6 +265,119 @@ call("c9", {"command": "pwd"}, {"output": "/w", "exit_code": 0, "error": None})
 # atuin sleeps through the first event: no callback may wait for it.
 assert slowest < 0.5, f"a callback took {slowest:.2f}s"
 "#;
+
+    /// A fake Hermes loading the installed plugin, building `hermes atuin` from what the plugin
+    /// registers as Hermes's `main.py` does, and running `hermes atuin import <file>` against a
+    /// stand-in for the gateway's client, `hermes_cli.gateway_session_store`. The stand-in answers
+    /// as the gateway did in the probes: a receipt counting what it imported, or a refusal.
+    /// `argv[2]` names the case, and the driver prints the exit code after the command's own
+    /// line.
+    const IMPORT_DRIVER: &str = r#"
+import argparse, importlib.util, json, sys, types
+
+case = sys.argv[2]
+calls = []
+
+class GatewayClientError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+class Store:
+    def call(self, verb, **kwargs):
+        calls.append((verb, kwargs))
+        if case == "refused":
+            raise GatewayClientError("revision_conflict", "expected revision 0, found 3")
+        if case == "skipped":
+            return {"ok": True, "result": {"imported": 0, "skipped": 1}}
+        return {"ok": True, "revision": 1, "result": {"imported": 1, "skipped": 0}}
+
+if case != "old_hermes":
+    for name in ("hermes_cli", "hermes_cli.gateway_session_store"):
+        sys.modules[name] = types.ModuleType(name)
+    sys.modules["hermes_cli.gateway_session_store"].session_store = Store
+
+spec = importlib.util.spec_from_file_location("atuin", sys.argv[1] + "/__init__.py")
+plugin = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plugin)
+commands = {}
+class Context:
+    def register_hook(self, name, callback):
+        pass
+    def register_cli_command(self, name, help, setup_fn, handler_fn):
+        commands[name] = (setup_fn, handler_fn)
+plugin.register(Context())
+setup, handler = commands["atuin"]
+parser = argparse.ArgumentParser(prog="hermes atuin")
+setup(parser)
+
+row = {"id": "20261110_120000_a1b2c3", "source": "cli", "messages": []}
+with open(sys.argv[3], "w") as f:
+    json.dump(row, f)
+args = parser.parse_args(["import", sys.argv[3]] if case != "unreadable" else ["import", "/nope"])
+code = handler(args)
+if calls:
+    verb, kwargs = calls[0]
+    assert verb == "session.mutate", verb
+    assert kwargs["session_id"] == row["id"], kwargs
+    assert kwargs["operation"] == "import" and kwargs["expected_revision"] == 0, kwargs
+    assert kwargs["payload"] == {"sessions": [row]}, kwargs
+    assert len(kwargs["request_id"]) == 32, kwargs
+print(code)
+"#;
+
+    /// `hermes atuin import` hands the gateway the row as a new session and prints one JSON line
+    /// saying whether it was imported, exiting 0 only when it was; a Hermes without the
+    /// gateway's client says so, rather than looking like a refusal.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::imported("imported", true, None, 0)]
+    #[case::skipped("skipped", false, Some("skipped"), 1)]
+    #[case::refused("refused", false, Some("revision_conflict: expected revision 0, found 3"), 1)]
+    #[case::old_hermes("old_hermes", false, Some("unsupported_hermes"), 1)]
+    #[case::unreadable("unreadable", false, Some("can't read /nope"), 1)]
+    #[tokio::test]
+    async fn the_plugin_imports_a_session_through_the_gateway(
+        #[case] case: &str,
+        #[case] ok: bool,
+        #[case] error: Option<&str>,
+        #[case] exit: i32,
+    ) {
+        if !have_python() {
+            eprintln!("skipped: no python3");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let plugin =
+            install_with(&home, Path::new("/opt/atuin"), &FakeHermes::default()).await.unwrap();
+        std::fs::write(dir.path().join("driver.py"), IMPORT_DRIVER).unwrap();
+
+        let ran = std::process::Command::new("python3")
+            .arg(dir.path().join("driver.py"))
+            .arg(&plugin)
+            .arg(case)
+            .arg(dir.path().join("row.json"))
+            .output()
+            .unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+
+        let stdout = String::from_utf8(ran.stdout).unwrap();
+        let lines: Vec<&str> = stdout.lines().collect();
+        let [reply, code] = lines.as_slice() else {
+            panic!("not one reply and an exit code: {stdout}");
+        };
+        let reply: serde_json::Value = serde_json::from_str(reply).unwrap();
+        assert_eq!(reply["ok"], ok, "{reply}");
+        match error {
+            Some(error) => {
+                let said = reply["error"].as_str().unwrap();
+                assert!(said.starts_with(error), "{said}");
+            }
+            None => assert!(reply.get("error").is_none(), "{reply}"),
+        }
+        assert_eq!(code.parse::<i32>().unwrap(), exit);
+    }
 
     /// The plugin hands atuin each `terminal` call's start and end in order, with its
     /// directory, and nothing else; the callbacks return at once while atuin is busy, and

@@ -423,12 +423,21 @@ impl Transcript {
         subagent
     }
 
-    /// Where this agent keeps the transcript of session `id` under `home`, when it has one.
+    /// Where this agent keeps the transcript of session `id` under `home`, when it has one: for
+    /// Hermes, the store of its home that holds it.
     pub fn find(home: &Path, agent: Agent, id: &str) -> Option<Self> {
-        assert!(
-            !matches!(agent, Agent::Hermes | Agent::Opencode),
-            "{agent:?} keeps every session in one database"
-        );
+        assert_ne!(agent, Agent::Opencode, "opencode keeps every session in one database");
+        if agent == Agent::Hermes {
+            let path = agent.root(home);
+            let held: Option<i64> = hermes_open(&path)
+                .query_row("SELECT 1 FROM sessions WHERE id = ?1", [id], |row| row.get(0))
+                .ok();
+            return held.map(|_| Self {
+                agent,
+                id: id.to_owned(),
+                path,
+            });
+        }
         if agent == Agent::Copilot {
             let path = agent.root(home).joined(id).joined("events.jsonl");
             return path.is_file().then(|| Self {
@@ -519,8 +528,26 @@ impl Transcript {
         )]);
     }
 
-    /// The transcript as it stands.
+    /// The transcript as it stands: for Hermes, the session's rows in order, a line each.
     pub fn read(&self) -> String {
+        if self.agent == Agent::Hermes {
+            let db = hermes_open(&self.path);
+            let mut rows = db
+                .prepare(
+                    "SELECT role, content, tool_calls, reasoning FROM messages WHERE session_id = \
+                     ?1 ORDER BY id",
+                )
+                .unwrap();
+            let lines: Vec<String> = rows
+                .query_map([&self.id], |row| {
+                    let cell = |i| row.get::<_, Option<String>>(i).map(Option::unwrap_or_default);
+                    Ok(format!("{}\t{}\t{}\t{}", cell(0)?, cell(1)?, cell(2)?, cell(3)?))
+                })
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            return lines.join("\n");
+        }
         fs::read_to_string(&self.path).unwrap()
     }
 
@@ -1327,6 +1354,22 @@ impl Transcript {
         .unwrap();
     }
 
+    /// Hermes's `/undo`: the session's last turn, from its last prompt on, is marked no longer in
+    /// the conversation, with `active = 0` and `compacted = 0`. Its rows are kept, and
+    /// `rewind_count` goes up.
+    pub fn undo_hermes(&self) {
+        assert_eq!(self.agent, Agent::Hermes);
+        let db = hermes_open(&self.path);
+        db.execute(
+            "UPDATE messages SET active = 0, compacted = 0 WHERE session_id = ?1 AND id >= \
+             (SELECT max(id) FROM messages WHERE session_id = ?1 AND role = 'user')",
+            [&self.id],
+        )
+        .unwrap();
+        db.execute("UPDATE sessions SET rewind_count = rewind_count + 1 WHERE id = ?1", [&self.id])
+            .unwrap();
+    }
+
     /// One row of this session's `messages`, with what every row carries, and the session's
     /// counts and activity bumped to match.
     fn hermes_message(&self, db: &rusqlite::Connection, row: &Value) {
@@ -1759,15 +1802,76 @@ fn sha256_hex(text: impl AsRef<[u8]>) -> String {
     format!("{:x}", sha2::Sha256::digest(text.as_ref()))
 }
 
+/// What `hermes [-p <profile>] atuin import <file>` does with atuin's plugin installed, as the
+/// gateway's `session.mutate import` does it: the session row into `$HERMES_HOME/state.db` with
+/// its columns as given, each message under a fresh `messages.id` with its `message_uid` kept, and
+/// one JSON line saying so. A list of content parts becomes Hermes's multimodal content. An id the
+/// store holds is refused `revision_conflict`, and a title it holds `storage_unavailable`.
+const HERMES_IMPORT: &str = r#"
+import json, os, sqlite3, sys
+
+args = sys.argv[1:]
+row = json.load(open(args[args.index("import") + 1]))
+db = sqlite3.connect(os.path.join(os.environ["HERMES_HOME"], "state.db"), timeout=10)
+
+def text(value):
+    return value if value is None or isinstance(value, str) else json.dumps(value)
+
+# A list of parts is multimodal content, stored under Hermes's prefix; a string as given,
+# unless it starts with the prefix, which Hermes wraps so it can't be taken for parts.
+def content(value):
+    if isinstance(value, list) or (isinstance(value, str) and value.startswith("\x00json:")):
+        return "\x00json:" + json.dumps(value)
+    return text(value)
+
+def refuse(error):
+    print(json.dumps({"ok": False, "error": error}))
+    sys.exit(1)
+
+if db.execute("SELECT 1 FROM sessions WHERE id = ?", (row["id"],)).fetchone():
+    refuse("revision_conflict")
+columns = ["id", "source", "title", "cwd", "model", "model_config", "parent_session_id",
+           "started_at", "ended_at", "end_reason", "git_branch"]
+try:
+    with db:
+        db.execute(
+            "INSERT INTO sessions (%s) VALUES (%s)" % (", ".join(columns), ", ".join("?" * len(columns))),
+            [text(row.get(c)) for c in columns],
+        )
+        fields = ["role", "content", "tool_call_id", "tool_calls", "tool_name", "timestamp",
+                  "finish_reason", "reasoning", "display_kind", "display_metadata", "message_uid"]
+        for m in row["messages"]:
+            db.execute(
+                "INSERT INTO messages (session_id, %s) VALUES (?, %s)" % (", ".join(fields), ", ".join("?" * len(fields))),
+                [row["id"]] + [content(m.get(f)) if f == "content" else text(m.get(f)) for f in fields],
+            )
+except sqlite3.IntegrityError:
+    refuse("storage_unavailable")
+print(json.dumps({"ok": True, "receipt": {"imported": 1, "skipped": 0}}))
+"#;
+
 /// Stand-ins for the agents' executables, on `PATH` ahead of anything installed: each prints how
-/// it was run and where, and exits.
+/// it was run and where, and exits. `hermes atuin import` imports too, as [`HERMES_IMPORT`] says.
 pub fn install_fakes(bin: &Path, agents: &[Agent]) {
     use std::os::unix::fs::PermissionsExt as _;
     fs::create_dir_all(bin).unwrap();
     for agent in agents {
         let path = bin.join(agent.program());
-        fs::write(&path, format!("#!/bin/sh\necho \"AGENT-RAN {} $* IN $PWD\"\n", agent.program()))
-            .unwrap();
+        let import = if *agent == Agent::Hermes {
+            let script = bin.join("hermes-import.py");
+            fs::write(&script, HERMES_IMPORT).unwrap();
+            format!(
+                "case \" $* \" in *\" atuin import \"*) exec python3 '{}' \"$@\";; esac\n",
+                script.display()
+            )
+        } else {
+            String::new()
+        };
+        fs::write(
+            &path,
+            format!("#!/bin/sh\n{import}echo \"AGENT-RAN {} $* IN $PWD\"\n", agent.program()),
+        )
+        .unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }

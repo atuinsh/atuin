@@ -1371,8 +1371,8 @@ async fn the_chooser_opens_when_there_is_a_choice() {
 }
 
 /// A session recorded on another machine is restored from sync (by the worker) only once it is
-/// chosen, and then resumed from where it was written; ctrl-y copies `atuin resume <id>`,
-/// which restores it when run, and writes nothing.
+/// chosen, and then resumed from where it was written, saying so; ctrl-y copies
+/// `atuin resume <id>`, which restores it when run, and writes nothing.
 #[rstest]
 #[tokio::test]
 async fn a_session_from_another_machine_is_restored_first() {
@@ -1402,6 +1402,8 @@ async fn a_session_from_another_machine_is_restored_first() {
     let restore = resume.restore.clone().unwrap();
     let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
     apply_response(&mut state, Response::Restored(row.handle.clone(), plan));
+    // The restore's status waits with its plan, for whichever enter resumes it.
+    assert_eq!(state.note, None);
     let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
     let Some(Outcome::Resume(plan)) = outcome else {
         panic!("{outcome:?}");
@@ -1410,6 +1412,7 @@ async fn a_session_from_another_machine_is_restored_first() {
         plan.native_path,
         Some(std::path::PathBuf::from(format!("/restored/{}.jsonl", row.handle.session)))
     );
+    assert_eq!(state.note.as_deref(), Some("restored the thread from sync"));
 }
 
 /// An enter waiting on its session's plan, or on its restore from sync, and then an idle refresh
@@ -1634,7 +1637,7 @@ impl Resumer for GatedRestores {
         source: &dyn SessionSource,
         session: &super::source::SessionRow,
         restore: &super::resumer::Restore,
-    ) -> Result<super::resumer::ResumePlan, super::resumer::NotResumable> {
+    ) -> Result<super::resumer::Restored, super::resumer::NotResumable> {
         self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.gate.acquire().await.unwrap().forget();
         self.inner.restore(source, session, restore).await

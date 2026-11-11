@@ -62,6 +62,7 @@ impl From<HermesCliError> for InstallMcpError {
             HermesCliError::Failed(printed) => {
                 Self::Failed(format!("hermes config set: {printed}"))
             }
+            HermesCliError::TimedOut => Self::Failed(format!("hermes config set: {err}")),
             HermesCliError::Io(err) => Self::Io(err),
         }
     }

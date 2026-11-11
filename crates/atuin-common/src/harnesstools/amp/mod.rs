@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::session::any::{AnySessions, ObservableExt};
 use super::{Harness, InstallHookError};
@@ -63,7 +63,7 @@ impl Harness for Amp {
 
     /// Amp's threads are on its servers, which atuin can't write to; a thread from another
     /// machine is already there.
-    async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
+    async fn rehydrate(&self, _session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
         Err(RehydrateError::Unsupported("Amp"))
     }
 }

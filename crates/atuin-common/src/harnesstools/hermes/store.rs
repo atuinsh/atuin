@@ -190,10 +190,23 @@ impl SessionRow {
             .fold(f64::MIN, f64::max)
     }
 
+    fn config(&self) -> Option<serde_json::Value> {
+        serde_json::from_str(self.model_config.as_deref()?).ok()
+    }
+
     /// The provider Hermes routed the session's model calls to.
     pub fn provider(&self) -> Option<String> {
-        let config: serde_json::Value = serde_json::from_str(self.model_config.as_deref()?).ok()?;
-        config["gateway_runtime"]["provider"].as_str().map(str::to_owned)
+        self.config()?["gateway_runtime"]["provider"].as_str().map(str::to_owned)
+    }
+
+    /// The session this one was forked from: `/branch` names it `_branched_from`, as atuin's
+    /// forks do, and a reset child `_reset_from`, in the same shape.
+    pub fn forked_from(&self) -> Option<String> {
+        let config = self.config()?;
+        ["_branched_from", "_reset_from"]
+            .iter()
+            .find_map(|key| config[key].as_str().filter(|id| !id.is_empty()))
+            .map(str::to_owned)
     }
 }
 
@@ -211,8 +224,9 @@ pub struct MessageRow {
     pub reasoning: Option<String>,
     pub observed: bool,
     pub compressed_summary: bool,
-    /// Whether the row is in the conversation Hermes shows: active, compacted (summarized away
-    /// but still history), or copied into the live transcript under another id.
+    /// Whether the row is in the conversation: the newest row under its `message_uid` (itself,
+    /// or the copy a compaction carried it into) is active, or compacted (summarized away but
+    /// still history).
     pub live: bool,
     pub display_kind: Option<String>,
     pub display_metadata: Option<String>,
@@ -349,32 +363,30 @@ impl Store {
     /// The `live` column of a `messages` row (as `m`) (see [`MessageRow::live`]), in a query
     /// whose `?1` is the row's session.
     ///
-    /// A `CASE`, so only a row that isn't live itself looks for a copy that is: per row, that
-    /// lookup costs a scan of the session. A live copy is found through Hermes's own partial index
-    /// (`idx_messages_session_uid`, on `(session_id, message_uid) WHERE active = 1`), which a
-    /// condition on `active OR compacted` can't use; compacted copies are gathered once per query.
+    /// A row's own flags can't say: a compaction leaves the rows it carries on compacted, and an
+    /// `/undo` of the turn they carry drops only their copies. So the uids whose newest row is in
+    /// the conversation are gathered once per query, in one pass over the session, and a row
+    /// with a uid is live when its uid is among them.
     fn live(&self) -> String {
         let has = |name: &str| self.columns.messages.contains(name);
-        let own = if has("compacted") {
-            "m.active = 1 OR m.compacted = 1"
-        } else {
-            "m.active = 1"
-        };
-        let mut live = format!("CASE WHEN {own} THEN 1");
-        if has("message_uid") {
-            live.push_str(
-                " WHEN EXISTS (SELECT 1 FROM messages c WHERE c.session_id = m.session_id AND \
-                 c.message_uid = m.message_uid AND c.active = 1 AND c.id <> m.id) THEN 1",
-            );
+        let shown = |row: &str| {
             if has("compacted") {
-                live.push_str(
-                    " WHEN m.message_uid IN (SELECT c.message_uid FROM messages c WHERE \
-                     c.session_id = ?1 AND c.compacted = 1 AND c.message_uid IS NOT NULL) THEN 1",
-                );
+                format!("{row}.active = 1 OR {row}.compacted = 1")
+            } else {
+                format!("{row}.active = 1")
             }
+        };
+        let own = format!("CASE WHEN {} THEN 1 ELSE 0 END", shown("m"));
+        if !has("message_uid") {
+            return own;
         }
-        live.push_str(" ELSE 0 END");
-        live
+        format!(
+            "CASE WHEN m.message_uid IS NULL THEN {own} WHEN m.message_uid IN (SELECT \
+             c.message_uid FROM messages c WHERE c.session_id = ?1 AND c.message_uid IS NOT NULL \
+             GROUP BY c.message_uid HAVING max(c.id) = max(CASE WHEN {} THEN c.id END)) THEN 1 \
+             ELSE 0 END",
+            shown("c"),
+        )
     }
 
     fn session_select(&self) -> String {
@@ -501,6 +513,21 @@ impl Store {
             .fetch_optional(&mut self.conn)
             .await?;
         Ok(found.is_some())
+    }
+
+    /// The titles of sessions titled `base`, or `base #<anything>`: the lineage Hermes numbers a
+    /// title in.
+    pub async fn titles_of(&mut self, base: &str) -> Result<Vec<String>, sqlx::Error> {
+        if !self.columns.sessions.contains("title") {
+            return Ok(Vec::new());
+        }
+        query_scalar::<Sqlite, String>(
+            "SELECT title FROM sessions WHERE title = ?1 OR substr(title, 1, length(?1) + 2) = ?1 \
+             || ' #'",
+        )
+        .bind(base)
+        .fetch_all(&mut self.conn)
+        .await
     }
 
     fn message_select(&self) -> String {
@@ -642,6 +669,30 @@ impl Store {
             .fetch_all(&mut self.conn)
             .await?;
         Ok(ids.into_iter().collect())
+    }
+
+    /// What changes when session `id`'s transcript does, in place or not: Hermes's own counters
+    /// of in-place edits and rewinds, and its rows' count, newest id and how many are active. A
+    /// store without the counters reads them as 0. `None` when the store has no such session.
+    pub async fn revision(&mut self, id: &str) -> Result<Option<Vec<i64>>, sqlx::Error> {
+        let counter = |name: &str| {
+            if self.columns.sessions.contains(name) {
+                format!("COALESCE(s.{name}, 0)")
+            } else {
+                "0".to_owned()
+            }
+        };
+        let sql = format!(
+            "SELECT {}, {}, (SELECT count(*) FROM messages m WHERE m.session_id = s.id), (SELECT \
+             COALESCE(max(m.id), 0) FROM messages m WHERE m.session_id = s.id), (SELECT count(*) \
+             FROM messages m WHERE m.session_id = s.id AND m.active = 1) FROM sessions s WHERE \
+             s.id = ?1",
+            counter("transcript_revision"),
+            counter("rewind_count"),
+        );
+        let row =
+            query::<Sqlite>(AssertSqlSafe(sql)).bind(id).fetch_optional(&mut self.conn).await?;
+        row.map(|row| (0..5).map(|i| row.try_get::<i64, _>(i)).collect()).transpose()
     }
 
     /// The timestamp and role of row `id` of session `session`, `None` when it is gone.

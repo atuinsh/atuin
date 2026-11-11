@@ -85,10 +85,42 @@ store as far as its columns allow.
 `atuin resume` reopens a session with `hermes -p <profile> --resume <id>`, the
 profile whose store holds it (`default` for the home's own, since a bare
 `hermes` follows `hermes profile use`), from any directory: Hermes goes back to
-the session's own. Atuin reads Hermes sessions but doesn't write them yet,
-so a Hermes session resumes only on a machine that has it, and can't be
-forked, caught up, or continued into from another agent. It can be continued
-in another agent.
+the session's own.
+
+Atuin writes Hermes sessions through its Hermes plugin, so restoring a session
+recorded on another machine, forking one, or continuing another agent's
+session in Hermes needs it installed, as Amp's capture does:
+
+```shell
+atuin hook install hermes
+```
+
+That installs it into the profile a bare `hermes` uses, which is where Atuin
+writes. Only Hermes's gateway writes its database, so the plugin adds a
+`hermes atuin import` command that hands the gateway one new session. Hermes
+takes only new sessions that way, so Atuin never catches up or switches a
+Hermes copy: it forks instead. Titles are unique in a Hermes store, so a fork,
+or a restore whose title is taken, gets the next of its line, as `/branch`
+names one. For example, a fork of `Fix the flaky test` is
+`Fix the flaky test #2`.
+
+A restored or forked session holds the branch Hermes resumes, so a turn
+undone with `/undo` stays out of it. Atuin can tell a turn was undone only
+once a turn came after it. A restored fork names the session it was forked
+from, as the fork itself does, so it stays grouped under it as a fork.
+
+A restored or forked session keeps the model it ran on, and its provider, only
+when the profile's own provider is the same one. That's `model.provider` in
+the profile's `config.yaml`. A provider the profile isn't set up for would have
+no credentials there. Otherwise, as for a session continued from another
+agent, it runs on the profile's default model.
+
+Hermes takes at most 10,000 messages and 5 MiB in one session. A session over
+5 MiB has its oldest tool output cut, one result at a time, until it fits,
+and Atuin says how many it cut. A shell command's result keeps its exit code.
+Atuin still holds the whole session. A session over 10,000 messages, or still over
+5 MiB with every tool output cut, isn't written, and Atuin says which limit
+it's over.
 
 ## What's captured
 
@@ -317,15 +349,16 @@ back.
   agent, with the same history, tool calls and all, and resumes that. The
   original is left as it is. The fork is linked to it the way the agent links
   its own forks (Claude Code's `forkedFrom`, Codex's `forked_from_id`, Grok
-  Build's `parent_session_id`, Kiro's `parentSessionId`, Pi's `parentSession`;
+  Build's `parent_session_id`, Hermes Agent's `_branched_from`, Kiro's
+  `parentSessionId`, Pi's `parentSession`;
   Copilot's start event gets a note it keeps; opencode gets a line it keeps
   from the model), so it's
   grouped under the original, with an Atuin id of its own. It keeps the
-  original's title. Pi names the original by its file, so a Pi session that
+  original's title. In Hermes Agent, it gets the next of its line, `#2`. Pi names the
+  original by its file, so a Pi session that
   isn't on this machine is written out first. Forking is selected instead of
   the original when the original can't resume here, or its agent has it open
-  on this machine. Sessions with no messages can't be forked, and neither can
-  Hermes Agent sessions, which Atuin doesn't write yet.
+  on this machine. Sessions with no messages can't be forked.
 - Every other agent installed on this machine follows. Picking one continues
   the session there as a new session: the conversation carries over, and so do
   the tool calls captured with their input and output (`capture_tools`), with
@@ -336,14 +369,13 @@ back.
   got a result, and web searches the model's provider ran itself become notes
   in the text, and reasoning is dropped. The new session
   opens with a note to the agent naming the session it continues, by its own
-  agent's id and its Atuin id (in Pi, the note opens the first prompt, so you
-  see it too). Agents that aren't installed aren't listed, and with nothing
+  agent's id and its Atuin id. In Pi and Hermes Agent, the note opens the
+  first prompt, so you see it too. Agents that aren't installed aren't listed, and with nothing
   else to offer (no other agent installed, and a session that can't be
   forked) ++enter++ resumes straight away.
 - If the session's own agent can't resume it here (an agent that isn't
-  installed, a Hermes Agent session recorded on another machine, or a session
-  whose transcript is here but whose directory is gone, for an agent that
-  needs it),
+  installed, or a session whose transcript is here but whose directory is gone,
+  for an agent that needs it),
   its line is dimmed with the reason, and the next one is selected instead.
 
 A session keeps one id on every machine. When you resume one in its own agent
@@ -385,7 +417,8 @@ synced messages:
   older format; a Pi session file
   Pi hasn't opened since version 2 of its format; and opencode sessions, which
   live in a database. Hermes Agent sessions are neither caught up nor switched,
-  since Atuin doesn't write them yet.
+  since Hermes takes only new sessions from Atuin: a copy behind, or gone
+  another way, forks.
 
 Atuin never merges branches, and never writes to a session its agent has open.
 Claude Code, Copilot, and Codex where it keeps session locks, say which session
@@ -428,10 +461,9 @@ The chooser still opens for a session its own agent can't resume.
 From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
-another (`claude-code`, `codex`, `copilot`, `grok`, `kiro`, `opencode`, `pi` or
-`omp`; `claude` is short for `claude-code` wherever Atuin takes an agent's name,
-and `kiro-cli` for `kiro`). Not into Hermes Agent, whose sessions Atuin
-doesn't write yet. `atuin resume
+another (`claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`,
+`opencode`, `pi` or `omp`; `claude` is short for `claude-code` wherever Atuin
+takes an agent's name, and `kiro-cli` for `kiro`). `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,
 `--switch` switches it to another branch, and `--fork` forks it from its newest

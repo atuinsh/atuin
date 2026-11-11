@@ -51,6 +51,20 @@ enum Canonical {
         pattern: String,
         path: Option<String>,
     },
+    /// Several replacements in one file, made as one call. Claude Code's `MultiEdit` is one, and so
+    /// is pi's `edit` of several. Only Hermes takes it, as a `patch` call per replacement, since a
+    /// `patch` makes one.
+    MultiEdit {
+        path: String,
+        edits: Vec<(String, String, bool)>,
+    },
+    WebSearch {
+        query: String,
+    },
+    /// A page fetched. Claude Code's result is the model's summary of the page, not the page.
+    WebFetch {
+        url: String,
+    },
 }
 
 /// A call's input as an object: Codex keeps a function call's arguments as the JSON text the
@@ -74,6 +88,17 @@ fn command(value: Option<&Value>) -> Option<String> {
         Value::Array(argv) if !argv.is_empty() => Some(command_line(argv)),
         _ => None,
     }
+}
+
+/// One replacement of an edit's input: its old and new text, and whether it replaces every
+/// occurrence.
+fn replacement(input: &Map<String, Value>) -> Option<(String, String, bool)> {
+    let old = string(input, &["old_string", "oldString", "oldText", "old_str", "oldStr"])?;
+    let new = string(input, &["new_string", "newString", "newText", "new_str", "newStr"])?;
+    let all = ["replace_all", "replaceAll"]
+        .iter()
+        .any(|k| input.get(*k).and_then(Value::as_bool) == Some(true));
+    Some((old, new, all))
 }
 
 impl Canonical {
@@ -110,6 +135,12 @@ impl Canonical {
                 | "grep_search"
                 | "glob"
                 | "find"
+                | "multiedit"
+                | "write_file"
+                | "patch"
+                | "search_files"
+                | "websearch"
+                | "webfetch"
         );
         if !known {
             return None;
@@ -170,40 +201,54 @@ impl Canonical {
                         .map(|(first, last)| json!(last.saturating_sub(first) + 1)),
                 }
             }
-            "write" | "create" | "fs_write" => Self::Write {
+            "write" | "create" | "fs_write" | "write_file" => Self::Write {
                 path: path()?,
                 content: string(&input, &["content", "file_text", "text"])?,
             },
-            "edit" | "search_replace" | "str_replace" => {
-                // pi's edit takes its replacements as `edits`; only one is an edit the others make.
-                let one = match input.get("edits") {
-                    Some(Value::Array(edits)) => match edits.as_slice() {
-                        [Value::Object(edit)] => edit.clone(),
-                        _ => return None,
-                    },
-                    _ => input.clone(),
-                };
-                Self::Edit {
-                    path: path()?,
-                    old: string(&one, &[
-                        "old_string",
-                        "oldString",
-                        "oldText",
-                        "old_str",
-                        "oldStr",
-                    ])?,
-                    new: string(&one, &[
-                        "new_string",
-                        "newString",
-                        "newText",
-                        "new_str",
-                        "newStr",
-                    ])?,
-                    all: ["replace_all", "replaceAll"]
+            // Hermes's `patch` replaces as an edit does, unless given a patch's text instead.
+            "edit" | "search_replace" | "str_replace" | "patch" | "multiedit" => {
+                // pi's edit and Claude Code's `MultiEdit` take their replacements as `edits`.
+                let mut edits = match input.get("edits") {
+                    Some(Value::Array(edits)) => edits
                         .iter()
-                        .any(|k| one.get(*k).and_then(Value::as_bool) == Some(true)),
+                        .map(|edit| edit.as_object().and_then(replacement))
+                        .collect::<Option<Vec<_>>>()?,
+                    _ => vec![replacement(&input)?],
+                };
+                let path = path()?;
+                if edits.len() == 1 {
+                    let (old, new, all) = edits.remove(0);
+                    Self::Edit {
+                        path,
+                        old,
+                        new,
+                        all,
+                    }
+                } else if edits.is_empty() {
+                    return None;
+                } else {
+                    Self::MultiEdit { path, edits }
                 }
             }
+            "search_files" => {
+                let pattern = string(&input, &["pattern"])?;
+                let path = string(&input, &["path"]);
+                match input.get("target").and_then(Value::as_str) {
+                    Some("files") => Self::Glob { pattern, path },
+                    _ => Self::Grep {
+                        pattern,
+                        path,
+                        glob: string(&input, &["file_glob"]),
+                        insensitive: false,
+                    },
+                }
+            }
+            "websearch" => Self::WebSearch {
+                query: string(&input, &["query"])?,
+            },
+            "webfetch" => Self::WebFetch {
+                url: string(&input, &["url"])?,
+            },
             "grep" => Self::Grep {
                 pattern: string(&input, &["pattern"])?,
                 path: string(&input, &["path"]),
@@ -236,7 +281,7 @@ impl Canonical {
 
     /// This call as `target`'s own tool, when it has one that does the same: its name and input.
     fn render(&self, target: AnyHarness, cwd: &Path) -> Option<(&'static str, Value)> {
-        use AnyHarness::{ClaudeCode, Codex, Copilot, Grok, Kiro, Opencode, Pi};
+        use AnyHarness::{ClaudeCode, Codex, Copilot, Grok, Hermes, Kiro, Opencode, Pi};
 
         let mut input = Map::new();
         let mut put = |key: &str, value: Option<Value>| {
@@ -252,11 +297,24 @@ impl Canonical {
             }
             // Codex runs everything else through its shell.
             (_, Codex(_)) => return None,
+            // Made a call per replacement by `carry`, where the target takes that.
+            (Self::MultiEdit { .. }, _) => return None,
+            (Self::WebSearch { query }, Hermes(_)) => {
+                put("query", Some(json!(query)));
+                "web_search"
+            }
+            (Self::WebFetch { url }, Hermes(_)) => {
+                put("urls", Some(json!([url])));
+                "web_extract"
+            }
+            // The others' web tools take input atuin hasn't seen, or none it can make.
+            (Self::WebSearch { .. } | Self::WebFetch { .. }, _) => return None,
             (Self::Shell { command }, _) => {
                 put("command", Some(json!(command)));
                 match target {
                     ClaudeCode(_) => "Bash",
                     Grok(_) => "run_terminal_command",
+                    Hermes(_) => "terminal",
                     Kiro(_) => "execute_bash",
                     _ => "bash",
                 }
@@ -308,8 +366,7 @@ impl Canonical {
                 put("limit", limit.clone());
                 match target {
                     ClaudeCode(_) => "Read",
-                    Grok(_) => "read_file",
-                    Kiro(_) => "read_file",
+                    Grok(_) | Hermes(_) | Kiro(_) => "read_file",
                     _ => "read",
                 }
             }
@@ -328,6 +385,7 @@ impl Canonical {
                 put("content", Some(json!(content)));
                 match target {
                     ClaudeCode(_) => "Write",
+                    Hermes(_) => "write_file",
                     _ => "write",
                 }
             }
@@ -344,7 +402,9 @@ impl Canonical {
             ) => {
                 put(path_key(target), Some(json!(path)));
                 let (old_key, new_key, all_key) = match target {
-                    ClaudeCode(_) | Grok(_) => ("old_string", "new_string", "replace_all"),
+                    ClaudeCode(_) | Grok(_) | Hermes(_) => {
+                        ("old_string", "new_string", "replace_all")
+                    }
                     Opencode(_) => ("oldString", "newString", "replaceAll"),
                     Kiro(_) => ("oldStr", "newStr", "replace_all"),
                     Copilot(_) => ("old_str", "new_str", ""),
@@ -356,6 +416,7 @@ impl Canonical {
                 match target {
                     ClaudeCode(_) => "Edit",
                     Grok(_) => "search_replace",
+                    Hermes(_) => "patch",
                     Kiro(_) => "str_replace",
                     _ => "edit",
                 }
@@ -392,13 +453,34 @@ impl Canonical {
                 put("caseSensitive", (!insensitive).then_some(json!(true)));
                 "grep_search"
             }
-            // opencode's search can't ignore case.
+            // opencode's and Hermes's searches can't ignore case.
             (
                 Self::Grep {
                     insensitive: true, ..
                 },
-                Opencode(_),
+                Opencode(_) | Hermes(_),
             ) => return None,
+            (
+                Self::Grep {
+                    pattern,
+                    path,
+                    glob,
+                    ..
+                },
+                Hermes(_),
+            ) => {
+                put("pattern", Some(json!(pattern)));
+                put("target", Some(json!("content")));
+                put("path", path.as_ref().map(|p| json!(p)));
+                put("file_glob", glob.as_ref().map(|g| json!(g)));
+                "search_files"
+            }
+            (Self::Glob { pattern, path }, Hermes(_)) => {
+                put("pattern", Some(json!(pattern)));
+                put("target", Some(json!("files")));
+                put("path", path.as_ref().map(|p| json!(p)));
+                "search_files"
+            }
             (
                 Self::Grep {
                     pattern,
@@ -516,9 +598,28 @@ impl CallIds {
 /// items (Codex's): a call kept as the tool it was, under such a name, would read as that tool.
 fn native(target: AnyHarness, name: &str) -> bool {
     let names: &[&str] = match target {
-        AnyHarness::Hermes(_) => {
-            unreachable!("refused by continue_at and fork: Hermes transcripts are never written")
-        }
+        // The `hermes-cli` toolset from `toolsets.py`, and the deferred tools it reaches.
+        AnyHarness::Hermes(_) => &[
+            "terminal",
+            "read_file",
+            "write_file",
+            "patch",
+            "search_files",
+            "web_search",
+            "web_extract",
+            "execute_code",
+            "delegate_task",
+            "clarify",
+            "memory",
+            "browser_exec",
+            "text_to_speech",
+            "manage_connections",
+            "tool_search",
+            "tool_describe",
+            "tool_call",
+            "process_manage",
+            "todo_list",
+        ],
         AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) => &[
             "bash",
             "read",
@@ -626,8 +727,10 @@ fn native(target: AnyHarness, name: &str) -> bool {
 }
 
 /// `call` (made in `source`, in a session that ran in `ran_in`) and its `result` as `target`
-/// writes them, in a session resuming in `cwd`. A call kept as the tool it was, whose name is one of the target's own tools (which
-/// takes other input), is named for its source: `pi_edit`.
+/// writes them, in a session resuming in `cwd`. That is one call, or for Hermes, a `patch` call per
+/// replacement of a multi-edit, each answered by the edit's result. A call kept as the tool it
+/// was, whose name is one of the target's own tools, is named for its source, since the target's
+/// tool of that name takes other input. For example, pi's `edit` becomes `pi_edit`.
 pub(super) fn carry(
     source: AnyHarness,
     target: AnyHarness,
@@ -636,44 +739,179 @@ pub(super) fn carry(
     ran_in: &Path,
     cwd: &Path,
     ids: &mut CallIds,
-) -> (ToolUse, ToolResult) {
-    let (name, input) = Canonical::parse(source, &call.name, &call.input, ran_in)
-        .and_then(|canonical| canonical.render(target, cwd))
-        .map_or_else(
-            || {
-                let name = if native(target, &call.name) {
-                    format!("{}_{}", source.name(), call.name)
-                } else {
-                    call.name.clone()
-                };
-                (api_name(&name, "tool"), call.input.clone())
-            },
-            |(name, input)| (name.to_owned(), input),
-        );
-    let id = ids.mint(&call.id);
-    // Kiro's shell tool reports its output with the command's exit code, which capture didn't
-    // keep: a command that failed is given 1, so the model still reads it as failed.
-    let output = if matches!(target, AnyHarness::Kiro(_)) && name == "execute_bash" {
-        let code = if result.error {
-            1
-        } else {
-            0
-        };
-        format!("Output:\n{}\n\n\nExit Code: {code}", output_text(result))
-    } else {
-        output_text(result)
+) -> Vec<(ToolUse, ToolResult)> {
+    let canonical = Canonical::parse(source, &call.name, &call.input, ran_in);
+    let calls = match canonical {
+        Some(Canonical::MultiEdit { path, edits }) if matches!(target, AnyHarness::Hermes(_)) => {
+            edits
+                .into_iter()
+                .map(|(old, new, all)| Canonical::Edit {
+                    path: path.clone(),
+                    old,
+                    new,
+                    all,
+                })
+                .collect()
+        }
+        Some(canonical) => vec![canonical],
+        None => Vec::new(),
     };
-    let call = ToolUse {
-        id: id.clone(),
-        name,
-        input: input_for(target, input),
+    let rendered: Option<Vec<(&'static str, Value, Canonical)>> = (!calls.is_empty())
+        .then(|| {
+            calls
+                .into_iter()
+                .map(|canonical| {
+                    let (name, input) = canonical.render(target, cwd)?;
+                    Some((name, input, canonical))
+                })
+                .collect()
+        })
+        .flatten();
+    let carried = rendered.map_or_else(
+        || {
+            let name = if native(target, &call.name) {
+                format!("{}_{}", source.name(), call.name)
+            } else {
+                call.name.clone()
+            };
+            vec![(api_name(&name, "tool"), call.input.clone(), None)]
+        },
+        |calls| {
+            calls
+                .into_iter()
+                .map(|(name, input, canonical)| (name.to_owned(), input, Some(canonical)))
+                .collect()
+        },
+    );
+    carried
+        .into_iter()
+        .map(|(name, input, canonical)| {
+            let id = ids.mint(&call.id);
+            let output = output_for(target, &name, canonical.as_ref(), result);
+            let call = ToolUse {
+                id: id.clone(),
+                name,
+                input: input_for(target, input),
+            };
+            let result = ToolResult {
+                call: id,
+                output: Value::String(output),
+                error: result.error,
+            };
+            (call, result)
+        })
+        .collect()
+}
+
+/// `result`'s output as `target` writes it for a call to its tool `name`, which made `canonical`.
+fn output_for(
+    target: AnyHarness,
+    name: &str,
+    canonical: Option<&Canonical>,
+    result: &ToolResult,
+) -> String {
+    let text = output_text(result);
+    match (target, canonical) {
+        // Kiro's shell tool reports its output with the command's exit code, which capture
+        // didn't keep: a command that failed is given 1, so the model still reads it as failed.
+        (AnyHarness::Kiro(_), _) if name == "execute_bash" => {
+            let code = i32::from(result.error);
+            format!("Output:\n{text}\n\n\nExit Code: {code}")
+        }
+        (AnyHarness::Hermes(_), Some(canonical)) => hermes_output(canonical, text, result.error),
+        _ => text,
+    }
+}
+
+/// A result of Hermes's own tool for `canonical`, in the shape that tool returns, so a result
+/// carried in reads as one Hermes wrote. Hermes's own code reads some of them back. Its compactor
+/// and its error checks read a `terminal` result's `exit_code` and `error`. The model copies a
+/// `patch`'s `old_string` from `read_file`'s `N|` lines. Some of what a shape holds capture didn't
+/// keep, such as an exit code or the size of a file. That is told from whether the call failed,
+/// or left out.
+fn hermes_output(canonical: &Canonical, text: String, error: bool) -> String {
+    let failed = |key: &str| json!({ key: text }).to_string();
+    let shaped = match canonical {
+        Canonical::Shell { .. } => {
+            // Hermes's own, carried back into it: as it was.
+            if serde_json::from_str::<Value>(&text).is_ok_and(|v| v.get("exit_code").is_some()) {
+                return text;
+            }
+            json!({"output": text, "exit_code": i32::from(error), "error": null})
+        }
+        Canonical::Read { .. } if error => json!({"content": "", "error": text}),
+        Canonical::Read { offset, .. } => {
+            let first = offset.as_ref().and_then(Value::as_u64).unwrap_or(1).max(1);
+            json!({"content": numbered(&text, first)})
+        }
+        Canonical::Write { .. } | Canonical::Glob { .. } | Canonical::Grep { .. } if error => {
+            return failed("error");
+        }
+        Canonical::Write { path, content } => {
+            json!({"bytes_written": content.len(), "files_modified": [path]})
+        }
+        Canonical::Edit { .. } | Canonical::MultiEdit { .. } if error => {
+            json!({"success": false, "error": text})
+        }
+        Canonical::Edit { path, .. } | Canonical::MultiEdit { path, .. } => {
+            json!({"success": true, "files_modified": [path]})
+        }
+        Canonical::Grep { .. } => {
+            // Claude Code's search opens with a count of its own, such as `Found 2 files`, which is
+            // no match.
+            let found = |line: &str| {
+                line.strip_prefix("Found ").and_then(|rest| rest.split_once(' ')).is_some_and(
+                    |(n, what)| {
+                        n.bytes().all(|b| b.is_ascii_digit())
+                            && ["file", "files", "match", "matches", "line", "lines"]
+                                .contains(&what.trim_end())
+                    },
+                )
+            };
+            let mut lines = text.lines().filter(|l| !l.trim().is_empty()).peekable();
+            if lines.peek().is_some_and(|first| found(first)) {
+                lines.next();
+            }
+            json!({"total_count": lines.count(), "matches_text": text})
+        }
+        Canonical::Glob { .. } => {
+            let files: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            json!({"total_count": files.len(), "files": files})
+        }
+        // Hermes's search results are entries atuin can't fill from another agent's text.
+        Canonical::WebSearch { .. } => return text,
+        Canonical::WebFetch { url } => json!({"results": [{"url": url, "content": text}]}),
     };
-    let result = ToolResult {
-        call: id,
-        output: Value::String(output),
-        error: result.error,
+    shaped.to_string()
+}
+
+/// A file read's `text` with its lines numbered as Hermes's `read_file` numbers them: `12|...`.
+/// Numbers another agent put on them are kept, such as Claude Code's `    12\t` and opencode's
+/// `00012| `. The lines of a read that numbered none are counted from `first`.
+fn numbered(text: &str, first: u64) -> String {
+    let split = |line: &str| -> Option<(u64, String)> {
+        let trimmed = line.trim_start();
+        let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+        let n = trimmed[..digits].parse().ok()?;
+        let rest = &trimmed[digits..];
+        let rest = rest
+            .strip_prefix('\t')
+            .or_else(|| rest.strip_prefix("| "))
+            .or_else(|| rest.strip_prefix('|'))
+            .or_else(|| rest.strip_prefix('→'))?;
+        Some((n, rest.to_owned()))
     };
-    (call, result)
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.iter().any(|line| split(line).is_some()) {
+        return lines
+            .iter()
+            .map(|line| {
+                split(line).map_or_else(|| (*line).to_owned(), |(n, rest)| format!("{n}|{rest}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    lines.iter().zip(first..).map(|(line, n)| format!("{n}|{line}")).collect::<Vec<_>>().join("\n")
 }
 
 #[cfg(test)]
@@ -682,7 +920,7 @@ mod tests {
 
     use super::*;
     use crate::harnesstools::continuation::tests::{
-        CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI,
+        CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI,
     };
 
     /// Copilot as a target, for a case whose source must stay Claude Code (its name shows in
@@ -707,7 +945,8 @@ mod tests {
         };
         // Resumed elsewhere than it ran (another machine).
         let (ran_in, cwd) = (Path::new("/work"), Path::new("/here"));
-        let (call, _) = carry(source, target, &call, &result, ran_in, cwd, &mut CallIds::default());
+        let (call, _) =
+            carry(source, target, &call, &result, ran_in, cwd, &mut CallIds::default()).remove(0);
         (call.name, call.input)
     }
 
@@ -767,6 +1006,23 @@ mod tests {
     #[case::kiro_append_kept_foreign("fs_append", json!({"path": "/a", "text": "x"}), CLAUDE, "fs_append", json!({"path": "/a", "text": "x"}))]
     #[case::kiro_file_search_kept_foreign("file_search", json!({"query": "main"}), CLAUDE, "file_search", json!({"query": "main"}))]
     #[case::kiro_list_kept_foreign("list_directory", json!({"path": "/a"}), CLAUDE, "list_directory", json!({"path": "/a"}))]
+    #[case::claude_to_hermes("Bash", json!({"command": "ls", "description": "list"}), HERMES, "terminal", json!({"command": "ls"}))]
+    #[case::read_to_hermes("Read", json!({"file_path": "/a.rs", "offset": 10, "limit": 5}), HERMES, "read_file", json!({"path": "/a.rs", "offset": 10, "limit": 5}))]
+    #[case::write_to_hermes("Write", json!({"file_path": "/a.rs", "content": "x"}), HERMES, "write_file", json!({"path": "/a.rs", "content": "x"}))]
+    #[case::edit_to_hermes("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}), HERMES, "patch", json!({"path": "/a", "old_string": "a", "new_string": "b", "replace_all": true}))]
+    #[case::grep_to_hermes("Grep", json!({"pattern": "fn main", "path": "src", "glob": "*.rs"}), HERMES, "search_files", json!({"pattern": "fn main", "target": "content", "path": "src", "file_glob": "*.rs"}))]
+    #[case::insensitive_grep_kept_foreign_by_hermes("Grep", json!({"pattern": "fn main", "-i": true}), HERMES, "Grep", json!({"pattern": "fn main", "-i": true}))]
+    #[case::glob_to_hermes("Glob", json!({"pattern": "**/*.rs"}), HERMES, "search_files", json!({"pattern": "**/*.rs", "target": "files"}))]
+    #[case::web_search_to_hermes("WebSearch", json!({"query": "atuin"}), HERMES, "web_search", json!({"query": "atuin"}))]
+    #[case::web_fetch_to_hermes("WebFetch", json!({"url": "https://atuin.sh", "prompt": "what is it"}), HERMES, "web_extract", json!({"urls": ["https://atuin.sh"]}))]
+    #[case::web_search_kept_foreign("WebSearch", json!({"query": "atuin"}), PI, "WebSearch", json!({"query": "atuin"}))]
+    #[case::hermes_name_kept_foreign_by_hermes("delegate_task", json!({"goal": "x"}), HERMES, "claude-code_delegate_task", json!({"goal": "x"}))]
+    #[case::hermes_write_to_claude("write_file", json!({"path": "/a.rs", "content": "x"}), CLAUDE, "Write", json!({"file_path": "/a.rs", "content": "x"}))]
+    #[case::hermes_patch_to_claude("patch", json!({"path": "/a", "old_string": "a", "new_string": "b"}), CLAUDE, "Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}))]
+    #[case::hermes_patch_text_kept_foreign("patch", json!({"mode": "patch", "patch": "*** Begin Patch"}), CLAUDE, "patch", json!({"mode": "patch", "patch": "*** Begin Patch"}))]
+    #[case::hermes_search_to_claude("search_files", json!({"pattern": "*.rs", "target": "files"}), CLAUDE, "Glob", json!({"pattern": "*.rs"}))]
+    #[case::hermes_grep_to_claude("search_files", json!({"pattern": "TODO", "file_glob": "*.rs"}), CLAUDE, "Grep", json!({"pattern": "TODO", "glob": "*.rs"}))]
+    #[case::multi_edit_kept_foreign_by_pi("MultiEdit", json!({"file_path": "/a", "edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "c", "new_string": "d"}]}), PI, "MultiEdit", json!({"file_path": "/a", "edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "c", "new_string": "d"}]}))]
     fn calls_translate(
         #[case] name: &str,
         #[case] input: Value,
@@ -799,7 +1055,8 @@ mod tests {
             error: false,
         };
         let here = Path::new("/work");
-        let (call, _) = carry(source, CLAUDE, &call, &result, here, here, &mut CallIds::default());
+        let (call, _) =
+            carry(source, CLAUDE, &call, &result, here, here, &mut CallIds::default()).remove(0);
         assert_eq!((call.name.as_str(), call.input), ("Read", want));
     }
 
@@ -835,7 +1092,7 @@ mod tests {
         };
         let (ran_in, cwd) = (Path::new("/work"), Path::new("/work"));
         let (_, carried) =
-            carry(CLAUDE, KIRO, &call, &result, ran_in, cwd, &mut CallIds::default());
+            carry(CLAUDE, KIRO, &call, &result, ran_in, cwd, &mut CallIds::default()).remove(0);
         assert_eq!(carried.output, json!(want));
         assert_eq!(carried.error, error);
         // A read's output is as it was.
@@ -845,8 +1102,103 @@ mod tests {
             input: json!({"file_path": "/a.rs"}),
         };
         let (_, carried) =
-            carry(CLAUDE, KIRO, &read, &result, ran_in, cwd, &mut CallIds::default());
+            carry(CLAUDE, KIRO, &read, &result, ran_in, cwd, &mut CallIds::default()).remove(0);
         assert_eq!(carried.output, json!("3 passed"));
+    }
+
+    /// `name` with `input`, answered `output`, carried from Claude Code into Hermes: each call and
+    /// its result's output. The result failed when `error` is set.
+    fn into_hermes(name: &str, input: Value, output: &str, error: bool) -> Vec<(ToolUse, String)> {
+        let call = ToolUse {
+            id: ToolCallId::from("toolu_01".to_owned()),
+            name: name.to_owned(),
+            input,
+        };
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: json!(output),
+            error,
+        };
+        let here = Path::new("/work");
+        carry(CLAUDE, HERMES, &call, &result, here, here, &mut CallIds::default())
+            .into_iter()
+            .map(|(call, result)| {
+                assert_eq!(result.call, call.id);
+                assert_eq!(result.error, error);
+                (call, result.output.as_str().unwrap().to_owned())
+            })
+            .collect()
+    }
+
+    fn output(name: &str, input: Value, output: &str, error: bool) -> Value {
+        let carried = into_hermes(name, input, output, error);
+        let [(_, output)] = carried.as_slice() else {
+            panic!("one call: {carried:?}");
+        };
+        serde_json::from_str(output).unwrap_or_else(|_| json!(output))
+    }
+
+    /// A result carried into Hermes takes the shape Hermes's own tool returns, which Hermes's code
+    /// reads back: a shell command's exit code, and a read's `N|` lines. A call that failed gets
+    /// exit code 1.
+    #[rstest]
+    #[case::ran("Bash", json!({"command": "ls"}), "a b", false, json!({"output": "a b", "exit_code": 0, "error": null}))]
+    #[case::shell_failed("Bash", json!({"command": "ls /nope"}), "No such file", true, json!({"output": "No such file", "exit_code": 1, "error": null}))]
+    #[case::read_numbered_by_claude("Read", json!({"file_path": "/a"}), "     9\tfn main() {\n    10\t}", false, json!({"content": "9|fn main() {\n10|}"}))]
+    #[case::read_numbered_by_opencode("read", json!({"filePath": "/a"}), "<file>\n00009| fn main() {\n</file>", false, json!({"content": "<file>\n9|fn main() {\n</file>"}))]
+    #[case::read_plain_from_its_offset("Read", json!({"file_path": "/a", "offset": 3}), "c\nd", false, json!({"content": "3|c\n4|d"}))]
+    #[case::read_failed("Read", json!({"file_path": "/a"}), "File does not exist.", true, json!({"content": "", "error": "File does not exist."}))]
+    #[case::wrote("Write", json!({"file_path": "/a", "content": "hello"}), "File created", false, json!({"bytes_written": 5, "files_modified": ["/a"]}))]
+    #[case::edited("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}), "The file /a has been updated.", false, json!({"success": true, "files_modified": ["/a"]}))]
+    #[case::edit_failed("Edit", json!({"file_path": "/a", "old_string": "a", "new_string": "b"}), "String to replace not found", true, json!({"success": false, "error": "String to replace not found"}))]
+    #[case::grepped("Grep", json!({"pattern": "x"}), "a.rs\nb.rs", false, json!({"total_count": 2, "matches_text": "a.rs\nb.rs"}))]
+    #[case::grepped_by_claude("Grep", json!({"pattern": "x"}), "Found 1 file\n/w/a.rs", false, json!({"total_count": 1, "matches_text": "Found 1 file\n/w/a.rs"}))]
+    #[case::globbed("Glob", json!({"pattern": "*.rs"}), "a.rs\nb.rs\n", false, json!({"total_count": 2, "files": ["a.rs", "b.rs"]}))]
+    #[case::searched("WebSearch", json!({"query": "atuin"}), "Atuin: magical shell history", false, json!("Atuin: magical shell history"))]
+    #[case::fetched("WebFetch", json!({"url": "https://atuin.sh", "prompt": "?"}), "A shell history tool.", false, json!({"results": [{"url": "https://atuin.sh", "content": "A shell history tool."}]}))]
+    #[case::foreign("mcp__atuin__history", json!({}), "plain", false, json!("plain"))]
+    fn results_carried_into_hermes_take_its_shapes(
+        #[case] name: &str,
+        #[case] input: Value,
+        #[case] said: &str,
+        #[case] error: bool,
+        #[case] want: Value,
+    ) {
+        assert_eq!(output(name, input, said, error), want);
+    }
+
+    /// A Hermes `terminal` result carried back into Hermes is left as it was, its real exit code
+    /// with it.
+    #[rstest]
+    fn a_hermes_shell_result_stays_as_it_was() {
+        let envelope = r#"{"output": "x", "exit_code": 2, "error": null}"#;
+        let carried = into_hermes("terminal", json!({"command": "false"}), envelope, true);
+        assert_eq!(carried[0].1, envelope);
+    }
+
+    /// Hermes's `patch` makes one replacement, so a multi-edit is a call each, every one
+    /// answered by the edit's result.
+    #[rstest]
+    fn a_multi_edit_is_a_patch_per_replacement() {
+        let carried = into_hermes(
+            "MultiEdit",
+            json!({"file_path": "/a", "edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "c", "new_string": "d", "replace_all": true}]}),
+            "Applied 2 edits",
+            false,
+        );
+        let calls: Vec<(&str, &str, Value)> = carried
+            .iter()
+            .map(|(call, _)| (call.id.as_ref(), call.name.as_str(), call.input.clone()))
+            .collect();
+        assert_eq!(calls, [
+            ("toolu_01", "patch", json!({"path": "/a", "old_string": "a", "new_string": "b"})),
+            (
+                "toolu_01_2",
+                "patch",
+                json!({"path": "/a", "old_string": "c", "new_string": "d", "replace_all": true})
+            ),
+        ]);
+        assert!(carried.iter().all(|(_, output)| output.contains(r#""success":true"#)));
     }
 
     #[rstest]

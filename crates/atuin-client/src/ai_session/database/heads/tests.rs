@@ -738,3 +738,66 @@ fn rows_for_a_branch_of_nodes_are_its_path(#[case] harness: HarnessKind) {
         assert_eq!(analysis.rows_for(&head.source_id), analysis.path_to(&head.source_id));
     }
 }
+
+/// A Hermes session `/undo`ne on one host and gone on with. The undone turn, u2 and a2, hangs from
+/// a1 as a dead end. The new turn, from u3 on, hangs from a1 too. One host wrote both, so the
+/// session didn't diverge. A call of the new turn has two results: the second hangs from the call
+/// beside the first, a twig with nothing substantive.
+const UNDONE: &[Row<'static>] = &[
+    ("syn-title", None, 1, 0, Title),
+    ("u1", None, 1, 1, Prompt),
+    ("a1", Some("u1"), 1, 2, Reply),
+    ("u2", Some("a1"), 1, 3, Prompt),
+    ("a2", Some("u2"), 1, 4, Reply),
+    ("u3", Some("a1"), 1, 5, Prompt),
+    ("c3", Some("u3"), 1, 6, Tool),
+    ("t3", Some("c3"), 1, 7, Tool),
+    ("t3b", Some("c3"), 1, 8, Tool),
+    ("a3", Some("t3"), 1, 9, Reply),
+];
+
+/// The branch a harness resuming one branch alone keeps: the newest head's rows, the twig its
+/// path leaves out among them, the title with them, and none of the undone turn.
+#[rstest]
+fn a_branchs_rows_keep_its_twigs_and_leave_the_undone_turn() {
+    let analysis = analyse(HarnessKind::Hermes, UNDONE);
+    assert!(!analysis.diverged(), "a rewind on one host is no divergence");
+    let newest = analysis.heads()[0].source_id.clone();
+    assert_eq!(newest.as_ref(), "a3");
+    let ids = |rows: Vec<&Message>| -> Vec<String> {
+        rows.iter().map(|m| m.source_id.to_string()).collect()
+    };
+    assert_eq!(ids(analysis.path_to(&newest)), ["u1", "a1", "u3", "c3", "t3", "a3"]);
+    assert_eq!(ids(analysis.branch_rows(&newest)), [
+        "syn-title",
+        "u1",
+        "a1",
+        "u3",
+        "c3",
+        "t3",
+        "t3b",
+        "a3"
+    ]);
+    // The undone turn's own branch, and nothing of the new one.
+    assert_eq!(ids(analysis.branch_rows(&SourceId::from("a2".to_owned()))), [
+        "syn-title",
+        "u1",
+        "a1",
+        "u2",
+        "a2"
+    ]);
+    assert!(analysis.branch_rows(&SourceId::from("nope".to_owned())).is_empty());
+}
+
+/// On a session that never forked, a branch's rows are every row.
+#[rstest]
+fn a_single_lines_branch_rows_are_all_of_it() {
+    let rows: &[Row<'static>] = &[
+        ("u1", None, 1, 0, Prompt),
+        ("a1", Some("u1"), 1, 1, Reply),
+        ("t1", Some("a1"), 1, 2, Tool),
+    ];
+    let analysis = analyse(HarnessKind::Hermes, rows);
+    let head = analysis.heads()[0].source_id.clone();
+    assert_eq!(analysis.branch_rows(&head).len(), 3);
+}

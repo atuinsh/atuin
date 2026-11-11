@@ -31,6 +31,7 @@
 use atuin_client::ai_session::{
     Analysis, FastForward, HarnessKind, HarnessSession, Head, Message, SourceId,
 };
+use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::rehydrate::RehydrateMessage;
 use atuin_common::harnesstools::session::{Content, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
@@ -468,7 +469,7 @@ pub async fn fork_from(
     session: &HarnessSession,
     head: Option<&SourceId>,
 ) -> Result<ForkFrom, NotResumable> {
-    let rows = branch_rows(source, session, head)
+    let rows = branch_rows(source, session, head, writes_one_branch(session.harness))
         .await
         .map_err(|e| NotResumable::Fork(format!("{e:#}")))?;
     Ok(ForkFrom {
@@ -477,25 +478,43 @@ pub async fn fork_from(
     })
 }
 
+/// Whether a copy of a session of `harness` written out as itself, a restore or a fork, holds the
+/// one branch the harness resumes, as [`Harness::writes_one_branch`] says. A continuation writes a
+/// line of rows of its own, whatever its target.
+///
+/// [`Harness::writes_one_branch`]: atuin_common::harnesstools::Harness::writes_one_branch
+pub fn writes_one_branch(harness: HarnessKind) -> bool {
+    harness.harness().is_some_and(|h| h.writes_one_branch())
+}
+
 /// The rows a transcript of `session` written out along `head` holds (see
 /// [`Analysis::rows_for`]): a head named (`--branch`, or a fork line picked) is followed; without
 /// one, a session that went on separately on several machines follows its newest head, so no
-/// branch's messages land in another's. `None` for any other session (or one whose branches
-/// aren't known): it is written out from every row synced of it, as it always was, rows off every
-/// branch included. With the rows, the head followed, when it is one of the session's.
+/// branch's messages land in another's. When `one_branch` is set, any session follows its newest
+/// head, along [`Analysis::branch_rows`]. That is for a harness that resumes one branch alone, as
+/// [`writes_one_branch`] says: a turn undone on one machine is no divergence, but isn't the branch
+/// the harness resumes. `None` for any other session, or one whose branches aren't known:
+/// it is written out from every row synced of it, as it always was, rows off every branch
+/// included. With the rows, the head followed, when it is one of the session's.
 pub async fn branch_rows(
     source: &dyn SessionSource,
     session: &HarnessSession,
     head: Option<&SourceId>,
+    one_branch: bool,
 ) -> eyre::Result<Option<(Vec<RehydrateMessage>, Option<Head>)>> {
     let Some(analysis) = source.analyse(session).await? else {
         return Ok(None);
     };
-    let newest = analysis.diverged().then(|| analysis.heads().first()).flatten();
+    let newest = (analysis.diverged() || one_branch).then(|| analysis.heads().first()).flatten();
     let Some(head) = head.or(newest.map(|h| &h.source_id)) else {
         return Ok(None);
     };
-    let rows = analysis.rows_for(head).into_iter().map(|m| m.clone().into()).collect();
+    let rows = if one_branch {
+        analysis.branch_rows(head)
+    } else {
+        analysis.rows_for(head)
+    };
+    let rows = rows.into_iter().map(|m| m.clone().into()).collect();
     Ok(Some((rows, analysis.heads().iter().find(|h| h.source_id == *head).cloned())))
 }
 

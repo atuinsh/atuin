@@ -18,7 +18,10 @@
 //! delegated in `model_config._delegate_from`, else `parent_session_id`. A session that carries
 //! on one Hermes ended for compression (its parent's `end_reason` is
 //! `compression`, the rotating layout from before in-place compaction) is a session of its own,
-//! naming that parent as a [`ParentKind::Continuation`].
+//! naming that parent as a [`ParentKind::Continuation`]. A fork, made by `/branch` or by atuin's
+//! `rehydrate`, names the session it came from in `model_config._branched_from`, and a reset child
+//! in `_reset_from`. That holds whatever its `parent_session_id` says, which Hermes keeps only when
+//! the original is its own import. The reader names that session as a [`ParentKind::Fork`].
 //!
 //! **Rows.**
 //! - `user`: what the user typed, a steer sent mid-turn (`display_kind = 'steer'`) included.
@@ -62,7 +65,8 @@
 //! from the nearest earlier row it yielded, whatever its state. Live capture reads rows as they
 //! land, so its links are exact; an import of old rewinds can join two undone turns in a row
 //! into one dead branch, since nothing says the second was undone apart from the first. A row
-//! still counts as live when a copy of it is (a compaction clone under the same `message_uid`).
+//! is as live as its newest copy (a compaction clone under the same `message_uid`): an `/undo`
+//! of a turn a compaction carried on drops only the copies, and leaves the originals compacted.
 //!
 //! In-place edits of a row's content (`transcript_revision`) are not followed: what was
 //! captured stands.
@@ -451,7 +455,10 @@ impl Context {
                     .parent
                     .clone()
                     .filter(|_| row.parent_end_reason.as_deref() == Some("compression"))
-                    .map(|parent| (SessionId::from(parent), ParentKind::Continuation)),
+                    .map(|parent| (SessionId::from(parent), ParentKind::Continuation))
+                    .or_else(|| {
+                        row.forked_from().map(|from| (SessionId::from(from), ParentKind::Fork))
+                    }),
             },
         }
     }
@@ -840,6 +847,27 @@ impl HermesMessage {
             Kind::Row(row) => Some(row),
             Kind::Title { .. } => None,
         }
+    }
+
+    /// Whether the row is in the conversation Hermes resumes, as it was read; `None` for a
+    /// title row.
+    pub(crate) fn live(&self) -> Option<bool> {
+        self.row_ref().map(|row| row.live)
+    }
+
+    /// The synced rows that atuin's writer recorded this row as holding without a row of their own,
+    /// each with the row it went into. `rehydrate` says when it records them.
+    pub(crate) fn merged(&self) -> HashMap<String, String> {
+        let Some(row) = self.row_ref() else {
+            return HashMap::new();
+        };
+        let Value::Object(merged) = metadata(row)[super::rehydrate::MERGED_KEY].take() else {
+            return HashMap::new();
+        };
+        merged
+            .into_iter()
+            .filter_map(|(row, into)| Some((row, into.as_str()?.to_owned())))
+            .collect()
     }
 
     fn is_assistant(&self) -> bool {

@@ -1,6 +1,6 @@
 name: atuin
 version: "1"
-description: Records the shell commands Hermes runs in Atuin's history.
+description: Records the shell commands Hermes runs in Atuin's history, and imports the sessions Atuin writes.
 author: Atuin
 provides_hooks:
   - pre_tool_call

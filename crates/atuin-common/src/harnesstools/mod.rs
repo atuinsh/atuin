@@ -34,7 +34,7 @@ use kiro::Kiro;
 use mcp::{InstallMcp, InstallMcpError};
 use opencode::Opencode;
 use pi::Pi;
-use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession};
+use rehydrate::{RehydrateError, RehydrateMessage, RehydrateSession, Rehydrated};
 use resume::{ResumeError, ResumePlan, ResumeTarget};
 use session::any::{AnySessions, ObservableExt};
 use sync::{
@@ -56,12 +56,21 @@ pub trait Harness: std::fmt::Debug {
         &[]
     }
 
-    /// Whether atuin writes this harness's transcripts: restoring a session here
-    /// ([`Self::rehydrate`]), catching a copy up or switching its branch (`SessionSync`), and
-    /// forking or continuing a session into it. A harness atuin only reads (Hermes, until its
-    /// write side lands) says no, and every writer refuses it up front.
-    fn writes_transcripts(&self) -> bool {
-        true
+    /// Whether a session written out for this harness holds the one branch it resumes, rather
+    /// than every row synced of it. A harness whose transcript keeps a tree resumes the branch its
+    /// last line names, and leaves the rest as it is; one whose writer makes every row it's given
+    /// part of the conversation says yes, so a turn undone elsewhere isn't brought back.
+    fn writes_one_branch(&self) -> bool {
+        false
+    }
+
+    /// Whether a restore of a session that is a fork writes the fork's link to the session it came
+    /// from, as the fork itself does. A restore is written from synced rows, which name no fork, so
+    /// without the link a reader that finds none falls back to what the rows say. For Hermes, that
+    /// is the continuation marker a fork of a continuation copies, and the restored fork would be
+    /// read as that continuation. The other harnesses' restores of forks write no link yet.
+    fn restores_fork_links(&self) -> bool {
+        false
     }
 
     /// The harness's name as people know it. For example, setup says "Recording commands from Grok
@@ -101,11 +110,12 @@ pub trait Harness: std::fmt::Debug {
     async fn locate(&self, id: &str) -> Option<PathBuf>;
 
     /// Write `session` out as this harness's own transcript, where [`Self::locate`] (and the
-    /// harness itself) will find it, and return where it went: a session recorded on another
-    /// machine, or whose transcript is gone, can then be resumed like any other. Never replaces a
-    /// transcript already there ([`RehydrateError::AlreadyExists`]).
+    /// harness itself) will find it, and return where it went, and what it left out to fit, if
+    /// anything: a session recorded on another machine, or whose transcript is gone, can then be
+    /// resumed like any other. Never replaces a transcript already there
+    /// ([`RehydrateError::AlreadyExists`]).
     #[allow(async_fn_in_trait)]
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError>;
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError>;
 }
 
 #[enum_dispatch(Harness, SessionSync, ObservableExt, InstallMcp)]

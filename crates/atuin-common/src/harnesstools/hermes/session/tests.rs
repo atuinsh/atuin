@@ -260,6 +260,84 @@ async fn a_turn_after_an_undo_hangs_from_before_it() {
     writer.close().await.unwrap();
 }
 
+/// A session after an in-place compaction, in the shape `/compress` left in the rig with Hermes
+/// main d70cbc5205: every row compacted, then the head (`c-1`) and the tail (`c-3`, `c-4`)
+/// carried on as copies under the same `message_uid`s around the summary. `c-2` was summarized
+/// away and has no copy.
+pub const CARRIED: &str = "local-carried";
+pub const CARRIED_SQL: &str = "
+    INSERT INTO sessions (id, source, created_source, started_at)
+        VALUES ('local-carried', 'local', 'cli', 1794350000.0);
+    INSERT INTO messages (id, session_id, role, content, timestamp, active, compacted,
+                          _compressed_summary, message_uid) VALUES
+        (901, 'local-carried', 'user', 'look', 1794350001.0, 0, 1, 0, 'c-1'),
+        (902, 'local-carried', 'assistant', 'looked', 1794350002.0, 0, 1, 0, 'c-2'),
+        (903, 'local-carried', 'user', 'again', 1794350003.0, 0, 1, 0, 'c-3'),
+        (904, 'local-carried', 'assistant', 'looked again', 1794350004.0, 0, 1, 0, 'c-4'),
+        (905, 'local-carried', 'user', 'look', 1794350001.0, 1, 0, 0, 'c-1'),
+        (906, 'local-carried', 'assistant', 'the summary', 1794350005.0, 1, 0, 1, 'c-6'),
+        (907, 'local-carried', 'user', 'again', 1794350003.0, 1, 0, 0, 'c-3'),
+        (908, 'local-carried', 'assistant', 'looked again', 1794350004.0, 1, 0, 0, 'c-4');";
+
+/// What `/undo` of [`CARRIED`]'s last turn does: it drops the copies only, and leaves their
+/// originals compacted.
+pub const UNDO_CARRIED_SQL: &str =
+    "UPDATE messages SET active = 0 WHERE session_id = 'local-carried' AND id IN (907, 908);";
+
+/// An `/undo` of a turn a compaction carried on takes its originals out of the conversation with
+/// its copies, though Hermes leaves them compacted: the turn after hangs from before it, whether
+/// read live or from the start, as Hermes resumes it.
+#[rstest]
+#[tokio::test]
+async fn undoing_a_carried_turn_undoes_its_originals() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, CARRIED_SQL]).await;
+    let (wake, woken) = watch::channel(0);
+    let session = HermesSession {
+        changes: Some(woken),
+        ..HermesSession::open(SessionId::from(CARRIED.to_owned()), &db)
+    };
+    let mut messages = Box::pin(session.messages());
+    let mut next = async || {
+        tokio::time::timeout(Duration::from_secs(5), messages.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+    };
+    let before: Vec<String> = [next().await, next().await, next().await, next().await]
+        .iter()
+        .map(|m| m.id().unwrap().to_string())
+        .collect();
+    assert_eq!(before, ["c-1", "c-2", "c-3", "c-4"]);
+
+    execute_in(
+        &db,
+        &format!(
+            "{UNDO_CARRIED_SQL}
+             INSERT INTO messages (id, session_id, role, content, timestamp, message_uid)
+                 VALUES (909, 'local-carried', 'user', 'after', 1794350009.0, 'c-9');"
+        ),
+    )
+    .await;
+    wake.send_modify(|n| *n += 1);
+    let after = next().await;
+    assert_eq!(after.id().unwrap().as_ref(), "c-9");
+    assert_eq!(after.parent_id().unwrap().as_ref(), "c-2");
+
+    let link = |id: &str, parent: Option<&str>| (id.to_owned(), parent.map(str::to_owned));
+    let read = read(&db, CARRIED).await;
+    assert_eq!(parents(&read), [
+        link("c-1", None),
+        link("c-2", Some("c-1")),
+        link("c-3", Some("c-2")),
+        link("c-4", Some("c-3")),
+        link("c-9", Some("c-2")),
+    ]);
+    let live: Vec<_> = read.iter().map(|m| m.live()).collect();
+    assert_eq!(live, [Some(true), Some(true), Some(false), Some(false), Some(true)]);
+}
+
 /// A store rewound under a read (a backup restored after capture read past its end) hands out
 /// row ids the read has passed again. The read sees its last row changed and starts over, rather
 /// than skip the new rows that reuse old ids.
@@ -815,4 +893,31 @@ async fn an_untouched_session_waits_for_a_change() {
     assert!(!changed.is_finished());
     wake.send_modify(|n| *n += 1);
     assert!(changed.await.unwrap().is_some());
+}
+
+/// A fork names the session it came from in `model_config`, as `/branch` and atuin's writer do,
+/// whether or not Hermes kept its `parent_session_id`; a reset child the same way.
+#[rstest]
+#[case::branch(r#"{"_branched_from": "orig"}"#, Some("orig"))]
+#[case::reset(r#"{"_reset_from": "orig"}"#, Some("orig"))]
+#[case::detached(r#"{"_branched_from": "gone"}"#, Some("gone"))]
+#[case::none(r#"{"gateway_runtime": {"provider": "openrouter"}}"#, None)]
+#[tokio::test]
+async fn a_fork_names_its_original(#[case] config: &str, #[case] want: Option<&str>) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA]).await;
+    execute_in(
+        &db,
+        &format!(
+            "INSERT INTO sessions (id, source, started_at) VALUES ('orig', 'cli', 1.0);
+             INSERT INTO sessions (id, source, started_at, model_config) VALUES ('fork', 'cli', \
+             2.0, '{config}');
+             INSERT INTO messages (session_id, role, content, timestamp, message_uid) VALUES
+                 ('fork', 'user', 'hello', 2.0, 'u1');"
+        ),
+    )
+    .await;
+    let messages = read(&db, "fork").await;
+    assert_eq!(messages[0].parent_session().as_ref().map(AsRef::as_ref), want);
+    assert_eq!(messages[0].parent_kind(), want.map(|_| ParentKind::Fork));
 }

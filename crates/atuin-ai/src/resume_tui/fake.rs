@@ -26,7 +26,7 @@ use time::{Duration, OffsetDateTime};
 use super::ResumeContext;
 use super::catchup::CatchUp;
 use super::resumer::{
-    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
+    Continued, ForkFrom, Forked, NotResumable, Restore, Restored, Resume, ResumeError, ResumePlan,
     ResumeTarget, Resumer, Switched,
 };
 use super::source::{
@@ -1121,9 +1121,12 @@ impl Resumer for FakeResumer {
         _source: &dyn SessionSource,
         session: &SessionRow,
         _restore: &Restore,
-    ) -> Result<ResumePlan, NotResumable> {
+    ) -> Result<Restored, NotResumable> {
         let native = PathBuf::from(format!("/restored/{}.jsonl", session.handle.session));
-        self.plan_for(session, Some(native))
+        Ok(Restored {
+            plan: self.plan_for(session, Some(native))?,
+            status: "restored the thread from sync".to_owned(),
+        })
     }
 
     /// Every other harness is installed. A session of a harness atuin doesn't know can't be

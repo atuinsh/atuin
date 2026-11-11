@@ -1,4 +1,5 @@
-"""Atuin's plugin for Hermes Agent: records the shell commands Hermes runs in Atuin's history.
+"""Atuin's plugin for Hermes Agent: records the shell commands Hermes runs in Atuin's history,
+and imports the sessions atuin writes into Hermes's store.
 
 `atuin hook install hermes` writes this file to `$HERMES_HOME/plugins/atuin/` and runs
 `hermes plugins enable atuin`.
@@ -12,6 +13,14 @@ Hermes runs a `pre_tool_call` callback under `plugins.hook_callback_timeout` and
 command when the callback overruns or raises. So the callbacks only queue the event and return
 None, and one worker thread hands the events to atuin in order: a command's end never reaches
 atuin before its start.
+
+`hermes atuin import <file>` is how atuin writes a session: a restore, a fork, or a continuation
+from another agent. The gateway is the only process Hermes lets write `state.db`. The only verb
+that takes a whole session is `session.mutate import`, and `hermes sessions import` reaches it only
+through a parser that drops tool calls. The command hands the gateway one session row, shaped as
+`hermes sessions export` writes one, and prints one JSON line saying what happened: `{"ok": true,
+...}` when the session was imported, else `{"ok": false, "error": ...}`. It exits 0 only when it
+was.
 """
 
 import atexit
@@ -21,6 +30,7 @@ import queue
 import subprocess
 import threading
 import time
+import uuid
 
 # Replaced with atuin's absolute path at install: the gateway that runs hooks doesn't have the
 # shell's PATH.
@@ -41,6 +51,12 @@ _worker_lock = threading.Lock()
 def register(ctx):
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("post_tool_call", _on_post_tool_call)
+    # Hermes before plugin commands still records commands; only atuin's writes need this.
+    register_cli_command = getattr(ctx, "register_cli_command", None)
+    if register_cli_command is not None:
+        register_cli_command(
+            "atuin", "Write the sessions atuin restores into this store", _setup_cli, _run_cli
+        )
 
 
 def _on_pre_tool_call(**kwargs):
@@ -147,3 +163,70 @@ def _send(event):
 def _drain(worker):
     _events.put(None)
     worker.join(_DRAIN_TIMEOUT_S)
+
+
+def _setup_cli(parser):
+    actions = parser.add_subparsers(dest="atuin_action")
+    imported = actions.add_parser("import", help="Import one session row (JSON) atuin wrote")
+    imported.add_argument("file")
+
+
+def _run_cli(args):
+    if getattr(args, "atuin_action", None) != "import":
+        return _reply(False, error="usage: hermes atuin import <file>", code=2)
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            row = json.load(f)
+    except Exception as exc:
+        return _reply(False, error=f"can't read {args.file}: {exc}")
+    session_id = row.get("id") if isinstance(row, dict) else None
+    if not isinstance(session_id, str) or not session_id:
+        return _reply(False, error="the row names no session id")
+    # The gateway's client, as `hermes sessions import` reaches it: Hermes internals, so a
+    # Hermes that moved them is told apart from a refused import.
+    try:
+        from hermes_cli.gateway_session_store import session_store
+    except Exception as exc:
+        return _reply(False, error=f"unsupported_hermes: no session store to import through ({exc})")
+    try:
+        receipt = session_store().call(
+            "session.mutate",
+            session_id=session_id,
+            request_id=uuid.uuid4().hex,
+            # A new session's revision: an id the store holds fails `revision_conflict`.
+            expected_revision=0,
+            operation="import",
+            payload={"sessions": [row]},
+        )
+    except Exception as exc:
+        reason = getattr(exc, "code", None) or getattr(exc, "reason", None)
+        text = str(exc) or type(exc).__name__
+        if isinstance(reason, str) and reason not in text:
+            text = f"{reason}: {text}"
+        return _reply(False, error=text)
+    imported = _count(receipt, "imported")
+    if imported == 1:
+        return _reply(True, receipt=receipt)
+    skipped = _count(receipt, "skipped")
+    return _reply(False, error="skipped" if skipped else "nothing imported", receipt=receipt)
+
+
+def _count(receipt, key):
+    """The count `key` of a receipt, wherever the gateway nests it: the verb's own result is
+    wrapped in the receipt layer's."""
+    if isinstance(receipt, dict):
+        value = receipt.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        for inner in receipt.values():
+            found = _count(inner, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _reply(ok, code=None, **fields):
+    print(json.dumps({"ok": ok, **fields}, default=repr), flush=True)
+    if code is not None:
+        return code
+    return 0 if ok else 1

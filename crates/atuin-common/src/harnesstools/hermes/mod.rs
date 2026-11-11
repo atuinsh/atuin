@@ -1,15 +1,16 @@
-//! Hermes Agent (Nous Research, `hermes`): reading its sessions and resuming them.
+//! Hermes Agent, Nous Research's `hermes`: reading its sessions, resuming them, and writing them.
 //!
 //! Hermes keeps every session in one SQLite database per home, `state.db` (see [`session`] for
-//! the reader and `store` for how it opens the file). Read-only for now: atuin never writes a
-//! Hermes session ([`Harness::writes_transcripts`]), so restore, catch-up, switch, fork and
-//! continuation into Hermes are off. What the reader knows of the store was verified against
-//! Hermes v0.23.0 and its main branch at d70cbc5205.
+//! the reader and `store` for how it opens the file). Only its gateway writes the store, so atuin
+//! writes a session through its plugin's `hermes atuin import`, as `rehydrate` describes. That
+//! session is a restore, a fork or a continuation. An import only adds new sessions: a copy here
+//! is never caught up or switched, and sync forks instead. What atuin knows of the store was
+//! verified against Hermes v0.23.0 and its main branch at d70cbc5205.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
@@ -20,6 +21,7 @@ pub mod cli;
 pub mod home;
 pub mod hooks;
 pub mod mcp;
+pub(crate) mod rehydrate;
 pub mod session;
 pub(crate) mod store;
 
@@ -88,9 +90,15 @@ impl Harness for Hermes {
         hooks::install(&install_home(), &atuin).await
     }
 
-    /// Never: atuin doesn't write Hermes sessions yet.
-    fn writes_transcripts(&self) -> bool {
-        false
+    /// Yes: Hermes's import takes every row it's given as live, so a turn `/undo` dropped would
+    /// come back beside the one that replaced it.
+    fn writes_one_branch(&self) -> bool {
+        true
+    }
+
+    /// Yes: a fork's `model_config._branched_from` is the only link Hermes's reader reads for it.
+    fn restores_fork_links(&self) -> bool {
+        true
     }
 
     /// `hermes --resume <id>`, from anywhere: Hermes changes into the session's own directory
@@ -113,8 +121,10 @@ impl Harness for Hermes {
         session::locate(&hermes_home(), id).await
     }
 
-    async fn rehydrate(&self, _session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        Err(RehydrateError::Unsupported("Hermes"))
+    /// Into the store that a bare `hermes` uses, through `hermes atuin import`, as `rehydrate`
+    /// describes.
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(&install_home(), session).await
     }
 }
 
@@ -148,11 +158,6 @@ mod tests {
             let harness = super::super::AnyHarness::from_name(name).unwrap();
             assert_eq!(harness.name(), "hermes", "{name}");
         }
-    }
-
-    #[rstest]
-    fn never_writes_a_session() {
-        assert!(!Hermes.writes_transcripts());
     }
 
     #[cfg(unix)]

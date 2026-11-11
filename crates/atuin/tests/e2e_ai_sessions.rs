@@ -529,7 +529,15 @@ fn restored(agent: Agent) -> Restored {
 /// there carries on the same session -- nothing in it read twice -- which syncs back.
 #[rstest]
 fn a_session_from_another_machine_restores_as_the_same_session(
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    #[values(
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Copilot,
+        Agent::Grok,
+        Agent::Hermes,
+        Agent::Kiro,
+        Agent::Pi
+    )]
     agent: Agent,
 ) {
     let Restored {
@@ -721,6 +729,118 @@ fn a_diverged_copy_resumes_only_as_chosen(
     assert!(!text.contains(&ours.reply), "our branch is still in it:\n{text}");
 }
 
+/// A Hermes fork of a continuation, restored on another machine and gone on with there, stays a
+/// fork of the continuation on both machines. The fork's first prompt opens with the continuation's
+/// marker, which names the Claude Code session it continued. The restored copy names its original
+/// as the fork did, so the reader there reads it as a fork, not as that continuation.
+#[rstest]
+fn a_restored_hermes_fork_stays_a_fork(project: TempDir) {
+    let server = SyncServer::start();
+    let (there, here) = Machine::pair(&server);
+    let turns = vec![Turn::new()];
+    let claude = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
+    there.wait_until_said(&claude.id, &said(&turns));
+
+    succeeded(&there.resume(&[&claude.id, "--in", "hermes", "--print"], there.home()));
+    let continued = there.wait_for_child(Agent::Hermes, &claude.id);
+    let continued = continued["session_id"].as_str().unwrap().to_owned();
+    there.wait_until_holds(&continued, &said(&turns));
+    succeeded(&there.resume(&[&continued, "--fork", "--print"], there.home()));
+    let fork = there.wait_for_child(Agent::Hermes, &continued);
+    assert_eq!(fork["parent_kind"], "fork");
+    let fork = fork["session_id"].as_str().unwrap().to_owned();
+    here.wait_until_holds(&fork, &said(&turns));
+
+    let (_, stderr) = succeeded(&here.resume(&[&fork, "--print"], here.home()));
+    assert!(stderr.contains("restored the thread from sync"), "{stderr}");
+    let restored = Transcript::find(here.home(), Agent::Hermes, &fork).unwrap();
+    let more = Turn::new();
+    restored.append(project.path(), std::slice::from_ref(&more));
+    let all = [said(&turns), said(std::slice::from_ref(&more))].concat();
+    here.wait_until_holds(&fork, &all);
+    there.wait_until_holds(&fork, &all);
+
+    for machine in [&here, &there] {
+        let session = machine.session(&fork).unwrap();
+        assert_eq!(session["parent_kind"], "fork", "{session:#}");
+        assert_eq!(session["parent"]["session_id"], continued.as_str(), "{session:#}");
+    }
+}
+
+/// A Hermes session `/undo`ne and gone on with is restored on another machine without the undone
+/// turn: Hermes's import makes every row it's given live, so the copy holds the branch Hermes
+/// resumed, as its own store does.
+#[rstest]
+fn an_undone_hermes_turn_stays_out_of_a_restore(project: TempDir) {
+    let server = SyncServer::start();
+    let (there, here) = Machine::pair(&server);
+    let turns = vec![Turn::new(), Turn::new()];
+    let original = Transcript::create(there.home(), Agent::Hermes, project.path(), &turns);
+    there.wait_until_said(&original.id, &said(&turns));
+    original.undo_hermes();
+    let again = Turn::new();
+    original.append(project.path(), std::slice::from_ref(&again));
+    let kept = [said(&turns[..1]), said(std::slice::from_ref(&again))].concat();
+    // The thread holds every turn, the undone one a dead end of its own.
+    let all = [said(&turns), said(std::slice::from_ref(&again))].concat();
+    here.wait_until_said(&original.id, &all);
+    let undone = &turns[1];
+
+    let (_, stderr) = succeeded(&here.resume(&[&original.id, "--print"], here.home()));
+    assert!(stderr.contains("restored the thread from sync"), "{stderr}");
+    let text = Transcript::find(here.home(), Agent::Hermes, &original.id).unwrap().read();
+    assert!(ai::holds_in_order(&text, &kept), "the kept turns aren't there:\n{text}");
+    for gone in [&undone.prompt, &undone.reply, &undone.command] {
+        assert!(!text.contains(gone.as_str()), "the undone turn came back:\n{text}");
+    }
+}
+
+/// A Hermes copy is never caught up or switched, since Hermes takes only new sessions. A copy
+/// behind the session's other machine, or gone another way, resumes only as chosen. `--as-is`
+/// resumes it untouched, and `--fork` writes the newest branch as a new Hermes session.
+/// `--switch` is never offered.
+#[rstest]
+#[case::behind(false)]
+#[case::diverged(true)]
+fn a_hermes_copy_is_forked_rather_than_caught_up(#[case] diverged: bool) {
+    let Restored {
+        _server,
+        project,
+        here,
+        there: _there,
+        turns,
+        original,
+        restored,
+    } = restored(Agent::Hermes);
+    let theirs = Turn::new();
+    if diverged {
+        restored.append(project.path(), &[Turn::new()]);
+    }
+    original.append(project.path(), std::slice::from_ref(&theirs));
+    ai::wait("their turn here", || here.show(&original.id).to_string().contains(&theirs.reply));
+    let copy = restored.read();
+    let resume =
+        |flags: &[&str]| here.resume(&[&[original.id.as_str()][..], flags].concat(), here.home());
+
+    let stderr = ai::failed(&resume(&["--print"]));
+    for flag in ["--as-is", "--fork"] {
+        assert!(stderr.contains(flag), "{flag} not offered: {stderr}");
+    }
+    assert!(!stderr.contains("--switch"), "a switch offered: {stderr}");
+    assert_eq!(restored.read(), copy, "the copy was written to");
+
+    let (stdout, _) = succeeded(&resume(&["--as-is", "--print"]));
+    assert_eq!(stdout.trim(), resume_line(&restored, project.path()));
+
+    let (_, stderr) = succeeded(&resume(&["--fork", "--print"]));
+    assert!(stderr.contains("forked into a new Hermes Agent session"), "{stderr}");
+    let fork = here.wait_for_child(Agent::Hermes, &original.id);
+    assert_eq!(fork["parent_kind"], "fork");
+    let newest = [said(&turns), said(std::slice::from_ref(&theirs))].concat();
+    here.wait_until_holds(fork["session_id"].as_str().unwrap(), &newest);
+    assert_eq!(restored.read(), copy, "the copy was written to");
+}
+
 /// Continuing a session that went different ways on two machines in another agent carries the
 /// branch `--branch` names, never both interleaved; without one named, it continues nothing,
 /// listing the branches to name.
@@ -731,6 +851,7 @@ fn a_diverged_copy_resumes_only_as_chosen(
 #[case::copilot_to_claude(Agent::Copilot, Agent::Claude)]
 #[case::grok_to_codex(Agent::Grok, Agent::Codex)]
 #[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
+#[case::hermes_to_claude(Agent::Hermes, Agent::Claude)]
 fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case] to: Agent) {
     let Restored {
         _server,
@@ -777,7 +898,15 @@ fn continuing_a_diverged_session_carries_one_branch(#[case] from: Agent, #[case]
 fn forking_a_session_leaves_it_and_links_the_fork(
     machine: Machine,
     project: TempDir,
-    #[values(Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Grok, Agent::Kiro, Agent::Pi)]
+    #[values(
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Copilot,
+        Agent::Grok,
+        Agent::Hermes,
+        Agent::Kiro,
+        Agent::Pi
+    )]
     agent: Agent,
 ) {
     let turns = vec![Turn::new(), Turn::new()];
@@ -816,6 +945,9 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 #[case::codex_to_grok(Agent::Codex, Agent::Grok)]
 #[case::codex_to_pi(Agent::Codex, Agent::Pi)]
 #[case::hermes_to_claude(Agent::Hermes, Agent::Claude)]
+#[case::hermes_to_codex(Agent::Hermes, Agent::Codex)]
+#[case::claude_to_hermes(Agent::Claude, Agent::Hermes)]
+#[case::codex_to_hermes(Agent::Codex, Agent::Hermes)]
 #[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 #[case::opencode_to_claude(Agent::Opencode, Agent::Claude)]
 #[case::opencode_to_codex(Agent::Opencode, Agent::Codex)]

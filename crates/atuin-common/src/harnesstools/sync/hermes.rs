@@ -1,5 +1,13 @@
-//! Hermes Agent: the session's rows in a `state.db`, which atuin reads but never writes (see the
-//! `hermes` module), so a copy here is neither caught up nor switched.
+//! Hermes Agent: the session's rows in a `state.db`, which only Hermes's gateway writes. Atuin
+//! writes a session there only as a new one, with `hermes atuin import`, as the `hermes` module
+//! describes. No Hermes verb adds rows to a session it holds or rewrites one. So a copy here is
+//! never caught up or switched, which [`SyncError::Unsupported`] says, and sync forks instead, as
+//! for opencode's switch.
+//!
+//! **Tip.** What the reader reads of the session, keyed as capture keys it, title rows included,
+//! and the row Hermes resumes from. That is the last row still in the conversation: a rewind
+//! leaves the rows it undid behind it. The synced rows atuin's writer merged into a row, or wrote
+//! no row for, are read back from that row's `display_metadata.atuin_merged`.
 //!
 //! **Liveness.** A Hermes chat client (CLI, TUI) with a session open, at its prompt or not,
 //! claims it in its home's registry, `runtime/active_sessions.json`: an entry naming the session
@@ -14,23 +22,37 @@
 //! [`RECENT`](super::RECENT) may have a Hermes at its prompt ([`Liveness::Unknown`]). A store
 //! that can't be read says the same.
 
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+use futures::TryStreamExt as _;
 
 use super::liveness::{Processes, Start};
 use super::{
     AppendOptions, AppendOutcome, Liveness, LocalTip, RehydrateMessage, ReplaceOutcome,
-    SessionSync, SyncError, blocking_liveness,
+    SessionSync, Stamp, SyncError, blocking_liveness,
 };
+use crate::harnesstools::hermes::session::{HermesMessage, HermesSession};
 use crate::harnesstools::hermes::store::{SessionRow, Store};
 use crate::harnesstools::hermes::{Hermes, hermes_home, session};
+use crate::harnesstools::session::{Message as _, Session as _, SessionId};
 use crate::path::PathBufExt as _;
 
-const UNSUPPORTED: SyncError = SyncError::Unsupported("Hermes sessions can't be written here");
+/// Why a Hermes copy is never caught up: import takes only sessions the store doesn't hold.
+const HERMES_APPEND: &str =
+    "Hermes can't add to a session it already holds, so it can't be caught up; fork it instead";
+
+/// Why a Hermes copy is never switched to another branch.
+const HERMES_SWITCH: &str = "Hermes can't rewrite a session it holds, so it can't be switched to \
+                             another branch; fork instead";
 
 impl SessionSync for Hermes {
-    async fn local_tip(&self, _id: &str) -> Result<Option<LocalTip>, SyncError> {
-        Err(UNSUPPORTED)
+    async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
+        let Some(db) = session::locate(&hermes_home(), id).await else {
+            return Ok(None);
+        };
+        local_tip_in(&db, id).await
     }
 
     async fn is_live(&self, id: &str, _cwd: Option<&Path>) -> Liveness {
@@ -60,7 +82,7 @@ impl SessionSync for Hermes {
         _lines: &[RehydrateMessage],
         _options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        Err(UNSUPPORTED)
+        Err(SyncError::Unsupported(HERMES_APPEND))
     }
 
     async fn replace(
@@ -71,8 +93,62 @@ impl SessionSync for Hermes {
         _options: &AppendOptions<'_>,
         _backups: &Path,
     ) -> Result<ReplaceOutcome, SyncError> {
-        Err(UNSUPPORTED)
+        Err(SyncError::Unsupported(HERMES_SWITCH))
     }
+}
+
+fn unreadable(err: impl std::fmt::Display) -> SyncError {
+    SyncError::Other(format!("reading Hermes's store: {err}"))
+}
+
+/// [`SessionSync::local_tip`] of session `id` in the store `db`, as the module docs describe.
+pub(super) async fn local_tip_in(db: &Path, id: &str) -> Result<Option<LocalTip>, SyncError> {
+    let mut store = Store::open(db).await.map_err(unreadable)?;
+    let read = async {
+        let Some(session) = store.any_session(id).await? else {
+            return Ok(None);
+        };
+        Ok::<_, sqlx::Error>(store.revision(id).await?.map(|revision| (session, revision)))
+    }
+    .await;
+    store.close().await;
+    let Some((session, revision)) = read.map_err(unreadable)? else {
+        return Ok(None);
+    };
+    let messages: Vec<HermesMessage> = HermesSession::open(SessionId::from(id.to_owned()), db)
+        .read()
+        .try_collect()
+        .await
+        .map_err(unreadable)?;
+    let mut known = HashSet::new();
+    let mut merged = HashMap::new();
+    let mut tip = None;
+    let mut stamped = format!("{revision:?}\n");
+    for message in &messages {
+        let Some(key) = message.id().map(String::from) else {
+            continue;
+        };
+        if message.live() == Some(true) {
+            tip = Some(key.clone());
+        }
+        merged.extend(message.merged());
+        stamped.push_str(&key);
+        stamped.push('\n');
+        known.insert(key);
+    }
+    known.extend(merged.keys().cloned());
+    let modified = SystemTime::UNIX_EPOCH
+        .checked_add(std::time::Duration::try_from_secs_f64(session.touched()).unwrap_or_default());
+    Ok(Some(LocalTip {
+        native_path: db.to_path_buf(),
+        known_source_ids: known,
+        merged,
+        tip_source_id: tip,
+        stamp: Stamp::of(stamped.as_bytes()),
+        modified,
+        cwd: session.cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
+        unswitchable: Some(HERMES_SWITCH),
+    }))
 }
 
 /// Whether a Hermes has session `id` of the store `db` open at `now` (see the module docs).
@@ -180,9 +256,13 @@ mod tests {
     use std::time::Duration;
 
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
-    use crate::harnesstools::hermes::session::tests::{execute_in, probe_store};
+    use crate::harnesstools::hermes::rehydrate::tests::import_into;
+    use crate::harnesstools::hermes::session::tests::{
+        CARRIED, CARRIED_SQL, UNDO_CARRIED_SQL, execute_in, probe_store,
+    };
     use crate::harnesstools::sync::liveness::tests::{entry, table};
 
     /// The client the registry cases below run: pid 4934, started at 1794263000 (whole seconds,
@@ -287,6 +367,109 @@ mod tests {
         assert_eq!(liveness_in(&db, RESUMED, at(1_794_246_600.0)).await, Liveness::Live {
             pid: None
         });
+    }
+
+    /// The tip of a session `/undo` rewound is the last row still in the conversation, not the
+    /// undone turn after it; every row the reader reads is known.
+    #[rstest]
+    #[tokio::test]
+    async fn the_tip_is_the_last_row_hermes_resumes_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = probe_store(dir.path()).await;
+
+        let tip = local_tip_in(&db, RESUMED).await.unwrap().unwrap();
+
+        let read: Vec<HermesMessage> =
+            HermesSession::open(SessionId::from(RESUMED.to_owned()), &db)
+                .read()
+                .try_collect()
+                .await
+                .unwrap();
+        let keys: HashSet<String> = read.iter().filter_map(|m| m.id().map(String::from)).collect();
+        assert_eq!(tip.known_source_ids, keys);
+        let last = read.iter().filter_map(|m| m.id()).next_back().unwrap().to_string();
+        let live = read.iter().rev().find(|m| m.live() == Some(true)).unwrap();
+        assert_ne!(tip.tip_source_id.as_deref(), Some(last.as_str()), "the undone turn's");
+        assert_eq!(tip.tip_source_id, live.id().map(String::from));
+        assert_eq!(tip.native_path, db);
+        assert!(tip.unswitchable.is_some());
+        assert!(local_tip_in(&db, "no-such").await.unwrap().is_none());
+    }
+
+    /// After an `/undo` of a turn a compaction carried on, the tip is the row before that turn,
+    /// where Hermes resumes, though the turn's originals are still compacted.
+    #[rstest]
+    #[tokio::test]
+    async fn the_tip_leaves_out_a_carried_turn_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = probe_store(dir.path()).await;
+        execute_in(&db, CARRIED_SQL).await;
+        let tip = local_tip_in(&db, CARRIED).await.unwrap().unwrap();
+        assert_eq!(tip.tip_source_id.as_deref(), Some("c-4"));
+
+        execute_in(&db, UNDO_CARRIED_SQL).await;
+        let tip = local_tip_in(&db, CARRIED).await.unwrap().unwrap();
+        assert_eq!(tip.tip_source_id.as_deref(), Some("c-2"));
+    }
+
+    /// The rows atuin's writer merged into a row, or wrote none for, are known, and the last of
+    /// them is the tip's.
+    #[rstest]
+    #[tokio::test]
+    async fn merged_rows_are_known_from_the_rows_they_went_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = probe_store(dir.path()).await;
+        import_into(&db, &json!({
+            "id": "20261110_120000_aaaaaa", "source": "cli", "started_at": 1.0,
+            "messages": [
+                {"role": "user", "content": "go", "timestamp": 2.0, "message_uid": "u1", "display_metadata": {"atuin_merged": {"title": ""}}},
+                {"role": "assistant", "content": "done [ran a shell command]", "timestamp": 3.0, "message_uid": "a2", "display_metadata": {"atuin_merged": {"a1": "a2", "r1": "a2"}}},
+            ],
+        }))
+        .await;
+
+        let tip = local_tip_in(&db, "20261110_120000_aaaaaa").await.unwrap().unwrap();
+
+        let known: HashSet<&str> = tip.known_source_ids.iter().map(String::as_str).collect();
+        assert_eq!(known, HashSet::from(["u1", "a2", "a1", "r1", "title"]));
+        assert_eq!(tip.tip_source_id.as_deref(), Some("a2"));
+        assert!(tip.is_tip("r1"));
+    }
+
+    /// A copy changes its stamp when Hermes adds, rewinds or edits a row.
+    #[rstest]
+    #[tokio::test]
+    async fn the_stamp_follows_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = probe_store(dir.path()).await;
+        let before = local_tip_in(&db, RESUMED).await.unwrap().unwrap().stamp;
+        execute_in(
+            &db,
+            &format!(
+                "UPDATE sessions SET transcript_revision = transcript_revision + 1 WHERE id = \
+                 '{RESUMED}';"
+            ),
+        )
+        .await;
+        assert_ne!(local_tip_in(&db, RESUMED).await.unwrap().unwrap().stamp, before);
+    }
+
+    /// No Hermes verb adds rows to a session or rewrites one: a copy is forked instead.
+    #[rstest]
+    #[tokio::test]
+    async fn a_copy_is_never_caught_up_or_switched() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = probe_store(dir.path()).await;
+        let tip = local_tip_in(&db, RESUMED).await.unwrap().unwrap();
+        let options = AppendOptions::default();
+        assert!(matches!(
+            Hermes.append(RESUMED, &tip, &[], &options).await,
+            Err(SyncError::Unsupported(_))
+        ));
+        assert!(matches!(
+            Hermes.replace(RESUMED, &tip, &[], &options, dir.path()).await,
+            Err(SyncError::Unsupported(_))
+        ));
     }
 
     #[rstest]
