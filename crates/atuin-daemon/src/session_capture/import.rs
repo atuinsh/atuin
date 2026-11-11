@@ -60,6 +60,8 @@ impl SessionImporter {
         filter: Option<HarnessKind>,
     ) -> impl Stream<Item = ImportProgress> + Send + 'static {
         async_stream::stream! {
+            // Dropped when the import ends, whether it finished or was cancelled.
+            let _release = ReleaseMemoryOnDrop;
             let mut sessions = 0u64;
             let mut imported = 0u64;
             let mut skipped = 0u64;
@@ -244,6 +246,22 @@ async fn read(mut enricher: MessageEnricher, session: AnySession) -> Read {
         session: enricher.handle(&sid).session,
         rows,
         failed,
+    }
+}
+
+/// Hands the memory an import freed back to the operating system when it is dropped.
+///
+/// An import reads whole sessions into memory, up to [`SessionImporter`]'s concurrency at a time.
+/// The allocator keeps that memory once it is freed. Without this, a large import left the daemon
+/// at its peak size, close to a gigabyte, until it restarted.
+struct ReleaseMemoryOnDrop;
+
+impl Drop for ReleaseMemoryOnDrop {
+    fn drop(&mut self) {
+        // Releasing walks every arena, which is too slow for the runtime's own threads.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn_blocking(atuin_common::os::memory::release_free_memory));
+        }
     }
 }
 
