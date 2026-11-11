@@ -102,6 +102,8 @@ impl SessionImporter {
         }
     }
 
+    /// Imports one harness's sessions on their own, with a release of their own.
+    #[cfg(test)]
     pub fn harness(
         &self,
         kind: HarnessKind,
