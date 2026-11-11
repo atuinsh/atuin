@@ -663,8 +663,11 @@ impl SearchIndex {
             // pointer while `&str` is the size of two.
             let normalized_commands: Vec<&Arc<str>> =
                 candidates.iter().map(|i| &commands.haystack[usize::conv(*i)]).collect();
-            // Use all cores when the number of commands is sufficiently large.
-            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            // Use several cores when the number of commands is sufficiently large. The matcher
+            // spawns new threads for every search, and beyond this cap that costs more than it saves.
+            const MAX_MATCH_THREADS: usize = 8;
+            let threads =
+                std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_MATCH_THREADS);
             let matches = tracing::span!(Level::TRACE, "index_search_match").in_scope(|| {
                 if threads > 1 && normalized_commands.len() >= 10_000 {
                     matcher.match_list_parallel(&normalized_commands, threads)
