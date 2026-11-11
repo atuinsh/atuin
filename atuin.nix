@@ -51,7 +51,7 @@ craneLib.buildPackage (
 
     # The linked binary records no RPATH for the libraries it loads from outside
     # glibc: OpenSSL, and libstdc++ for the Luau VM. Without one, it fails with
-    # "cannot open shared object file". The completions run the patched binary
+    # "cannot open shared object file". postInstall runs the patched binary
     # without LD_LIBRARY_PATH, so a missing library fails the build instead.
     postInstall =
       lib.optionalString stdenv.hostPlatform.isLinux ''
@@ -64,6 +64,8 @@ craneLib.buildPackage (
       ''
       + ''
         unset LD_LIBRARY_PATH
+        # A failure inside <(...) below doesn't reach `set -e`.
+        $out/bin/atuin --version
         installShellCompletion --cmd atuin \
           --bash <($out/bin/atuin gen-completions -s bash) \
           --fish <($out/bin/atuin gen-completions -s fish) \
