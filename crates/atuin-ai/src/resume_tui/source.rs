@@ -335,6 +335,7 @@ pub fn harness_badge(harness: HarnessKind) -> &'static str {
         HarnessKind::Copilot => "CP",
         HarnessKind::Amp => "AM",
         HarnessKind::Kiro => "KI",
+        HarnessKind::Hermes => "HE",
         HarnessKind::Unknown => "??",
     }
 }
@@ -350,6 +351,7 @@ pub fn harness_arg(harness: HarnessKind) -> Option<&'static str> {
         HarnessKind::Omp => Some("omp"),
         HarnessKind::Copilot => Some("copilot"),
         HarnessKind::Kiro => Some("kiro"),
+        HarnessKind::Hermes => Some("hermes"),
         HarnessKind::Amp | HarnessKind::Unknown => None,
     }
 }
@@ -366,6 +368,7 @@ pub fn harness_label(harness: HarnessKind) -> &'static str {
         HarnessKind::Copilot => "Copilot",
         HarnessKind::Amp => "Amp",
         HarnessKind::Kiro => "Kiro",
+        HarnessKind::Hermes => "Hermes Agent",
         HarnessKind::Unknown => "unknown",
     }
 }

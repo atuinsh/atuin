@@ -523,6 +523,7 @@ history-format-braces-hint = If your formatting string contains literal curly br
 history-format-braces-example = Use {"{"}{"{"} for literal {"{"} and {"}"}{"}"} for literal {"}"}
 history-start-daemon-failed = failed to start history via the daemon; saving it locally instead: { $error }
 history-end-daemon-failed = failed to end history via the daemon; ending it locally instead: { $error }
+history-cancel-daemon-failed = failed to drop history via the daemon; dropping it locally instead: { $error }
 history-octavo-login-failed = failed to learn which Hub user is logged in, so deletions won't reach Octavo: { $error }
 history-octavo-queue-failed = failed to queue history deletions for Octavo, so they won't reach it: { $error }
 history-tail-lagged = atuin daemon dropped { $dropped } history events; tail fell behind

@@ -39,6 +39,7 @@ mod ccode;
 mod codex;
 mod copilot;
 mod grok;
+mod hermes;
 mod kiro;
 pub mod liveness;
 mod opencode;

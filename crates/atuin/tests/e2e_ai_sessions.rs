@@ -70,6 +70,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
         Agent::Codex,
         Agent::Copilot,
         Agent::Grok,
+        Agent::Hermes,
         Agent::Kiro,
         Agent::Opencode,
         Agent::Pi
@@ -153,6 +154,63 @@ fn capture_applies_the_history_and_output_filters_to_agent_commands(project: Tem
     assert!(calls.iter().all(|call| call.name == Agent::Claude.tool()), "{calls:#?}");
 }
 
+/// A shell command Hermes runs is in history as the agent's, with its exit code, in the directory
+/// it ran in. Hermes's atuin plugin hands each `terminal` call's start and end to `atuin hook
+/// hermes` from the gateway, whose own directory is never the command's: the plugin names that
+/// in the event.
+#[rstest]
+#[case::succeeded(0)]
+#[case::failed(1)]
+fn a_command_hermes_runs_is_in_history_as_its_own(
+    machine: Machine,
+    project: TempDir,
+    #[case] exit_code: i64,
+) {
+    let gateway = tempfile::tempdir().unwrap();
+    let session = Agent::Hermes.new_id();
+    let turn = Turn::new();
+    let events = agents::hermes_hook_events(
+        &session,
+        &turn.command,
+        project.path(),
+        &turn.output,
+        exit_code,
+    );
+    for event in events {
+        let sent = gateway.path().join("event.json");
+        std::fs::write(&sent, event.to_string()).unwrap();
+        let mut hook = machine.atuin(&["hook", "hermes"]);
+        hook.current_dir(gateway.path())
+            .env("PWD", gateway.path())
+            .env("HERMES_HOME", machine.home().join(".hermes"))
+            .stdin(std::fs::File::open(&sent).unwrap());
+        succeeded(&common::Process::spawn(hook).wait());
+    }
+
+    let want = format!(
+        "{}\t{exit_code}\t{}\t{}",
+        turn.command,
+        project.path().display(),
+        Agent::Hermes.harness()
+    );
+    ai::wait_for("the command in history", || {
+        let mut list = machine.atuin(&[
+            "history",
+            "list",
+            "--format",
+            "{command}\t{exit}\t{directory}\t{author}",
+        ]);
+        // Any shell session will do: the list isn't narrowed to one.
+        list.env("ATUIN_SESSION", common::SESSION);
+        let history = common::output(list);
+        if history.lines().any(|line| line == want) {
+            Ok(())
+        } else {
+            Err(format!("history holds:\n{history}"))
+        }
+    });
+}
+
 /// A transcript the agent goes on writing is followed, and one it wrote to while the daemon was
 /// down is picked up where it was left: either way, every turn is in the session exactly once.
 #[rstest]
@@ -164,6 +222,7 @@ fn capture_follows_a_transcript_exactly_once_across_restarts(
         Agent::Codex,
         Agent::Copilot,
         Agent::Grok,
+        Agent::Hermes,
         Agent::Kiro,
         Agent::Opencode,
         Agent::Pi
@@ -184,12 +243,40 @@ fn capture_follows_a_transcript_exactly_once_across_restarts(
     machine.wait_until_said(&transcript.id, &said(&turns));
 }
 
-/// An opencode session renamed after its conversation is listed, and found, under its new title
-/// at once, not only once another message carries it.
+/// The daemon reads Hermes's store and lets go of it: Hermes won't vacuum, repair or change the
+/// journal mode of a store another process holds open, and the daemon runs all day.
 #[rstest]
-fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: TempDir) {
+fn the_daemon_lets_go_of_the_hermes_store(machine: Machine, project: TempDir) {
     let turns = [Turn::new()];
-    let transcript = Transcript::create(machine.home(), Agent::Opencode, project.path(), &turns);
+    let transcript = Transcript::create(machine.home(), Agent::Hermes, project.path(), &turns);
+    machine.wait_until_said(&transcript.id, &said(&turns));
+
+    let store = atuin_common::path::AbsPathBuf::canonicalize(&transcript.path).unwrap();
+    ai::wait_for("the daemon to close the Hermes store", || {
+        // `state.db` and its `-wal` and `-shm` beside it.
+        let held: Vec<_> = machine
+            .daemon_open_files()
+            .into_iter()
+            .filter(|file| file.to_string_lossy().starts_with(&*store.to_string_lossy()))
+            .collect();
+        if held.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("it holds {held:?}"))
+        }
+    });
+}
+
+/// A session renamed after its conversation is listed, and found, under its new title at once,
+/// not only once another message carries it.
+#[rstest]
+fn a_renamed_session_is_listed_under_its_new_title(
+    machine: Machine,
+    project: TempDir,
+    #[values(Agent::Hermes, Agent::Opencode)] agent: Agent,
+) {
+    let turns = [Turn::new()];
+    let transcript = Transcript::create(machine.home(), agent, project.path(), &turns);
     machine.wait_until_said(&transcript.id, &said(&turns));
 
     let title = format!("renamed {}", word());
@@ -212,7 +299,7 @@ fn a_renamed_session_is_listed_under_its_new_title(machine: Machine, project: Te
 #[rstest]
 fn capture_starts_when_the_config_turns_it_on(
     project: TempDir,
-    #[values(Agent::Claude, Agent::Kiro)] agent: Agent,
+    #[values(Agent::Claude, Agent::Hermes, Agent::Kiro)] agent: Agent,
 ) {
     let mut machine = Machine::with_config("", "capture = false\n");
     machine.start_daemon();
@@ -246,11 +333,13 @@ fn capture_starts_when_the_config_turns_it_on(
 fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
     let id = transcript.id.as_str();
     let resume_arg = format!("--resume={id}");
+    let profile = agents::hermes_profile(&transcript.path);
     let args = match transcript.agent {
         Agent::Claude => vec!["--resume", id],
         Agent::Codex => vec!["resume", id],
         Agent::Copilot => vec![resume_arg.as_str()],
         Agent::Grok => vec!["--resume", id],
+        Agent::Hermes => vec!["-p", profile.as_deref().unwrap_or("default"), "--resume", id],
         Agent::Kiro => vec!["chat", "--resume-id", id],
         Agent::Opencode => vec!["--session", id],
         Agent::Pi => vec!["--session", transcript.path.to_str().unwrap()],
@@ -335,6 +424,7 @@ fn the_picker_needs_a_terminal_to_read_keys_from(machine: Machine) {
 #[case::codex(Agent::Codex, "agent id")]
 #[case::copilot(Agent::Copilot, "agent id")]
 #[case::grok(Agent::Grok, "agent id")]
+#[case::hermes(Agent::Hermes, "agent id")]
 #[case::kiro(Agent::Kiro, "agent id")]
 #[case::opencode(Agent::Opencode, "agent id")]
 #[case::pi(Agent::Pi, "agent id")]
@@ -365,6 +455,29 @@ fn a_local_session_resumes_in_its_agent_where_it_ran(
     let (stdout, stderr) = succeeded(&machine.resume(&[&name, "--print"], machine.home()));
     assert_eq!(stdout.trim(), resume_line(&transcript, project.path()), "{stderr}");
     assert_eq!(std::fs::read(&transcript.path).unwrap(), before, "the transcript changed");
+}
+
+/// A Hermes session kept in a profile's own store (`hermes -p <profile>`) is captured beside the
+/// root store's, and resumes in that profile.
+#[rstest]
+fn a_hermes_profile_session_resumes_in_its_profile(project: TempDir) {
+    let mut machine = Machine::new();
+    agents::install_hermes_profile(machine.home(), "work");
+    machine.start_daemon();
+    let turns = [Turn::new()];
+    let root = Transcript::create(machine.home(), Agent::Hermes, project.path(), &turns);
+    let other = [Turn::new()];
+    let profiled = Transcript::hermes_in_profile(machine.home(), "work", project.path(), &other);
+    machine.wait_until_said(&root.id, &said(&turns));
+    machine.wait_until_said(&profiled.id, &said(&other));
+
+    let more = [Turn::new()];
+    profiled.append(project.path(), &more);
+    machine.wait_until_said(&profiled.id, &[said(&other), said(&more)].concat());
+
+    let (stdout, stderr) = succeeded(&machine.resume(&[&profiled.id, "--print"], machine.home()));
+    assert_eq!(stdout.trim(), resume_line(&profiled, project.path()), "{stderr}");
+    assert!(stdout.contains(" -p work "), "{stdout}");
 }
 
 /// Two machines of one account, and a session captured on the first, on the second written back
@@ -701,6 +814,7 @@ fn forking_a_session_leaves_it_and_links_the_fork(
 #[case::grok_to_codex(Agent::Grok, Agent::Codex)]
 #[case::codex_to_grok(Agent::Codex, Agent::Grok)]
 #[case::codex_to_pi(Agent::Codex, Agent::Pi)]
+#[case::hermes_to_claude(Agent::Hermes, Agent::Claude)]
 #[case::kiro_to_claude(Agent::Kiro, Agent::Claude)]
 #[case::opencode_to_claude(Agent::Opencode, Agent::Claude)]
 #[case::opencode_to_codex(Agent::Opencode, Agent::Codex)]

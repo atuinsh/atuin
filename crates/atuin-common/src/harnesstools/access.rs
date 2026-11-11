@@ -92,6 +92,7 @@ impl Access {
                 | "run_command"
                 | "execute_bash"
                 | "execute_pwsh"
+                | "terminal"
         ) {
             let command = match input.get("command").or_else(|| input.get("cmd")) {
                 Some(Value::String(line)) => Some(line.clone()),
@@ -258,6 +259,7 @@ mod tests {
     #[case::kiro_bash("execute_bash", json!({"command": "cat .pgpass", "description": "Read the file", "cwd": "/w", "run_in_background": false}), shell("cat .pgpass", Some("/w")))]
     #[case::kiro_bash_redirect("execute_bash", json!({"command": "echo A=1 > .env", "cwd": null}), Access { writes: vec![".env".into()], ..shell("echo A=1 > .env", None) })]
     #[case::kiro_pwsh("execute_pwsh", json!({"command": "Get-Content .env"}), shell("Get-Content .env", None))]
+    #[case::hermes_terminal("terminal", json!({"command": "cat .env", "workdir": "/w", "background": false}), shell("cat .env", Some("/w")))]
     #[case::claude_read("Read", json!({"file_path": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::opencode_read("read", json!({"filePath": "/w/.env"}), reads(&["/w/.env"]))]
     #[case::grep("Grep", json!({"pattern": "x", "path": "/w"}), reads(&["/w"]))]

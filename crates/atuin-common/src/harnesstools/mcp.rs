@@ -13,6 +13,8 @@ use super::ccode::Ccode;
 use super::codex::{self, Codex};
 use super::copilot::{self, Copilot};
 use super::grok::{self, Grok};
+use super::hermes::cli::{HermesCliError, HermesCommand};
+use super::hermes::{self, Hermes};
 use super::kiro::{self, Kiro};
 use super::opencode::{self, Opencode};
 use super::pi::{Flavour, Pi};
@@ -51,6 +53,18 @@ pub enum InstallMcpError {
 
     #[error("the atuin executable path is not valid UTF-8: {}", .0.display())]
     NonUtf8Executable(PathBuf),
+}
+
+impl From<HermesCliError> for InstallMcpError {
+    fn from(err: HermesCliError) -> Self {
+        match err {
+            HermesCliError::NotFound => Self::NotFound("hermes"),
+            HermesCliError::Failed(printed) => {
+                Self::Failed(format!("hermes config set: {printed}"))
+            }
+            HermesCliError::Io(err) => Self::Io(err),
+        }
+    }
 }
 
 /// Registers atuin's MCP server (`atuin mcp`) with a harness at user scope.
@@ -143,6 +157,19 @@ impl InstallMcp for Grok {
     }
 }
 
+impl InstallMcp for Hermes {
+    fn mcp_config_path(&self) -> PathBuf {
+        hermes::mcp::config_path(hermes::install_home().path())
+    }
+
+    /// Through `hermes config set` (see [`hermes::mcp::install`]), so `mcp_program` stays the
+    /// default, `hermes`. `executable()` already goes through `launch_path`.
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let hermes = HermesCommand::new(&hermes::install_home());
+        Ok(hermes::mcp::install(&hermes, &executable()?).await?)
+    }
+}
+
 impl InstallMcp for Kiro {
     fn mcp_config_path(&self) -> PathBuf {
         kiro_config_path(&kiro::kiro_home())
@@ -228,7 +255,7 @@ fn executable() -> Result<String, InstallMcpError> {
 /// The first atuin in an absolute `PATH` entry where that is `exe`, since a package manager's
 /// entry there (a Homebrew or Nix profile symlink) survives upgrades where the resolved path
 /// doesn't, and `exe` otherwise.
-fn launch_path(exe: PathBuf) -> PathBuf {
+pub(crate) fn launch_path(exe: PathBuf) -> PathBuf {
     let on_path = crate::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
             .filter(|dir| dir.is_absolute())
@@ -342,11 +369,20 @@ mod tests {
         (dir, env)
     }
 
+    /// Hermes's default home is `%LOCALAPPDATA%\\hermes` on Windows (here unset, so under the home's
+    /// `AppData\\Local`), `~/.hermes` elsewhere.
+    const HERMES_CONFIG: &str = if cfg!(windows) {
+        "AppData/Local/hermes/config.yaml"
+    } else {
+        ".hermes/config.yaml"
+    };
+
     #[rstest]
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
     #[case("copilot", ".copilot/mcp-config.json")]
     #[case("grok", ".grok/config.toml")]
+    #[case("hermes", HERMES_CONFIG)]
     #[case("kiro", ".kiro/settings/mcp.json")]
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
@@ -373,6 +409,7 @@ mod tests {
     #[case("codex", "CODEX_HOME", "config.toml")]
     #[case("copilot", "COPILOT_HOME", "mcp-config.json")]
     #[case("grok", "GROK_HOME", "config.toml")]
+    #[case("hermes", "HERMES_HOME", "config.yaml")]
     #[case("kiro", "KIRO_HOME", "settings/mcp.json")]
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]

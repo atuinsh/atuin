@@ -1,5 +1,6 @@
 use std::fmt::{self, Display};
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -380,16 +381,20 @@ fn normalize_command_for_storage<'a>(command: &'a str, settings: &Settings) -> &
     }
 }
 
+/// `cwd` is where the command runs when that isn't atuin's own directory: an agent whose hooks run
+/// elsewhere says it in its event.
 fn make_starting_history(
     settings: &Settings,
     command: &str,
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
+    cwd: Option<&Path>,
+    at: Option<OffsetDateTime>,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
-    let cwd = utils::get_current_dir();
+    let cwd = cwd.map_or_else(utils::get_current_dir, Path::to_path_buf);
     let command = normalize_command_for_storage(command, settings);
 
     // A command containing a NUL byte could never have been executed by a shell
@@ -409,7 +414,7 @@ fn make_starting_history(
         author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
 
     let h: History = History::capture()
-        .timestamp(OffsetDateTime::now_utc())
+        .timestamp(at.unwrap_or_else(OffsetDateTime::now_utc))
         .command(command)
         .cwd(cwd.to_string_lossy().into_owned())
         .author_opt(author)
@@ -531,8 +536,11 @@ pub(super) async fn start_history_entry(
     author: Option<&str>,
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
+    cwd: Option<&Path>,
+    at: Option<OffsetDateTime>,
 ) -> Result<Option<HistoryId>> {
-    let Some(h) = make_starting_history(settings, command, author, author_kind, intent) else {
+    let Some(h) = make_starting_history(settings, command, author, author_kind, intent, cwd, at)
+    else {
         return Ok(None);
     };
 
@@ -586,6 +594,30 @@ pub(super) async fn end_history_entry(
     let history_store = HistoryStore::new(store.clone(), host_id, encryption_key);
 
     handle_end(&db, store, history_store, settings, id, exit, duration).await
+}
+
+/// Drop the entry [`start_history_entry`] opened, for a command whose end will never be known. Like
+/// an entry [`end_history_entry`] drops for failing when `store_failed` is off, it was never
+/// stored, so there is nothing to sync.
+#[instrument(level = "trace", skip_all, fields(id = %id), err)]
+pub(super) async fn cancel_history_entry(settings: &Settings, id: HistoryId) -> Result<()> {
+    // `history start` may have saved it locally, when the daemon couldn't take it.
+    #[cfg(feature = "daemon")]
+    if settings.daemon.enabled {
+        match daemon::cancel_history(settings, id).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                userio::log::warn!("history-cancel-daemon-failed", error = format!("{e:#}"));
+            }
+        }
+    }
+
+    let db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
+    match db.load(id).await? {
+        Some(h) if h.duration <= 0 => db.delete(h).await?,
+        _ => debug!("no unfinished history entry to cancel"),
+    }
+    Ok(())
 }
 
 /// Delete history entries, routing through the daemon when it owns the store.
@@ -1119,6 +1151,8 @@ impl Cmd {
                     author.as_deref(),
                     author_kind,
                     intent.as_deref(),
+                    None,
+                    None,
                 )
                 .await?
                 {
@@ -1284,7 +1318,7 @@ mod tests {
             ..Settings::utc()
         };
 
-        let h = make_starting_history(&settings, "ls   \t", None, None, None).unwrap();
+        let h = make_starting_history(&settings, "ls   \t", None, None, None, None, None).unwrap();
         handle_start(&db, &h).await;
 
         let history = db
@@ -1300,7 +1334,10 @@ mod tests {
     fn make_starting_history_drops_command_with_nul_byte(settings: Settings) {
         // A command containing a NUL byte can never have been executed by a shell;
         // it should be dropped rather than committed to history.
-        assert!(make_starting_history(&settings, "hello\0world", None, None, None).is_none());
+        assert!(
+            make_starting_history(&settings, "hello\0world", None, None, None, None, None)
+                .is_none()
+        );
     }
 
     #[rstest]

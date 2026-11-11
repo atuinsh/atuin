@@ -27,7 +27,7 @@ pub use capture::CommandCapture;
 /// entry does not state it, and so when matching against [`AuthorPattern::AllAgent`] and
 /// [`AuthorPattern::AllUser`].
 pub const KNOWN_AGENTS: &[&str] =
-    &["amp", "claude-code", "codex", "copilot", "grok", "kiro", "omp", "opencode", "pi"];
+    &["amp", "claude-code", "codex", "copilot", "grok", "hermes", "kiro", "omp", "opencode", "pi"];
 
 /// The spelling of [`AuthorPattern::AllUser`] on the command line and in the MCP tool schema.
 pub const AUTHOR_FILTER_ALL_USER: &str = "$all-user";

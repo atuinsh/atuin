@@ -22,17 +22,19 @@ pub enum Agent {
     Codex,
     Copilot,
     Grok,
+    Hermes,
     Kiro,
     Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Claude,
         Self::Codex,
         Self::Copilot,
         Self::Grok,
+        Self::Hermes,
         Self::Kiro,
         Self::Opencode,
         Self::Pi,
@@ -45,6 +47,7 @@ impl Agent {
             Self::Codex => "codex",
             Self::Copilot => "copilot",
             Self::Grok => "grok",
+            Self::Hermes => "hermes",
             Self::Kiro => "kiro",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
@@ -58,6 +61,7 @@ impl Agent {
             Self::Codex => "codex",
             Self::Copilot => "copilot",
             Self::Grok => "grok",
+            Self::Hermes => "hermes",
             Self::Kiro => "kiro-cli",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
@@ -70,6 +74,7 @@ impl Agent {
             Self::Claude => "Bash",
             Self::Codex => "exec_command",
             Self::Grok => "run_terminal_command",
+            Self::Hermes => "terminal",
             Self::Kiro => "execute_bash",
             Self::Copilot | Self::Opencode | Self::Pi => "bash",
         }
@@ -82,6 +87,7 @@ impl Agent {
             Self::Codex => "Codex",
             Self::Copilot => "Copilot",
             Self::Grok => "Grok Build",
+            Self::Hermes => "Hermes Agent",
             Self::Kiro => "Kiro",
             Self::Opencode => "opencode",
             Self::Pi => "Pi",
@@ -92,6 +98,9 @@ impl Agent {
     pub fn new_id(self) -> String {
         let uuid = atuin_common::utils::uuid_v7();
         match self {
+            // What the gateway names every local chat (v0.23.0): a hash of the profile, the user and
+            // the request that opened it.
+            Self::Hermes => format!("local-{}", sha256_hex(uuid.as_simple().to_string())),
             Self::Kiro => format!("sess_{}", uuid::Uuid::new_v4()),
             Self::Opencode => format!("ses_{}", uuid.as_simple()),
             _ => uuid.as_hyphenated().to_string(),
@@ -106,6 +115,7 @@ impl Agent {
             Self::Codex => home.join(".codex/sessions"),
             Self::Copilot => home.join(".copilot/session-state"),
             Self::Grok => home.join(".grok/sessions"),
+            Self::Hermes => home.join(".hermes/state.db"),
             Self::Kiro => home.join(".kiro/sessions"),
             Self::Opencode => home.join(".local/share/opencode/opencode.db"),
             Self::Pi => home.join(".pi/agent/sessions"),
@@ -116,6 +126,7 @@ impl Agent {
     pub fn install(self, home: &Path) {
         match self {
             Self::Opencode => opencode_db(home),
+            Self::Hermes => hermes_db(&self.root(home)),
             // Codex keeps a lock per open thread here; with the directory present, atuin asks the
             // locks whether a session is open, rather than every `codex` process on the machine.
             Self::Codex => {
@@ -243,7 +254,7 @@ impl Transcript {
             Agent::Kiro => {
                 agent.root(home).joined(kiro_bucket(cwd)).joined(&id).joined("messages.jsonl")
             }
-            Agent::Opencode => agent.root(home),
+            Agent::Hermes | Agent::Opencode => agent.root(home),
         };
         let transcript = Self { agent, id, path };
         match agent {
@@ -295,6 +306,7 @@ impl Transcript {
                     json!({"type": "user", "content": [{"type": "text", "text": format!("<user_info>\nWorkspace Path: {}\n</user_info>", cwd.display())}]}),
                 ]);
             }
+            Agent::Hermes => transcript.create_hermes(cwd, started),
             Agent::Kiro => transcript.create_kiro(home, cwd, started),
             Agent::Claude | Agent::Pi | Agent::Codex => {
                 fs::create_dir_all(transcript.path.parent().unwrap()).unwrap();
@@ -343,6 +355,23 @@ impl Transcript {
         transcript
     }
 
+    /// A new Hermes session in the store of profile `profile` (`hermes -p <profile>`), working in
+    /// `cwd`: the profile's own `state.db` under `~/.hermes/profiles`, made if it isn't there.
+    pub fn hermes_in_profile(home: &Path, profile: &str, cwd: &Path, turns: &[Turn]) -> Self {
+        let path = hermes_profile_store(home, profile);
+        if !path.is_file() {
+            install_hermes_profile(home, profile);
+        }
+        let transcript = Self {
+            agent: Agent::Hermes,
+            id: Agent::Hermes.new_id(),
+            path,
+        };
+        transcript.create_hermes(cwd, tick());
+        transcript.append(cwd, turns);
+        transcript
+    }
+
     /// A Claude Code subagent `parent` spawned, working in `cwd`: its own transcript beside the
     /// parent's, whose lines name the parent's session.
     pub fn claude_subagent(parent: &Self, cwd: &Path, turns: &[Turn]) -> Self {
@@ -361,7 +390,10 @@ impl Transcript {
 
     /// Where this agent keeps the transcript of session `id` under `home`, when it has one.
     pub fn find(home: &Path, agent: Agent, id: &str) -> Option<Self> {
-        assert_ne!(agent, Agent::Opencode, "opencode keeps every session in one database");
+        assert!(
+            !matches!(agent, Agent::Hermes | Agent::Opencode),
+            "{agent:?} keeps every session in one database"
+        );
         if agent == Agent::Copilot {
             let path = agent.root(home).joined(id).joined("events.jsonl");
             return path.is_file().then(|| Self {
@@ -411,10 +443,24 @@ impl Transcript {
         None
     }
 
-    /// Rename the opencode session `title`, as `Session.setTitle` does: a `session.updated.1` row
-    /// with the session's info, `time.updated` bumped to now.
+    /// Rename the session `title`, as the agent does. opencode's `Session.setTitle` writes a
+    /// `session.updated.1` row with the session's info, `time.updated` bumped to now; Hermes's
+    /// `/title` sets the session's title in place, ranked as the user's.
     pub fn rename(&self, title: &str) {
-        assert_eq!(self.agent, Agent::Opencode, "only opencode's sessions are renamed here");
+        if self.agent == Agent::Hermes {
+            hermes_open(&self.path)
+                .execute(
+                    "UPDATE sessions SET title = ?2, title_source = 'user' WHERE id = ?1",
+                    rusqlite::params![self.id, title],
+                )
+                .unwrap();
+            return;
+        }
+        assert_eq!(
+            self.agent,
+            Agent::Opencode,
+            "only opencode's and Hermes's sessions are renamed"
+        );
         let (directory, created) = rusqlite::Connection::open(&self.path)
             .unwrap()
             .query_row(
@@ -451,6 +497,7 @@ impl Transcript {
             Agent::Codex => self.append_codex(turns),
             Agent::Copilot => self.append_copilot(turns),
             Agent::Grok => self.append_grok(turns),
+            Agent::Hermes => self.append_hermes(turns),
             Agent::Kiro => self.append_kiro(cwd, turns),
             Agent::Pi => self.append_pi(turns),
             Agent::Opencode => self.append_opencode(cwd, turns),
@@ -1107,6 +1154,162 @@ impl Transcript {
         }
     }
 
+    /// Hermes Agent's session row as its gateway writes it when `hermes` opens a chat (v0.23.0):
+    /// `source` `local`, the surface in `created_source`, untitled, its system prompt kept apart
+    /// by hash, and open (`ended_at` NULL) until the client closes.
+    fn create_hermes(&self, cwd: &Path, started: OffsetDateTime) {
+        let db = hermes_open(&self.path);
+        let prompt = format!("You are Hermes Agent, an assistant {}.", word());
+        let hash = sha256_hex(&prompt);
+        db.execute("INSERT OR IGNORE INTO system_prompts (hash, prompt) VALUES (?1, ?2)", [
+            &hash, &prompt,
+        ])
+        .unwrap();
+        let config = json!({
+            "gateway_runtime": {
+                "provider": "openrouter",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_mode": "chat_completions",
+                "fallback_active": false,
+            },
+        });
+        hermes_insert(
+            &db,
+            "sessions",
+            &json!({
+                "id": self.id,
+                "source": "local",
+                "created_source": "cli",
+                "session_key": format!("agent:main:local:dm:{}", self.id),
+                "origin_json": json!({"platform": "local", "chat_id": self.id, "chat_type": "dm"}).to_string(),
+                "model": "xiaomi/mimo-v2.5-pro",
+                "model_config": config.to_string(),
+                "system_prompt_hash": hash,
+                "started_at": secs(started),
+                "cwd": cwd,
+                "last_activity_at": secs(started),
+                "profile_name": hermes_profile(&self.path).unwrap_or_else(|| "default".to_owned()),
+            }),
+        );
+    }
+
+    /// Hermes's rows, each committed as it lands, as the gateway flushes them: per turn the
+    /// prompt, the model's `terminal` call with its reasoning and no text, the call's result, and
+    /// the reply. A turn holds a lease on the session from before its prompt until its reply.
+    /// The session is titled at the start of its first turn, as `maybe_auto_title` does, and is
+    /// open while the turns run: a resume clears `ended_at`, and closing the client sets it.
+    /// Hermes restores the session's own directory on resume, so the session's `cwd` stays put.
+    fn append_hermes(&self, turns: &[Turn]) {
+        let mut db = hermes_open(&self.path);
+        db.execute("UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?1", [
+            &self.id
+        ])
+        .unwrap();
+        for turn in turns {
+            let call = format!("call-{}", uuid::Uuid::new_v4());
+            let call_uid = short();
+            let at = secs(tick());
+            let tx = db.transaction().unwrap();
+            hermes_insert(
+                &tx,
+                "session_turn_leases",
+                &json!({
+                    "conversation_id": self.id,
+                    "holder": format!("pid={}:turn={}:platform=cli", std::process::id(), &short()[24..]),
+                    "acquired_at": at,
+                    "expires_at": at + 300.0,
+                }),
+            );
+            tx.execute(
+                "UPDATE sessions SET title = ?2, title_source = 'derived' WHERE id = ?1 AND title \
+                 IS NULL",
+                rusqlite::params![self.id, format!("Hermes session {}", word())],
+            )
+            .unwrap();
+            self.hermes_message(&tx, &json!({
+                "role": "user",
+                "content": turn.prompt,
+                "platform_message_id": short(),
+                "display_metadata": json!({"gateway_input_owner": uuid::Uuid::new_v4(), "submission_id": short()}).to_string(),
+            }));
+            tx.commit().unwrap();
+
+            let tx = db.transaction().unwrap();
+            let arguments = json!({"command": turn.command}).to_string();
+            self.hermes_message(&tx, &json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": json!([{
+                    "id": call,
+                    "call_id": call,
+                    "response_item_id": format!("fc_{call}"),
+                    "type": "function",
+                    "function": {"name": self.agent.tool(), "arguments": arguments},
+                }]).to_string(),
+                "finish_reason": "tool_calls",
+                "reasoning": turn.thinking,
+                "reasoning_content": turn.thinking,
+                "reasoning_details": json!([{"type": "reasoning.text", "text": turn.thinking, "format": "unknown", "index": 0}]).to_string(),
+                "tool_call_uids": json!({&call: call_uid}).to_string(),
+            }));
+            tx.execute(
+                "UPDATE sessions SET tool_call_count = tool_call_count + 1 WHERE id = ?1",
+                [&self.id],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+
+            let tx = db.transaction().unwrap();
+            self.hermes_message(
+                &tx,
+                &json!({
+                    "role": "tool",
+                    "content": hermes_terminal_result(&turn.output, 0),
+                    "tool_call_id": call,
+                    "tool_name": self.agent.tool(),
+                    "tool_call_uid": call_uid,
+                }),
+            );
+            tx.commit().unwrap();
+
+            let tx = db.transaction().unwrap();
+            self.hermes_message(
+                &tx,
+                &json!({
+                    "role": "assistant",
+                    "content": turn.reply,
+                    "finish_reason": "stop",
+                }),
+            );
+            tx.execute("DELETE FROM session_turn_leases WHERE conversation_id = ?1", [&self.id])
+                .unwrap();
+            tx.commit().unwrap();
+        }
+        db.execute(
+            "UPDATE sessions SET ended_at = ?2, end_reason = 'cli_close' WHERE id = ?1",
+            rusqlite::params![self.id, secs(tick())],
+        )
+        .unwrap();
+    }
+
+    /// One row of this session's `messages`, with what every row carries, and the session's
+    /// counts and activity bumped to match.
+    fn hermes_message(&self, db: &rusqlite::Connection, row: &Value) {
+        let at = secs(tick());
+        let mut row = row.clone();
+        let fields = row.as_object_mut().unwrap();
+        fields.insert("session_id".into(), json!(self.id));
+        fields.insert("timestamp".into(), json!(at));
+        fields.insert("message_uid".into(), json!(short()));
+        hermes_insert(db, "messages", &row);
+        db.execute(
+            "UPDATE sessions SET message_count = message_count + 1, last_activity_at = ?2 WHERE \
+             id = ?1",
+            rusqlite::params![self.id, at],
+        )
+        .unwrap();
+    }
+
     fn append_pi(&self, turns: &[Turn]) {
         let mut parent = self.last("id");
         let mut lines = Vec::new();
@@ -1272,9 +1475,7 @@ fn grok_workspace(cwd: &Path) -> String {
 /// Kiro's bucket for sessions started in `cwd`: the first 16 hex digits of the SHA-256 of the
 /// workspace paths, which for the CLI is `cwd` alone, without a trailing slash.
 fn kiro_bucket(cwd: &Path) -> String {
-    use sha2::Digest as _;
-    let path = cwd.to_str().unwrap().trim_end_matches('/');
-    format!("{:x}", sha2::Sha256::digest(path.as_bytes()))[..16].to_owned()
+    sha256_hex(cwd.to_str().unwrap().trim_end_matches('/'))[..16].to_owned()
 }
 
 /// Claude Code's directory for the project at `cwd`: every character but a letter or digit a dash.
@@ -1396,6 +1597,131 @@ fn opencode_events(home: &Path, events: &[(&str, Value)]) {
         }
     }
     tx.commit().unwrap();
+}
+
+/// The store of Hermes profile `profile` under `home`: `hermes -p <profile>` runs with
+/// `HERMES_HOME` set to that profile's directory.
+pub fn hermes_profile_store(home: &Path, profile: &str) -> PathBuf {
+    home.join(".hermes/profiles").joined(profile).joined("state.db")
+}
+
+/// Lay out Hermes profile `profile` under `home` as `hermes profile create` leaves it, its store
+/// opened once.
+pub fn install_hermes_profile(home: &Path, profile: &str) {
+    hermes_db(&hermes_profile_store(home, profile));
+}
+
+/// The two events Hermes's `terminal` tool fires for running `command` in `cwd` in session
+/// `session`, printing `output` and exiting with `exit_code`, as the atuin plugin hands them to
+/// `atuin hook hermes`: Hermes's own `pre_tool_call` and `post_tool_call` arguments, named by
+/// `hook_event_name`, with the `cwd` the plugin looks up.
+pub fn hermes_hook_events(
+    session: &str,
+    command: &str,
+    cwd: &Path,
+    output: &str,
+    exit_code: i64,
+) -> [Value; 2] {
+    let call = format!("call-{}", uuid::Uuid::new_v4());
+    let turn = format!("{session}:{session}:{}", &short()[24..]);
+    let pre = json!({
+        "hook_event_name": "pre_tool_call",
+        "tool_name": "terminal",
+        "args": {"command": command},
+        "task_id": session,
+        "session_id": session,
+        "tool_call_id": call,
+        "turn_id": turn,
+        "api_request_id": format!("{turn}:api:1"),
+        "middleware_trace": [],
+        "conversation_id": session,
+        "telemetry_schema_version": "hermes.observer.v1",
+        "cwd": cwd,
+    });
+    let mut post = pre.clone();
+    let fields = post.as_object_mut().unwrap();
+    fields.insert("hook_event_name".into(), json!("post_tool_call"));
+    fields.insert("result".into(), json!(hermes_terminal_result(output, exit_code)));
+    fields.insert("duration_ms".into(), json!(922));
+    fields.insert(
+        "status".into(),
+        json!(if exit_code == 0 {
+            "ok"
+        } else {
+            "error"
+        }),
+    );
+    fields.insert("error_type".into(), Value::Null);
+    fields.insert("error_message".into(), Value::Null);
+    [pre, post]
+}
+
+/// The profile whose store is at `path`, if any but the root's (which Hermes names `default`).
+pub fn hermes_profile(path: &Path) -> Option<String> {
+    let dir = path.parent()?;
+    let parent = dir.parent()?.file_name()?;
+    (parent == "profiles").then(|| dir.file_name().unwrap().to_string_lossy().into_owned())
+}
+
+/// A Hermes store at `path` as Hermes leaves it after its first open: the tables, in WAL mode.
+fn hermes_db(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let db = rusqlite::Connection::open(path).unwrap();
+    db.pragma_update(None, "journal_mode", "wal").unwrap();
+    db.execute_batch(include_str!("../../../atuin-common/tests/fixtures/hermes/schema.sql"))
+        .unwrap();
+}
+
+/// A connection to the Hermes store at `path`. Each is closed when dropped, so between writes no
+/// connection holds the store, as when Hermes is idle: SQLite then removes `-wal` and `-shm`.
+fn hermes_open(path: &Path) -> rusqlite::Connection {
+    let db = rusqlite::Connection::open(path).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
+    db
+}
+
+/// Insert `row`, an object of column names to values, into `table`.
+fn hermes_insert(db: &rusqlite::Connection, table: &str, row: &Value) {
+    let row = row.as_object().unwrap();
+    let columns: Vec<&str> = row.keys().map(String::as_str).collect();
+    let marks: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
+    let values: Vec<rusqlite::types::Value> = row
+        .values()
+        .map(|value| match value {
+            Value::Null => rusqlite::types::Value::Null,
+            Value::Number(n) if n.is_i64() => rusqlite::types::Value::Integer(n.as_i64().unwrap()),
+            Value::Number(n) => rusqlite::types::Value::Real(n.as_f64().unwrap()),
+            Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+            other => rusqlite::types::Value::Text(other.to_string()),
+        })
+        .collect();
+    db.execute(
+        &format!("INSERT INTO {table} ({}) VALUES ({})", columns.join(", "), marks.join(", ")),
+        rusqlite::params_from_iter(values),
+    )
+    .unwrap();
+}
+
+/// What Hermes's `terminal` tool returns for a command that printed `output` and exited with
+/// `exit_code`, as Python's `json.dumps` writes it.
+pub fn hermes_terminal_result(output: &str, exit_code: i64) -> String {
+    format!(
+        "{{\"output\": {}, \"exit_code\": {exit_code}, \"error\": null}}",
+        serde_json::to_string(output).unwrap()
+    )
+}
+
+/// Unix seconds, as Hermes stamps its rows.
+fn secs(at: OffsetDateTime) -> f64 {
+    // Milliseconds since 1970 need far fewer than an f64's 53 bits: the cast is exact.
+    #[allow(clippy::cast_precision_loss)]
+    let ms = millis(at) as f64;
+    ms / 1000.0
+}
+
+fn sha256_hex(text: impl AsRef<[u8]>) -> String {
+    use sha2::Digest as _;
+    format!("{:x}", sha2::Sha256::digest(text.as_ref()))
 }
 
 /// Stand-ins for the agents' executables, on `PATH` ahead of anything installed: each prints how

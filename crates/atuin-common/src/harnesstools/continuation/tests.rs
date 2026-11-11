@@ -14,6 +14,8 @@ use crate::harnesstools::copilot::Copilot;
 use crate::harnesstools::copilot::session::CopilotSession;
 use crate::harnesstools::grok::Grok;
 use crate::harnesstools::grok::session::GrokSession;
+use crate::harnesstools::hermes::Hermes;
+use crate::harnesstools::hermes::session::HermesSession;
 use crate::harnesstools::kiro::Kiro;
 use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::Opencode;
@@ -21,7 +23,7 @@ use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, copilot, grok, kiro, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
@@ -29,6 +31,7 @@ pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
 pub const COPILOT: AnyHarness = AnyHarness::Copilot(Copilot);
 pub const GROK: AnyHarness = AnyHarness::Grok(Grok);
+pub const HERMES: AnyHarness = AnyHarness::Hermes(Hermes);
 pub const KIRO: AnyHarness = AnyHarness::Kiro(Kiro);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
@@ -94,6 +97,17 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
         AnyHarness::Amp(_) => unreachable!("Amp keeps no transcript to read"),
+        AnyHarness::Hermes(_) => {
+            let dir = tempfile::tempdir().unwrap();
+            let db = hermes::session::tests::probe_store(dir.path()).await;
+            let id = hermes::session::tests::TOOL_ERROR;
+            let lines: Vec<_> = HermesSession::open(SessionId::from(id.to_owned()), &db)
+                .read()
+                .try_collect()
+                .await
+                .unwrap();
+            session_of(id, rows_of(&lines))
+        }
         AnyHarness::Kiro(_) => {
             let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
             let lines: Vec<_> = KiroSession::open(
@@ -207,6 +221,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
         AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
         AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
         AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
@@ -226,6 +241,7 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         assert!(seen.insert(id), "{id} is used twice");
         match target {
             AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+            AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
             AnyHarness::ClaudeCode(_)
             | AnyHarness::Copilot(_)
             | AnyHarness::Grok(_)
@@ -341,6 +357,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
         }
         let answered: Vec<String> = match target {
             AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+            AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
@@ -375,7 +392,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
     #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
@@ -427,6 +444,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let id = SessionId::from(session.id.clone());
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
         AnyHarness::Kiro(_) => {
             let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
             let sessions = root.join("sessions");
@@ -541,7 +559,7 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
     #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
@@ -1179,4 +1197,18 @@ fn each_model_call_is_a_step_and_the_assistant_ends() {
         r#"Tool: c2 -> "ok""#,
         r#"Assistant: "[the original session stopped here]""#,
     ]);
+}
+
+/// Hermes sessions are never written: a continuation into Hermes is refused before anything is
+/// minted, whatever the source.
+#[rstest]
+#[tokio::test]
+async fn a_continuation_into_hermes_is_refused(
+    #[values(CLAUDE, CODEX, COPILOT, KIRO, OPENCODE, PI)] source: AnyHarness,
+) {
+    let original = recorded(source).await;
+    assert_eq!(
+        continue_in(source, &original, Some(ATUIN_ID), HERMES).unwrap_err(),
+        ContinueError::Unwritable("hermes")
+    );
 }

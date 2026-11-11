@@ -9,6 +9,7 @@ use crate::harnesstools::ccode::session::{CcodeListener, CcodeSession, CcodeSess
 use crate::harnesstools::codex::session::{CodexListener, CodexSession, CodexSessions};
 use crate::harnesstools::copilot::session::{CopilotListener, CopilotSession, CopilotSessions};
 use crate::harnesstools::grok::session::{GrokListener, GrokSession, GrokSessions};
+use crate::harnesstools::hermes::session::{HermesListener, HermesSession, HermesSessions};
 use crate::harnesstools::kiro::session::{KiroListener, KiroSession, KiroSessions};
 use crate::harnesstools::opencode::session::{OpencodeListener, OpencodeSession, OpencodeSessions};
 use crate::harnesstools::pi::session::{PiListener, PiSession, PiSessions};
@@ -80,6 +81,7 @@ pub enum AnySessions {
     Codex(CodexSessions),
     Copilot(CopilotSessions),
     Grok(GrokSessions),
+    Hermes(HermesSessions),
     Kiro(KiroSessions),
     Opencode(OpencodeSessions),
     Pi(PiSessions),
@@ -131,6 +133,7 @@ pub enum AnyListener {
     Codex(CodexListener),
     Copilot(CopilotListener),
     Grok(GrokListener),
+    Hermes(HermesListener),
     Kiro(KiroListener),
     Opencode(OpencodeListener),
     Pi(PiListener),
@@ -175,6 +178,7 @@ pub enum AnySession {
     Codex(CodexSession),
     Copilot(CopilotSession),
     Grok(GrokSession),
+    Hermes(HermesSession),
     Kiro(KiroSession),
     Opencode(OpencodeSession),
     Pi(PiSession),

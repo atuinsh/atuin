@@ -60,6 +60,14 @@ fn id_file_path(tool_use_id: &str) -> PathBuf {
     std::env::temp_dir().joined(format!("atuin-hook-{tool_use_id}"))
 }
 
+/// The history entry a command's start opened, which only its end (or cancel) reads.
+fn take_history_id(tool_use_id: &str) -> Option<HistoryId> {
+    let id_path = id_file_path(tool_use_id);
+    let history_id = std::fs::read_to_string(&id_path).ok()?;
+    let _ = std::fs::remove_file(&id_path);
+    HistoryId::from_str(history_id.trim()).ok()
+}
+
 /// Tells the user how to make an agent pick up freshly installed hooks. The extension-based
 /// agents need a nudge, and so does Kiro, which reads its hook files when a session starts;
 /// the other command-hook agents load them on the next run.
@@ -149,6 +157,8 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
             command,
             intent,
             tool_use_id,
+            cwd,
+            at,
         }) => {
             if let Some(history_id) = history::start_history_entry(
                 settings,
@@ -156,6 +166,8 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
                 Some(author),
                 Some(AuthorKind::Agent),
                 intent.as_deref(),
+                cwd.as_deref(),
+                at,
             )
             .await?
             {
@@ -166,6 +178,7 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
             tool_use_id,
             exit,
             transcript,
+            duration,
         }) => {
             let exit = exit
                 .or_else(|| {
@@ -173,13 +186,13 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
                     codex::session::command_exit_code(&transcript, &tool_use_id)
                 })
                 .unwrap_or(0);
-            let id_path = id_file_path(&tool_use_id);
-
-            if let Ok(history_id) = std::fs::read_to_string(&id_path) {
-                if let Ok(history_id) = HistoryId::from_str(history_id.trim()) {
-                    let _ = history::end_history_entry(settings, history_id, exit, None).await;
-                }
-                let _ = std::fs::remove_file(&id_path);
+            if let Some(history_id) = take_history_id(&tool_use_id) {
+                let _ = history::end_history_entry(settings, history_id, exit, duration).await;
+            }
+        }
+        Some(HookEvent::Cancel { tool_use_id }) => {
+            if let Some(history_id) = take_history_id(&tool_use_id) {
+                let _ = history::cancel_history_entry(settings, history_id).await;
             }
         }
         None => {}

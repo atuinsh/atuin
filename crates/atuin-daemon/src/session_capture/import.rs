@@ -227,6 +227,7 @@ mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::copilot::session::CopilotSessions;
+    use atuin_common::harnesstools::hermes::session::HermesSessions;
     use atuin_common::harnesstools::kiro::session::KiroSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_common::harnesstools::session::ParentKind;
@@ -540,6 +541,59 @@ mod tests {
         assert_eq!(session.title.as_deref(), Some("Read README and Run Probe Command"));
         assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/kiro-play")));
         assert_eq!(session.git_branch, None);
+    }
+
+    /// Hermes keeps every session in one `state.db`: import reads its coding sessions (not the
+    /// subagent the probe delegated to), with each one's directory and the rows the store holds.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_hermes_sessions_from_its_store() {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("state.db");
+        let mut conn = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        for sql in [
+            include_str!("../../../atuin-common/tests/fixtures/hermes/schema.sql"),
+            include_str!("../../../atuin-common/tests/fixtures/hermes/probe.sql"),
+        ] {
+            // Not through `atuin_common::db::query`, which takes only static SQL: this stands for
+            // Hermes's own writes.
+            #[allow(clippy::disallowed_methods)]
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut conn).await.unwrap();
+        }
+        sqlx::Connection::close(conn).await.unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            HermesSessions::builder().home(home.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Hermes, sessions)
+            .collect()
+            .await;
+        // Rows 1-22 and 27-28: the subagent's 23-26 are left out.
+        assert_eq!(sum_new(&progress), 24);
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from(
+                "local-524543fc0c9eeda01f40f2cd88fefc201a75a0fd59817a174c4f18e0ebb80136".to_owned(),
+            ),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/hermes-play/work")));
+        let subagent = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from("20261109_094652_9ca0a5".to_owned()),
+        };
+        assert!(sink.sidecar.get_session(&subagent).await.unwrap().is_none());
     }
 
     /// A Kiro subagent's log, under its parent's directory, is a session of its own: import

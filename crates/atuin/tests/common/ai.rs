@@ -267,6 +267,26 @@ impl Machine {
         drop(daemon);
     }
 
+    /// The files the daemon has open, by their real paths.
+    pub fn daemon_open_files(&self) -> Vec<PathBuf> {
+        let pid = self.daemon.as_ref().expect("the daemon isn't running").child.id();
+        let fds = PathBuf::from(format!("/proc/{pid}/fd"));
+        if fds.is_dir() {
+            return std::fs::read_dir(fds)
+                .unwrap()
+                .flatten()
+                .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+                .collect();
+        }
+        // No `/proc` (macOS): `lsof` names each open file on a line of its own, after an `n`.
+        let listed = Command::new("lsof").args(["-Fn", "-p", &pid.to_string()]).output().unwrap();
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            .map(PathBuf::from)
+            .collect()
+    }
+
     /// The daemon's log so far, for a failure message.
     pub fn logs(&self) -> String {
         self.daemon.as_ref().map(Process::logs).unwrap_or_default()

@@ -10,9 +10,10 @@
 //! Every row of a session is a node of one tree (a forest, really), built per harness from what
 //! its rows say:
 //!
-//! - **Claude Code and Pi** link each line to the one before it (`parent_source_id`). Rows keyed
-//!   on their content (`syn-`: titles and other lines with no id) are no node; a session holding
-//!   nothing else is linear.
+//! - **Claude Code, Pi and Hermes Agent** link each line to the one before it
+//!   (`parent_source_id`; Hermes's reader names it, and a turn `/undo` dropped hangs from the turn
+//!   before it as a dead end, as a Claude Code rewind does). Rows keyed on their content (`syn-`:
+//!   titles and other lines with no id) are no node; a session holding nothing else is linear.
 //! - **Copilot** rows name the row before them in their lane since the reader learnt to; those
 //!   captured before it did have no parent, and each follows on from the row before it (as a
 //!   row whose parent is not stored does, below). Its title rows (`syn-`) are no node.
@@ -112,10 +113,12 @@ enum Model {
 impl Model {
     const fn of(harness: HarnessKind) -> Self {
         match harness {
-            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => Self::Tree {
-                chained: false,
-                beside: true,
-            },
+            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp | HarnessKind::Hermes => {
+                Self::Tree {
+                    chained: false,
+                    beside: true,
+                }
+            }
             // Amp's title rows (an import's) are content-addressed, beside its messages.
             HarnessKind::Copilot | HarnessKind::Amp | HarnessKind::Kiro => Self::Tree {
                 chained: true,

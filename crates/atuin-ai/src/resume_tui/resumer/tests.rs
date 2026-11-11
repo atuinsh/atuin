@@ -1566,3 +1566,53 @@ async fn a_switched_copy_fast_forwards_as_its_branch_grows(dirs: Dirs) {
     assert_eq!(status.as_deref(), Some("caught up: 1 message from @00000002"));
     assert_eq!(*machine.appended.lock(), ["e@d"]);
 }
+
+/// A Hermes copy here resumes as it is: atuin never writes Hermes sessions, so there is no
+/// catching it up, whatever the copy reads as (here, not at all) and whatever sync holds.
+#[rstest]
+#[tokio::test]
+async fn a_hermes_copy_resumes_as_it_is_without_catching_up(dirs: Dirs) {
+    let machine = FakeMachine {
+        found: HashMap::from([("local-h1".to_owned(), PathBuf::from("/h/.hermes/state.db"))]),
+        tip_error: Some("Hermes sessions can't be written here"),
+        ..FakeMachine::default()
+    };
+    let session = row(HarnessKind::Hermes, "local-h1", &dirs.elsewhere, false);
+    let resumer = resumer(&dirs, &machine);
+    let resume = resumer.plan(&session).await.unwrap();
+    assert!(!resume.catch_up, "{resume:?}");
+    assert_eq!(resume.plan.program, "hermes");
+    assert_eq!(resume.plan.args, ["-p", "default", "--resume", "local-h1"]);
+
+    let source = fake::FakeSource::from_rows(vec![session.clone()])
+        .with_synced(&session.handle, fake::synced_rows(true));
+    let caught = resumer.catch_up(&source, &session, None).await.unwrap();
+    assert!(
+        matches!(&caught, CatchUp::Ready { plan, status: None } if plan.program == "hermes"),
+        "{caught:?}"
+    );
+    assert!(machine.appended.lock().is_empty());
+}
+
+/// A Hermes session that isn't here can't be restored, forked, or continued into (atuin never
+/// writes Hermes sessions): each is refused up front, with nothing written, and Hermes is never
+/// offered as a continuation target.
+#[rstest]
+#[tokio::test]
+async fn a_hermes_session_not_here_is_not_resumable(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let remote = row(HarnessKind::Hermes, "local-h2", &dirs.elsewhere, true);
+    let err = resumer.plan(&remote).await.unwrap_err();
+    assert_eq!(err, NotResumable::Unwritable("hermes"));
+    assert!(!resumer.can_fork(&remote));
+    let err = resumer.fork(&Synced, &remote, ForkFrom::default()).await.unwrap_err();
+    assert_eq!(err, NotResumable::Unwritable("hermes"));
+    assert!(machine.written.lock().is_empty());
+
+    let claude = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
+    assert!(!resumer.continue_targets(&claude).contains(&HarnessKind::Hermes));
+    let err = resumer.continue_in(&Worked, &claude, HarnessKind::Hermes, None).await.unwrap_err();
+    assert_eq!(err, NotResumable::Unwritable("hermes"));
+    assert!(machine.written.lock().is_empty());
+}

@@ -8,8 +8,12 @@ use std::path::PathBuf;
 
 use atuin_common::string::NonNulStr;
 use serde_json::error::Category;
+use time::OffsetDateTime;
 
-use super::wire::{HookEventName, WireHookEvent, WireToolName};
+use super::wire::{
+    HermesEventName, HermesTerminalOutcome, HermesToolName, HookEventName, WireHermesEvent,
+    WireHookEvent, WireToolName,
+};
 use crate::i18n::fl;
 
 /// Why a hook payload could not be parsed.
@@ -39,6 +43,12 @@ pub enum HookEvent {
         command: NonNulStr,
         intent: Option<String>,
         tool_use_id: String,
+        /// Where it runs, when the event says so: Hermes's does, since its hooks run in its
+        /// gateway's directory. Other agents run their hooks in the command's directory.
+        cwd: Option<PathBuf>,
+        /// When it started, when the event says so: Hermes's plugin queues its events, so one
+        /// can reach atuin well after its command started. Others' arrive as it starts.
+        at: Option<OffsetDateTime>,
     },
     /// A Bash command finished; close the matching history entry.
     End {
@@ -47,11 +57,23 @@ pub enum HookEvent {
         exit: Option<i64>,
         /// The session's transcript, where Codex records the exit code its event doesn't say.
         transcript: Option<PathBuf>,
+        /// How long it ran, in nanoseconds, when the event says so (Hermes's does; see
+        /// [`HookEvent::Start::at`]). Otherwise it runs until this event arrives.
+        duration: Option<u64>,
+    },
+    /// A Bash command started, but its end will never be known (Hermes moved it to the
+    /// background); drop the history entry its start opened, as a command started in the
+    /// background is never recorded.
+    Cancel {
+        tool_use_id: String,
     },
 }
 
 /// The harness whose bare `tool_response` ends in the exit code.
 const KIRO: &str = "kiro";
+
+/// The harness whose events come in a shape of their own, [`WireHermesEvent`].
+const HERMES: &str = "hermes";
 
 impl HookEvent {
     /// Reduce a decoded wire event from `harness` (the name `atuin hook` was given) to a
@@ -90,6 +112,8 @@ impl HookEvent {
                     command,
                     intent,
                     tool_use_id,
+                    cwd: None,
+                    at: None,
                 })
             }
             HookEventName::PostToolUse => {
@@ -104,6 +128,7 @@ impl HookEvent {
                     tool_use_id,
                     exit: exit.or_else(|| wire.tool_result.and_then(|result| result.exit_code())),
                     transcript: wire.transcript_path,
+                    duration: None,
                 })
             }
             // Failed: with the exit code its error starts with (`Exit code 2`), else 1.
@@ -111,15 +136,65 @@ impl HookEvent {
                 tool_use_id,
                 exit: Some(wire.error.as_deref().and_then(failure_exit_code).unwrap_or(1)),
                 transcript: wire.transcript_path,
+                duration: None,
             }),
             HookEventName::Other => None,
         }
     }
 }
 
+impl HookEvent {
+    /// [`Self::reduce`] for Hermes's events. We **don't** care about tools other than
+    /// `terminal`, nor about a command started in the background (`background`), whose end comes
+    /// when it starts.
+    fn reduce_hermes(wire: WireHermesEvent) -> Option<Self> {
+        if !matches!(wire.tool_name, HermesToolName::Terminal) {
+            return None;
+        }
+        let (at, duration) = (wire.called_at(), wire.duration_nanos());
+        let args = wire.args?;
+        if args.is_background() {
+            return None;
+        }
+        let call_id = wire.tool_call_id.filter(|id| !id.is_empty())?;
+        let tool_use_id = match wire.session_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(session_id) => correlation_key(session_id, &call_id),
+            None => call_id,
+        };
+
+        match wire.hook_event_name {
+            HermesEventName::PreToolCall => Some(HookEvent::Start {
+                command: args.command.filter(|command| !command.is_empty())?,
+                intent: None,
+                tool_use_id,
+                cwd: wire.cwd,
+                at,
+            }),
+            HermesEventName::PostToolCall => {
+                let exit = match HermesTerminalOutcome::of(wire.result.as_deref()) {
+                    HermesTerminalOutcome::Exited(exit) => exit,
+                    HermesTerminalOutcome::Running => {
+                        return Some(HookEvent::Cancel { tool_use_id });
+                    }
+                    // as Kiro reports a call that never ran
+                    HermesTerminalOutcome::NeverRan => -1,
+                };
+                Some(HookEvent::End {
+                    tool_use_id,
+                    exit: Some(exit),
+                    transcript: None,
+                    duration,
+                })
+            }
+            HermesEventName::Other => None,
+        }
+    }
+}
+
 /// What stands in for a `tool_use_id` an agent (Copilot, Kiro) doesn't send: the session and
 /// the command, which both the start and the end of a call carry. Two identical commands running
-/// at once in one session share a key, and the second to end closes the first's entry.
+/// at once in one session share a key, and the second to end closes the first's entry. Hermes's
+/// call ids go through it too, with the session, since they can repeat across sessions.
 fn correlation_key(session_id: &str, command: &str) -> String {
     format!("{session_id}-{:016x}", xxhash_rust::xxh3::xxh3_64(command.as_bytes()))
 }
@@ -140,8 +215,14 @@ impl HookEvent {
     /// [`ParseError`]: an agent could never send that legitimately, so it signals
     /// a real fault worth seeing.
     pub fn from_json_str(input: &str, harness: &str) -> Result<Option<Self>, ParseError> {
-        match serde_json::from_str::<WireHookEvent>(input) {
-            Ok(wire) => Ok(Self::reduce(wire, harness)),
+        let parsed = match harness {
+            HERMES => serde_json::from_str::<WireHermesEvent>(input).map(Self::reduce_hermes),
+            _ => {
+                serde_json::from_str::<WireHookEvent>(input).map(|wire| Self::reduce(wire, harness))
+            }
+        };
+        match parsed {
+            Ok(event) => Ok(event),
             Err(err) if err.classify() == Category::Data => Ok(None),
             Err(err) => Err(ParseError::MalformedJson {
                 line: err.line(),
@@ -197,6 +278,8 @@ mod tests {
             command: non_nul("echo hello"),
             intent: Some("Test greeting".into()),
             tool_use_id: "toolu_abc123".into(),
+            cwd: None,
+            at: None,
         })
     )]
     #[case::pre_tool_use_without_description(
@@ -206,7 +289,7 @@ mod tests {
             "tool_input": {"command": "ls"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::Start { command: non_nul("ls"), intent: None, tool_use_id: "toolu_abc123".into() })
+        Some(HookEvent::Start { command: non_nul("ls"), intent: None, tool_use_id: "toolu_abc123".into(), cwd: None, at: None })
     )]
     #[case::post_tool_use_uses_exit_code(
         json!({
@@ -216,7 +299,7 @@ mod tests {
             "tool_response": {"exitCode": 3, "stdout": "hello\n"},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(3), transcript: None })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(3), transcript: None, duration: None })
     )]
     #[case::post_tool_use_without_exit_code_says_none(
         json!({
@@ -225,7 +308,7 @@ mod tests {
             "tool_response": {},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None, duration: None })
     )]
     // Nor does a null exitCode.
     #[case::null_exit_code_says_none(
@@ -235,7 +318,7 @@ mod tests {
             "tool_response": {"exitCode": null},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: None, transcript: None, duration: None })
     )]
     // PostToolUseFailure without an exit code in its error is exit 1, whatever tool_response says.
     #[case::failure_forces_exit_one_ignoring_response(
@@ -246,7 +329,7 @@ mod tests {
             "tool_response": {"exitCode": 0},
             "tool_use_id": "toolu_abc123"
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(1), transcript: None })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(1), transcript: None, duration: None })
     )]
     // Claude Code's failure says a shell command's exit code first in its error (Claude Code
     // 2.1.291, `PostToolUseFailure`'s `error`).
@@ -259,7 +342,7 @@ mod tests {
             "error": "Exit code 2\nls: cannot access '/nope': No such file or directory",
             "is_interrupt": false
         }),
-        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(2), transcript: None })
+        Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(2), transcript: None, duration: None })
     )]
     // Codex 0.160 says only the output, and where its transcript is (a real payload's fields).
     #[case::codex_post_tool_use(
@@ -280,6 +363,7 @@ mod tests {
             tool_use_id: "exec-55bd0a92-7032-4356-b380-ac1cc1ea66f4".into(),
             exit: None,
             transcript: Some("/w/.codex/sessions/2026/10/09/rollout-x.jsonl".into()),
+            duration: None,
         })
     )]
     // Grok Build names its shell tool `run_terminal_command` and reports `exit_code` in snake_case.
@@ -300,6 +384,8 @@ mod tests {
             command: non_nul("cargo test"),
             intent: Some("Run workspace tests".into()),
             tool_use_id: "call_ok_1".into(),
+            cwd: None,
+            at: None,
         })
     )]
     #[case::grok_post_tool_use_nonzero_exit(
@@ -316,6 +402,7 @@ mod tests {
             tool_use_id: "call_fail_2".into(),
             exit: Some(7),
             transcript: Some("/w/.grok/sessions/%2Fw/01a18221/updates.jsonl".into()),
+            duration: None,
         })
     )]
     // Non-Bash tools are never recorded.
@@ -352,6 +439,8 @@ mod tests {
             command: non_nul("echo probe-hello; false"),
             intent: Some("Run probe echo command".into()),
             tool_use_id: copilot_key("echo probe-hello; false"),
+            cwd: None,
+            at: None,
         })
     )]
     #[case::copilot_post_tool_use(
@@ -364,7 +453,7 @@ mod tests {
             "tool_input": {"command": "echo probe-hello; false", "description": "Run probe echo command"},
             "tool_result": {"result_type": "success", "text_result_for_llm": "probe-hello\n<shellId: 0 completed with exit code 1>"}
         }),
-        Some(HookEvent::End { tool_use_id: copilot_key("echo probe-hello; false"), exit: Some(1), transcript: None })
+        Some(HookEvent::End { tool_use_id: copilot_key("echo probe-hello; false"), exit: Some(1), transcript: None, duration: None })
     )]
     // A command Copilot started in the background (`mode: async`) is never recorded: its end
     // comes when it starts. A real payload, Copilot CLI 1.0.104.
@@ -396,7 +485,7 @@ mod tests {
             "tool_input": {"command": "exit 3", "description": "Run exit 3"},
             "tool_result": {"result_type": "success", "text_result_for_llm": "\n<shellId: 0 completed with exit code 3>"}
         }),
-        Some(HookEvent::End { tool_use_id: copilot_key("exit 3"), exit: Some(3), transcript: None })
+        Some(HookEvent::End { tool_use_id: copilot_key("exit 3"), exit: Some(3), transcript: None, duration: None })
     )]
     // An empty tool_use_id is treated the same as missing.
     #[case::empty_tool_use_id_skipped(
@@ -497,6 +586,8 @@ mod tests {
             command: non_nul("date +%s%N"),
             intent: Some("Get current Unix time in nanoseconds".into()),
             tool_use_id: kiro_key("date +%s%N"),
+            cwd: None,
+            at: None,
         })
     )]
     #[case::kiro_post_tool_use(
@@ -508,7 +599,7 @@ mod tests {
             "tool_input": {"command": "date +%s%N", "description": "Get current Unix time in nanoseconds", "cwd": null, "run_in_background": false, "timeout": null},
             "tool_response": "Output:\n1793383081798933000\n\n\nExit Code: 0"
         }),
-        Some(HookEvent::End { tool_use_id: kiro_key("date +%s%N"), exit: Some(0), transcript: None })
+        Some(HookEvent::End { tool_use_id: kiro_key("date +%s%N"), exit: Some(0), transcript: None, duration: None })
     )]
     // A failing command is a `PostToolUse` too, its exit code at the end of the response (the
     // response is as Kiro's transcript records it).
@@ -521,7 +612,7 @@ mod tests {
             "tool_input": {"command": "python3 -m unittest -v 2>&1", "description": "Run the project unit tests verbosely", "cwd": null, "run_in_background": false, "timeout": null},
             "tool_response": "Output:\ntest_mean (test_calc.CalcTest.test_mean) ... FAIL\n\nFAILED (failures=1)\n\n\nExit Code: 1"
         }),
-        Some(HookEvent::End { tool_use_id: kiro_key("python3 -m unittest -v 2>&1"), exit: Some(1), transcript: None })
+        Some(HookEvent::End { tool_use_id: kiro_key("python3 -m unittest -v 2>&1"), exit: Some(1), transcript: None, duration: None })
     )]
     // A call that never ran (denied, or its permission request failed) reports `Exit Code: -1`,
     // which closes the entry its start opened.
@@ -534,7 +625,7 @@ mod tests {
             "tool_input": {"command": "echo probe-hello", "cwd": null, "run_in_background": false, "timeout": null},
             "tool_response": "Output:\nThe permission request failed before it was answered, so this call did not run; the user did not reject it.\n\nExit Code: -1"
         }),
-        Some(HookEvent::End { tool_use_id: kiro_key("echo probe-hello"), exit: Some(-1), transcript: None })
+        Some(HookEvent::End { tool_use_id: kiro_key("echo probe-hello"), exit: Some(-1), transcript: None, duration: None })
     )]
     // A command Kiro runs in the background is never recorded: its end comes when it starts.
     #[case::kiro_background_start_skipped(
@@ -571,6 +662,8 @@ mod tests {
             command: non_nul("Get-Date"),
             intent: None,
             tool_use_id: kiro_key("Get-Date"),
+            cwd: None,
+            at: None,
         })
     )]
     // Kiro's other tools, and its session events, aren't recorded. The session events are real
@@ -614,6 +707,219 @@ mod tests {
         assert_eq!(HookEvent::from_json_str(&input.to_string(), "kiro").unwrap(), expected);
     }
 
+    /// The session the Hermes cases below ran in, a gateway-made id (Hermes v0.23.0).
+    const HERMES_SESSION: &str =
+        "local-524543fc0c9eeda01f40f2cd88fefc201a75a0fd59817a174c4f18e0ebb80136";
+
+    /// When the plugin says Hermes called each hook below, and how long Hermes says the call took
+    /// (its `duration_ms`, 557).
+    const HERMES_CALLED_AT: f64 = 1_794_263_000.5;
+    const HERMES_DURATION: u64 = 557_000_000;
+
+    fn hermes_at() -> Option<OffsetDateTime> {
+        OffsetDateTime::from_unix_timestamp_nanos(1_794_263_000_500_000_000).ok()
+    }
+
+    /// The key a Hermes call in [`HERMES_SESSION`] correlates by.
+    fn hermes_key(call_id: &str) -> String {
+        correlation_key(HERMES_SESSION, call_id)
+    }
+
+    /// A Hermes event as atuin's plugin sends it: Hermes's keyword arguments (real ones, from
+    /// a probe of v0.23.0) and the plugin's `hook_event_name` and `cwd`. `post` adds a post's
+    /// own; `args` and `result` replace the probe's.
+    fn hermes_event(
+        name: &str,
+        args: serde_json::Value,
+        result: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut event = json!({
+            "hook_event_name": name,
+            "tool_name": "terminal",
+            "task_id": HERMES_SESSION,
+            "session_id": HERMES_SESSION,
+            "tool_call_id": "call-50b5552b-7f41-4258-8684-95d89f27b5cb",
+            "turn_id": format!("{HERMES_SESSION}:{HERMES_SESSION}:a8ff0610"),
+            "api_request_id": format!("{HERMES_SESSION}:{HERMES_SESSION}:a8ff0610:api:1"),
+            "middleware_trace": [],
+            "conversation_id": HERMES_SESSION,
+            "telemetry_schema_version": "hermes.observer.v1",
+            "cwd": "/w/sub",
+            "called_at": HERMES_CALLED_AT,
+        });
+        event["args"] = args;
+        if let Some(result) = result {
+            let post = event.as_object_mut().unwrap();
+            post.insert("result".into(), json!(result.to_string()));
+            post.insert("duration_ms".into(), json!(557));
+            post.insert("status".into(), json!("error"));
+            post.insert("error_type".into(), json!("tool_error"));
+            post.insert("error_message".into(), json!("exit 1"));
+        }
+        event
+    }
+
+    fn hermes_end(exit: i64) -> HookEvent {
+        HookEvent::End {
+            tool_use_id: hermes_key("call-50b5552b-7f41-4258-8684-95d89f27b5cb"),
+            exit: Some(exit),
+            transcript: None,
+            duration: Some(HERMES_DURATION),
+        }
+    }
+
+    #[rstest]
+    #[case::pre_tool_call(
+        hermes_event("pre_tool_call", json!({"command": "ls /nonexistent-atuin-probe-dir"}), None),
+        Some(HookEvent::Start {
+            command: non_nul("ls /nonexistent-atuin-probe-dir"),
+            intent: None,
+            tool_use_id: hermes_key("call-50b5552b-7f41-4258-8684-95d89f27b5cb"),
+            cwd: Some("/w/sub".into()),
+            at: hermes_at(),
+        })
+    )]
+    #[case::post_tool_call_failed(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "ls /nonexistent-atuin-probe-dir"}),
+            Some(json!({"output": "ls: /nonexistent-atuin-probe-dir: No such file or directory", "exit_code": 1, "error": null})),
+        ),
+        Some(hermes_end(1))
+    )]
+    // A `cd` says where it went, which the next call's start carries as its cwd.
+    #[case::post_tool_call_with_cd(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "cd sub && pwd"}),
+            Some(json!({"output": "/w/sub", "exit_code": 0, "error": null, "cwd": "/w/sub"})),
+        ),
+        Some(hermes_end(0))
+    )]
+    // Refused, or waiting for the user's approval: the command never ran.
+    #[case::blocked(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "rm -rf /"}),
+            Some(json!({"output": "", "exit_code": -1, "error": "Command denied: recursive delete. Use the approval prompt to allow it, or rephrase the command.", "status": "blocked"})),
+        ),
+        Some(hermes_end(-1))
+    )]
+    #[case::pending_approval(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "rm -rf build"}),
+            Some(json!({"output": "", "exit_code": -1, "error": "", "status": "pending_approval", "approval_pending": true, "command": "rm -rf build"})),
+        ),
+        Some(hermes_end(-1))
+    )]
+    #[case::rejected_arguments(
+        hermes_event("post_tool_call", json!({"command": "ls", "workdir": "/etc/../"}), Some(json!({"error": "Blocked dangerous workdir"}))),
+        Some(hermes_end(-1))
+    )]
+    // Moved to the background after it overran: it runs on, and its exit will never be known.
+    #[case::yielded_to_background(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "npm test"}),
+            Some(json!({"output": "", "exit_code": null, "error": null, "status": "yielded_to_background", "session_id": "proc_1", "pid": 42, "notify_on_complete": true})),
+        ),
+        Some(HookEvent::Cancel { tool_use_id: hermes_key("call-50b5552b-7f41-4258-8684-95d89f27b5cb") })
+    )]
+    // Started in the background: never recorded, as its end comes when it starts.
+    #[case::background_start(
+        hermes_event("pre_tool_call", json!({"command": "npm run dev", "background": true}), None),
+        None
+    )]
+    #[case::background_end(
+        hermes_event(
+            "post_tool_call",
+            json!({"command": "npm run dev", "background": true}),
+            Some(json!({"output": "Background process started", "session_id": "proc_1", "pid": 42, "exit_code": 0, "error": null})),
+        ),
+        None
+    )]
+    #[case::background_as_a_string(
+        hermes_event("pre_tool_call", json!({"command": "npm run dev", "background": "true"}), None),
+        None
+    )]
+    #[case::not_background(
+        hermes_event("pre_tool_call", json!({"command": "make", "background": false, "timeout": 30}), None),
+        Some(HookEvent::Start {
+            command: non_nul("make"),
+            intent: None,
+            tool_use_id: hermes_key("call-50b5552b-7f41-4258-8684-95d89f27b5cb"),
+            cwd: Some("/w/sub".into()),
+            at: hermes_at(),
+        })
+    )]
+    // A subagent's command is its own session's, with its own call id.
+    #[case::subagent(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "tool_name": "terminal",
+            "args": {"command": "echo from-subagent && pwd"},
+            "task_id": "sa-0-c2a1c766",
+            "session_id": "20261109_094652_9ca0a5",
+            "tool_call_id": "call-f298c755-1b3b-41c6-96a5-1a17eda07912",
+            "turn_id": "20261109_094652_9ca0a5:sa-0-c2a1c766:f03cbf05",
+            "conversation_id": "local-56e64527431b680fad9f17881150e9234ddbca30777b3d57949bd767d30315e1",
+            "telemetry_schema_version": "hermes.observer.v1",
+            "cwd": "/w"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("echo from-subagent && pwd"),
+            intent: None,
+            tool_use_id: correlation_key("20261109_094652_9ca0a5", "call-f298c755-1b3b-41c6-96a5-1a17eda07912"),
+            cwd: Some("/w".into()),
+            at: None,
+        })
+    )]
+    #[case::other_tool(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "tool_name": "delegate_task",
+            "args": {"tasks": [{"goal": "Use the terminal tool to run: echo from-subagent && pwd ."}]},
+            "session_id": "local-56e64527431b680fad9f17881150e9234ddbca30777b3d57949bd767d30315e1",
+            "tool_call_id": "call-dc936657-5714-4b81-a991-d6e9e76b3525",
+            "cwd": "/w"
+        }),
+        None
+    )]
+    #[case::other_event(
+        json!({
+            "hook_event_name": "transform_terminal_output",
+            "tool_name": "terminal",
+            "args": {"command": "ls"},
+            "session_id": HERMES_SESSION,
+            "tool_call_id": "call-1"
+        }),
+        None
+    )]
+    #[case::no_call_id(
+        json!({"hook_event_name": "pre_tool_call", "tool_name": "terminal", "args": {"command": "ls"}, "session_id": HERMES_SESSION}),
+        None
+    )]
+    // Without a session, the call id alone.
+    #[case::no_session(
+        json!({"hook_event_name": "pre_tool_call", "tool_name": "terminal", "args": {"command": "ls"}, "tool_call_id": "call-1"}),
+        Some(HookEvent::Start { command: non_nul("ls"), intent: None, tool_use_id: "call-1".into(), cwd: None, at: None })
+    )]
+    #[case::empty_command(hermes_event("pre_tool_call", json!({"command": ""}), None), None)]
+    // Claude Code's shape is not Hermes's.
+    #[case::claude_shape(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "toolu_abc123"
+        }),
+        None
+    )]
+    fn parses_hermes_event(#[case] input: serde_json::Value, #[case] expected: Option<HookEvent>) {
+        assert_eq!(HookEvent::from_json_str(&input.to_string(), "hermes").unwrap(), expected);
+    }
+
     /// Codex serializes `tool_response` as a bare string, unlike the object
     /// Claude Code sends. Dropping the completion leaves the history entry
     /// opened by the matching `PreToolUse` unfinished, so nothing is recorded
@@ -625,17 +931,17 @@ mod tests {
     #[case::codex_string_tool_response(
         "codex",
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"printf probe"},"tool_response":"probe"}"#,
-        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None, duration: None })
     )]
     #[case::codex_output_that_prints_an_exit_code(
         "codex",
         r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"example-call","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"echo 'Exit Code: 7'"},"tool_response":"Exit Code: 7\n"}"#,
-        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None })
+        Some(HookEvent::End { tool_use_id: "example-call".into(), exit: None, transcript: None, duration: None })
     )]
     #[case::kiro_output_ending_in_its_exit_code(
         "kiro",
         r#"{"hook_event_name":"PostToolUse","tool_name":"execute_bash","session_id":"example-session","cwd":"/tmp","tool_input":{"command":"exit 7"},"tool_response":"Output:\n\n\n\nExit Code: 7"}"#,
-        Some(HookEvent::End { tool_use_id: correlation_key("example-session", "exit 7"), exit: Some(7), transcript: None })
+        Some(HookEvent::End { tool_use_id: correlation_key("example-session", "exit 7"), exit: Some(7), transcript: None, duration: None })
     )]
     fn a_bare_tool_response_says_the_exit_for_kiro_alone(
         #[case] harness: &str,
@@ -701,6 +1007,8 @@ mod tests {
                     command: NonNulStr::new(command).unwrap(),
                     intent: description,
                     tool_use_id,
+                    cwd: None,
+                    at: None,
                 })
             );
         }
@@ -720,7 +1028,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
-                Some(HookEvent::End { tool_use_id, exit: Some(exit), transcript: None })
+                Some(HookEvent::End { tool_use_id, exit: Some(exit), transcript: None, duration: None })
             );
         }
 
@@ -740,7 +1048,7 @@ mod tests {
 
             prop_assert_eq!(
                 HookEvent::from_json_str(&input.to_string(), "claude-code").unwrap(),
-                Some(HookEvent::End { tool_use_id, exit: Some(1), transcript: None })
+                Some(HookEvent::End { tool_use_id, exit: Some(1), transcript: None, duration: None })
             );
         }
 

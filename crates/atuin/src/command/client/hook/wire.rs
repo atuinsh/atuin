@@ -6,11 +6,15 @@
 //! exit code is in its transcript; Copilot's `tool_result` holds the output with the exit code
 //! at its end, and it names no `tool_use_id`; Kiro's `tool_response` is a bare string ending in
 //! `Exit Code: <n>`, its shell tool is `execute_bash`, and it names no `tool_use_id` either.
+//!
+//! Hermes Agent sends a shape of its own, through atuin's Hermes plugin: see [`WireHermesEvent`].
 
 use std::path::PathBuf;
 
 use atuin_common::string::NonNulStr;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
+use time::OffsetDateTime;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
@@ -157,6 +161,148 @@ impl WireToolResult {
     }
 }
 
+/// A Hermes Agent tool call, as atuin's Hermes plugin sends it: the keyword arguments Hermes
+/// passes its `pre_tool_call` and `post_tool_call` hooks (v0.23.0), plus the `hook_event_name`
+/// and the `cwd` and `called_at` the plugin adds. Fields atuin doesn't read (`task_id`,
+/// `turn_id`, `status`, ...) are ignored.
+#[derive(Debug, Deserialize)]
+pub struct WireHermesEvent {
+    pub hook_event_name: HermesEventName,
+    pub tool_name: HermesToolName,
+    /// Correlates a command's start and end. Some providers repeat ids (llama.cpp sends one
+    /// constant id), so it is only unique within a session.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub args: Option<WireHermesArgs>,
+    /// What the tool returned, on `post_tool_call`: for `terminal`, a JSON object in a string
+    /// (see [`WireHermesTerminalResult`]).
+    #[serde(default)]
+    pub result: Option<String>,
+    /// Where the command runs. Hermes's hooks run in its gateway, whose directory is not the
+    /// command's, so the plugin looks it up.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    /// When Hermes called the hook, in Unix seconds. The plugin queues its events and hands them
+    /// to atuin one at a time, so the event can arrive well after its command started.
+    #[serde(default)]
+    pub called_at: Option<f64>,
+    /// How long the tool call took, as Hermes measured it, on `post_tool_call`.
+    #[serde(default)]
+    pub duration_ms: Option<f64>,
+}
+
+impl WireHermesEvent {
+    /// [`Self::called_at`] as a time, `None` when absent or out of range.
+    pub fn called_at(&self) -> Option<OffsetDateTime> {
+        let seconds = self.called_at.filter(|s| s.is_finite() && *s >= 0.0)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let nanos = (seconds * 1e9) as i128;
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
+    }
+
+    /// [`Self::duration_ms`] in nanoseconds, as history keeps durations.
+    pub fn duration_nanos(&self) -> Option<u64> {
+        let ms = self.duration_ms.filter(|ms| ms.is_finite() && *ms >= 0.0)?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some((ms * 1e6) as u64)
+    }
+}
+
+/// See [`WireHermesEvent::hook_event_name`]. Unrecognized values map to
+/// [`HermesEventName::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HermesEventName {
+    PreToolCall,
+    PostToolCall,
+    #[serde(other)]
+    Other,
+}
+
+/// See [`WireHermesEvent::tool_name`]; we only record `terminal`, Hermes's shell tool.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HermesToolName {
+    Terminal,
+    #[serde(other)]
+    Other,
+}
+
+/// The `terminal` tool's arguments (`tools/terminal_tool.py`). Those of other tools decode too,
+/// as nothing.
+#[derive(Debug, Deserialize)]
+pub struct WireHermesArgs {
+    #[serde(default)]
+    pub command: Option<NonNulStr>,
+    /// Whether the command runs on in the background, its end coming as soon as it has started.
+    /// Any JSON, since a model may send the string `"true"`.
+    #[serde(default)]
+    pub background: Option<Value>,
+}
+
+impl WireHermesArgs {
+    pub fn is_background(&self) -> bool {
+        match &self.background {
+            Some(Value::Bool(background)) => *background,
+            Some(Value::String(background)) => background.eq_ignore_ascii_case("true"),
+            _ => false,
+        }
+    }
+}
+
+/// What the `terminal` tool returns (`tools/terminal_tool.py`): `{"output", "exit_code",
+/// "error"}`, with a `status` for a command that was `blocked`, is `pending_approval`, or was
+/// `yielded_to_background`.
+#[derive(Debug, Deserialize)]
+pub struct WireHermesTerminalResult {
+    /// `None` when the result has no `exit_code`, `Some(Value::Null)` when it is `null`.
+    #[serde(default, deserialize_with = "present")]
+    pub exit_code: Option<Value>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// A field that is there, `null` included.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+/// How a Hermes `terminal` call ended, as far as its result says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HermesTerminalOutcome {
+    /// It exited with this code. A command Hermes refused to run (`blocked`,
+    /// `pending_approval`) says `-1`.
+    Exited(i64),
+    /// It runs on in the background, so its exit is not known: Hermes moved it there after it
+    /// overran (`yielded_to_background`, `exit_code: null`).
+    Running,
+    /// It never ran: the call failed before it got that far, with no exit code (Hermes's
+    /// argument checks answer `{"error": ...}` alone).
+    NeverRan,
+}
+
+impl HermesTerminalOutcome {
+    /// The outcome `result` (a [`WireHermesEvent::result`]) reports.
+    pub fn of(result: Option<&str>) -> Self {
+        let Some(result) =
+            result.and_then(|result| serde_json::from_str::<WireHermesTerminalResult>(result).ok())
+        else {
+            return Self::NeverRan;
+        };
+        if result.status.as_deref() == Some("yielded_to_background") {
+            return Self::Running;
+        }
+        match result.exit_code {
+            Some(Value::Null) => Self::Running,
+            Some(code) => code.as_i64().map_or(Self::NeverRan, Self::Exited),
+            None => Self::NeverRan,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -179,5 +325,48 @@ mod tests {
         #[case] expected: Option<i64>,
     ) {
         assert_eq!(trailing_exit_code(output), expected);
+    }
+
+    #[rstest]
+    #[case::exited(
+        r#"{"output": "hi", "exit_code": 0, "error": null}"#,
+        HermesTerminalOutcome::Exited(0)
+    )]
+    #[case::failed(
+        r#"{"output": "", "exit_code": 1, "error": null}"#,
+        HermesTerminalOutcome::Exited(1)
+    )]
+    #[case::timed_out(
+        r#"{"output": "", "exit_code": 124, "error": "Command timed out after 180 seconds"}"#,
+        HermesTerminalOutcome::Exited(124)
+    )]
+    #[case::blocked(
+        r#"{"output": "", "exit_code": -1, "error": "Command denied", "status": "blocked"}"#,
+        HermesTerminalOutcome::Exited(-1)
+    )]
+    #[case::yielded(
+        r#"{"output": "", "exit_code": null, "error": null, "status": "yielded_to_background", "session_id": "proc_1"}"#,
+        HermesTerminalOutcome::Running
+    )]
+    #[case::null_exit(
+        r#"{"output": "", "exit_code": null, "error": null}"#,
+        HermesTerminalOutcome::Running
+    )]
+    #[case::rejected_arguments(
+        r#"{"error": "command is required"}"#,
+        HermesTerminalOutcome::NeverRan
+    )]
+    #[case::not_a_number(r#"{"exit_code": "zero"}"#, HermesTerminalOutcome::NeverRan)]
+    #[case::not_json("Command failed", HermesTerminalOutcome::NeverRan)]
+    fn reads_how_a_hermes_command_ended(
+        #[case] result: &str,
+        #[case] expected: HermesTerminalOutcome,
+    ) {
+        assert_eq!(HermesTerminalOutcome::of(Some(result)), expected);
+    }
+
+    #[rstest]
+    fn a_hermes_end_without_a_result_never_ran() {
+        assert_eq!(HermesTerminalOutcome::of(None), HermesTerminalOutcome::NeverRan);
     }
 }

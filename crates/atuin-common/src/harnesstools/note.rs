@@ -112,7 +112,8 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         | "unified_exec"
         | "run_terminal_command"
         | "execute_bash"
-        | "execute_pwsh" => on(
+        | "execute_pwsh"
+        | "terminal" => on(
             field(&["command", "cmd"])
                 .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a))),
             &|c| format!("ran {}", code(c)),
@@ -269,6 +270,7 @@ mod tests {
     #[case::codex_argv("shell", json!({"command": ["git", "log", "--oneline"]}), "[ran `git log --oneline`]")]
     #[case::codex_exec("exec_command", json!(r#"{"cmd":"ls -la"}"#), "[ran `ls -la`]")]
     #[case::kiro_exec("execute_bash", json!({"command": "ls -la", "run_in_background": false}), "[ran `ls -la`]")]
+    #[case::hermes_terminal("terminal", json!({"command": "ls -la", "background": false}), "[ran `ls -la`]")]
     #[case::codex_patch(
         "apply_patch",
         json!("*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Add File: src/b.rs\n+z\n*** End Patch"),

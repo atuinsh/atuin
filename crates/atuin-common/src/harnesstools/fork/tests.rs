@@ -8,7 +8,7 @@ use super::*;
 use crate::harnesstools::ccode::session::CcodeSession;
 use crate::harnesstools::codex::session::CodexSession;
 use crate::harnesstools::continuation::tests::{
-    CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI, pool, recorded, rows_of,
+    CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, pool, recorded, rows_of,
 };
 use crate::harnesstools::continuation::{fork_marker_text, linked_from_message};
 use crate::harnesstools::copilot::session::CopilotSession;
@@ -61,6 +61,7 @@ async fn written(
     let id = SessionId::from(session.id.clone());
     match harness {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Hermes(_) => unreachable!("atuin writes no Hermes sessions"),
         AnyHarness::Kiro(_) => {
             let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =
@@ -315,4 +316,18 @@ async fn an_opencode_fork_of_only_replies_names_its_original() {
     let (rows, links) = written(OPENCODE, dir.path(), &forked).await;
     assert_eq!(rows[0].content, vec![Content::Text(marker)]);
     assert_eq!(links, vec![(original.id.clone(), ParentKind::Fork)]);
+}
+
+/// Hermes sessions are never written: a Hermes session is not forked, whatever its rows.
+#[rstest]
+#[tokio::test]
+async fn a_hermes_session_is_not_forked() {
+    let original = recorded(HERMES).await;
+    assert!(!original.messages.is_empty());
+    let of = ForkOf {
+        id: original.id.clone(),
+        atuin_id: Some(ATUIN_ID.to_owned()),
+        path: None,
+    };
+    assert!(fork(HERMES, &original, of, None).is_none());
 }

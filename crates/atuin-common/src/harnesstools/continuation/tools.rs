@@ -96,6 +96,7 @@ impl Canonical {
                 | "run_terminal_command"
                 | "execute_bash"
                 | "execute_pwsh"
+                | "terminal"
                 | "read"
                 | "read_file"
                 | "view"
@@ -123,7 +124,8 @@ impl Canonical {
             | "local_shell"
             | "run_terminal_command"
             | "execute_bash"
-            | "execute_pwsh" => {
+            | "execute_pwsh"
+            | "terminal" => {
                 let (command, workdir) = if name == "local_shell" {
                     (command(input.get("command")), string(&input, &["working_directory"]))
                 } else {
@@ -445,6 +447,7 @@ const fn path_key(target: AnyHarness) -> &'static str {
         AnyHarness::Amp(_)
         | AnyHarness::Codex(_)
         | AnyHarness::Copilot(_)
+        | AnyHarness::Hermes(_)
         | AnyHarness::Kiro(_)
         | AnyHarness::Pi(_) => "path",
     }
@@ -513,6 +516,9 @@ impl CallIds {
 /// items (Codex's): a call kept as the tool it was, under such a name, would read as that tool.
 fn native(target: AnyHarness, name: &str) -> bool {
     let names: &[&str] = match target {
+        AnyHarness::Hermes(_) => {
+            unreachable!("refused by continue_at and fork: Hermes transcripts are never written")
+        }
         AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) => &[
             "bash",
             "read",

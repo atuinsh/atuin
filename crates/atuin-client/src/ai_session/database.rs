@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -1586,6 +1586,7 @@ impl AiSessionDatabase {
             7 => Ok(HarnessKind::Grok),
             8 => Ok(HarnessKind::Amp),
             9 => Ok(HarnessKind::Kiro),
+            10 => Ok(HarnessKind::Hermes),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -2919,6 +2920,39 @@ mod tests {
         let generation = count("SELECT generation FROM projection_state");
 
         conn.execute_batch(include_str!("migrations/0005_reproject_for_kiro.sql")).unwrap();
+
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
+    }
+
+    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
+    /// harness before they knew Hermes.
+    #[rstest]
+    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+            include_str!("migrations/0005_reproject_for_kiro.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 0, 'local-1', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 0, 1, '1', 0, 1, '[]');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        let generation = count("SELECT generation FROM projection_state");
+
+        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
 
         assert_eq!(count("SELECT count(*) FROM sessions"), 0);
         assert_eq!(count("SELECT count(*) FROM messages"), 0);

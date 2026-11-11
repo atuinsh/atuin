@@ -12,6 +12,7 @@ pub mod continuation;
 pub mod copilot;
 pub mod fork;
 pub mod grok;
+pub mod hermes;
 mod json_hooks;
 pub mod kiro;
 pub mod mcp;
@@ -28,6 +29,7 @@ use ccode::Ccode;
 use codex::Codex;
 use copilot::Copilot;
 use grok::Grok;
+use hermes::Hermes;
 use kiro::Kiro;
 use mcp::{InstallMcp, InstallMcpError};
 use opencode::Opencode;
@@ -52,6 +54,14 @@ pub trait Harness: std::fmt::Debug {
     /// There is a default implementation -- the empty set.
     fn alias_names(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Whether atuin writes this harness's transcripts: restoring a session here
+    /// ([`Self::rehydrate`]), catching a copy up or switching its branch (`SessionSync`), and
+    /// forking or continuing a session into it. A harness atuin only reads (Hermes, until its
+    /// write side lands) says no, and every writer refuses it up front.
+    fn writes_transcripts(&self) -> bool {
+        true
     }
 
     /// The harness's name as people know it. For example, setup says "Recording commands from Grok
@@ -106,6 +116,7 @@ pub enum AnyHarness {
     Codex(Codex),
     Copilot(Copilot),
     Grok(Grok),
+    Hermes(Hermes),
     Kiro(Kiro),
     Opencode(Opencode),
     Pi(Pi),
@@ -176,6 +187,7 @@ impl AnyHarness {
             Self::Codex(Codex),
             Self::Copilot(Copilot),
             Self::Grok(Grok),
+            Self::Hermes(Hermes),
             Self::Kiro(Kiro),
             Self::Opencode(Opencode),
             Self::Pi(Pi::PI),

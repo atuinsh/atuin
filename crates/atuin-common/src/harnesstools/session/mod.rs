@@ -561,6 +561,7 @@ use crate::harnesstools::ccode::session::CcodeMessage;
 use crate::harnesstools::codex::session::CodexMessage;
 use crate::harnesstools::copilot::session::CopilotMessage;
 use crate::harnesstools::grok::session::GrokMessage;
+use crate::harnesstools::hermes::session::HermesMessage;
 use crate::harnesstools::kiro::session::KiroMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
@@ -573,6 +574,7 @@ pub enum AnyMessage {
     Codex(CodexMessage),
     Copilot(CopilotMessage),
     Grok(GrokMessage),
+    Hermes(HermesMessage),
     Kiro(KiroMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
