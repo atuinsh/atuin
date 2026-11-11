@@ -7,6 +7,7 @@ use atuin_common::harnesstools::session::any::{
 };
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
+use tokio_util::task::AbortOnDropHandle;
 
 use super::Sink;
 use super::engine::{Start, warm_once};
@@ -110,10 +111,15 @@ impl SessionImporter {
             let Ok(existing) = sessions.existing() else {
                 return;
             };
+            // Each session is read in a task of its own. A read's warm-up holds capture's locks
+            // across its queries, and the loop below stops polling the reads while it stores a
+            // batch, which takes the same locks. A read polled only by the loop would then never
+            // release them, and the import and live capture would both wait forever. Each task is
+            // aborted when the import is dropped, as a read polled by the loop would be.
             let mut reads = existing
                 .map(|item| {
                     let sink = sink.clone();
-                    async move {
+                    AbortOnDropHandle::new(tokio::spawn(async move {
                         // A scan failure (unreadable directory/entry) is not a session; surface it
                         // so the summary reflects a partial backfill instead of a silent one.
                         let session = item.ok()?;
@@ -131,9 +137,15 @@ impl SessionImporter {
                             Ok(read) => Some(read),
                             Err(err) => std::panic::resume_unwind(err.into_panic()),
                         }
-                    }
+                    }))
                 })
-                .buffer_unordered(concurrency);
+                .buffer_unordered(concurrency)
+                .map(|joined| match joined {
+                    Ok(read) => read,
+                    Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+                    // Cancelled: the runtime is shutting down, and the import with it.
+                    Err(_) => None,
+                });
 
             // Sessions' rows are stored a batch at a time, a session's progress once its are.
             let mut batch = Vec::new();
@@ -263,6 +275,7 @@ mod tests {
     use futures::StreamExt;
     use futures::future::BoxFuture;
     use rstest::rstest;
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::session_capture::{AiHarnessSessionCapture, hooks};
@@ -498,6 +511,129 @@ mod tests {
 
         assert_eq!(counts, [(BATCH as u64 + 2, 0, 0)]);
         assert_eq!(pushes.0.load(SeqCst), 2);
+    }
+
+    /// Holds the second warm-up inside capture's locks until the first append is about to wait
+    /// for them.
+    #[derive(Debug)]
+    struct HeldWarmUp {
+        warm_ups: AtomicUsize,
+        appends: AtomicUsize,
+        /// A permit once the second warm-up holds capture's locks.
+        holding: Semaphore,
+        /// A permit once the first append is about to wait for capture's locks.
+        appending: Semaphore,
+    }
+
+    impl HeldWarmUp {
+        fn new() -> Self {
+            Self {
+                warm_ups: AtomicUsize::new(0),
+                appends: AtomicUsize::new(0),
+                holding: Semaphore::new(0),
+                appending: Semaphore::new(0),
+            }
+        }
+    }
+
+    impl hooks::Hooks for HeldWarmUp {
+        fn at(&self, point: hooks::Point) -> BoxFuture<'_, hooks::Fault> {
+            Box::pin(async move {
+                match point {
+                    hooks::Point::WarmRead(hooks::WarmStep::Session)
+                        if self.warm_ups.fetch_add(1, SeqCst) == 1 =>
+                    {
+                        self.holding.add_permits(1);
+                        self.appending.acquire().await.unwrap().forget();
+                    }
+                    hooks::Point::Appending if self.appends.fetch_add(1, SeqCst) == 0 => {
+                        self.holding.acquire().await.unwrap().forget();
+                        self.appending.add_permits(1);
+                    }
+                    _ => {}
+                }
+                hooks::Fault::None
+            })
+        }
+    }
+
+    /// A batch is stored while another session's warm-up holds capture's locks. The import waits
+    /// for that warm-up to finish instead of waiting forever for the locks it holds.
+    #[rstest]
+    #[tokio::test]
+    async fn a_batch_stored_during_another_sessions_warm_up_does_not_deadlock() {
+        let root = tempfile::tempdir().unwrap();
+        // Each session fills a batch on its own. The first one read is stored while the second
+        // one's warm-up holds the locks, and that warm-up only goes on once the store is waiting.
+        let turns = vec!["user:hi"; BATCH];
+        write_pi_session(root.path(), "s1", &turns);
+        write_pi_session(root.path(), "s2", &turns);
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.hooks = Some(Arc::new(HeldWarmUp::new()));
+
+        let import = SessionImporter::new(Arc::new(sink), pool())
+            .harness(HarnessKind::Pi, pi_sessions(root.path()))
+            .collect::<Vec<_>>();
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(10), import)
+            .await
+            .expect("the import deadlocked");
+
+        // Each session's header and turns.
+        assert_eq!(sum_new(&progress), 2 * (BATCH as u64 + 1));
+    }
+
+    /// Holds every warm-up inside capture's locks until it is dropped.
+    #[derive(Debug)]
+    struct StuckWarmUps {
+        /// A permit for each warm-up that holds capture's locks.
+        holding: Semaphore,
+    }
+
+    impl hooks::Hooks for StuckWarmUps {
+        fn at(&self, point: hooks::Point) -> BoxFuture<'_, hooks::Fault> {
+            Box::pin(async move {
+                if point == hooks::Point::WarmRead(hooks::WarmStep::Session) {
+                    self.holding.add_permits(1);
+                    futures::future::pending::<()>().await;
+                }
+                hooks::Fault::None
+            })
+        }
+    }
+
+    /// An import dropped while a session's warm-up holds capture's locks releases them, so
+    /// capture goes on once an import is cancelled.
+    #[rstest]
+    #[tokio::test]
+    async fn a_dropped_import_releases_capture_locks() {
+        let root = tempfile::tempdir().unwrap();
+        write_pi_session(root.path(), "s1", &["user:hi"]);
+        let hooks = Arc::new(StuckWarmUps {
+            holding: Semaphore::new(0),
+        });
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.hooks = Some(hooks.clone());
+        let sink = Arc::new(sink);
+
+        let mut import = Box::pin(
+            SessionImporter::new(sink.clone(), pool())
+                .harness(HarnessKind::Pi, pi_sessions(root.path())),
+        );
+        let held = async {
+            tokio::select! {
+                event = import.next() => panic!("the import went on past a held warm-up: {event:?}"),
+                permit = hooks.holding.acquire() => permit.unwrap().forget(),
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), held)
+            .await
+            .expect("the warm-up never took capture's locks");
+        drop(import);
+
+        let locks = tokio::time::timeout(std::time::Duration::from_secs(5), sink.lock_ready())
+            .await
+            .expect("the dropped import kept capture's locks");
+        assert!(locks.is_ok());
     }
 
     #[rstest]

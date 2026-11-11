@@ -244,6 +244,8 @@ impl Sink {
         origin: Origin,
         msgs: Vec<Message>,
     ) -> Result<Vec<Appended>, AppendError> {
+        #[cfg(test)]
+        self.hook(hooks::Point::Appending).await;
         let locks = self.lock_ready().await?;
         let sink = self.clone();
         // The locks go with the task: released when it ends, however it ends (a panic unwinding
