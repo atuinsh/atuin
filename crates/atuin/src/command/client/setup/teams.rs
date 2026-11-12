@@ -17,36 +17,44 @@ use eyre::{Result, WrapErr as _};
 use itertools::Itertools as _;
 use toml_edit::Value;
 
+use super::upload::Upload;
 use super::{Status, Step, Updates, count, names, send};
 
 /// Turn Atuin for Teams on, if the account has it, and upload what Atuin already has here if
-/// `backfill`.
+/// `backfill`. Returns the upload to watch, if it started one.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
     store: &SqliteStore,
     backfill: bool,
     tx: &Updates,
-) {
+) -> Option<Upload> {
     send(tx, Step::Teams, Status::Running("Turning on Atuin for Teams".into()));
-    let status = match turn_on(settings, store, backfill).await {
-        Ok(status) => status,
-        Err(e) => Status::Failed(format!(
-            "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --teams` to try again"
-        )),
+    let (status, upload) = match turn_on(settings, store, backfill).await {
+        Ok(on) => on,
+        Err(e) => {
+            let failed = format!(
+                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --teams` to try again"
+            );
+            (Status::Failed(failed), None)
+        }
     };
     send(tx, Step::Teams, status);
+    upload
 }
 
-/// How turning it on went: `Err` for a failure that trying again may fix.
-async fn turn_on(settings: &Arc<Settings>, store: &SqliteStore, backfill: bool) -> Result<Status> {
+/// How turning it on went, and the upload it started: `Err` for a failure that trying again may
+/// fix.
+async fn turn_on(
+    settings: &Arc<Settings>,
+    store: &SqliteStore,
+    backfill: bool,
+) -> Result<(Status, Option<Upload>)> {
     let login = match HubClient::new(settings)?.login(settings).await {
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => {
-            return Ok(Status::Failed(
-                "Atuin for Teams needs you signed in: run `atuin login`, then `atuin setup \
-                 --teams`"
-                    .into(),
-            ));
+            let failed = "Atuin for Teams needs you signed in: run `atuin login`, then `atuin \
+                          setup --teams`";
+            return Ok((Status::Failed(failed.into()), None));
         }
         Err(err) => return Err(err).wrap_err("couldn't ask the hub who you're signed in as"),
     };
@@ -55,10 +63,9 @@ async fn turn_on(settings: &Arc<Settings>, store: &SqliteStore, backfill: bool) 
     let caps = atuin_client::api_client::caps_client(settings)?;
     caps.refresh().await?;
     if caps.get_server::<OctavoCap>().await?.is_none() {
-        return Ok(Status::Failed(format!(
-            "Atuin for Teams isn't enabled for your account on {}",
-            settings.sync_address
-        )));
+        let failed =
+            format!("Atuin for Teams isn't enabled for your account on {}", settings.sync_address);
+        return Ok((Status::Failed(failed), None));
     }
 
     let backfill = if backfill {
@@ -95,11 +102,13 @@ async fn turn_on(settings: &Arc<Settings>, store: &SqliteStore, backfill: bool) 
     let restarted = restart_daemon(settings).await;
     let (uploading, old) = queued?;
     if let Err(instruction) = restarted {
-        return Ok(Status::Failed(format!(
-            "Atuin for Teams is on once the daemon restarts: {instruction}"
-        )));
+        let failed = format!("Atuin for Teams is on once the daemon restarts: {instruction}");
+        return Ok((Status::Failed(failed), None));
     }
 
+    let upload = uploading
+        .is_some()
+        .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone()));
     let uploading =
         uploading.map_or_else(String::new, |what| format!(", uploading {what} in the background"));
     let old = if old > 0 {
@@ -107,7 +116,7 @@ async fn turn_on(settings: &Arc<Settings>, store: &SqliteStore, backfill: bool) 
     } else {
         String::new()
     };
-    Ok(Status::Done(format!("Atuin for Teams is on{uploading}{old}")))
+    Ok((Status::Done(format!("Atuin for Teams is on{uploading}{old}")), upload))
 }
 
 /// What Atuin already has here, to upload.

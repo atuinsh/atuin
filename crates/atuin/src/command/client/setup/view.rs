@@ -2,6 +2,8 @@
 
 use std::io::{self, Write};
 use std::time::Duration;
+#[cfg(feature = "octavo")]
+use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_common::harnesstools::Harness as _;
@@ -17,6 +19,8 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use ratatui::{DefaultTerminal, Frame, TerminalOptions, Viewport};
 use tokio::sync::mpsc;
 
+#[cfg(feature = "octavo")]
+use super::upload::{Gauge, Progress, State, Tracker, Upload};
 use super::{
     Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Teams, Update, count, is_address,
     names,
@@ -110,10 +114,15 @@ async fn drive(
         }
     };
 
+    let Some(offer) = offer else {
+        // ctrl-c: what was running stays as it was.
+        return Ok(Some(outcome(&plan, running, &mut updates)));
+    };
     // Sign-in has said what the account holds, so what's left is theirs to import.
-    match offer.filter(|offer| !offer.is_empty()) {
-        Some(offer) if !ask_import => super::skip_import(&offer, &tx),
-        Some(offer) => {
+    match offer {
+        _ if offer.is_empty() => {}
+        offer if !ask_import => super::skip_import(&offer, &tx),
+        offer => {
             let mut import = Import::new(&offer);
             // The screen doesn't know about the sign-in link, so wouldn't clear it.
             terminal.clear()?;
@@ -132,20 +141,128 @@ async fn drive(
                 },
                 &tx,
             );
-            while let Ok(update) = updates.try_recv() {
-                running.update(update);
-            }
-            running.show(terminal, tick)?;
             if !take.is_empty() {
-                super::import(&take, &tx).await;
+                let import = super::import(&take, &tx, plan.waits_for_imports());
+                let imported = drawn(terminal, &mut running, &mut updates, &mut tick, import);
+                if imported.await?.is_none() {
+                    return Ok(Some(outcome(&plan, running, &mut updates)));
+                }
             }
         }
-        None => {}
     }
+
+    #[cfg(feature = "octavo")]
+    if let Some(Teams::On { backfill }) = plan.teams {
+        let on = super::turn_on_teams(store, backfill, &tx);
+        match drawn(terminal, &mut running, &mut updates, &mut tick, on).await? {
+            Some(Some(upload)) => {
+                watch(terminal, &mut running, &mut updates, &mut tick, &upload).await?;
+            }
+            Some(None) => {}
+            None => return Ok(Some(outcome(&plan, running, &mut updates))),
+        }
+    }
+    Ok(Some(outcome(&plan, running, &mut updates)))
+}
+
+/// The plan, and each step as the screen last heard of it.
+fn outcome(
+    plan: &Plan,
+    mut running: Running,
+    updates: &mut mpsc::UnboundedReceiver<Update>,
+) -> (Plan, Vec<(Step, Status)>) {
     while let Ok(update) = updates.try_recv() {
         running.update(update);
     }
-    Ok(Some((plan.clone(), running.steps)))
+    (plan.clone(), running.steps)
+}
+
+/// Run `work` with the screen kept moving. `None` if they pressed ctrl-c first, which drops it.
+async fn drawn<T>(
+    terminal: &mut DefaultTerminal,
+    running: &mut Running,
+    updates: &mut mpsc::UnboundedReceiver<Update>,
+    tick: &mut usize,
+    work: impl Future<Output = T>,
+) -> Result<Option<T>> {
+    let mut work = std::pin::pin!(work);
+    loop {
+        while let Ok(update) = updates.try_recv() {
+            running.update(update);
+        }
+        running.show(terminal, *tick)?;
+        *tick += 1;
+        tokio::select! {
+            done = work.as_mut() => return Ok(Some(done)),
+            key = next_key() => {
+                if let Some(key) = key?
+                    && matches!(running.handle(key), Handled::Abort)
+                {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+}
+
+/// Show `upload` going until it's done or they leave, then say in the summary how far it got.
+#[cfg(feature = "octavo")]
+async fn watch(
+    terminal: &mut DefaultTerminal,
+    running: &mut Running,
+    updates: &mut mpsc::UnboundedReceiver<Update>,
+    tick: &mut usize,
+    upload: &Upload,
+) -> Result<()> {
+    /// Often enough to look live, seldom enough to leave the daemon its database.
+    const READ_EVERY: Duration = Duration::from_millis(500);
+
+    while let Ok(update) = updates.try_recv() {
+        running.update(update);
+    }
+    let uploading = Status::Running("Uploading to Atuin for Teams".into());
+    running.update(Update::Step(Step::Upload, uploading));
+    let mut tracker = Tracker::default();
+    let mut read_at: Option<Instant> = None;
+    let summary = loop {
+        if read_at.is_none_or(|at| at.elapsed() >= READ_EVERY) {
+            read_at = Some(Instant::now());
+            match upload.backlog().await {
+                Ok(backlog) => {
+                    let now = Instant::now();
+                    running.upload = Some(tracker.update(&backlog, upload.daemon_running(), now));
+                }
+                Err(e) => {
+                    break Status::Failed(format!(
+                        "Couldn't follow the upload ({e}). It goes on in the background"
+                    ));
+                }
+            }
+        }
+        running.show(terminal, *tick)?;
+        *tick += 1;
+        if let Some(done) = running.upload.filter(|progress| progress.state == State::Done) {
+            break Status::Done(done.summary());
+        }
+        if let Some(key) = next_key().await?
+            && leaves(key)
+        {
+            let summary = running.upload.as_ref().map(Progress::summary);
+            break Status::Done(
+                summary.unwrap_or_else(|| "Uploading to Atuin for Teams in the background".into()),
+            );
+        }
+    };
+    running.upload = None;
+    running.update(Update::Step(Step::Upload, summary));
+    Ok(())
+}
+
+/// Whether `key` leaves the upload to go on in the background.
+#[cfg(feature = "octavo")]
+fn leaves(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+        || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
 }
 
 /// The next key pressed, `None` once a moment passes without one, so spinners keep turning.
@@ -499,6 +616,9 @@ struct Running {
     sign_in: SignIn,
     /// Where the sign-in link was written, last frame.
     link_at: Option<(u16, u16)>,
+    /// How far the Atuin for Teams upload has got, while setup watches it.
+    #[cfg(feature = "octavo")]
+    upload: Option<Progress>,
 }
 
 /// The sign-in link: where it goes, and the address.
@@ -603,6 +723,13 @@ impl Running {
                 ]),
             };
             lines.push(line);
+            #[cfg(feature = "octavo")]
+            if *step == Step::Upload
+                && let Some(progress) = &self.upload
+            {
+                lines.extend(upload_lines(progress));
+                hint = Some(hints(&[("q", "leave, the upload goes on in the background")]));
+            }
             if *step != Step::Sync {
                 continue;
             }
@@ -653,6 +780,55 @@ impl Running {
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), frame.area());
         url_at
     }
+}
+
+/// The gauges under the upload's step, and why it isn't moving, if it isn't.
+#[cfg(feature = "octavo")]
+fn upload_lines(progress: &Progress) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if progress.commands.total > 0 {
+        lines.push(gauge_line("Commands", progress.commands));
+    }
+    match progress.threads {
+        Some(threads) if threads.total > 0 => lines.push(gauge_line("Threads", threads)),
+        Some(_) => {}
+        None => lines.push(Line::from(vec![Span::raw("    Threads   "), dim("counting…")])),
+    }
+    let why = match progress.state {
+        State::Uploading | State::Done => None,
+        State::Paused => {
+            Some(Span::raw("    Paused while your account has Atuin for Teams off").yellow())
+        }
+        State::Stalled {
+            daemon_running: false,
+        } => Some(
+            Span::raw(
+                "    Nothing's gone up for a while, and the daemon isn't running: run `atuin \
+                 daemon start`",
+            )
+            .yellow(),
+        ),
+        State::Stalled {
+            daemon_running: true,
+        } => Some(dim("    Nothing's gone up for a while: the daemon keeps trying")),
+    };
+    lines.extend(why.map(Line::from));
+    lines
+}
+
+/// `label`, a bar as full as `gauge`, and its counts.
+#[cfg(feature = "octavo")]
+fn gauge_line(label: &str, gauge: Gauge) -> Line<'static> {
+    const WIDTH: u64 = 24;
+    let filled = u128::from(gauge.done) * u128::from(WIDTH) / u128::from(gauge.total.max(1));
+    let filled = u64::try_from(filled).unwrap_or(WIDTH).min(WIDTH);
+    let cells = |n: u64| usize::try_from(n).unwrap_or_default();
+    Line::from(vec![
+        Span::raw(format!("    {label:<10}")),
+        Span::raw("█".repeat(cells(filled))).fg(ACCENT),
+        dim("░".repeat(cells(WIDTH - filled))),
+        Span::raw(format!("  {} of {}", count(gauge.done), count(gauge.total))),
+    ])
 }
 
 /// The rows `lines` take in `area`, wrapped as the screen wraps them.
@@ -1117,6 +1293,72 @@ mod tests {
         found.agents[0].1 = threads;
         found.agents[1].1 = 0;
         assert_eq!(text(&found_lines(&found)), expected);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::uploading(State::Uploading, None)]
+    #[case::paused(State::Paused, Some("    Paused while your account has Atuin for Teams off"))]
+    #[case::no_daemon(
+        State::Stalled { daemon_running: false },
+        Some("    Nothing's gone up for a while, and the daemon isn't running: run `atuin daemon start`"),
+    )]
+    #[case::retrying(
+        State::Stalled { daemon_running: true },
+        Some("    Nothing's gone up for a while: the daemon keeps trying"),
+    )]
+    fn the_upload_shows_a_bar_per_count_and_why_it_stalled(
+        #[case] state: State,
+        #[case] why: Option<&str>,
+    ) {
+        let progress = Progress {
+            commands: Gauge {
+                done: 4_210,
+                total: 6_000,
+            },
+            threads: None,
+            held: 0,
+            state,
+        };
+        let mut expected = vec![
+            format!("    Commands  {}{}  4,210 of 6,000", "█".repeat(16), "░".repeat(8)),
+            "    Threads   counting…".to_owned(),
+        ];
+        expected.extend(why.map(str::to_owned));
+        assert_eq!(text(&upload_lines(&progress)), expected);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    fn the_upload_draws_under_its_step_with_how_to_leave() {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 22)).unwrap();
+        let running = Running {
+            steps: vec![(Step::Upload, Status::Running("Uploading to Atuin for Teams".into()))],
+            upload: Some(Progress {
+                commands: Gauge { done: 0, total: 0 },
+                threads: Some(Gauge { done: 1, total: 4 }),
+                held: 0,
+                state: State::Uploading,
+            }),
+            ..Running::default()
+        };
+        let shown = terminal.draw(|frame| drop(running.draw(frame, 0))).unwrap().buffer.clone();
+        let rows: Vec<String> = shown
+            .content()
+            .chunks(100)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            .map(|row| row.trim_end().to_owned())
+            .collect();
+        let at = rows.iter().position(|row| row.ends_with("Uploading to Atuin for Teams"));
+        let at = at.expect("the step is drawn");
+        assert_eq!(
+            rows[at + 1],
+            format!("    Threads   {}{}  1 of 4", "█".repeat(6), "░".repeat(18))
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("q leave, the upload goes on in the background"))
+        );
     }
 
     #[rstest]

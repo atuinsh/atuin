@@ -3,6 +3,8 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, IsTerminal, Write};
+#[cfg(all(feature = "ai", feature = "daemon"))]
+use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -32,6 +34,8 @@ use tracing::instrument;
 
 #[cfg(feature = "octavo")]
 mod teams;
+#[cfg(feature = "octavo")]
+mod upload;
 mod view;
 
 /// Each flag sets a choice on the first screen, which starts from what's found here.
@@ -105,7 +109,12 @@ impl Cmd {
             if self.no_import {
                 skip_import(&offer, &tx);
             } else {
-                import(&offer, &tx).await;
+                import(&offer, &tx, plan.waits_for_imports()).await;
+            }
+            #[cfg(feature = "octavo")]
+            if let Some(Teams::On { backfill }) = plan.teams {
+                // Not watched: there's no screen to watch it on.
+                let _upload = turn_on_teams(store, backfill, &tx).await;
             }
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
@@ -260,6 +269,14 @@ pub enum Sync {
     Off,
 }
 
+impl Plan {
+    /// Whether setup waits for its imports: turning Atuin for Teams on restarts the daemon, which
+    /// would stop one going in the background, and its upload takes in only what's imported.
+    const fn waits_for_imports(&self) -> bool {
+        matches!(self.teams, Some(Teams::On { .. }))
+    }
+}
+
 /// Whether Atuin for Teams is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Teams {
@@ -281,6 +298,9 @@ pub enum Step {
     Teams,
     History,
     Threads,
+    /// Watching Atuin for Teams upload, after the imports it takes in.
+    #[cfg(feature = "octavo")]
+    Upload,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,8 +338,9 @@ fn send(tx: &Updates, step: Step, status: Status) {
     let _ = tx.send(Update::Step(step, status));
 }
 
-/// Do what `plan` says, telling the screen as it goes. Sign-in, if any, reads `answers`. Returns
-/// what there is to import, now sign-in has said what the account holds.
+/// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin for Teams.
+/// Sign-in, if any, reads `answers`. Returns what there is to import, now sign-in has said what
+/// the account holds.
 async fn apply(
     plan: &Plan,
     found: &Found,
@@ -371,12 +392,28 @@ async fn apply(
     } else {
         Account::None
     };
-    // Once sign-in has said who the account is, so the hub can say whether it has it.
-    #[cfg(feature = "octavo")]
-    if let Some(Teams::On { backfill }) = plan.teams {
-        teams::enable(&settings, store, backfill, tx).await;
-    }
     Ok(offer(plan, found, account, tx))
+}
+
+/// Turn Atuin for Teams on, once sign-in has said who the account is, so the hub can say whether
+/// it has it, and after the imports, so what it uploads takes them in. Returns the upload to
+/// watch, if it started one.
+#[cfg(feature = "octavo")]
+async fn turn_on_teams(
+    store: &SqliteStore,
+    backfill: bool,
+    tx: &Updates,
+) -> Option<upload::Upload> {
+    match Settings::new() {
+        Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, tx).await,
+        Err(e) => {
+            let failed = format!(
+                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --teams` to try again"
+            );
+            send(tx, Step::Teams, Status::Failed(failed));
+            None
+        }
+    }
 }
 
 /// What the account this machine syncs with has already. Importing that here before its data
@@ -472,21 +509,27 @@ fn skip_import(offer: &Offer, tx: &Updates) {
     }
 }
 
-/// Hand what they took up the offer of to the daemon, which imports it in the background.
+/// Hand what they took up the offer of to the daemon, which imports it in the background, or, if
+/// `wait`, before this returns.
 #[cfg(feature = "daemon")]
-async fn import(offer: &Offer, tx: &Updates) {
-    async fn history(shell: &str) -> Result<()> {
+async fn import(offer: &Offer, tx: &Updates, wait: bool) {
+    async fn history(shell: &str, wait: bool) -> Result<()> {
         let settings = Settings::new()?;
         let var = |name| var_nonempty(name).map(|v| v.to_string_lossy().into_owned());
         let mut client = super::daemon::ready_client(&settings).await?;
-        client.import_history(shell, var("HISTFILE"), var("fish_history")).await
+        client.import_history(shell, var("HISTFILE"), var("fish_history"), wait).await
     }
+    let (done, later) = if wait {
+        ("Imported", "")
+    } else {
+        ("Importing", " in the background")
+    };
 
     if let Some((shell, commands)) = offer.history {
-        let status = match history(shell).await {
-            Ok(()) => {
-                Status::Done(format!("Importing {} commands in the background", count(commands)))
-            }
+        let commands = count(commands);
+        send(tx, Step::History, Status::Running(format!("Importing {commands} commands")));
+        let status = match history(shell, wait).await {
+            Ok(()) => Status::Done(format!("{done} {commands} commands{later}")),
             Err(e) => Status::Failed(format!(
                 "Couldn't import your shell history ({e:#}). Try `atuin import auto`"
             )),
@@ -495,11 +538,19 @@ async fn import(offer: &Offer, tx: &Updates) {
     }
     #[cfg(feature = "ai")]
     if let Some(threads) = offer.threads {
-        let status = match import_threads().await {
-            Ok(()) if threads == 1 => Status::Done("Importing 1 thread in the background".into()),
-            Ok(()) => {
-                Status::Done(format!("Importing {} threads in the background", count(threads)))
-            }
+        let threads = if threads == 1 {
+            "1 thread".to_owned()
+        } else {
+            format!("{} threads", count(threads))
+        };
+        send(tx, Step::Threads, Status::Running(format!("Importing {threads}")));
+        let status = match import_threads(wait).await {
+            Ok(None) => Status::Done(format!("{done} {threads}{later}")),
+            Ok(Some(failed)) => Status::Failed(format!(
+                "Imported {threads}, but couldn't read {} of their lines. Try `atuin threads \
+                 import`",
+                count(failed)
+            )),
             Err(e) => Status::Failed(format!(
                 "Couldn't import your threads ({e:#}). Try `atuin threads import`"
             )),
@@ -508,19 +559,35 @@ async fn import(offer: &Offer, tx: &Updates) {
     }
 }
 
+/// Have the daemon import every harness's threads, in the background unless `wait`. Returns how
+/// many transcript lines and directory reads failed, if it waited and any did.
 #[cfg(all(feature = "ai", feature = "daemon"))]
-async fn import_threads() -> Result<()> {
+async fn import_threads(wait: bool) -> Result<Option<NonZeroU64>> {
+    use atuin_daemon::grpc::ai::session::pb::import_sessions_event::Event;
+
     let settings = Settings::new()?;
     // A daemon already running picks the new config up itself; this starts one that isn't.
     super::daemon::ready_client(&settings).await?;
     let mut client = atuin_daemon::AiClient::from_settings(&settings).await?;
     client.wait_for_sessions(|_| {}).await?;
-    client.import_sessions_in_background().await
+    if !wait {
+        client.import_sessions_in_background().await?;
+        return Ok(None);
+    }
+    let mut events = client.import_sessions(None).await?;
+    let mut failed = None;
+    while let Some(event) = events.message().await? {
+        // A line or directory it couldn't read counts here, not as a stream error.
+        if let Some(Event::Summary(summary)) = event.event {
+            failed = NonZeroU64::new(summary.failed);
+        }
+    }
+    Ok(failed)
 }
 
-/// Import shell history here, with no daemon to hand it to.
+/// Import shell history here, with no daemon to hand it to, before returning.
 #[cfg(not(feature = "daemon"))]
-async fn import(offer: &Offer, tx: &Updates) {
+async fn import(offer: &Offer, tx: &Updates, _wait: bool) {
     if let Some((shell, _)) = offer.history {
         send(tx, Step::History, Status::Running("Importing your shell history".into()));
         let status = match quietly(&["import", shell]).await {

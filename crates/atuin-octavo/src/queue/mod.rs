@@ -62,6 +62,21 @@ pub struct ThreadBackfill {
     pub until_idx: Option<RecordIdx>,
 }
 
+/// What is left of a user's uploads, as one read of the queue saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backlog {
+    /// Queued history entries.
+    pub history: u64,
+    /// Queued thread messages, less the held ones a restarted daemon uploads.
+    pub thread_messages: u64,
+    /// Held thread messages: stored, but under a key or from a build this daemon can't read.
+    pub held_thread_messages: u64,
+    /// Every backfill, done or not, in host order.
+    pub backfills: Vec<ThreadBackfill>,
+    /// Whether the account is marked off, which pauses the queue.
+    pub off: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct UploadQueue {
     db: Sqlite,
@@ -465,6 +480,44 @@ impl UploadQueue {
         Ok(backfills)
     }
 
+    /// What is left of `user`'s uploads, read in one transaction so the parts agree.
+    pub async fn backlog(&self, user: &UserId) -> Result<Backlog, QueueError> {
+        let mut tx = self.db.pool().begin().await?;
+        let count =
+            |sql: &'static str| db::query_scalar::<sqlx::Sqlite, i64>(sql).bind(user.as_str());
+        let history = count("SELECT COUNT(*) FROM history_uploads WHERE user_id = ?1")
+            .fetch_one(&mut *tx)
+            .await?;
+        let thread_messages =
+            count("SELECT COUNT(*) FROM thread_message_uploads WHERE user_id = ?1 AND held = 0")
+                .fetch_one(&mut *tx)
+                .await?;
+        let held_thread_messages =
+            count("SELECT COUNT(*) FROM thread_message_uploads WHERE user_id = ?1 AND held = 1")
+                .fetch_one(&mut *tx)
+                .await?;
+        let backfills = db::query_as(
+            "SELECT host_id, next_idx, until_idx FROM thread_backfills WHERE user_id = ?1 ORDER \
+             BY host_id",
+        )
+        .bind(user.as_str())
+        .fetch_all(&mut *tx)
+        .await?;
+        let off =
+            count("SELECT COUNT(*) FROM octavo_off WHERE user_id = ?1").fetch_one(&mut *tx).await?;
+        tx.commit().await?;
+
+        // `COUNT(*)` is never negative.
+        let unsigned = |n: i64| u64::try_from(n).unwrap_or_default();
+        Ok(Backlog {
+            history: unsigned(history),
+            thread_messages: unsigned(thread_messages),
+            held_thread_messages: unsigned(held_thread_messages),
+            backfills,
+            off: off > 0,
+        })
+    }
+
     /// Moves `user`'s backfill of `host` on to the record at `next`.
     pub async fn advance_thread_backfill(
         &self,
@@ -793,5 +846,39 @@ mod tests {
             next_idx: 0,
             until_idx,
         }]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn backlog_counts_what_is_left_of_each_users_uploads(#[future(awt)] queue: TempQueue) {
+        let (alice, bob) = (UserId::new("alice"), UserId::new("bob"));
+        let host = HostId(uuid_v7());
+        queue.queue.push_many_history(&alice, ids(3)).await.expect("push");
+        queue.queue.push_many_history(&bob, ids(1)).await.expect("push");
+        let messages = record_ids(3);
+        queue.queue.push_thread_messages(&alice, messages.iter().copied()).await.expect("push");
+        queue.queue.hold_thread_messages(&alice, [messages[0]]).await.expect("hold");
+        queue.queue.request_thread_backfill(&alice, [(host, Some(9))]).await.expect("request");
+        queue.queue.advance_thread_backfill(&alice, host, 4).await.expect("advance");
+        queue.queue.mark_off(&alice).await.expect("mark");
+
+        assert_eq!(queue.queue.backlog(&alice).await.expect("read"), Backlog {
+            history: 3,
+            thread_messages: 2,
+            held_thread_messages: 1,
+            backfills: vec![ThreadBackfill {
+                host_id: host,
+                next_idx: 4,
+                until_idx: Some(10),
+            }],
+            off: true,
+        });
+        assert_eq!(queue.queue.backlog(&bob).await.expect("read"), Backlog {
+            history: 1,
+            thread_messages: 0,
+            held_thread_messages: 0,
+            backfills: Vec::new(),
+            off: false,
+        });
     }
 }

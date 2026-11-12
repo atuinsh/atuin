@@ -79,7 +79,8 @@ message CompactStoreReply {
 }
 
 // Import a shell's history file in the background, as `atuin setup` offers to. The reply comes
-// straight away; the daemon logs how the import went.
+// straight away, unless `wait` asks for it once the import is done; the daemon logs how the import
+// went.
 message ImportHistoryRequest {
   // The shell, as `atuin import <shell>` takes it.
   string shell = 1;
@@ -87,6 +88,9 @@ message ImportHistoryRequest {
   optional string histfile = 2;
   // Fish's history session, when the client's `fish_history` names one.
   optional string fish_history = 3;
+  // Reply once the import is done, failing as it failed. A client that stops waiting leaves the
+  // import going.
+  bool wait = 4;
 }
 
 message ImportHistoryReply {}

@@ -201,17 +201,20 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
-    /// Have the daemon import `shell`'s history file after replying.
+    /// Have the daemon import `shell`'s history file, replying straight away unless `wait`, then
+    /// once it's imported.
     pub async fn import_history(
         &mut self,
         shell: &str,
         histfile: Option<String>,
         fish_history: Option<String>,
+        wait: bool,
     ) -> Result<()> {
         let request = ImportHistoryRequest {
             shell: shell.to_owned(),
             histfile,
             fish_history,
+            wait,
         };
         self.client.import_history(request).await?;
         Ok(())

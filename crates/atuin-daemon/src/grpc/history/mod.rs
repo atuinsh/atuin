@@ -40,6 +40,22 @@ pub struct Service {
     daemon_handle: DaemonHandle,
 }
 
+/// Errors returned by [`Service::import_shell_history`].
+#[derive(Debug, thiserror::Error)]
+enum ImportHistoryError {
+    #[error("couldn't run `atuin import {shell}`: {source}")]
+    Spawn {
+        shell: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("`atuin import {shell}` failed: {stderr}")]
+    Failed {
+        shell: String,
+        stderr: String,
+    },
+}
+
 impl Service {
     #[must_use]
     pub fn new(journal: Arc<HistoryJournal>, daemon_handle: DaemonHandle) -> Self {
@@ -47,6 +63,44 @@ impl Service {
             journal,
             daemon_handle,
         }
+    }
+
+    /// Import `shell`'s history with the CLI at `exe`, then have search and sync see it.
+    async fn import_shell_history(
+        &self,
+        exe: &std::path::Path,
+        shell: &str,
+        histfile: Option<String>,
+        fish_history: Option<String>,
+    ) -> Result<(), ImportHistoryError> {
+        // The importers are the CLI's.
+        let mut command = tokio::process::Command::new(exe);
+        command.args(["import", shell]).stdin(Stdio::null()).stdout(Stdio::null());
+        // Where the client's history is, not where the daemon's own environment says, which may
+        // be another shell's.
+        for (name, value) in [("HISTFILE", &histfile), ("fish_history", &fish_history)] {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        let output = command.output().await.map_err(|source| ImportHistoryError::Spawn {
+            shell: shell.to_owned(),
+            source,
+        })?;
+        if !output.status.success() {
+            return Err(ImportHistoryError::Failed {
+                shell: shell.to_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+
+        // Search reads its index, which doesn't see rows written by another process.
+        let search = self.daemon_handle.settings().await.search.clone();
+        self.journal.reload_search_index(&search).await;
+        tracing::info!(shell, "imported shell history");
+        self.daemon_handle.request_sync();
+        Ok(())
     }
 }
 
@@ -164,39 +218,26 @@ impl GrpcService for Service {
             shell,
             histfile,
             fish_history,
+            wait,
         } = request.into_inner();
         let exe = std::env::current_exe().map_err(|e| Status::internal(e.to_string()))?;
         let service = self.clone();
+        let (done, imported) = tokio::sync::oneshot::channel();
+        // Spawned, so a client that stops waiting doesn't stop the import.
         tokio::spawn(async move {
-            // The importers are the CLI's.
-            let mut command = tokio::process::Command::new(&exe);
-            command.args(["import", shell.as_str()]).stdin(Stdio::null()).stdout(Stdio::null());
-            // Where the client's history is, not where the daemon's own environment says, which
-            // may be another shell's.
-            for (name, value) in [("HISTFILE", &histfile), ("fish_history", &fish_history)] {
-                match value {
-                    Some(value) => command.env(name, value),
-                    None => command.env_remove(name),
-                };
+            let result = service.import_shell_history(&exe, &shell, histfile, fish_history).await;
+            if let Err(e) = &result {
+                tracing::error!("{e}");
             }
-            match command.output().await {
-                Ok(output) if output.status.success() => {}
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    tracing::error!("`atuin import {shell}` failed: {}", stderr.trim());
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("couldn't run `atuin import {shell}`: {e}");
-                    return;
-                }
-            }
-            // Search reads its index, which doesn't see rows written by another process.
-            let search = service.daemon_handle.settings().await.search.clone();
-            service.journal.reload_search_index(&search).await;
-            tracing::info!(shell, "imported shell history");
-            service.daemon_handle.request_sync();
+            // Nobody is listening when the client didn't ask to wait, or stopped waiting.
+            let _ = done.send(result);
         });
+        if wait {
+            imported
+                .await
+                .map_err(|_| Status::internal("the import stopped before it finished"))?
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
         Ok(Response::new(ImportHistoryReply {}))
     }
 
