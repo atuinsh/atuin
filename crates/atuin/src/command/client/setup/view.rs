@@ -18,7 +18,8 @@ use ratatui::{DefaultTerminal, Frame, TerminalOptions, Viewport};
 use tokio::sync::mpsc;
 
 use super::{
-    Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Update, count, is_address, names,
+    Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Teams, Update, count, is_address,
+    names,
 };
 
 const HEIGHT: u16 = 22;
@@ -176,6 +177,9 @@ enum Row {
     Mcp,
     Sync,
     Server,
+    Teams,
+    /// Whether Atuin for Teams takes what Atuin already has too.
+    Backfill,
     /// The button that goes on to set it all up.
     Go,
 }
@@ -186,7 +190,9 @@ impl Row {
         match self {
             Self::Shell | Self::Threads | Self::AgentHistory => Some("What should Atuin capture?"),
             Self::CtrlR | Self::UpArrow | Self::Mcp => Some("How do you want to search it?"),
-            Self::Sync | Self::Server => Some("Where should it sync?"),
+            Self::Sync | Self::Server | Self::Teams | Self::Backfill => {
+                Some("Where should it sync?")
+            }
             Self::Go => None,
         }
     }
@@ -211,6 +217,9 @@ struct Choose {
     /// Into [`SYNC_CHOICES`].
     sync: usize,
     server: String,
+    /// Atuin for Teams, when setup asks about it.
+    teams: Option<bool>,
+    backfill: bool,
     row: Row,
     error: Option<&'static str>,
 }
@@ -231,6 +240,8 @@ impl Choose {
             mcp: plan.mcp,
             sync,
             server: server.unwrap_or_default(),
+            teams: plan.teams.map(|teams| teams != Teams::Off),
+            backfill: plan.teams == Some(Teams::On { backfill: true }),
             row: Row::Shell,
             error: None,
         }
@@ -253,6 +264,13 @@ impl Choose {
             rows.push(Row::Sync);
             if self.sync == 1 {
                 rows.push(Row::Server);
+            }
+            // Atuin for Teams uploads as the account sync signs in to, so it needs sync.
+            if self.teams.is_some() && self.sync != 2 {
+                rows.push(Row::Teams);
+                if self.teams == Some(true) {
+                    rows.push(Row::Backfill);
+                }
             }
         }
         rows.push(Row::Go);
@@ -299,6 +317,8 @@ impl Choose {
             Row::UpArrow => self.up_arrow = !self.up_arrow,
             Row::Mcp => self.mcp = !self.mcp,
             Row::Sync => self.sync = (self.sync + by) % SYNC_CHOICES.len(),
+            Row::Teams => self.teams = self.teams.map(|on| !on),
+            Row::Backfill => self.backfill = !self.backfill,
             Row::Server | Row::Go => {}
         }
     }
@@ -321,6 +341,15 @@ impl Choose {
             self.error = Some("Choose something to set up, or press esc to leave");
             return None;
         }
+        let teams = self.teams.map(|on| {
+            if on && sync != Sync::Off {
+                Teams::On {
+                    backfill: self.backfill,
+                }
+            } else {
+                Teams::Off
+            }
+        });
         Some(Plan {
             shell: self.shell,
             threads: self.threads,
@@ -329,6 +358,7 @@ impl Choose {
             up_arrow: self.up_arrow,
             mcp: self.mcp,
             sync,
+            teams,
         })
     }
 
@@ -387,6 +417,18 @@ impl Choose {
                     let spans = vec![value, dim(format!("  {about}"))];
                     toggle(at, None, self.sync != 2, "Sync", spans)
                 }
+                Row::Teams => choice(
+                    at,
+                    self.teams == Some(true),
+                    "Atuin for Teams",
+                    "share with your team, not end-to-end encrypted",
+                ),
+                Row::Backfill => choice(
+                    at,
+                    self.backfill,
+                    "Upload what's here",
+                    "the history and threads Atuin already has",
+                ),
                 Row::Go => button(at, "Continue"),
                 Row::Server => {
                     let mut spans = vec![Span::raw(" ".repeat(8)), pad("Address", at)];
@@ -918,6 +960,7 @@ mod tests {
             } else {
                 Sync::Off
             },
+            teams: None,
         });
     }
 
@@ -991,6 +1034,58 @@ mod tests {
             panic!("expected a plan");
         };
         assert_eq!(plan.sync, Sync::Server("https://atuin.example.com".into()));
+    }
+
+    #[cfg(feature = "sync")]
+    #[rstest]
+    #[case::left_on(&[], Some(Teams::On { backfill: false }))]
+    #[case::with_backfill(&[Row::Backfill], Some(Teams::On { backfill: true }))]
+    #[case::turned_off(&[Row::Teams], Some(Teams::Off))]
+    #[case::turned_off_with_sync(&[Row::Backfill, Row::Sync, Row::Sync], Some(Teams::Off))]
+    fn teams_is_chosen_beside_sync(
+        found: Found,
+        #[case] toggled: &[Row],
+        #[case] expected: Option<Teams>,
+    ) {
+        let plan = Plan {
+            teams: Some(Teams::On { backfill: false }),
+            ..preset(&found)
+        };
+        let mut choose = Choose::new(&found, &plan);
+        for &row in toggled {
+            choose.row = row;
+            press(&mut choose, &found, &[KeyCode::Enter]);
+        }
+        choose.row = Row::Go;
+        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
+            panic!("expected a plan");
+        };
+        assert_eq!(plan.teams, expected);
+    }
+
+    #[cfg(feature = "sync")]
+    #[rstest]
+    #[case::not_asked(None, false, &[])]
+    #[case::on(Some(Teams::On { backfill: false }), false, &[Row::Teams, Row::Backfill])]
+    #[case::off(Some(Teams::Off), false, &[Row::Teams])]
+    #[case::sync_off(Some(Teams::On { backfill: false }), true, &[])]
+    fn teams_rows_follow_the_flag_and_sync(
+        found: Found,
+        #[case] teams: Option<Teams>,
+        #[case] sync_off: bool,
+        #[case] expected: &[Row],
+    ) {
+        let mut choose = Choose::new(&found, &Plan {
+            teams,
+            ..preset(&found)
+        });
+        if sync_off {
+            choose.sync = 2;
+        }
+        let rows = choose.rows(&found);
+        let shown: Vec<_> =
+            rows.into_iter().filter(|row| matches!(row, Row::Teams | Row::Backfill)).collect();
+        assert_eq!(shown, expected);
     }
 
     #[rstest]

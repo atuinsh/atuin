@@ -21,7 +21,7 @@ use crate::pb::{NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    #[error("the Octavo endpoint {address} is not a valid URI")]
+    #[error("the Atuin for Teams endpoint {address} is not a valid URI")]
     Endpoint {
         address: Url,
         #[source]
@@ -41,7 +41,7 @@ pub enum HubCallError {
     HistoryNotStored(#[source] tonic::Status),
     #[error("the hub has not stored the thread yet")]
     ThreadNotStored(#[source] tonic::Status),
-    #[error("Octavo needs a hub login; run `atuin login`")]
+    #[error("Atuin for Teams needs a hub login; run `atuin login`")]
     NotLoggedIn,
     #[error("the hub login was saved without its user, which the next upload pass learns")]
     UnknownUser,
@@ -49,15 +49,15 @@ pub enum HubCallError {
     Meta(eyre::Report),
     #[error(transparent)]
     Connect(#[from] ConnectError),
-    #[error("Octavo runs only on Atuin's hosted hub, not {0}")]
+    #[error("Atuin for Teams runs only on Atuin's hosted hub, not {0}")]
     SelfHostedHub(Url),
-    #[error("the hub changed to {0} after Octavo connected; restart atuin")]
+    #[error("the hub changed to {0} after Atuin for Teams connected; restart atuin")]
     HubChanged(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
     NoUserId,
-    #[error("Octavo is not enabled for this account")]
+    #[error("Atuin for Teams is not enabled for this account")]
     OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
     Hub(#[source] Status),
@@ -125,7 +125,7 @@ enum Target {
     Official,
     /// A self-hosted hub, which Octavo refuses: there is nowhere to upload to.
     SelfHosted,
-    /// The `octavo.__debug__.address` of a self-hosted hub.
+    /// The `teams.__debug__.address` of a self-hosted hub.
     Debug(Url),
 }
 
@@ -134,7 +134,7 @@ impl Target {
         if settings.hub_endpoint() == *DEFAULT_HUB_URL {
             return Self::Official;
         }
-        match &settings.octavo.debug.address {
+        match &settings.teams.debug.address {
             Some(address) => Self::Debug(address.clone()),
             None => Self::SelfHosted,
         }
@@ -163,9 +163,9 @@ pub struct HubClient {
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
         let target = Target::of(settings);
-        if settings.octavo.debug.address.is_some() && matches!(target, Target::Official) {
+        if settings.teams.debug.address.is_some() && matches!(target, Target::Official) {
             warn!(
-                "octavo.__debug__.address is honored only while sync_address is a self-hosted hub \
+                "teams.__debug__.address is honored only while sync_address is a self-hosted hub \
                  (sync_protocol = \"hub\"); uploading to Atuin's hub"
             );
         }
@@ -463,7 +463,7 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
 #[cfg(test)]
 mod tests {
     use atuin_client::settings::{
-        DEFAULT_SYNC_URL, DbLocation, Octavo, OctavoDebug, Settings, SyncProtocol,
+        DEFAULT_SYNC_URL, DbLocation, Settings, SyncProtocol, Teams, TeamsDebug,
     };
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
@@ -481,11 +481,11 @@ mod tests {
             sync_address: Url::parse(sync_address).unwrap(),
             sync_protocol: SyncProtocol::Hub,
             data_dir: AbsPathBuf::new(&dir).unwrap(),
-            octavo: Octavo {
-                debug: OctavoDebug {
+            teams: Teams {
+                debug: TeamsDebug {
                     address: debug_address.map(|url| Url::parse(url).unwrap()),
                 },
-                ..Octavo::default()
+                ..Teams::default()
             },
             ..Settings::default()
         };

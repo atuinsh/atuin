@@ -219,7 +219,7 @@ impl EngineInner {
             match events.recv().await {
                 // The events a lag dropped may have held one.
                 Ok(DaemonEvent::LoggedIn) | Err(RecvError::Lagged(_)) => self.logins.notify_one(),
-                // `config enable octavo` clears the off mark before it writes the config.
+                // `atuin setup --teams` clears the off mark before it writes the config.
                 Ok(DaemonEvent::SettingsReloaded) => self.wake.notify_one(),
                 Ok(DaemonEvent::ShutdownRequested) => {}
                 Err(RecvError::Closed) => return,
@@ -245,7 +245,7 @@ impl EngineInner {
         };
 
         self.delete_pending(&login).await?;
-        if !settings.octavo.enabled {
+        if !settings.teams.enabled {
             return Ok(NextPass::Waiting);
         }
         // Fixed even while the account is marked off: what capture lets by then goes up direct or
@@ -399,7 +399,7 @@ impl EngineInner {
 
     /// Uploads `login`'s queued outputs for up to [`PASS_BUDGET`], saying whether more may be left.
     async fn send_outputs(&self, login: &HubLogin, settings: &Settings) -> Result<NextPass, Halt> {
-        if !settings.octavo.upload_output {
+        if !settings.teams.upload_output {
             return Ok(NextPass::Waiting);
         }
 

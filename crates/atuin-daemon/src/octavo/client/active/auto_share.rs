@@ -102,7 +102,7 @@ impl Sharer {
 
     /// Queues the shares `thread`'s config files ask for.
     async fn look_at(&mut self, thread: LiveThread) {
-        if !self.uploader.handle.settings().await.octavo.enabled {
+        if !self.uploader.handle.settings().await.teams.enabled {
             return;
         }
         let candidate = match thread.read().await {

@@ -1,7 +1,7 @@
 //! `[threads]`: capturing coding agents' threads, and the `atuin threads resume` picker.
 //!
 //! Before `[threads]`, these were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`,
-//! which are still read for any it doesn't set (see `Settings::with_legacy_threads`).
+//! which are still read for any it doesn't set (see `Settings::with_legacy_keys`).
 //!
 //! Only the picker-specific knobs live here. The look and feel (`style`, `invert`, `show_preview`,
 //! `max_preview_height`, `enter_accept`, `keymap_mode`, `theme`) is read from the top-level

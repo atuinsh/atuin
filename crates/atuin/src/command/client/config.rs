@@ -1,34 +1,10 @@
 use std::sync::Arc;
 
-#[cfg(feature = "octavo")]
-use atuin_client::history::HistoryId;
-#[cfg(feature = "octavo")]
-use atuin_client::record::sqlite_store::SqliteStore;
-#[cfg(feature = "octavo")]
-use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::string::StrExt;
 use atuin_common::userio;
-#[cfg(feature = "octavo")]
-use atuin_daemon::service::pidfile::Pidfile;
-#[cfg(feature = "octavo")]
-use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
-#[cfg(feature = "octavo")]
-use atuin_domain::caps::OctavoCap;
-#[cfg(feature = "octavo")]
-use atuin_domain::record::{HostId, RecordIdx, RecordStatus, RecordTag};
-#[cfg(feature = "octavo")]
-use atuin_octavo::hub::{HubCallError, HubClient, UserId};
-#[cfg(feature = "octavo")]
-use atuin_octavo::pb;
-#[cfg(feature = "octavo")]
-use atuin_octavo::queue::UploadQueue;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
-#[cfg(feature = "octavo")]
-use eyre::WrapErr;
-#[cfg(feature = "octavo")]
-use itertools::Itertools as _;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
@@ -293,9 +269,6 @@ pub enum Feature {
     Daemon,
     #[value(help = fl!("value-config-feature-output-capture"))]
     OutputCapture,
-    #[cfg(feature = "octavo")]
-    #[value(help = fl!("value-config-feature-octavo"))]
-    Octavo,
     #[cfg(all(feature = "ai", feature = "daemon"))]
     #[value(help = fl!("value-config-feature-threads"), alias = "ai-sessions")]
     Threads,
@@ -309,18 +282,6 @@ impl EnableCmd {
             return Ok(());
         }
 
-        #[cfg(feature = "octavo")]
-        let octavo = match self.feature {
-            Feature::Octavo => {
-                let Some(onboarding) = onboard_octavo(settings).await? else {
-                    userio::log::info!("config-enable-octavo-declined");
-                    return Ok(());
-                };
-                Some(onboarding)
-            }
-            _ => None,
-        };
-
         let config_file = Settings::get_config_path()?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
 
@@ -329,21 +290,9 @@ impl EnableCmd {
 
         userio::log::info!("config-enabled");
 
-        // Queued before the restart below so the daemon starts on it, and reported after it so a
-        // failure still leaves the daemon on the new config.
-        #[cfg(feature = "octavo")]
-        let backfilled = match octavo {
-            Some(onboarding) => onboarding.backfill().await,
-            None => Ok(()),
-        };
-        #[cfg(not(feature = "octavo"))]
-        let backfilled = Ok(());
-
         // The daemon reads these settings only at startup, so it needs a restart to pick them
         // up. A running daemon with autostart off may be externally managed (systemd, launchd),
-        // so leave that one alone and tell the user instead, unless Octavo was enabled: then a
-        // daemon systemd or launchd runs, Atuin's launchd agent included, is restarted through
-        // them.
+        // so leave that one alone and tell the user instead.
         #[cfg(feature = "daemon")]
         {
             // `settings` predates the edit, which may have switched the daemon and its autostart
@@ -353,17 +302,12 @@ impl EnableCmd {
                 Ok(settings) => settings,
                 Err(e) => {
                     userio::log::warn!("config-reload-failed", error = e.to_string());
-                    return backfilled;
+                    return Ok(());
                 }
             };
             if settings.daemon.enabled && !settings.daemon.autostart {
-                #[cfg(feature = "octavo")]
-                if self.feature == Feature::Octavo {
-                    restart_managed_daemon(&settings).await;
-                    return backfilled;
-                }
                 userio::log::info!("config-restart-daemon-and-shell");
-                return backfilled;
+                return Ok(());
             } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
                 userio::log::warn!("config-daemon-restart-failed", error = e.to_string());
             }
@@ -371,7 +315,7 @@ impl EnableCmd {
 
         userio::log::info!("config-restart-shell");
 
-        backfilled
+        Ok(())
     }
 
     pub(super) fn get_updated_config(
@@ -394,8 +338,6 @@ impl EnableCmd {
                 changes.push(("pty_proxy.enabled", Value::from(true)));
                 changes.push(("output.enabled", Value::from(true)));
             }
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => changes.push(("octavo.enabled", Value::from(true))),
             #[cfg(all(feature = "ai", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(true))),
         }
@@ -406,189 +348,6 @@ impl EnableCmd {
 
         Ok(updated)
     }
-}
-
-/// What enabling Octavo queues once the config says it's on.
-#[cfg(feature = "octavo")]
-struct OctavoOnboarding {
-    queue: UploadQueue,
-    user: UserId,
-    backfill: Vec<HistoryId>,
-    old: usize,
-    /// The threads to upload, if the user asked to.
-    threads: Option<StoredThreads>,
-}
-
-/// The account's thread records: every `ai-session` series, on this machine or the server.
-#[cfg(feature = "octavo")]
-struct StoredThreads {
-    /// Each series' host, with the idx of the last record to upload. This machine's is `None`, for
-    /// the daemon to fix once it sees Octavo on, as capture appends to it until then.
-    tails: Vec<(HostId, Option<RecordIdx>)>,
-    /// How many records the series hold together.
-    messages: u64,
-}
-
-#[cfg(feature = "octavo")]
-impl StoredThreads {
-    /// The thread records `settings`' record store or its server holds, or `None` when neither
-    /// holds any.
-    ///
-    /// The server is asked too, so the records that a sync in progress has yet to download go up
-    /// as well. Nothing else uploads another machine's threads.
-    async fn read(settings: &Arc<Settings>) -> Result<Option<Self>> {
-        let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
-        let remote = async {
-            SyncSession::builder()
-                .store(store.clone())
-                .client_source(ClientSource::FromSettings {
-                    settings,
-                    caps: None,
-                })
-                .build()
-                .connect()
-                .await?
-                .record_status()
-                .await
-        };
-        let remote = remote.await.wrap_err(
-            "failed to ask the server which threads your account holds; run `atuin config enable \
-             octavo` again to retry",
-        )?;
-        Ok(Self::of(settings.host_id().await?, &store.status().await?, &remote))
-    }
-
-    /// The `ai-session` series `local` or `remote` holds, each at the later of its tails, with
-    /// `here` this machine's host.
-    fn of(here: HostId, local: &RecordStatus, remote: &RecordStatus) -> Option<Self> {
-        let tails = [local, remote]
-            .into_iter()
-            .flat_map(|status| &status.hosts)
-            .filter_map(|(&host, tails)| Some((host, *tails.get(&RecordTag::AiSession)?)))
-            .into_grouping_map()
-            .max();
-        if tails.is_empty() {
-            return None;
-        }
-
-        let messages = tails.values().map(|tail| tail.saturating_add(1)).sum();
-        let tails =
-            tails.into_iter().map(|(host, tail)| (host, (host != here).then_some(tail))).collect();
-        Some(Self { tails, messages })
-    }
-}
-
-#[cfg(feature = "octavo")]
-impl OctavoOnboarding {
-    async fn backfill(self) -> Result<()> {
-        if !self.backfill.is_empty() {
-            let queued = self.queue.push_many_history(&self.user, self.backfill).await.wrap_err(
-                "failed to queue your history for upload; run `atuin config enable octavo` again \
-                 to retry",
-            )?;
-            userio::log::info!("config-enable-octavo-backfilled", count = queued);
-        }
-        if self.old > 0 {
-            userio::log::info!("config-enable-octavo-backfill-old", count = self.old);
-        }
-        // The daemon fixes this machine's bound at its tail as of when it sees Octavo on.
-        if let Some(StoredThreads { tails, messages }) = self.threads {
-            self.queue.request_thread_backfill(&self.user, tails).await.wrap_err(
-                "failed to queue your threads for upload; run `atuin config enable octavo` again \
-                 to retry",
-            )?;
-            userio::log::info!("config-enable-octavo-threads-backfilled", count = messages);
-        }
-
-        Ok(())
-    }
-}
-
-/// Asks the user to enable Octavo, and whether to upload the history and threads they already
-/// have; `None` if they decline.
-#[cfg(feature = "octavo")]
-async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboarding>> {
-    let login = match HubClient::new(settings)?.login(settings).await {
-        Ok(login) => login,
-        Err(HubCallError::NotLoggedIn) => eyre::bail!(fl!("config-enable-octavo-not-logged-in")),
-        Err(err) => return Err(err).wrap_err("failed to ask the hub who you are logged in as"),
-    };
-
-    let caps = atuin_client::api_client::caps_client(settings)?;
-    caps.refresh().await?;
-    if caps.get_server::<OctavoCap>().await?.is_none() {
-        eyre::bail!(fl!(
-            "config-enable-octavo-not-enabled",
-            address = settings.sync_address.to_string()
-        ));
-    }
-
-    let accepted = super::setup::prompt(
-        "Octavo",
-        &fl!("config-enable-octavo-description"),
-        Some(&fl!("config-enable-octavo-disclaimer")),
-        super::setup::DefaultAnswer::No,
-    )?;
-    if !accepted {
-        return Ok(None);
-    }
-
-    let history =
-        atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout).await?;
-    let (ids, old): (Vec<_>, Vec<_>) =
-        history.active_ids().await?.into_iter().partition(|&id| pb::UuidV7::try_from(id).is_ok());
-
-    let backfill = super::setup::prompt(
-        "history backfill",
-        &fl!("config-enable-octavo-backfill", count = ids.len()),
-        None,
-        super::setup::DefaultAnswer::No,
-    )?;
-
-    let (backfill, old) = if backfill {
-        (ids, old.len())
-    } else {
-        (Vec::new(), 0)
-    };
-
-    let threads = match StoredThreads::read(settings).await? {
-        Some(threads) => super::setup::prompt(
-            "threads backfill",
-            &fl!("config-enable-octavo-threads-backfill", count = threads.messages),
-            None,
-            super::setup::DefaultAnswer::No,
-        )?
-        .then_some(threads),
-        None => None,
-    };
-
-    // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
-    let queue = UploadQueue::open(settings.octavo_queue_path())
-        .await
-        .wrap_err("failed to open Octavo's upload queue")?;
-    // The server says the account has Octavo now, so a daemon that found it off queues again, and
-    // sends what it paused as it reloads the config this writes.
-    queue.clear_off(login.user_id()).await.wrap_err(
-        "failed to note that your account has Octavo; run `atuin config enable octavo` again to \
-         retry",
-    )?;
-    // An unfixed backfill from an earlier yes would be fixed at the tail on the daemon's next pass
-    // with Octavo on, taking threads captured while Octavo was off. Dropped before the config
-    // turns Octavo on, so that pass can't come first.
-    if threads.is_none() {
-        queue.drop_unfixed_thread_backfills(login.user_id()).await.wrap_err(
-            "failed to cancel an earlier upload of your threads; run `atuin config enable octavo` \
-             again to retry",
-        )?;
-    }
-
-    Ok(Some(OctavoOnboarding {
-        queue,
-        user: login.user_id().clone(),
-        backfill,
-        old,
-        threads,
-    }))
 }
 
 impl DisableCmd {
@@ -614,8 +373,6 @@ impl DisableCmd {
                 }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => restart_autostarted_daemon(settings).await,
             // The daemon notices the change itself, and the shell doesn't care.
             #[cfg(feature = "ai")]
             Feature::Threads => return Ok(()),
@@ -639,8 +396,6 @@ impl DisableCmd {
                 }
             }
             Feature::OutputCapture => changes.push(("output.enabled", Value::from(false))),
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => changes.push(("octavo.enabled", Value::from(false))),
             #[cfg(all(feature = "ai", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(false))),
         }
@@ -651,82 +406,6 @@ impl DisableCmd {
 
         Ok(updated)
     }
-}
-
-/// Restarts the running daemon through the systemd unit or launchd job that runs it, or Atuin's
-/// launchd agent, as the daemon picks its Octavo client as it starts. Any other, such as one run
-/// by hand, is left to the user.
-#[cfg(feature = "octavo")]
-async fn restart_managed_daemon(settings: &Settings) {
-    // Connecting to a systemd socket, or to launchd's for the agent, would start a daemon that
-    // isn't running, which reads the new config, only to restart it or warn that it can't be.
-    if !Pidfile::new(&settings.daemon.pidfile_path).is_live() {
-        userio::log::info!("config-restart-shell");
-        return;
-    }
-    let found = match ActiveService::find(settings).await {
-        Ok(found) => found,
-        Err(err) => {
-            tracing::debug!(?err, "can't tell what runs the daemon");
-            None
-        }
-    };
-    let Some(service) = found else {
-        userio::log::info!("config-restart-daemon-and-shell");
-        return;
-    };
-
-    match service.external_manager().cloned() {
-        // It doesn't say which unit the socket starts, so a restart would only be refused.
-        Some(manager @ ExternalManager::SystemdSocket) => {
-            userio::log::warn!("config-managed-daemon-restart-failed", error = manager.to_string());
-        }
-        Some(
-            manager @ (ExternalManager::SystemdUnit { .. } | ExternalManager::LaunchdJob { .. }),
-        ) => {
-            restart_through(service, Some(&manager)).await;
-        }
-        None if service.is_launchd_agent() => restart_through(service, None).await,
-        None => {
-            userio::log::info!("config-restart-daemon-and-shell");
-            return;
-        }
-    }
-    userio::log::info!("config-restart-shell");
-}
-
-/// Restarts `service` through `manager`, the systemd unit or launchd job that runs it in Atuin's
-/// place, if any.
-#[cfg(feature = "octavo")]
-async fn restart_through(service: ActiveService, manager: Option<&ExternalManager>) {
-    userio::log::info!("daemon-restarting");
-    let Err(e) = service.restart().await else {
-        userio::log::info!("daemon-restarted");
-        return;
-    };
-    let Some(manager) = manager else {
-        // Atuin runs it, so `atuin daemon restart` is the instruction.
-        userio::log::warn!("config-daemon-restart-failed", error = e.to_string());
-        return;
-    };
-    userio::log::warn!(
-        "config-managed-daemon-restart-failed",
-        error = with_instruction(&e, manager)
-    );
-}
-
-/// `err`, from restarting the daemon `manager` runs, followed by the manager's instruction for
-/// restarting it.
-#[cfg(feature = "octavo")]
-fn with_instruction(err: &RestartError, manager: &ExternalManager) -> String {
-    let (err, instruction) = (err.to_string(), manager.to_string());
-    // A daemon that recorded no program to run again is refused with the instruction alone.
-    // The comparison relies on the error wrappers being `#[error(transparent)]`; a
-    // non-transparent one would only print the instruction twice.
-    if err == instruction {
-        return err;
-    }
-    format!("{err}; {instruction}")
 }
 
 #[cfg(feature = "daemon")]
@@ -957,8 +636,6 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "octavo")]
-    use atuin_domain::record::RecordSeriesKey;
     use rstest::rstest;
 
     use super::*;
@@ -1336,41 +1013,5 @@ mod tests {
         for fragment in expected_err {
             assert!(err.contains(fragment), "error should mention `{fragment}`, got: {err}");
         }
-    }
-
-    #[cfg(feature = "octavo")]
-    #[rstest]
-    fn stored_threads_bound_other_machines_series_at_the_later_tail() {
-        let [here, behind, remote_only] = [1, 2, 3].map(|n| HostId(uuid::Uuid::from_u128(n)));
-        let threads = |host| RecordSeriesKey::new(host, RecordTag::AiSession);
-        let local = RecordStatus::from_points([
-            (threads(here), 5),
-            (threads(behind), 3),
-            (RecordSeriesKey::new(remote_only, RecordTag::History), 7),
-        ]);
-        let remote = RecordStatus::from_points([
-            (threads(here), 4),
-            (threads(behind), 9),
-            (threads(remote_only), 2),
-        ]);
-
-        let StoredThreads {
-            mut tails,
-            messages,
-        } = StoredThreads::of(here, &local, &remote).expect("both hold threads");
-
-        tails.sort();
-        assert_eq!(tails, [(here, None), (behind, Some(9)), (remote_only, Some(2))]);
-        assert_eq!(messages, 6 + 10 + 3);
-    }
-
-    #[cfg(feature = "octavo")]
-    #[rstest]
-    fn stored_threads_are_none_without_a_thread_series() {
-        let host = HostId(uuid::Uuid::from_u128(1));
-        let history =
-            RecordStatus::from_points([(RecordSeriesKey::new(host, RecordTag::History), 7)]);
-
-        assert!(StoredThreads::of(host, &history, &RecordStatus::new()).is_none());
     }
 }

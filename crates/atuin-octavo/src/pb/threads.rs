@@ -109,7 +109,7 @@ impl fmt::Display for Field {
 /// Why a key can't go to Octavo.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum KeyError {
-    #[error("{field} is {len} bytes, over the {MAX_ID_BYTES} Octavo takes")]
+    #[error("{field} is {len} bytes, over the {MAX_ID_BYTES} Atuin for Teams takes")]
     TooLong {
         field: Field,
         len: usize,
@@ -123,7 +123,7 @@ pub enum KeyError {
 /// Why a [`Message`] can't be sent to Octavo.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ThreadMessageConversionError {
-    #[error("record id {0} is not a UUIDv7, so Octavo can't store it")]
+    #[error("record id {0} is not a UUIDv7, so Atuin for Teams can't store it")]
     RecordId(RecordId),
     #[error("message {0} names no atuin session id")]
     NoAtuinId(RecordId),
@@ -138,7 +138,9 @@ pub enum ThreadMessageConversionError {
         id: RecordId,
         source: KeyError,
     },
-    #[error("message {id} is {len} bytes encoded, over the {MAX_MESSAGE_BYTES} Octavo takes")]
+    #[error(
+        "message {id} is {len} bytes encoded, over the {MAX_MESSAGE_BYTES} Atuin for Teams takes"
+    )]
     TooLarge {
         id: RecordId,
         len: usize,

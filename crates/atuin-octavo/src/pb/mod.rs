@@ -18,7 +18,7 @@ use uuid::{Uuid, Version};
 
 /// An id of another version than UUIDv7, the only one Octavo stores.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[error("id {0} is not a UUIDv7, so Octavo can't store it")]
+#[error("id {0} is not a UUIDv7, so Atuin for Teams can't store it")]
 pub struct NotUuidV7<Id>(pub Id);
 
 impl TryFrom<Uuid> for UuidV7 {

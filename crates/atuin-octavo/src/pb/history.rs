@@ -32,9 +32,11 @@ pub enum HistoryConversionError {
     ExitOutOfRange(i64),
     #[error("invalid duration: {0}")]
     InvalidDuration(#[from] prost_types::DurationError),
-    #[error("the author name is {0} bytes, over the {MAX_AUTHOR_NAME_BYTES} Octavo allows")]
+    #[error(
+        "the author name is {0} bytes, over the {MAX_AUTHOR_NAME_BYTES} Atuin for Teams allows"
+    )]
     AuthorTooLong(usize),
-    #[error("the entry is {0} bytes, over the {MAX_HISTORY_BYTES} Octavo takes")]
+    #[error("the entry is {0} bytes, over the {MAX_HISTORY_BYTES} Atuin for Teams takes")]
     TooLarge(usize),
 }
 
@@ -102,7 +104,7 @@ impl TryFrom<DomainHistory> for History {
 const MAX_OUTPUT_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Error)]
-#[error("the output is {0} bytes, over the {MAX_OUTPUT_BYTES} Octavo takes")]
+#[error("the output is {0} bytes, over the {MAX_OUTPUT_BYTES} Atuin for Teams takes")]
 pub struct OutputTooLarge(pub usize);
 
 impl TryFrom<CommandCapture> for HistoryOutput {

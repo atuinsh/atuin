@@ -61,8 +61,8 @@ sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
 ai = ["atuin-ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Compiled in, but nothing reaches Octavo until the user sets `octavo.enabled`, which
-# `atuin config enable octavo` does.
+# Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
+# `atuin setup --teams` does.
 octavo = [
     "sync",
     "daemon",

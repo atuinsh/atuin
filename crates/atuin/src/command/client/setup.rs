@@ -30,6 +30,8 @@ use tokio::sync::mpsc;
 use toml_edit::Value;
 use tracing::instrument;
 
+#[cfg(feature = "octavo")]
+mod teams;
 mod view;
 
 /// Each flag sets a choice on the first screen, which starts from what's found here.
@@ -71,16 +73,29 @@ pub struct Cmd {
     /// Don't import the shell history and threads already on this machine
     #[arg(long)]
     no_import: bool,
+
+    /// Turn on Atuin for Teams
+    // Hidden until Atuin for Teams ships.
+    #[arg(long, hide = true)]
+    teams: bool,
 }
 
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings, db: &Sqlite, store: &SqliteStore) -> Result<()> {
+        if self.teams && !TEAMS {
+            eyre::bail!(
+                "this atuin has no Atuin for Teams: it was built without the `octavo` feature"
+            );
+        }
         let yes = self.yes || !io::stdout().is_terminal();
         let found = Found::detect(settings, db).await;
         let plan = self.plan(&found, yes);
         if yes && plan.sync == Sync::Cloud && found.syncing() != Some(Sync::Cloud) {
             eyre::bail!("signing in to Atuin Cloud needs you: run `atuin setup` without --yes");
+        }
+        if yes && plan.teams == Some(Teams::Off) && self.teams {
+            eyre::bail!("Atuin for Teams needs sync: run `atuin setup --teams` without --yes");
         }
 
         if yes {
@@ -116,6 +131,12 @@ impl Cmd {
             (None, None) if yes || !cfg!(feature = "sync") => Sync::Off,
             (None, None) => found.server.clone().map_or(Sync::Cloud, Sync::Server),
         };
+        // Atuin for Teams uploads as the account sync signs in to, so it needs sync.
+        let teams = self.teams.then_some(if sync == Sync::Off {
+            Teams::Off
+        } else {
+            Teams::On { backfill: false }
+        });
         Plan {
             shell: !self.no_shell_history,
             // With no agents to ask about, as it is.
@@ -129,12 +150,16 @@ impl Cmd {
             up_arrow: found.up_arrow && !self.no_up_arrow,
             mcp: agents && !self.no_mcp,
             sync,
+            teams,
         }
     }
 }
 
 /// Agent threads need a daemon to capture them, and Atuin AI to read them.
 const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
+
+/// Atuin for Teams needs the hub client, which `octavo` builds in.
+const TEAMS: bool = cfg!(feature = "octavo");
 
 /// `--sync`: `cloud`, `off`, or a server's address.
 fn parse_sync(value: &str) -> Result<Sync, String> {
@@ -224,6 +249,8 @@ pub struct Plan {
     up_arrow: bool,
     mcp: bool,
     sync: Sync,
+    /// Atuin for Teams, when setup asks about it.
+    teams: Option<Teams>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,6 +260,16 @@ pub enum Sync {
     Off,
 }
 
+/// Whether Atuin for Teams is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Teams {
+    Off,
+    /// Uploading what Atuin records from now on, and with `backfill` what it has already.
+    On {
+        backfill: bool,
+    },
+}
+
 /// The lines of the list setup shows while it works, in the order shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Step {
@@ -240,6 +277,8 @@ pub enum Step {
     AgentHooks,
     Mcp,
     Sync,
+    #[cfg(feature = "octavo")]
+    Teams,
     History,
     Threads,
 }
@@ -332,6 +371,11 @@ async fn apply(
     } else {
         Account::None
     };
+    // Once sign-in has said who the account is, so the hub can say whether it has it.
+    #[cfg(feature = "octavo")]
+    if let Some(Teams::On { backfill }) = plan.teams {
+        teams::enable(&settings, store, backfill, tx).await;
+    }
     Ok(offer(plan, found, account, tx))
 }
 
@@ -590,7 +634,15 @@ async fn write_config(plan: &Plan) -> Result<()> {
         }
         Sync::Cloud | Sync::Off => {}
     }
+    // Turned on after sign-in, once the hub has said the account has it.
+    #[cfg(feature = "octavo")]
+    if plan.teams == Some(Teams::Off) && settings.teams.enabled {
+        changes.push(("teams.enabled", Value::from(false)));
+    }
+    update_config_file(changes).await
+}
 
+async fn update_config_file(changes: Vec<(&str, Value)>) -> Result<()> {
     let config_file = Settings::get_config_path()?;
     let config = tokio::fs::read_to_string(&config_file).await?;
     let updated = super::config::update_config(&config, changes)?;
@@ -1172,45 +1224,6 @@ fn count(n: impl std::fmt::Display) -> String {
     out
 }
 
-#[cfg(feature = "octavo")]
-#[derive(Clone, Copy, Debug)]
-pub enum DefaultAnswer {
-    #[expect(dead_code)]
-    Yes,
-    No,
-}
-
-#[cfg(feature = "octavo")]
-pub fn prompt(
-    feature: &str,
-    description: &str,
-    note: Option<&str>,
-    default: DefaultAnswer,
-) -> Result<bool> {
-    let q = match default {
-        DefaultAnswer::Yes => "[Y/n]",
-        DefaultAnswer::No => "[y/N]",
-    };
-
-    println!("> Enable {feature}?", feature = feature.bold().bright_blue());
-    if let Some(note) = note {
-        println!("  {description}");
-        print!("  {note} {q} ", q = q.bold());
-    } else {
-        print!("  {description} {q} ", q = q.bold());
-    }
-
-    io::stdout().flush().ok();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(match input.trim().to_lowercase().as_str() {
-        "" => matches!(default, DefaultAnswer::Yes),
-        "y" | "yes" => true,
-        _ => false,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use rstest::{fixture, rstest};
@@ -1300,6 +1313,7 @@ mod tests {
             up_arrow: true,
             mcp: true,
             sync: Sync::Off,
+            teams: None,
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let offer = offer(&plan, found, account, &tx);
@@ -1385,6 +1399,7 @@ mod tests {
             up_arrow: false,
             mcp: false,
             sync: Sync::Off,
+            teams: None,
         });
     }
 
@@ -1439,6 +1454,20 @@ mod tests {
         let args = std::iter::once("setup").chain(flags.iter().copied());
         // Without them, there are no agents to ask about.
         assert_eq!(Cmd::parse_from(args).plan(&found, false).threads, expected || !THREADS);
+    }
+
+    #[rstest]
+    #[case::not_asked(&[], None)]
+    #[case::asked(&["--teams"], Some(Teams::On { backfill: false }))]
+    #[case::without_sync(&["--teams", "--sync", "off"], Some(Teams::Off))]
+    fn teams_is_asked_about_with_the_flag(
+        mut found: Found,
+        #[case] flags: &[&str],
+        #[case] expected: Option<Teams>,
+    ) {
+        found.signed_in = true;
+        let args = std::iter::once("setup").chain(flags.iter().copied());
+        assert_eq!(Cmd::parse_from(args).plan(&found, false).teams, expected);
     }
 
     #[rstest]

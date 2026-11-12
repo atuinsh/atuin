@@ -667,7 +667,7 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
         Err(HubCallError::NotLoggedIn) => return,
         Err(err) => {
             userio::log::warn!(
-                "history-octavo-login-failed",
+                "history-teams-login-failed",
                 error = format!("{:#}", eyre::Report::new(err))
             );
             return;
@@ -680,7 +680,7 @@ async fn queue_octavo_deletions(settings: &Settings, ids: Vec<HistoryId>) {
         async { UploadQueue::open(path).await?.push_deletions(login.user_id(), stored).await };
     if let Err(err) = queued.await {
         userio::log::warn!(
-            "history-octavo-queue-failed",
+            "history-teams-queue-failed",
             error = format!("{:#}", eyre::Report::new(err))
         );
     }

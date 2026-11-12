@@ -555,22 +555,25 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+/// `[teams]`: Atuin for Teams, which `atuin setup --teams` turns on.
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Octavo {
+pub struct Teams {
     pub enabled: bool,
-    /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
-    /// both on.
+    /// Whether captured command output goes to Atuin for Teams too, while `enabled` and output
+    /// capture are both on.
     pub upload_output: bool,
     #[serde(rename = "__debug__", default, skip_serializing)]
-    pub debug: OctavoDebug,
+    pub debug: TeamsDebug,
 }
 
-/// Settings for pointing Octavo at a hub other than Atuin's, kept out of the docs on purpose.
+/// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
+/// purpose.
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct OctavoDebug {
-    /// The gRPC address Octavo uploads to, honored only while `sync_address` is a self-hosted hub.
+pub struct TeamsDebug {
+    /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
+    /// self-hosted hub.
     pub address: Option<Url>,
 }
 
@@ -1158,7 +1161,7 @@ pub struct Settings {
 
     #[cfg(feature = "octavo")]
     #[serde(default)]
-    pub octavo: Octavo,
+    pub teams: Teams,
 
     #[serde(default)]
     pub search: Search,
@@ -1701,10 +1704,6 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?;
-        #[cfg(feature = "octavo")]
-        let builder = builder
-            .set_default("octavo.enabled", false)?
-            .set_default("octavo.upload_output", false)?;
 
         Ok(builder.add_source(Self::environment()))
     }
@@ -1813,16 +1812,15 @@ impl Settings {
             .set_override("data_dir", effective_data_dir.to_str().map(ShellExpanded::escape))?;
 
         Ok(Self::with_lenient_paths(
-            Self::with_legacy_threads(config_builder.build()?)?,
+            Self::with_legacy_keys(config_builder.build()?)?,
             Self::path_defaults(&effective_data_dir),
         )?)
     }
 
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
-    /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
-    /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
-    /// value.
-    fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
+    /// Read renamed keys under their new names, for any key the new name doesn't set itself:
+    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
+    /// was `[octavo]`. The defaults are set here, under them, so they never hide a legacy value.
+    fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
                 config::ValueKind::Table(table) => {
@@ -1839,6 +1837,7 @@ impl Settings {
             ("ai.capture_sessions", "threads.capture"),
             ("ai.capture_tools", "threads.capture_tools"),
             ("ai.sessions", "threads"),
+            ("octavo", "teams"),
         ] {
             if let Ok(value) = config.get::<config::Value>(old) {
                 leaves(new.to_string(), value, &mut legacy);
@@ -1846,15 +1845,18 @@ impl Settings {
         }
         legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
 
+        let defaults = Config::builder()
+            .set_default("threads.capture", false)?
+            .set_default("threads.capture_tools", true)?;
+        #[cfg(feature = "octavo")]
+        let defaults = defaults
+            .set_default("teams.enabled", false)?
+            .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
-            .try_fold(
-                Config::builder()
-                    .set_default("threads.capture", false)?
-                    .set_default("threads.capture_tools", true)?
-                    .add_source(config),
-                |builder, (key, value)| builder.set_override(key, value),
-            )?
+            .try_fold(defaults.add_source(config), |builder, (key, value)| {
+                builder.set_override(key, value)
+            })?
             .build()
     }
 
@@ -1997,7 +1999,7 @@ impl Settings {
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
         let data_dir = atuin_common::dirs::unconfigured_data_dir();
         let config = Self::with_lenient_paths(
-            Self::with_legacy_threads(
+            Self::with_legacy_keys(
                 Self::builder_with_data_dir(&data_dir)?
                     .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
                     .build()?,
@@ -2617,8 +2619,8 @@ mod tests {
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()
             .expect("could not build config");
-        Settings::with_legacy_threads(config)
-            .expect("could not read legacy threads settings")
+        Settings::with_legacy_keys(config)
+            .expect("could not read legacy settings")
             .try_deserialize()
             .expect("could not deserialize config")
     }
@@ -2626,16 +2628,30 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::set(
+        "[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::legacy(
         "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
         Some("http://127.0.0.1:50052/")
     )]
     #[case::absent("", None)]
-    fn octavo_debug_address_is_read_from_its_hidden_table(
+    fn teams_debug_address_is_read_from_its_hidden_table(
         #[case] toml: &str,
         #[case] expected: Option<&str>,
     ) {
         let settings = parse_settings(toml);
-        assert_eq!(settings.octavo.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+        assert_eq!(settings.teams.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::unset("", false)]
+    #[case::teams("[teams]\nenabled = true\n", true)]
+    #[case::legacy("[octavo]\nenabled = true\n", true)]
+    #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
+    fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
+        assert_eq!(parse_settings(toml).teams.enabled, enabled);
     }
 
     #[rstest]
@@ -2676,7 +2692,7 @@ mod tests {
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
-        let config = Settings::with_legacy_threads(config::Config::default()).unwrap();
+        let config = Settings::with_legacy_keys(config::Config::default()).unwrap();
         assert!(!config.get_bool("threads.capture").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }

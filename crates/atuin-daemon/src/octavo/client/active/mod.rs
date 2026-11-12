@@ -82,7 +82,7 @@ impl ActiveOctavoClient {
 impl OctavoClient for ActiveOctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId) {
         let settings = self.uploader.handle.settings().await.clone();
-        if !settings.octavo.enabled {
+        if !settings.teams.enabled {
             return;
         }
         // Read now, so the command goes to whoever was logged in as it finished.
@@ -102,7 +102,7 @@ impl OctavoClient for ActiveOctavoClient {
 
     async fn push_output(&self, id: HistoryId) {
         let settings = self.uploader.handle.settings().await.clone();
-        if !(settings.octavo.enabled && settings.octavo.upload_output) {
+        if !(settings.teams.enabled && settings.teams.upload_output) {
             return;
         }
         // Read now, so the output goes to whoever was logged in as it was captured.
@@ -128,7 +128,7 @@ impl OctavoClient for ActiveOctavoClient {
 
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
-        if !settings.octavo.enabled {
+        if !settings.teams.enabled {
             return ThreadUpload::Nothing;
         }
         // Read now, so the messages go to whoever was logged in as they were captured.
@@ -238,7 +238,7 @@ impl DirectUploader {
             Ok(()) => {
                 self.resume(login.user_id()).await;
                 // The entry's output may be queued already, waiting on it.
-                if settings.octavo.upload_output {
+                if settings.teams.upload_output {
                     self.wake.notify_one();
                 }
             }
