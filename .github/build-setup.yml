@@ -1,0 +1,9 @@
+- name: Install pandoc
+  if: runner.os == 'Windows'
+  uses: pandoc/actions/setup@v1
+  with:
+    version: "3.12.1"
+- name: Generate the MSI license page
+  if: runner.os == 'Windows'
+  shell: bash
+  run: pandoc --from=commonmark --to=rtf --standalone --output=crates/atuin/wix/License.rtf LICENSE

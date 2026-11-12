@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_ef70a508-92e6-4a19-84ad-75203459f5a8",
+  "title": "Run Shell Command Echo Probe",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/tmp/kiro-play"
+  ],
+  "rootPaths": [
+    "/tmp/kiro-play"
+  ],
+  "createdAt": "2026-10-30T17:51:05.586Z",
+  "lastModifiedAt": "2026-10-30T17:51:08.755Z",
+  "modelId": "auto",
+  "workflowLaunch": "when-asked",
+  "contextSnapshotModelDisplay": {
+    "modelId": "auto",
+    "display": "Auto (model selected dynamically on the server)"
+  },
+  "semanticReviewEnabled": true,
+  "disableAutoCompaction": false,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "memoryConfig": {
+    "mode": "disabled",
+    "reflection": false
+  },
+  "memoryConfigSource": "explicit",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "memory": {
+          "mode": "disabled",
+          "reflection": false
+        },
+        "workflows": {
+          "enabled": false
+        },
+        "goal": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}

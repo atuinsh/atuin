@@ -1,4 +1,5 @@
 use atuin_client::settings::{Settings, UpdateChannel};
+use atuin_common::userio;
 use axoupdater::{AxoUpdater, UpdateRequest};
 use clap::Parser;
 use eyre::{Result, bail, eyre};
@@ -77,11 +78,11 @@ impl Cmd {
         };
 
         if self.check {
-            println!("Checking for updates on the {channel} channel...");
+            userio::log::info!("update-checking", channel = channel);
             return match updater.query_new_version().await? {
                 Some(new) if new > &current.parse()? => {
                     println!("Update available: v{current} -> v{new}");
-                    println!("Run `atuin update` to install it");
+                    userio::log::info!("update-run-hint");
                     Ok(())
                 }
                 _ => {
@@ -91,23 +92,26 @@ impl Cmd {
             };
         }
 
-        match &self.version {
-            Some(version) => println!("Updating to atuin v{version}..."),
-            None => println!("Checking for updates on the {channel} channel..."),
+        if let Some(version) = &self.version {
+            userio::log::info!("update-installing", version = version);
+        } else {
+            userio::log::info!("update-checking", channel = channel);
         }
 
         match updater.run().await? {
             Some(result) => {
-                println!(
-                    "Updated atuin v{current} -> v{} ({})",
-                    result.new_version, result.new_version_tag
+                userio::log::info!(
+                    "update-done",
+                    current = current,
+                    new_version = result.new_version.to_string(),
+                    tag = result.new_version_tag
                 );
-                println!("Restart your shell sessions to pick up the new version");
+                userio::log::info!("update-restart-shell");
                 Ok(())
             }
             None if self.version.is_some() => Err(eyre!("update did not run")),
             None => {
-                println!("atuin v{current} is up to date");
+                userio::log::info!("update-up-to-date", current = current);
                 Ok(())
             }
         }

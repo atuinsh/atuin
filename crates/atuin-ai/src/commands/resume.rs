@@ -1,8 +1,7 @@
 //! `atuin threads resume [QUERY]`: pick a captured AI coding-agent session and resume it.
 //!
 //! - A QUERY that is a session id (or a unique prefix of one) resumes it directly, no picker.
-//!   From the shell widget, `enter_accept` decides whether it runs or lands on the command line;
-//!   a session that can't be resumed opens the picker on it, so the reason shows. An id that
+//!   A session that can't be resumed opens the picker on it, so the reason shows. An id that
 //!   names several sessions (a prefix of several, or one id several agents have) opens the
 //!   picker on them, to pick one; without a terminal to run it on, it fails, listing them.
 //! - A session whose transcript isn't on this machine (recorded on another host, or deleted) is
@@ -57,7 +56,7 @@ use atuin_common::string::EscapeNonPrintablePosixExt as _;
 use clap::Args;
 use eyre::{Result, bail};
 
-use super::session::one_line;
+use super::session::{HarnessArg, one_line};
 use crate::resume_tui::catchup::{self, CatchUp, Held};
 use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
@@ -96,7 +95,7 @@ pub struct Cmd {
     /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
     /// several machines needs `--branch`.
     #[arg(long = "in", value_enum, value_name = "HARNESS")]
-    continue_in: Option<ContinueIn>,
+    continue_in: Option<HarnessArg>,
 
     /// Fork the thread QUERY names (by id, or a unique id prefix): it is written out as a new
     /// session of the same agent, with the same history, and resumed. The original is left as
@@ -140,28 +139,6 @@ pub struct Cmd {
     /// Report the result on stderr for the shell widget.
     #[arg(long, hide = true)]
     shell_widget: bool,
-}
-
-/// A harness to continue a session in (`--in`).
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-enum ContinueIn {
-    Claude,
-    Codex,
-    Opencode,
-    Pi,
-    Omp,
-}
-
-impl ContinueIn {
-    fn kind(self) -> HarnessKind {
-        match self {
-            Self::Claude => HarnessKind::ClaudeCode,
-            Self::Codex => HarnessKind::Codex,
-            Self::Opencode => HarnessKind::Opencode,
-            Self::Pi => HarnessKind::Pi,
-            Self::Omp => HarnessKind::Omp,
-        }
-    }
 }
 
 /// Where the result goes.
@@ -453,7 +430,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
         if output != Output::Widget {
             eprintln!("atuin: {}", status.escape_non_printable());
         }
-        return finish(direct_outcome(plan, output, settings.enter_accept), output);
+        return finish(Outcome::Resume(plan), output);
     }
 
     let mut preselect = None;
@@ -494,7 +471,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
                 {
                     eprintln!("atuin: {}", status.escape_non_printable());
                 }
-                return finish(direct_outcome(plan, output, settings.enter_accept), output);
+                return finish(Outcome::Resume(plan), output);
             }
             Err(why) => preselect = Some(picker_on(row, why, flag, picker_has_a_terminal())?),
         }
@@ -654,15 +631,16 @@ async fn continue_plan(
     source: &dyn SessionSource,
     resumer: &dyn Resumer,
     query: &str,
-    into: ContinueIn,
+    into: HarnessArg,
     branch: Option<&str>,
     here: &str,
 ) -> Result<(ResumePlan, String)> {
+    let into = HarnessKind::from(into);
     let Some((row, redirected)) = direct_target(source, query).await? else {
         bail!("`--in` continues the thread an id names: no single thread has the id {query:?}");
     };
     let kind = row.handle.harness;
-    if into.kind() == kind {
+    if into == kind {
         let resumed = direct_plan(source, resumer, &row, Direct::CatchUp, branch, here).await?;
         let (plan, said) = resumed.map_err(|why| {
             eyre::eyre!("{}", escaped(&format!("can't resume {}: {why}", row.handle.session)))
@@ -692,7 +670,7 @@ async fn continue_plan(
             None
         }
     };
-    let continued = resumer.continue_in(source, &row, into.kind(), head.as_ref()).await;
+    let continued = resumer.continue_in(source, &row, into, head.as_ref()).await;
     let continued = continued.map_err(|why| {
         eyre::eyre!("{}", escaped(&format!("can't continue {}: {why}", row.handle.session)))
     })?;
@@ -735,17 +713,6 @@ async fn fork_plan(
         status.push_str(&format!("; {note}"));
     }
     Ok((forked.plan, status))
-}
-
-/// What a session named by id does without the picker. Standalone, `atuin threads resume <id>` resumes
-/// it. The widget passes whatever is on the command line, so there it follows `enter_accept` like
-/// the picker's enter: without it, the command lands on the command line to be checked first.
-fn direct_outcome(plan: ResumePlan, output: Output, enter_accept: bool) -> Outcome {
-    if output == Output::Widget && !enter_accept {
-        Outcome::Edit(plan)
-    } else {
-        Outcome::Resume(plan)
-    }
 }
 
 fn finish(outcome: Outcome, output: Output) -> Result<()> {
@@ -796,22 +763,26 @@ fn exec(plan: &ResumePlan) -> Result<()> {
     // would not resolve to. It is looked up as the check looked it up (a relative path against the
     // session's directory), and made absolute before changing directory, so a relative `PATH` entry
     // such as `.` finds what the check found; elsewhere the name is looked up as it was checked.
-    #[cfg(windows)]
+    use std::path::Path;
+
+    use atuin_common::executable::resolve_in_path;
     use atuin_common::path::AbsPathBuf;
 
-    #[cfg(windows)]
-    use crate::resume_tui::resumer;
-    #[cfg(windows)]
-    let program = match resumer::find_program(&resumer::program_to_check(plan)) {
-        Some(found) => AbsPathBuf::from_current_dir(found)?.into_path_buf(),
-        None => plan.program.clone().into(),
+    use crate::resume_tui::resumer::program_to_check;
+
+    let found = if cfg!(windows) {
+        let to_check = program_to_check(plan);
+        resolve_in_path(Path::new(&to_check)).map(AbsPathBuf::from_current_dir).transpose()?
+    } else {
+        None
     };
-    #[cfg(not(windows))]
-    let program = &plan.program;
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
     }
-    let mut command = std::process::Command::new(program);
+    let mut command = match &found {
+        Some(found) => std::process::Command::new(found),
+        None => std::process::Command::new(&plan.program),
+    };
     command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         // Keep $PWD in step, so harnesses that read it see the session's directory.
@@ -1069,7 +1040,7 @@ mod tests {
 
         let resumer = FakeResumer::default();
         let (plan, status) =
-            continue_plan(&source, &resumer, query, ContinueIn::Codex, None, fake::THIS_HOST_ID)
+            continue_plan(&source, &resumer, query, HarnessArg::Codex, None, fake::THIS_HOST_ID)
                 .await
                 .unwrap();
         assert_eq!(plan.args[1], format!("continued-{target}"));
@@ -1130,27 +1101,6 @@ mod tests {
         }
     }
 
-    #[rstest]
-    #[case(Output::Widget, false, false)]
-    #[case(Output::Widget, true, true)]
-    #[case(Output::Exec, false, true)]
-    #[case(Output::Print, false, true)]
-    fn a_direct_match_from_the_widget_follows_enter_accept(
-        #[case] output: Output,
-        #[case] enter_accept: bool,
-        #[case] runs: bool,
-    ) {
-        let plan = ResumePlan {
-            program: "claude".to_owned(),
-            args: vec!["--resume".to_owned(), "abc".to_owned()],
-            cwd: None,
-            cwd_requirement: atuin_common::harnesstools::resume::CwdRequirement::Preferred,
-            native_path: None,
-        };
-        let outcome = direct_outcome(plan, output, enter_accept);
-        assert_eq!(matches!(outcome, Outcome::Resume(_)), runs, "{outcome:?}");
-    }
-
     /// `atuin threads resume <id> --in <harness>` continues the session the id names, and plans
     /// resuming the new session; a query that names no single session is an error.
     #[rstest]
@@ -1162,7 +1112,7 @@ mod tests {
             &source,
             &resumer,
             "7f3c9a12",
-            ContinueIn::Codex,
+            HarnessArg::Codex,
             None,
             fake::THIS_HOST_ID,
         )
@@ -1173,14 +1123,23 @@ mod tests {
         assert_eq!(status, "continuing in Codex: 42 tool calls become notes");
 
         let err =
-            continue_plan(&source, &resumer, "fix flaky", ContinueIn::Pi, None, fake::THIS_HOST_ID)
+            continue_plan(&source, &resumer, "fix flaky", HarnessArg::Pi, None, fake::THIS_HOST_ID)
                 .await
                 .unwrap_err();
         assert!(err.to_string().contains("no single thread has the id"), "{err}");
 
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
-        assert_eq!(cli.cmd.continue_in, Some(ContinueIn::Opencode));
+        assert_eq!(cli.cmd.continue_in, Some(HarnessArg::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+    }
+
+    /// `--in` takes the harness names the listings show, and `claude` for `claude-code`.
+    #[rstest]
+    #[case::listed("claude-code")]
+    #[case::synonym("claude")]
+    fn in_takes_claude_code_by_both_names(#[case] name: &str) {
+        let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", name]).unwrap();
+        assert_eq!(cli.cmd.continue_in, Some(HarnessArg::ClaudeCode));
     }
 
     /// An agent's error keeps its lines, each without control characters.
@@ -1212,7 +1171,7 @@ mod tests {
         let resumer = FakeResumer::default();
         let here = fake::THIS_HOST_ID;
         let continued =
-            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Pi, branch, here).await;
+            continue_plan(&source, &resumer, "7f3c9a12", HarnessArg::Pi, branch, here).await;
         match want {
             Ok(head) => {
                 continued.unwrap();
@@ -1238,7 +1197,7 @@ mod tests {
         let resumer = FakeResumer::default();
         let here = fake::THIS_HOST_ID;
         let (plan, status) =
-            continue_plan(&source, &resumer, "7f3c9a12", ContinueIn::Claude, None, here)
+            continue_plan(&source, &resumer, "7f3c9a12", HarnessArg::ClaudeCode, None, here)
                 .await
                 .unwrap();
         let row = direct_match(&source, "7f3c9a12").await.unwrap().unwrap();

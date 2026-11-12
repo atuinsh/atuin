@@ -32,5 +32,13 @@ fn a_check_that_ran_exits_zero_even_when_the_answer_is_no(output: Output) {
 fn the_answer_is_reported_on_stdout(output: Output) {
     let answer = String::from_utf8_lossy(&output.stdout);
 
-    assert_eq!(answer.trim(), "0", "with no terminal there is no proxy to be attached to");
+    assert_eq!(
+        answer.trim(),
+        if cfg!(feature = "pty-proxy") {
+            "0"
+        } else {
+            "-1"
+        },
+        "with no terminal there is no proxy to be attached to"
+    );
 }

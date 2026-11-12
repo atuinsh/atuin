@@ -16,6 +16,7 @@ pub mod highlighted;
 pub mod trim;
 
 mod auto_os_string;
+mod bounded;
 mod escape_non_printable_posix_ext;
 mod non_blank;
 mod non_nul_str;
@@ -26,6 +27,7 @@ mod normalize;
 #[cfg(feature = "unicode")]
 pub use align::{AlignExt, Alignment};
 pub use auto_os_string::AutoOsString;
+pub use bounded::{Bounded, TooLong};
 pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;

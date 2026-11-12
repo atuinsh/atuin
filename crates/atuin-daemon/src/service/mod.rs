@@ -12,10 +12,13 @@ mod socket_holder;
 mod startup_lock;
 mod systemd;
 
+use std::ops::ControlFlow;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
+use atuin_common::futures::Backoff;
+use atuin_common::userio::log::RequestId;
 pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
@@ -27,6 +30,7 @@ use startup_lock::StartupLock;
 pub use startup_lock::StartupLockError;
 
 use crate::HistoryClient;
+use crate::grpc::request;
 use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::DaemonAddress;
 use crate::service::backend::{AnyBackend, Backend, Launchd};
@@ -135,7 +139,11 @@ impl ActiveService {
         let startup = pidfile.startup_lock(timeout);
         let _held = startup.acquire().await?;
 
-        match Self::find(settings).await {
+        let found = match Self::find(settings).await {
+            Ok(None) if pidfile.is_live() => Self::find_booting(settings, &pidfile, timeout).await,
+            found => found,
+        };
+        match found {
             Ok(Some(found)) => match found.ensure_our_build() {
                 Ok(()) => return Ok(found),
                 Err(newer) if newer.peer_is_newer() => return Err(ServiceFindError::Newer(newer)),
@@ -148,8 +156,9 @@ impl ActiveService {
                 }
             },
             Ok(None) => {}
-            // launchd holds the socket for an agent that can't start, such as one whose executable
-            // was removed. A service holding the pidfile may only be slow to boot, and killing it
+            // A socket with nothing behind it to answer, as launchd holds for an agent installed
+            // before agents bound their own that can't start, such as one whose executable was
+            // removed. A service holding the pidfile may only be slow to boot, and killing it
             // would leave the next client to kill the next one.
             Err(ServiceFindError::Find(FindError::Unresponsive(_))) if !pidfile.is_live() => {
                 backend.evict().await.map_err(|err| ReplaceError::Stop(err.into()))?;
@@ -168,10 +177,35 @@ impl ActiveService {
         })
     }
 
+    /// Find the service that a daemon holding the pidfile but not yet listening boots, as the
+    /// launchd agent that launchd starts at login may be when a shell first asks for it.
+    ///
+    /// The daemon takes the pidfile before it binds its socket, and launching another would only
+    /// wait for it to exit. Gives up once the daemon releases the pidfile, finding nothing, or
+    /// after `timeout`, finding it unresponsive.
+    async fn find_booting(
+        settings: &Settings,
+        pidfile: &Pidfile,
+        timeout: Duration,
+    ) -> Result<Option<Self>, ServiceFindError> {
+        Backoff::Constant(Connection::READY_POLL)
+            .retry(
+                || async {
+                    match Self::find(settings).await {
+                        Ok(None) if pidfile.is_live() => ControlFlow::Continue(()),
+                        found => ControlFlow::Break(found),
+                    }
+                },
+                timeout,
+            )
+            .await
+            .unwrap_or_else(|()| Err(FindError::Unresponsive(timeout).into()))
+    }
+
     /// Try to find the active service, if one exists, whatever its version.
     ///
-    /// It starts none itself, but connecting to the launchd agent's socket has launchd start the
-    /// agent if it isn't running.
+    /// It starts none itself, but connecting to the socket that launchd holds for an agent
+    /// installed before agents bound their own has launchd start the agent if it isn't running.
     ///
     /// TODO(markovejnovic): Do not use the global Settings but pass DaemonSettings.
     pub async fn find(settings: &Settings) -> Result<Option<Self>, ServiceFindError> {
@@ -236,16 +270,64 @@ impl ActiveService {
         self.connection.ensure_our_build()
     }
 
-    /// The connection to the service.
+    /// A client of the service's history API.
     #[must_use]
-    pub fn into_client(self) -> HistoryClient {
+    pub fn history_client(&self) -> HistoryClient {
         self.connection.history_client()
+    }
+
+    /// Runs `request`, showing on this process's [`SINK`](atuin_common::userio::log::SINK) what the
+    /// service logs for the user while serving the calls it makes. A service that can't send its
+    /// logs still runs `request`.
+    pub async fn with_logs<R>(&self, request: impl Future<Output = R>) -> R {
+        /// How long the service has to start sending its logs: as long as it has to answer at all
+        /// when it is looked for.
+        const LISTEN_WAIT: Duration = Duration::from_secs(2);
+
+        request::scope(RequestId::generate(), async {
+            let logs = tokio::time::timeout(LISTEN_WAIT, self.connection.listen_logs()).await;
+            let result = request.await;
+            match logs {
+                Ok(Ok(logs)) => logs.finish().await,
+                Ok(Err(status)) => tracing::debug!(?status, "not listening to the daemon's logs"),
+                Err(_) => tracing::debug!("the daemon didn't start sending its logs in time"),
+            }
+            result
+        })
+        .await
     }
 
     /// Where the service listens.
     #[must_use]
     pub const fn address(&self) -> &DaemonAddress {
         self.connection.address()
+    }
+
+    /// The systemd unit or socket, or the launchd job, that runs the service in Atuin's place, if
+    /// one does: [`Self::restart`] then goes through it.
+    #[must_use]
+    pub fn external_manager(&self) -> Option<&ExternalManager> {
+        match self.backend() {
+            AnyBackend::External(external) => Some(external.manager()),
+            AnyBackend::Launchd(_) | AnyBackend::Subproc(_) => None,
+        }
+    }
+
+    /// Whether the service is Atuin's launchd agent, which [`Self::restart`] installs again.
+    #[must_use]
+    pub fn is_launchd_agent(&self) -> bool {
+        match self.backend() {
+            // Also the backend of another daemon while the agent is installed, which a restart
+            // would replace with the agent.
+            AnyBackend::Launchd(_) => {
+                self.pidfile.is_live()
+                    && self
+                        .pidfile
+                        .info()
+                        .is_some_and(|info| info.run_mode == Some(RunMode::LaunchdAgent))
+            }
+            AnyBackend::External(_) | AnyBackend::Subproc(_) => false,
+        }
     }
 
     /// Restart the service.
@@ -325,6 +407,7 @@ impl ActiveService {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::env::MockEnv;
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
 
@@ -343,6 +426,10 @@ mod tests {
         #[case] claimed: bool,
     ) {
         let dir = tempfile::tempdir().unwrap();
+        // Without `ATUIN_HOME`, whatever the process exports: with it, a socket the pidfile
+        // doesn't name is another profile's and refused outright, never waited on.
+        let env = MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
         let socket = dir.path().join("atuin.sock");
         let mut settings = Settings::default();
         settings.daemon.pidfile_path =
@@ -366,5 +453,61 @@ mod tests {
             panic!("a socket that never answers should be unresponsive");
         };
         assert_eq!(waited == ActiveService::timeout(settings.local_timeout), claimed);
+    }
+
+    /// A daemon that holds the pidfile but doesn't listen yet is waited on, not launched over. For
+    /// example, the launchd agent that launchd starts at login may not listen yet when a shell
+    /// first looks for it.
+    ///
+    /// The wait ends in one of three ways. If the daemon starts listening, the client finds it.
+    /// If the daemon releases the pidfile without ever listening, it died while it booted, and
+    /// the client finds nothing. If neither happens before the timeout, the daemon is
+    /// unresponsive. These cases cover the last two.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::released(Some(Duration::from_secs(1)))]
+    #[case::held(None)]
+    #[tokio::test(start_paused = true)]
+    async fn a_daemon_that_does_not_listen_yet_is_waited_on_while_it_holds_the_pidfile(
+        #[case] released_after: Option<Duration>,
+    ) {
+        const TIMEOUT: Duration = Duration::from_secs(5);
+
+        let dir = tempfile::tempdir().unwrap();
+        let env = MockEnv::install();
+        env.set("HOME", dir.path().join("home"));
+        let mut settings = Settings::default();
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(dir.path().join("atuin-daemon.pid")).unwrap();
+        // Nothing listens there yet.
+        settings.daemon.socket_path = Some(AbsPathBuf::new(dir.path().join("atuin.sock")).unwrap());
+        let pidfile = Pidfile::new(&settings.daemon.pidfile_path);
+        let info = PidfileInfo::current(&settings.daemon, RunMode::LaunchdAgent);
+        let daemon = pidfile.acquire(&info).unwrap();
+        let _releaser = tokio::spawn(async move {
+            match released_after {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending().await,
+            }
+            drop(daemon);
+        });
+
+        let started = tokio::time::Instant::now();
+        let found = ActiveService::find_booting(&settings, &pidfile, TIMEOUT).await;
+        let waited = started.elapsed();
+
+        match released_after {
+            Some(after) => {
+                assert!(matches!(found, Ok(None)), "nothing ever listened");
+                assert!(after <= waited && waited < TIMEOUT, "waited {waited:?}");
+            }
+            None => {
+                assert!(
+                    matches!(found, Err(ServiceFindError::Find(FindError::Unresponsive(TIMEOUT)))),
+                    "a daemon that holds the pidfile and never listens is unresponsive"
+                );
+                assert!(waited >= TIMEOUT, "gave up after {waited:?}");
+            }
+        }
     }
 }

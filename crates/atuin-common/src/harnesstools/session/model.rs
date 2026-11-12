@@ -132,8 +132,8 @@ impl ToolResult {
 /// Anthropic counts input this way; OpenAI (and so Codex) counts the cached tokens inside
 /// `input_tokens`, and those readers take them out.
 ///
-/// Also the daemon's `ai.agent.Tokens` wire message, so its prost tags are that message's field
-/// numbers.
+/// Also the daemon's `ai.agent.Tokens` and atuin-octavo's `atuin.api.v1.TokenUsage` wire messages,
+/// so its prost tags are their field numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Message), prost(skip_debug))]
 #[cfg_attr(not(feature = "proto"), derive(Default))]
@@ -157,6 +157,26 @@ pub struct Usage {
 }
 
 impl Usage {
+    /// Each count `f` makes of it, a count not reported staying unreported.
+    #[must_use]
+    pub fn map(self, f: impl Fn(u64) -> u64) -> Self {
+        let Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+        } = self;
+
+        Self {
+            input: input.map(&f),
+            output: output.map(&f),
+            cache_read: cache_read.map(&f),
+            cache_write: cache_write.map(&f),
+            reasoning: reasoning.map(&f),
+        }
+    }
+
     /// All the input the model processed: uncached, read from the cache and written to it.
     /// `None` when none of them was reported.
     #[must_use]

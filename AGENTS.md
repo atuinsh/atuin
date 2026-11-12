@@ -94,6 +94,15 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
+- Use `#[cfg()]` only for code that actually needs conditional compilation; prefer `if cfg!()` otherwise.
+- Use `let _ = ...` rather than `_ = ...` except where an expression, rather than a statement, is needed.
+
+## Writing style (comments, commit messages, prose)
+- Write plain, complete sentences. Keep articles and relative pronouns ("that", "which", "who").
+- One idea per sentence. If a sentence has more than one clause, split it.
+- No mid-sentence parentheticals; put examples in a separate sentence ("For example, ...").
+- Every comment must make sense on its own. Don't start with "So does", "Same for", "This too".
+- If a reader would need to reread a sentence, rewrite it.
 
 ## Testing
 

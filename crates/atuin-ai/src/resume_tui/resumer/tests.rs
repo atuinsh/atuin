@@ -26,6 +26,8 @@ struct FakeMachine {
     written: Arc<Mutex<Vec<RehydrateSession>>>,
     missing_programs: Vec<&'static str>,
     cant_rehydrate: Option<HarnessKind>,
+    /// What the writer says it left out of each session it writes.
+    written_note: Option<&'static str>,
     tip: Option<LocalTip>,
     /// Reading the copy fails, saying this.
     tip_error: Option<&'static str>,
@@ -53,7 +55,7 @@ impl Machine for FakeMachine {
         &self,
         harness: AnyHarness,
         session: &RehydrateSession,
-    ) -> Result<PathBuf, RehydrateError> {
+    ) -> Result<Rehydrated, RehydrateError> {
         let path = PathBuf::from(format!("/restored/{}.jsonl", session.id));
         match (harness, session.id.as_str()) {
             (harness, _) if self.cant_rehydrate == Some(HarnessKind::from(&harness)) => {
@@ -62,7 +64,10 @@ impl Machine for FakeMachine {
             (_, "already-there") => Err(RehydrateError::AlreadyExists(path)),
             _ => {
                 self.written.lock().push(session.clone());
-                Ok(path)
+                Ok(Rehydrated {
+                    path,
+                    note: self.written_note.map(str::to_owned),
+                })
             }
         }
     }
@@ -376,7 +381,13 @@ async fn restoring_writes_the_transcript_and_plans_resuming_it(dirs: Dirs, #[cas
     let restore = resumer.plan(&remote).await.unwrap().restore.unwrap();
     assert_eq!(restore.cwd, dirs.here);
 
-    let plan = resumer.restore(&Synced, &remote, &restore).await.unwrap();
+    let restored = resumer.restore(&Synced, &remote, &restore).await.unwrap();
+    assert_eq!(
+        restored.status,
+        "restored the thread from sync; /gone/proj isn't on this machine; resuming in the current \
+         directory"
+    );
+    let plan = restored.plan;
     let path = format!("/restored/{id}.jsonl");
     assert_eq!(plan.args, ["--session", path.as_str()]);
     assert_eq!(plan.cwd.as_deref(), Some(dirs.here.as_path()));
@@ -386,6 +397,31 @@ async fn restoring_writes_the_transcript_and_plans_resuming_it(dirs: Dirs, #[cas
     } else {
         assert!(written.is_empty());
     }
+}
+
+/// What a writer had to leave out is in the status line of the restore, the fork and the
+/// continuation that wrote it, after why it resumes where it does. Hermes's trimmed tool outputs
+/// are such a note.
+#[rstest]
+#[tokio::test]
+async fn what_a_writer_left_out_is_in_the_status(dirs: Dirs) {
+    let note = "trimmed 2 tool outputs to fit Hermes's 5 MiB import limit (atuin keeps them whole)";
+    let machine = FakeMachine {
+        written_note: Some(note),
+        ..FakeMachine::default()
+    };
+    let resumer = resumer(&dirs, &machine);
+    let remote = row(HarnessKind::Pi, "abc-123", &dirs.elsewhere, true);
+    let restore = resumer.plan(&remote).await.unwrap().restore.unwrap();
+    let restored = resumer.restore(&Synced, &remote, &restore).await.unwrap();
+    assert_eq!(restored.status, format!("restored the thread from sync; {note}"));
+
+    let forked = resumer.fork(&Worked, &remote, ForkFrom::default()).await.unwrap();
+    assert_eq!(forked.note.as_deref(), Some(note));
+
+    let claude = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
+    let continued = resumer.continue_in(&Worked, &claude, HarnessKind::Pi, None).await.unwrap();
+    assert_eq!(continued.note.as_deref(), Some(note));
 }
 
 /// A template using `{path}` doesn't stop a session from being restored: the plan shows where
@@ -406,7 +442,7 @@ async fn a_path_template_plans_a_restore_and_resumes_the_restored_transcript(dir
     assert_eq!(resume.plan.args, ["--session", RESTORED_PATH_PLACEHOLDER]);
     let restore = resume.restore.expect("restored from sync");
 
-    let plan = resumer.restore(&Synced, &remote, &restore).await.unwrap();
+    let plan = resumer.restore(&Synced, &remote, &restore).await.unwrap().plan;
     assert_eq!(plan.program, "my-pi");
     assert_eq!(plan.args, ["--session", "/restored/abc-123.jsonl"]);
     assert_eq!(machine.written.lock().len(), 1);
@@ -447,8 +483,8 @@ async fn a_harness_not_installed_here_says_so(dirs: Dirs) {
 async fn unsupported_sessions_and_subagents_are_not_resumable(dirs: Dirs) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert_eq!(resumer.plan(&copilot).await.unwrap_err(), NotResumable::Unsupported("Copilot"));
+    let unknown = row(HarnessKind::Unknown, "u-1", &dirs.here, false);
+    assert_eq!(resumer.plan(&unknown).await.unwrap_err(), NotResumable::Unsupported("unknown"));
 
     // A Claude Code subagent is refused by the harness before anything is looked up.
     let subagent = row(HarnessKind::ClaudeCode, "agent-a1b2", &dirs.here, true);
@@ -632,7 +668,14 @@ async fn continuing_writes_a_new_session_of_the_target(dirs: Dirs) {
 #[tokio::test]
 async fn an_empty_session_is_not_continued(
     dirs: Dirs,
-    #[values(HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)] target: HarnessKind,
+    #[values(
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Kiro,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
+    target: HarnessKind,
 ) {
     let machine = FakeMachine::default();
     let resumer = resumer(&dirs, &machine);
@@ -650,7 +693,14 @@ async fn an_empty_session_is_not_continued(
 #[tokio::test]
 async fn an_empty_session_is_not_forked(
     dirs: Dirs,
-    #[values(HarnessKind::ClaudeCode, HarnessKind::Codex, HarnessKind::Opencode, HarnessKind::Pi)]
+    #[values(
+        HarnessKind::ClaudeCode,
+        HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Kiro,
+        HarnessKind::Opencode,
+        HarnessKind::Pi
+    )]
     harness: HarnessKind,
 ) {
     let machine = FakeMachine::default();
@@ -695,8 +745,12 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
     let session = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
     assert_eq!(resumer.continue_targets(&session), [
         HarnessKind::Codex,
+        HarnessKind::Copilot,
+        HarnessKind::Grok,
+        HarnessKind::Hermes,
+        HarnessKind::Kiro,
         HarnessKind::Pi,
-        HarnessKind::Omp
+        HarnessKind::Omp,
     ]);
 
     let err =
@@ -706,50 +760,9 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
         resumer.continue_in(&Worked, &session, HarnessKind::ClaudeCode, None).await.unwrap_err();
     assert!(matches!(err, NotResumable::Continue("Claude Code", _)), "{err}");
     assert!(machine.written.lock().is_empty());
-
-    let copilot = row(HarnessKind::Copilot, "cp-1", &dirs.here, false);
-    assert!(resumer.continue_targets(&copilot).is_empty());
 }
 
-#[rstest]
-fn finds_programs_on_path() {
-    assert!(!on_path("definitely-not-a-program-atuin"));
-}
-
-#[cfg(unix)]
-#[rstest]
-fn finds_programs_on_path_and_by_path_on_unix() {
-    assert!(on_path("sh"));
-    assert!(find_program("sh").is_some_and(|path| path.is_absolute() && path.ends_with("sh")));
-    assert!(on_path("/bin/sh"));
-    assert!(!on_path("/nonexistent/sh"));
-
-    // A file that isn't executable can't be run.
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("not-executable");
-    std::fs::write(&file, "").unwrap();
-    assert!(!on_path(file.to_str().unwrap()));
-}
-
-#[cfg(windows)]
-#[rstest]
-fn finds_programs_on_path_and_by_path_on_windows() {
-    use atuin_common::env;
-
-    // `cmd` is found as `cmd.exe` through PATHEXT, on PATH or by its path.
-    assert!(on_path("cmd"));
-    assert!(on_path("cmd.exe"));
-    // What runs is the file the check found, extension and all, which spawning `cmd` would not
-    // resolve to were it a `.cmd` or `.bat` script.
-    let found = find_program("cmd").unwrap();
-    assert!(found.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")), "{found:?}");
-    let system32 = std::path::Path::new(&env::var("SystemRoot").unwrap()).join("System32");
-    assert!(on_path(system32.join("cmd").to_str().unwrap()));
-    assert!(on_path(system32.join("cmd.exe").to_str().unwrap()));
-    assert!(!on_path(r"C:\nonexistent\cmd"));
-}
-
-/// A [`FakeMachine`] whose programs are checked for real, with [`on_path`].
+/// A [`FakeMachine`] whose programs are checked for real, with [`is_executable_with_path_search`].
 #[derive(Clone)]
 struct RealPrograms(FakeMachine);
 
@@ -763,12 +776,12 @@ impl Machine for RealPrograms {
         &self,
         harness: AnyHarness,
         session: &RehydrateSession,
-    ) -> Result<PathBuf, RehydrateError> {
+    ) -> Result<Rehydrated, RehydrateError> {
         self.0.rehydrate(harness, session).await
     }
 
     fn installed(&self, program: &str) -> bool {
-        on_path(program)
+        is_executable_with_path_search(program)
     }
 }
 
@@ -851,8 +864,6 @@ async fn a_fork_is_a_new_session_of_its_own_harness(dirs: Dirs) {
     resumer.fork(&Worked, &session, from).await.unwrap();
     assert_eq!(machine.written.lock()[1].messages.len(), 2, "up to the tip");
 
-    let copilot = row(HarnessKind::Copilot, "cp", &dirs.elsewhere, false);
-    assert!(!resumer.can_fork(&copilot));
     let missing = FakeMachine {
         missing_programs: vec!["claude"],
         ..FakeMachine::default()
@@ -1182,6 +1193,94 @@ async fn a_session_not_here_is_restored_along_one_branch(
     };
     let ids: Vec<&str> = restored.messages.iter().map(|m| m.source_id.as_str()).collect();
     assert_eq!(ids, want);
+}
+
+/// A session `/undo`ne on one host and gone on with didn't diverge: `u`-`v` was undone after `b`,
+/// and `w`-`z` came after it. Hermes's import makes every row live, so Hermes gets the branch it
+/// resumes alone, whether restored by either path or forked. Claude Code's transcript keeps the
+/// tree, so it gets every row.
+#[rstest]
+#[case::hermes_caught_up(HarnessKind::Hermes, "catch up", &["a", "b", "w", "z"])]
+#[case::hermes_by_the_picker(HarnessKind::Hermes, "restore", &["a", "b", "w", "z"])]
+#[case::hermes_forked(HarnessKind::Hermes, "fork", &["a", "b", "w", "z"])]
+#[case::claude_code(HarnessKind::ClaudeCode, "catch up", &["a", "b", "u", "v", "w", "z"])]
+#[tokio::test]
+async fn an_undone_turn_stays_out_of_a_harness_resuming_one_branch(
+    dirs: Dirs,
+    #[case] harness: HarnessKind,
+    #[case] by: &str,
+    #[case] want: &[&str],
+) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let mut session = row(harness, "s", &dirs.elsewhere, true);
+    session.handle.harness = harness;
+    let rows = [
+        ("a", None, 1, 0, false),
+        ("b", Some("a"), 1, 1, true),
+        ("u", Some("b"), 1, 2, false),
+        ("v", Some("u"), 1, 3, true),
+        ("w", Some("b"), 1, 4, false),
+        ("z", Some("w"), 1, 5, true),
+    ]
+    .into_iter()
+    .map(|spec| fake::synced_row(&session.handle, spec))
+    .collect();
+    let source =
+        fake::FakeSource::from_rows(vec![session.clone()]).with_synced(&session.handle, rows);
+    match by {
+        "restore" => {
+            let restore = resumer.plan(&session).await.unwrap().restore.unwrap();
+            resumer.restore(&source, &session, &restore).await.unwrap();
+        }
+        "fork" => {
+            resumer.fork(&source, &session, ForkFrom::default()).await.unwrap();
+        }
+        _ => {
+            let caught = resumer.catch_up(&source, &session, None).await.unwrap();
+            assert!(matches!(caught, CatchUp::Ready { .. }), "{caught:?}");
+        }
+    }
+
+    let written = machine.written.lock().clone();
+    let last = written.last().expect("a session written");
+    let ids: Vec<&str> = last.messages.iter().map(|m| m.source_id.as_str()).collect();
+    assert_eq!(ids, want);
+}
+
+/// A restore of a Hermes fork names the session it was forked from, as the fork did: its rows name
+/// no fork, and without the link Hermes's reader would take the continuation marker a fork of a
+/// continuation copies for its parent. A continuation names none. Claude Code's restores write no
+/// fork link, as before.
+#[rstest]
+#[case::hermes_fork(HarnessKind::Hermes, Relation::Fork, Some("orig"))]
+#[case::hermes_continuation(HarnessKind::Hermes, Relation::Continuation, None)]
+#[case::claude_code_fork(HarnessKind::ClaudeCode, Relation::Fork, None)]
+#[tokio::test]
+async fn a_restored_fork_keeps_its_link_where_the_harness_writes_it(
+    dirs: Dirs,
+    #[case] harness: HarnessKind,
+    #[case] relation: Relation,
+    #[case] want: Option<&str>,
+) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let mut session = row(harness, "s", &dirs.elsewhere, true);
+    session.handle.harness = harness;
+    session.relation = relation;
+    session.parent = Some(HarnessSession {
+        harness,
+        session: atuin_client::ai_session::NativeSessionId::from("orig".to_owned()),
+    });
+    let restore = resumer.plan(&session).await.unwrap().restore.unwrap();
+    resumer.restore(&Synced, &session, &restore).await.unwrap();
+
+    let written = machine.written.lock().clone();
+    let [restored] = written.as_slice() else {
+        panic!("one session written: {written:?}");
+    };
+    assert_eq!(restored.id, "s", "a restore keeps the session's id");
+    assert_eq!(restored.fork_of.as_ref().map(|of| of.id.as_str()), want);
 }
 
 /// A session continued in another harness carries one branch, as a restore does: the head named,
@@ -1591,4 +1690,37 @@ async fn a_switched_copy_fast_forwards_as_its_branch_grows(dirs: Dirs) {
     };
     assert_eq!(status.as_deref(), Some("caught up: 1 message from @00000002"));
     assert_eq!(*machine.appended.lock(), ["e@d"]);
+}
+
+/// A Hermes copy here is caught up as any agent's is, resumed under the profile whose store
+/// holds it. Hermes's sync refuses the append itself, so a copy behind is forked. The tests in
+/// `sync/hermes.rs` cover that.
+#[rstest]
+#[tokio::test]
+async fn a_hermes_copy_here_is_caught_up_in_its_profile(dirs: Dirs) {
+    let machine = FakeMachine {
+        found: HashMap::from([("local-h1".to_owned(), PathBuf::from("/h/.hermes/state.db"))]),
+        ..FakeMachine::default()
+    };
+    let session = row(HarnessKind::Hermes, "local-h1", &dirs.elsewhere, false);
+    let resume = resumer(&dirs, &machine).plan(&session).await.unwrap();
+    assert!(resume.catch_up, "{resume:?}");
+    assert_eq!(resume.plan.program, "hermes");
+    assert_eq!(resume.plan.args, ["-p", "default", "--resume", "local-h1"]);
+}
+
+/// A Hermes session that isn't here is restored, forked and continued into as any other
+/// agent's is.
+#[rstest]
+#[tokio::test]
+async fn a_hermes_session_not_here_restores(dirs: Dirs) {
+    let machine = FakeMachine::default();
+    let resumer = resumer(&dirs, &machine);
+    let remote = row(HarnessKind::Hermes, "local-h2", &dirs.elsewhere, true);
+    let resume = resumer.plan(&remote).await.unwrap();
+    assert!(resume.restore.is_some(), "{resume:?}");
+    assert!(resumer.can_fork(&remote));
+
+    let claude = row(HarnessKind::ClaudeCode, "abc-123", &dirs.elsewhere, false);
+    assert!(resumer.continue_targets(&claude).contains(&HarnessKind::Hermes));
 }

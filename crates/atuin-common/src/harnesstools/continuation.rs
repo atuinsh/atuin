@@ -44,11 +44,14 @@
 //! The session starts with a [`marker_text`] naming the source harness and session (and the
 //! session's atuin id, for whoever reads it: the link capture stores is the harness's), written as
 //! the least intrusive line each target has: text the harness itself adds to the user's turn (a
-//! Claude Code `isMeta` line, a Codex `developer` message, an opencode `synthetic` part), which
-//! the model reads with the first prompt and the user never sees. Pi has no such line: the only
+//! Claude Code `isMeta` line, a Codex `developer` message, an opencode `synthetic` part, a Kiro
+//! `agent_note`), which the model reads with the first prompt and the user never sees. Pi has no such line: the only
 //! lines it sends the model that nobody typed (`custom_message`, summaries) each become a user
 //! message of their own, two user messages in a row. So there the marker is the first text block
-//! of the first prompt, a short first line the user sees too. Capture reads it back as the
+//! of the first prompt, a short first line the user sees too. So it is in Hermes, which keeps no
+//! system row. Its only rows that the model reads and nobody sees carry
+//! `display_metadata.model_only`, and they are scaffolding its reader leaves out. So the first
+//! prompt is Hermes's multimodal parts, with the marker first. Capture reads it back as the
 //! session's parent ([`continued_from_message`]).
 
 use std::collections::{HashMap, HashSet};
@@ -58,7 +61,6 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use super::note::{Part, clip, render, tool_note};
-use super::pi::Flavour;
 use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
@@ -136,19 +138,6 @@ impl Flattened {
     }
 }
 
-/// The harness's name as people know it.
-fn label(harness: AnyHarness) -> &'static str {
-    match harness {
-        AnyHarness::ClaudeCode(_) => "Claude Code",
-        AnyHarness::Codex(_) => "Codex",
-        AnyHarness::Opencode(_) => "opencode",
-        AnyHarness::Pi(pi) => match pi.flavour() {
-            Flavour::Pi => "Pi",
-            Flavour::Omp => "omp",
-        },
-    }
-}
-
 /// The marker a continuation starts with: its first line names the session it continues
 /// (`Continued from <harness> session <id> (atuin id <atuin id>) via atuin.`, the harness by its
 /// [name](crate::harnesstools::Harness::name), without the atuin id when it isn't known); the
@@ -162,7 +151,7 @@ pub fn marker_text(source: AnyHarness, id: &str, atuin_id: Option<&str>) -> Stri
          Calls it couldn't carry are shown as notes in [brackets]. The files may have changed \
          since: check them before relying on what was done.",
         source.name(),
-        label(source),
+        source.display_name(),
     )
 }
 
@@ -321,10 +310,10 @@ fn continue_at(
         step: None,
     };
     let marker = marker_text(source, &original.id, atuin_id);
-    // pi has no line the model reads that the user didn't type but its own user message: the
-    // marker is the first block of the first prompt (see the module docs).
-    let pi = matches!(target, AnyHarness::Pi(_));
-    if pi {
+    // pi and Hermes have no line the model reads that the user didn't type but its own user
+    // message. So the marker is the first block of the first prompt, as the module docs say.
+    let in_prompt = matches!(target, AnyHarness::Pi(_) | AnyHarness::Hermes(_));
+    if in_prompt {
         rows.last -= Duration::milliseconds(1);
     } else {
         rows.push(start, Role::System, vec![Content::Text(marker.clone())], None);
@@ -333,7 +322,7 @@ fn continue_at(
         match turn.kind {
             Kind::User => {
                 let mut content = vec![Content::Text(turn.render())];
-                if pi && rows.rows.is_empty() {
+                if in_prompt && rows.rows.is_empty() {
                     content.insert(0, Content::Text(marker.clone()));
                 }
                 rows.push(turn.at, Role::User, content, None);
@@ -359,9 +348,9 @@ fn continue_at(
         rows.push(at, Role::Assistant, vec![note], Some(StopReason::EndTurn));
     }
     let mut rows = rows.rows;
-    // Only Claude Code and Pi keep a tree; opencode reads a row's parent as the message it
-    // answers, which it finds on its own.
-    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_)) {
+    // Only Claude Code, Grok Build and Pi keep a tree; opencode reads a row's parent as the
+    // message it answers, which it finds on its own.
+    if !matches!(target, AnyHarness::ClaudeCode(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_)) {
         for message in &mut rows {
             message.parent_source_id = None;
         }
@@ -428,8 +417,8 @@ impl Rows {
 
     /// A step of an assistant's turn, as the target writes one: its text, then its calls, each
     /// answered by its result. Claude Code and pi send a message's text and calls together,
-    /// then the results (Claude Code all in one message, pi one each); Codex writes every item
-    /// as a line of its own, and opencode every part, a call and its result being one.
+    /// then the results (Claude Code all in one message, pi one each); Codex and Kiro write
+    /// every item as a row of its own, and opencode every part, a call and its result being one.
     fn step(&mut self, at: OffsetDateTime, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
         self.open_step();
         self.write_step(at, step, ran_in, cwd);
@@ -449,7 +438,7 @@ impl Rows {
         let (calls, results): (Vec<_>, Vec<_>) = step
             .calls
             .iter()
-            .map(|(call, result)| {
+            .flat_map(|(call, result)| {
                 tools::carry(self.source, self.target, call, result, ran_in, cwd, &mut self.calls)
             })
             .unzip();
@@ -459,7 +448,13 @@ impl Rows {
         }
         let calling = Some(StopReason::ToolUse);
         match self.target {
-            AnyHarness::ClaudeCode(_) | AnyHarness::Pi(_) => {
+            // Copilot and Hermes answer each call with a result row of its own, as pi does.
+            AnyHarness::Amp(_)
+            | AnyHarness::ClaudeCode(_)
+            | AnyHarness::Pi(_)
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Grok(_)
+            | AnyHarness::Hermes(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
@@ -471,11 +466,11 @@ impl Rows {
                     }
                 }
             }
-            AnyHarness::Codex(_) | AnyHarness::Opencode(_) => {
+            AnyHarness::Codex(_) | AnyHarness::Kiro(_) | AnyHarness::Opencode(_) => {
                 if let Some(text) = text {
                     self.push(at, Role::Assistant, vec![text], Some(StopReason::EndTurn));
                 }
-                let codex = matches!(self.target, AnyHarness::Codex(_));
+                let codex = matches!(self.target, AnyHarness::Codex(_) | AnyHarness::Kiro(_));
                 for (call, result) in calls.into_iter().zip(results) {
                     let (call, result) = (Content::ToolUse(call), Content::ToolResult(result));
                     if codex {
@@ -785,27 +780,49 @@ impl Ids {
         }
     }
 
-    /// A new session's id: a UUID (Claude Code's random, Codex's and Pi's time-ordered), or an
-    /// opencode `ses_` id, which sort newest first.
+    /// A new session's id: a UUID (Claude Code's and Copilot's random, Codex's, Grok Build's and
+    /// Pi's time-ordered), a Kiro `sess_<uuid>`, an opencode `ses_` id, which sort newest first,
+    /// or Hermes's own for a session it starts, `YYYYMMDD_HHMMSS_<6 hex>`. Hermes's time is
+    /// local; atuin's is UTC, and only the shape matters.
     fn session(&self) -> String {
         match self.target {
-            AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
-            AnyHarness::Codex(_) | AnyHarness::Pi(_) => Uuid::now_v7().to_string(),
+            AnyHarness::Hermes(_) => {
+                let at = self.now.to_offset(time::UtcOffset::UTC);
+                let stamp = at
+                    .format(time::macros::format_description!(
+                        "[year][month][day]_[hour][minute][second]"
+                    ))
+                    .expect("a UTC time formats");
+                format!("{stamp}_{}", &Uuid::new_v4().as_simple().to_string()[..6])
+            }
+            AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => {
+                Uuid::new_v4().to_string()
+            }
+            AnyHarness::Kiro(_) => format!("sess_{}", Uuid::new_v4()),
+            AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
+                Uuid::now_v7().to_string()
+            }
             AnyHarness::Opencode(_) => {
                 opencode::rehydrate::mint_session(self.now, &Uuid::new_v4().to_string())
             }
         }
     }
 
-    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code; for Codex, a
+    /// A new row's id, as its writer takes it: a line `uuid` for Claude Code, an event id for
+    /// Copilot, a row id for Kiro; for Codex, a
     /// content-keyed `syn-` id, which its writer leaves off the line as Codex itself does for a
     /// message it names no id; an opencode `prt_` part id, in time order (rows of one message,
     /// the marker and the first prompt, are read in id order); a pi entry id (8 hex digits,
-    /// unique in the session).
+    /// unique in the session); a Hermes `message_uid`, 32 hex digits as Hermes mints them.
     fn row(&mut self, at: OffsetDateTime) -> String {
         loop {
             let id = match self.target {
-                AnyHarness::ClaudeCode(_) => Uuid::new_v4().to_string(),
+                AnyHarness::Hermes(_) => Uuid::new_v4().as_simple().to_string(),
+                AnyHarness::Amp(_)
+                | AnyHarness::ClaudeCode(_)
+                | AnyHarness::Copilot(_)
+                | AnyHarness::Grok(_)
+                | AnyHarness::Kiro(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

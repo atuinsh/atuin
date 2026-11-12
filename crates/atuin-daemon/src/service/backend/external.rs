@@ -89,6 +89,11 @@ impl External {
         })
     }
 
+    /// What runs the service.
+    pub(in crate::service) const fn manager(&self) -> &ExternalManager {
+        &self.manager
+    }
+
     /// Have what runs the service restart it, without waiting for the new one to answer.
     ///
     /// Only if that brings up this client's build: every client of this build would otherwise

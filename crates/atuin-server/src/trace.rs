@@ -5,6 +5,8 @@ use axum::extract::{ConnectInfo, MatchedPath, Request};
 use axum::response::Response;
 use tracing::{Span, field};
 
+use crate::client_ip::ClientIp;
+
 /// Build the root tracing span for an incoming HTTP request.
 pub fn make_request_span(request: &Request) -> Span {
     let method = request.method();
@@ -16,8 +18,11 @@ pub fn make_request_span(request: &Request) -> Span {
         .get::<MatchedPath>()
         .map_or_else(|| request.uri().path(), MatchedPath::as_str);
 
-    let client_ip =
-        request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(addr)| addr.ip());
+    // The resolved address accounts for trusted reverse proxies; the raw peer is only used when
+    // the request did not pass through that resolution.
+    let client_ip = request.extensions().get::<ClientIp>().map(|ClientIp(ip)| *ip).or_else(|| {
+        request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(addr)| addr.ip())
+    });
 
     let span = tracing::info_span!(
         "http.request",

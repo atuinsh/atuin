@@ -1,0 +1,118 @@
+<?xml version='1.0' encoding='windows-1252'?>
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    <Product
+        Id='*'
+        Name='Atuin'
+        UpgradeCode='313BC66B-8878-40FC-9042-45A787D28E7B'
+        Manufacturer='Atuin, Inc.'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='Magical shell history'
+            Manufacturer='Atuin, Inc.'
+            InstallerVersion='500'
+            Languages='1033'
+            Compressed='yes'
+            SummaryCodepage='1252'
+            />
+
+        <Property Id='ALLUSERS' Value='2'/>
+        <Property Id='MSIINSTALLPERUSER' Value='1'/>
+
+        <MajorUpgrade
+            AllowSameVersionUpgrades='yes'
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of Atuin is already installed. Setup will now exit.'
+        />
+
+        <MediaTemplate EmbedCab='yes'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='Atuin'>
+                    <Component Id='License' Guid='*'>
+                        <File Id='LicenseFile'
+                            Source='LICENSE'
+                            KeyPath='yes'/>
+                    </Component>
+                    <Component Id='Readme' Guid='*'>
+                        <File Id='ReadmeFile'
+                            Source='README.md'
+                            KeyPath='yes'/>
+                    </Component>
+                    <Component Id='Changelog' Guid='*'>
+                        <File Id='ChangelogFile'
+                            Source='CHANGELOG.md'
+                            KeyPath='yes'/>
+                    </Component>
+                    
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='93A1B211-BC0F-4942-81E4-6F6CAA9C25F1' KeyPath='yes'>
+                            <Condition>ALLUSERS = 1</Condition>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        <Component Id='PathUser' Guid='9D69F682-9347-4442-B38C-3A82C43C86D0' KeyPath='yes'>
+                            <Condition>NOT (ALLUSERS = 1)</Condition>
+                            <Environment
+                                Id='PATHUSER'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='no'/>
+                        </Component>
+                        <Component Id='Atuin' Guid='*'>
+                            <File
+                                Id='AtuinExe'
+                                Name='atuin.exe'
+                                Source='$(var.CargoTargetBinDir)\atuin.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Main'
+            Title='Application'
+            Description='Installs Atuin and its license, and adds Atuin to the PATH.'
+            Level='1'
+            AllowAdvertise='no'
+            Absent='disallow'>
+            <ComponentRef Id='License'/>
+            <ComponentRef Id='Readme'/>
+            <ComponentRef Id='Changelog'/>
+            <ComponentRef Id='Atuin'/>
+            <ComponentRef Id='Path'/>
+            <ComponentRef Id='PathUser'/>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+        <Icon Id='ProductICO' SourceFile='$(sys.SOURCEFILEDIR)atuin.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO' />
+        <Property Id='ARPHELPLINK' Value='https://docs.atuin.sh'/>
+
+        <WixVariable Id='WixUILicenseRtf' Value='$(sys.SOURCEFILEDIR)License.rtf'/>
+
+        <UIRef Id='AtuinUI'/>
+    </Product>
+</Wix>

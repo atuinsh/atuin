@@ -1,7 +1,6 @@
-# atuin CI. Replaces the GitHub Actions workflows rust.yml (except
-# Windows, which stays in .github/workflows/windows.yml until Buildkite's
-# hosted Windows agents are generally available), nix.yml, codespell.yml,
-# shellcheck.yml, vale.yml, installer.yml and nightly.yml.
+# atuin CI. Replaces the GitHub Actions workflows rust.yml, windows.yml,
+# nix.yml, codespell.yml, shellcheck.yml, vale.yml, installer.yml and
+# nightly.yml.
 #
 # Each Rust step sources .buildkite/scripts/toolchain.sh (rustup + pinned
 # tools, and the `section` log-group helper). Caching is Buildkite Cache
@@ -20,7 +19,8 @@
 #
 # Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
 # Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
-# (12 vCPU), both default queues in every Buildkite cluster.
+# (12 vCPU), both default queues in every Buildkite cluster. Windows jobs
+# use windows-large (8 vCPU), a hosted Windows queue made for this pipeline.
 #
 # Scheduled builds (the nightly schedule, set in the pipeline settings) run
 # everything plus the nightly tests, which also keeps main's cache entries
@@ -61,6 +61,8 @@ common:
     BUILDKITE_TEST_ENGINE_RESULT_PATH: test-results/test-engine.json
   - &macos-large
     queue: macos-large
+  - &windows-large
+    queue: windows-large
 
 env:
   CARGO_TERM_COLOR: always
@@ -141,6 +143,16 @@ steps:
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
       - .buildkite/scripts/run-tests.sh macos
 
+  # Unit tests only, as the GitHub Actions job ran. Windows steps run one
+  # bash script each (windows.sh), since cmd.exe ignores failing lines.
+  - label: ":windows: Tests (Windows)"
+    key: tests-windows
+    agents: *windows-large
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command: bash .buildkite/scripts/windows.sh tests
+
   # All features are type-checked by clippy below.
   - label: ":mag: Check (Linux)"
     key: check
@@ -181,6 +193,12 @@ steps:
       - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
       - *prune
       - *save-target
+
+  - label: ":windows: Check (Windows)"
+    key: check-windows
+    agents: *windows-large
+    timeout_in_minutes: 45
+    command: bash .buildkite/scripts/windows.sh check
 
   - label: ":crab: MSRV (1.95.0)"
     key: msrv

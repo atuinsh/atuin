@@ -10,17 +10,29 @@ use crate::harnesstools::ccode::Ccode;
 use crate::harnesstools::ccode::session::{CcodeMessage, CcodeSession};
 use crate::harnesstools::codex::Codex;
 use crate::harnesstools::codex::session::CodexSession;
+use crate::harnesstools::copilot::Copilot;
+use crate::harnesstools::copilot::session::CopilotSession;
+use crate::harnesstools::grok::Grok;
+use crate::harnesstools::grok::session::GrokSession;
+use crate::harnesstools::hermes::Hermes;
+use crate::harnesstools::hermes::session::HermesSession;
+use crate::harnesstools::kiro::Kiro;
+use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::Opencode;
 use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
 pub const CLAUDE: AnyHarness = AnyHarness::ClaudeCode(Ccode);
 pub const CODEX: AnyHarness = AnyHarness::Codex(Codex);
+pub const COPILOT: AnyHarness = AnyHarness::Copilot(Copilot);
+pub const GROK: AnyHarness = AnyHarness::Grok(Grok);
+pub const HERMES: AnyHarness = AnyHarness::Hermes(Hermes);
+pub const KIRO: AnyHarness = AnyHarness::Kiro(Kiro);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 /// The original's atuin id, as the picker passes it.
@@ -84,6 +96,44 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 /// A real session recorded by `source`, as its harness wrote it.
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
+        AnyHarness::Amp(_) => unreachable!("Amp keeps no transcript to read"),
+        AnyHarness::Hermes(_) => {
+            let dir = tempfile::tempdir().unwrap();
+            let db = hermes::session::tests::probe_store(dir.path()).await;
+            let id = hermes::session::tests::TOOL_ERROR;
+            let lines: Vec<_> = HermesSession::open(SessionId::from(id.to_owned()), &db)
+                .read()
+                .try_collect()
+                .await
+                .unwrap();
+            session_of(id, rows_of(&lines))
+        }
+        AnyHarness::Kiro(_) => {
+            let id = "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48";
+            let lines: Vec<_> = KiroSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("kiro/resumed.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
+        AnyHarness::Copilot(_) => {
+            let id = "8623b9dc-b2aa-40dc-a8ce-1f3738d4d4db";
+            let lines: Vec<_> = CopilotSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("copilot/task-and-edit.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
         AnyHarness::ClaudeCode(_) => {
             let text = std::fs::read_to_string(fixture("ccode/session1.jsonl")).unwrap();
             let lines: Vec<CcodeMessage> =
@@ -149,6 +199,19 @@ async fn read(source: AnyHarness) -> RehydrateSession {
             .unwrap();
             session_of(id, rows_of(&lines))
         }
+        AnyHarness::Grok(_) => {
+            let id = "01a18a39-82d5-7fc1-ae65-177c81cb02ff";
+            let lines: Vec<_> = GrokSession::open(
+                SessionId::from(id.to_owned()),
+                fixture("grok/01a18a39-82d5-7fc1-ae65-177c81cb02ff/chat_history.jsonl"),
+                pool(),
+            )
+            .read()
+            .try_collect()
+            .await
+            .unwrap();
+            session_of(id, rows_of(&lines))
+        }
     }
 }
 
@@ -157,8 +220,25 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
     let id = &session.id;
     let uuid = |s: &str| Uuid::parse_str(s).is_ok();
     match target {
-        AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
-        AnyHarness::Codex(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
+        AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        // `YYYYMMDD_HHMMSS_<6 hex>`, as Hermes names a session it starts.
+        AnyHarness::Hermes(_) => {
+            let parts: Vec<&str> = id.split('_').collect();
+            let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+            assert!(
+                parts.len() == 3
+                    && digits(parts[0], 8)
+                    && digits(parts[1], 6)
+                    && parts[2].len() == 6
+                    && parts[2].bytes().all(|b| b.is_ascii_hexdigit()),
+                "{id}"
+            );
+        }
+        AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
+        AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
+        AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
+            assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7);
+        }
         AnyHarness::Pi(_) => assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7),
         AnyHarness::Opencode(_) => {
             let rest = id.strip_prefix("ses_").unwrap();
@@ -172,7 +252,14 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
         let id = m.source_id.as_str();
         assert!(seen.insert(id), "{id} is used twice");
         match target {
-            AnyHarness::ClaudeCode(_) => assert!(uuid(id), "{id}"),
+            AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+            AnyHarness::Hermes(_) => {
+                assert!(id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+            }
+            AnyHarness::ClaudeCode(_)
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Grok(_)
+            | AnyHarness::Kiro(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -201,9 +288,9 @@ fn api_name(name: &str) -> bool {
 /// user's turns text, the assistant's text and calls, each call answered by its result in the
 /// rows the target writes them in; nothing reasoning.
 fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &RehydrateSession) {
-    // A line of its own (the harness's), or pi's first prompt's first block.
+    // A line of the harness's own, or the first block of pi's and Hermes's first prompt.
     let (marker, rows) = match target {
-        AnyHarness::Pi(_) => (&s.messages[0], s.messages.as_slice()),
+        AnyHarness::Pi(_) | AnyHarness::Hermes(_) => (&s.messages[0], s.messages.as_slice()),
         _ => s.messages.split_first().expect("a marker"),
     };
     let [Content::Text(text), ..] = marker.content.as_slice() else {
@@ -214,7 +301,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     assert_eq!((harness.name(), id), (source.name(), original));
     let linked = continued_from_row(marker);
     assert_eq!(linked, Some((source.name(), original.to_owned())));
-    if !matches!(target, AnyHarness::Pi(_)) {
+    if !matches!(target, AnyHarness::Pi(_) | AnyHarness::Hermes(_)) {
         assert_eq!(marker.role, Role::System);
     }
 
@@ -283,18 +370,22 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             continue;
         }
         let answered: Vec<String> = match target {
+            AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
             // A message of calls, then one of their results.
             AnyHarness::ClaudeCode(_) => ids(&rows[n + 1], true),
             // A message of calls, then a result each.
-            AnyHarness::Pi(_) => rows[n + 1..=n + called.len()]
+            AnyHarness::Grok(_)
+            | AnyHarness::Hermes(_)
+            | AnyHarness::Pi(_)
+            | AnyHarness::Copilot(_) => rows[n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);
                     ids(r, true)
                 })
                 .collect(),
-            // A line per call, then its output's.
-            AnyHarness::Codex(_) => {
+            // A row per call, then its result's.
+            AnyHarness::Codex(_) | AnyHarness::Kiro(_) => {
                 assert_eq!(m.content.len(), 1, "{m:?}");
                 ids(&rows[n + 1], true)
             }
@@ -316,8 +407,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -367,6 +458,36 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let root = dir.path();
     let id = SessionId::from(session.id.clone());
     match target {
+        AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Hermes(_) => {
+            let lines = hermes::rehydrate::tests::written(root, session).await;
+            assert_eq!(
+                hermes::session::locate(root, &session.id).await,
+                Some(root.join("state.db"))
+            );
+            // The title row is the session's, no row of the continuation.
+            rows_of(&lines)
+                .into_iter()
+                .filter(|r| r.role != Role::Other("atuin-title".into()))
+                .collect()
+        }
+        AnyHarness::Kiro(_) => {
+            let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
+            let sessions = root.join("sessions");
+            assert_eq!(kiro::session::locate(&sessions, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                KiroSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            // The header's title row is the session's, no row of the continuation.
+            rows_of(&lines).into_iter().filter(|r| !r.source_id.starts_with("syn-")).collect()
+        }
+        AnyHarness::Copilot(_) => {
+            let path = copilot::rehydrate::rehydrate_into(root, session).unwrap();
+            assert_eq!(copilot::session::locate(root, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                CopilotSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            // The sidecar's title row is the session's, no row of the continuation.
+            rows_of(&lines).into_iter().filter(|r| !r.source_id.starts_with("atuin-")).collect()
+        }
         AnyHarness::ClaudeCode(_) => {
             let path = ccode::rehydrate::rehydrate_into(root, session).unwrap();
             assert_eq!(ccode::session::locate(root, &session.id), Some(path.clone()));
@@ -388,6 +509,7 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
                 root,
                 &root.join("sessions"),
                 session,
+                None,
             )
             .unwrap();
             assert_eq!(pi::session::locate(root, &session.id), Some(path.clone()));
@@ -408,6 +530,14 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
                 "the session is opencode's under its id"
             );
             rows
+        }
+        AnyHarness::Grok(_) => {
+            let sessions_dir = root.join("sessions");
+            let path = grok::rehydrate::rehydrate_into(&sessions_dir, root, session).unwrap();
+            assert_eq!(grok::session::locate(&sessions_dir, &session.id), Some(path.clone()));
+            let lines: Vec<_> =
+                GrokSession::open(id, path, pool()).read().try_collect().await.unwrap();
+            rows_of(&lines)
         }
     }
 }
@@ -455,8 +585,8 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -781,7 +911,7 @@ fn a_pasted_marker_is_no_link(#[case] paste: fn(&str) -> String) {
 /// merely quotes a marker keeps it.
 #[rstest]
 fn a_continuations_marker_is_not_carried_on(
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, OPENCODE, PI)] target: AnyHarness,
 ) {
     let old = marker_text(CLAUDE, "4bd6b5bd-7d34-4a39-a2d6-2e6f6a6c0b1d", Some(ATUIN_ID));
     let original = session_of("orig", vec![
@@ -816,7 +946,7 @@ fn a_continuations_marker_is_not_carried_on(
 #[case::only_blank(vec![msg(Role::User, vec![text("  ")], 1)])]
 fn an_empty_session_is_not_continued(
     #[case] messages: Vec<RehydrateMessage>,
-    #[values(CLAUDE, CODEX, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, OPENCODE, PI)] target: AnyHarness,
 ) {
     let original = session_of("orig", messages);
     let err = continue_in(CODEX, &original, Some(ATUIN_ID), target).unwrap_err();

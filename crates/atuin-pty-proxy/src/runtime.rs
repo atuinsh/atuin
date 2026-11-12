@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
+use atuin_common::userio;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::termios::SpecialCodeIndex;
@@ -135,12 +136,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
             let path = atuin_common::fs::RemoveOnDropPath(socket_path);
             Ok::<_, InitError>((server, path))
         })
-        .map_err(|e| {
-            // If we're unable to initialize the PTY server (e.g., failed to create the socket),
-            // print the error and continue rather than returning it, so the user still gets a
-            // shell.
-            eprintln!("atuin pty-proxy: failed to initialize server: {e}");
-        })
+        .inspect_err(|e| userio::log::error!("pty-proxy-server-init-failed", error = e.to_string()))
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
@@ -168,16 +164,14 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
         cmd.env("SHELL", shell);
     }
     set_child_env(&mut cmd, socket_path.as_deref());
-    // Atuin sets a restrictive process-wide umask on startup to protect the
-    // files it creates. The shell must not inherit it (#3695) — restore the
-    // umask the user launched us with. Applied in the child between fork and
-    // exec, so the proxy's own umask stays restrictive.
-    if let Some(mask) = options.child_umask {
+    // The shell must not inherit atuin's owner-only umask (#3695): restore the one the user
+    // launched us with. Applied in the child between fork and exec, so ours stays restrictive.
+    if let Some(mask) = atuin_common::os::umask::Umask::original() {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "mode_t is u16 on macOS and u32 on Linux. nop on linux, narrowing on macOS."
         )]
-        cmd.umask(Some(mask as _));
+        cmd.umask(Some(mask.bits() as _));
     }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;

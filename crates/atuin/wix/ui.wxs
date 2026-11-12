@@ -1,0 +1,119 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    <Fragment>
+        <Property Id='AtuinScope' Value='user'/>
+        <Property Id='ARPNOMODIFY' Value='1'/>
+
+        <SetProperty
+            Action='SetUserFolder'
+            Id='APPLICATIONFOLDER'
+            Value='[LocalAppDataFolder]Programs\atuin\'
+            Before='CostFinalize'
+            Sequence='both'>NOT APPLICATIONFOLDER AND NOT (ALLUSERS = 1)</SetProperty>
+        <SetProperty
+            Action='SetMachineFolder'
+            Id='APPLICATIONFOLDER'
+            Value='[%ProgramW6432]\atuin\'
+            Before='CostFinalize'
+            Sequence='both'>NOT APPLICATIONFOLDER AND ALLUSERS = 1</SetProperty>
+
+        <UI Id='AtuinUI'>
+            <TextStyle Id='WixUI_Font_Normal' FaceName='!(loc.Advanced_Font_FaceName)' Size='!(loc.Advanced_Font_Normal_Size)'/>
+            <TextStyle Id='WixUI_Font_Bigger' FaceName='!(loc.Advanced_Font_FaceName)' Size='!(loc.Advanced_Font_Bigger_Size)'/>
+            <TextStyle Id='WixUI_Font_Title' FaceName='!(loc.Advanced_Font_FaceName)' Size='!(loc.Advanced_Font_Title_Size)' Bold='yes'/>
+            <TextStyle Id='WixUI_Font_Emphasized' FaceName='!(loc.Advanced_Font_FaceName)' Size='!(loc.Advanced_Font_Emphasized_Size)' Bold='yes'/>
+
+            <Property Id='DefaultUIFont' Value='WixUI_Font_Normal'/>
+            <Property Id='WixUI_Mode' Value='Advanced'/>
+
+            <DialogRef Id='DiskCostDlg'/>
+            <DialogRef Id='ErrorDlg'/>
+            <DialogRef Id='FatalError'/>
+            <DialogRef Id='FilesInUse'/>
+            <DialogRef Id='MsiRMFilesInUse'/>
+            <DialogRef Id='PrepareDlg'/>
+            <DialogRef Id='ProgressDlg'/>
+            <DialogRef Id='ResumeDlg'/>
+            <DialogRef Id='UserExit'/>
+            <DialogRef Id='VerifyReadyDlg'/>
+            <DialogRef Id='MaintenanceWelcomeDlg'/>
+            <DialogRef Id='MaintenanceTypeDlg'/>
+
+            <Dialog Id='AtuinLicenseDlg' Width='370' Height='270' Title='!(loc.AdvancedWelcomeEulaDlg_Title)'>
+                <Control Id='BannerBitmap' Type='Bitmap' X='0' Y='0' Width='370' Height='44' TabSkip='no' Text='!(loc.AdvancedWelcomeEulaDlgBannerBitmap)'/>
+                <Control Id='BannerLine' Type='Line' X='0' Y='44' Width='370' Height='0'/>
+                <Control Id='BottomLine' Type='Line' X='0' Y='234' Width='370' Height='0'/>
+                <Control Id='Title' Type='Text' X='20' Y='10' Width='300' Height='24' Transparent='yes' NoPrefix='yes' Text='!(loc.AdvancedWelcomeEulaDlgTitle)'/>
+                <Control Id='LicenseText' Type='ScrollableText' X='20' Y='55' Width='330' Height='140' Sunken='yes' TabSkip='no'>
+                    <Text SourceFile='!(wix.WixUILicenseRtf)'/>
+                </Control>
+                <Control Id='LicenseAcceptedCheckBox' Type='CheckBox' X='20' Y='202' Width='330' Height='18' CheckBoxValue='1' Property='LicenseAccepted' Text='!(loc.WelcomeEulaDlgLicenseAcceptedCheckBox)'/>
+                <Control Id='Print' Type='PushButton' X='112' Y='243' Width='56' Height='17' Text='!(loc.WixUIPrint)'>
+                    <Publish Event='DoAction' Value='WixUIPrintEula'>1</Publish>
+                </Control>
+                <Control Id='Back' Type='PushButton' X='180' Y='243' Width='56' Height='17' Disabled='yes' Text='!(loc.WixUIBack)'/>
+                <Control Id='Next' Type='PushButton' X='236' Y='243' Width='56' Height='17' Default='yes' Text='!(loc.WixUINext)'>
+                    <Publish Event='NewDialog' Value='AtuinScopeDlg'>LicenseAccepted = "1"</Publish>
+                    <Condition Action='disable'><![CDATA[LicenseAccepted <> "1"]]></Condition>
+                    <Condition Action='enable'>LicenseAccepted = "1"</Condition>
+                </Control>
+                <Control Id='Cancel' Type='PushButton' X='304' Y='243' Width='56' Height='17' Cancel='yes' Text='!(loc.WixUICancel)'>
+                    <Publish Event='SpawnDialog' Value='CancelDlg'>1</Publish>
+                </Control>
+            </Dialog>
+
+            <Dialog Id='AtuinScopeDlg' Width='370' Height='270' Title='!(loc.InstallScopeDlg_Title)' KeepModeless='yes'>
+                <Control Id='BannerBitmap' Type='Bitmap' X='0' Y='0' Width='370' Height='44' TabSkip='no' Text='!(loc.InstallScopeDlgBannerBitmap)'/>
+                <Control Id='BannerLine' Type='Line' X='0' Y='44' Width='370' Height='0'/>
+                <Control Id='BottomLine' Type='Line' X='0' Y='234' Width='370' Height='0'/>
+                <Control Id='Title' Type='Text' X='15' Y='6' Width='200' Height='15' Transparent='yes' NoPrefix='yes' Text='!(loc.InstallScopeDlgTitle)'/>
+                <Control Id='Description' Type='Text' X='25' Y='23' Width='280' Height='20' Transparent='yes' NoPrefix='yes' Text='Choose who can use [ProductName] on this computer.'/>
+                <Control Id='Scope' Type='RadioButtonGroup' X='20' Y='55' Width='330' Height='120' Property='AtuinScope'>
+                    <RadioButtonGroup Property='AtuinScope'>
+                        <RadioButton Value='user' X='0' Y='0' Width='295' Height='16' Text='!(loc.InstallScopeDlgPerUser)'/>
+                        <RadioButton Value='machine' X='0' Y='60' Width='295' Height='16' Text='!(loc.InstallScopeDlgPerMachine)'/>
+                    </RadioButtonGroup>
+                </Control>
+                <Control Id='UserDescription' Type='Text' X='33' Y='70' Width='300' Height='36' NoPrefix='yes' Text='Installs to [LocalAppDataFolder]Programs\atuin and adds it to your PATH. Administrator rights are not needed.'/>
+                <Control Id='MachineDescription' Type='Text' X='33' Y='131' Width='300' Height='36' NoPrefix='yes' Text='Installs to [%ProgramW6432]\atuin and adds it to the PATH of every user. Administrator rights are needed.'/>
+                <Control Id='Back' Type='PushButton' X='180' Y='243' Width='56' Height='17' Text='!(loc.WixUIBack)'>
+                    <Publish Event='NewDialog' Value='AtuinLicenseDlg'>1</Publish>
+                </Control>
+                <Control Id='Next' Type='PushButton' X='236' Y='243' Width='56' Height='17' Default='yes' Text='!(loc.WixUINext)'>
+                    <Publish Property='ALLUSERS' Value='{}'>1</Publish>
+                    <Publish Property='APPLICATIONFOLDER' Value='[LocalAppDataFolder]Programs\atuin\'>1</Publish>
+                    <Publish Event='NewDialog' Value='VerifyReadyDlg'>1</Publish>
+                    <Condition Action='show'><![CDATA[AtuinScope <> "machine"]]></Condition>
+                    <Condition Action='hide'>AtuinScope = "machine"</Condition>
+                </Control>
+                <Control Id='NextShield' Type='PushButton' X='236' Y='243' Width='56' Height='17' Default='yes' ElevationShield='yes' Hidden='yes' Text='!(loc.WixUINext)'>
+                    <Publish Property='ALLUSERS' Value='1'>1</Publish>
+                    <Publish Property='MSIINSTALLPERUSER' Value='{}'>1</Publish>
+                    <Publish Property='APPLICATIONFOLDER' Value='[%ProgramW6432]\atuin\'>1</Publish>
+                    <Publish Event='NewDialog' Value='VerifyReadyDlg'>1</Publish>
+                    <Condition Action='show'>AtuinScope = "machine"</Condition>
+                    <Condition Action='hide'><![CDATA[AtuinScope <> "machine"]]></Condition>
+                </Control>
+                <Control Id='Cancel' Type='PushButton' X='304' Y='243' Width='56' Height='17' Cancel='yes' Text='!(loc.WixUICancel)'>
+                    <Publish Event='SpawnDialog' Value='CancelDlg'>1</Publish>
+                </Control>
+            </Dialog>
+
+            <Publish Dialog='VerifyReadyDlg' Control='Back' Event='NewDialog' Value='AtuinScopeDlg' Order='1'>NOT Installed</Publish>
+            <Publish Dialog='VerifyReadyDlg' Control='Back' Event='NewDialog' Value='MaintenanceTypeDlg' Order='2'>Installed</Publish>
+
+            <Publish Dialog='MaintenanceWelcomeDlg' Control='Next' Event='NewDialog' Value='MaintenanceTypeDlg'>1</Publish>
+            <Publish Dialog='MaintenanceTypeDlg' Control='RepairButton' Event='NewDialog' Value='VerifyReadyDlg'>1</Publish>
+            <Publish Dialog='MaintenanceTypeDlg' Control='RemoveButton' Event='NewDialog' Value='VerifyReadyDlg'>1</Publish>
+            <Publish Dialog='MaintenanceTypeDlg' Control='Back' Event='NewDialog' Value='MaintenanceWelcomeDlg'>1</Publish>
+
+            <Publish Dialog='ExitDialog' Control='Finish' Event='EndDialog' Value='Return' Order='999'>1</Publish>
+        </UI>
+
+        <InstallUISequence>
+            <Show Dialog='AtuinLicenseDlg' Before='ProgressDlg'>NOT Installed</Show>
+        </InstallUISequence>
+
+        <UIRef Id='WixUI_Common'/>
+    </Fragment>
+</Wix>

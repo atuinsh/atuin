@@ -26,7 +26,7 @@ use time::{Duration, OffsetDateTime};
 use super::ResumeContext;
 use super::catchup::CatchUp;
 use super::resumer::{
-    Continued, ForkFrom, Forked, NotResumable, Restore, Resume, ResumeError, ResumePlan,
+    Continued, ForkFrom, Forked, NotResumable, Restore, Restored, Resume, ResumeError, ResumePlan,
     ResumeTarget, Resumer, Switched,
 };
 use super::source::{
@@ -1121,13 +1121,16 @@ impl Resumer for FakeResumer {
         _source: &dyn SessionSource,
         session: &SessionRow,
         _restore: &Restore,
-    ) -> Result<ResumePlan, NotResumable> {
+    ) -> Result<Restored, NotResumable> {
         let native = PathBuf::from(format!("/restored/{}.jsonl", session.handle.session));
-        self.plan_for(session, Some(native))
+        Ok(Restored {
+            plan: self.plan_for(session, Some(native))?,
+            status: "restored the thread from sync".to_owned(),
+        })
     }
 
-    /// Every other harness is installed. A session of a harness atuin can't read back (Copilot)
-    /// can't be continued anywhere.
+    /// Every other harness is installed. A session of a harness atuin doesn't know can't be
+    /// continued anywhere.
     fn continue_targets(&self, session: &SessionRow) -> Vec<HarnessKind> {
         if session.handle.harness.harness().is_none() {
             return Vec::new();
@@ -1166,7 +1169,7 @@ impl Resumer for FakeResumer {
         })
     }
 
-    /// Every harness atuin writes is installed.
+    /// Every harness is installed.
     fn can_fork(&self, session: &SessionRow) -> bool {
         session.handle.harness.harness().is_some()
     }

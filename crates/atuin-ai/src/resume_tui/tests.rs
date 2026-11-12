@@ -975,7 +975,7 @@ async fn untitled_shows_everywhere() {
 
 /// Enter on a session asks where to resume it: its own harness first and selected, then the
 /// other harnesses installed here, under a rule, to continue it in. Enter picks the
-/// selected line the way the key that opened it asked (resume, with `enter_accept`), tab edits,
+/// selected line the way the key that opened it asked (resume), tab edits,
 /// a digit picks its line, and nothing reaches the query while it's open.
 #[rstest]
 #[tokio::test]
@@ -1035,7 +1035,7 @@ async fn the_chooser_offers_the_original_first_then_the_others() {
     assert!(state.chooser.is_none(), "esc goes back to the list");
 }
 
-/// Opened with tab (or enter without `enter_accept`), the chooser edits whichever line is picked,
+/// Opened with tab, the chooser edits whichever line is picked,
 /// and says so.
 #[rstest]
 #[tokio::test]
@@ -1116,20 +1116,21 @@ async fn an_original_that_cant_resume_is_dimmed_and_passed_over() {
         state.plans.remove(&row.handle);
     }
 
-    // A harness atuin can't continue from (Copilot) has only its own line, saying why.
-    let mut copilot = fake::row(HarnessKind::Copilot, "cp1", "t");
-    copilot.host_id = fake::THIS_HOST_ID.to_owned();
-    state.results = vec![copilot.clone()];
+    // A harness atuin can't continue from (one it doesn't know) has only its own line, saying
+    // why.
+    let mut unknown = fake::row(HarnessKind::Unknown, "u1", "t");
+    unknown.host_id = fake::THIS_HOST_ID.to_owned();
+    state.results = vec![unknown.clone()];
     state.list.selected = 0;
-    state.plans.insert(copilot.handle.clone(), FakeResumer::default().plan(&copilot).await);
+    state.plans.insert(unknown.handle.clone(), FakeResumer::default().plan(&unknown).await);
     state.open_chooser(
-        &copilot,
-        FakeResumer::default().continue_targets(&copilot),
-        FakeResumer::default().can_fork(&copilot),
+        &unknown,
+        FakeResumer::default().continue_targets(&unknown),
+        FakeResumer::default().can_fork(&unknown),
         Pending::Resume,
     );
     let out = text(&render(&mut state, &s, 100, 30));
-    assert!(out.contains("> 1 Copilot  resume: atuin can't resume"), "{out}");
+    assert!(out.contains("> 1 unknown  resume: atuin can't resume"), "{out}");
     assert!(!out.contains("fork:"), "atuin can't fork it either: {out}");
 }
 
@@ -1370,8 +1371,8 @@ async fn the_chooser_opens_when_there_is_a_choice() {
 }
 
 /// A session recorded on another machine is restored from sync (by the worker) only once it is
-/// chosen, and then resumed from where it was written; ctrl-y copies `atuin resume <id>`,
-/// which restores it when run, and writes nothing.
+/// chosen, and then resumed from where it was written, saying so; ctrl-y copies
+/// `atuin resume <id>`, which restores it when run, and writes nothing.
 #[rstest]
 #[tokio::test]
 async fn a_session_from_another_machine_is_restored_first() {
@@ -1401,6 +1402,8 @@ async fn a_session_from_another_machine_is_restored_first() {
     let restore = resume.restore.clone().unwrap();
     let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
     apply_response(&mut state, Response::Restored(row.handle.clone(), plan));
+    // The restore's status waits with its plan, for whichever enter resumes it.
+    assert_eq!(state.note, None);
     let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
     let Some(Outcome::Resume(plan)) = outcome else {
         panic!("{outcome:?}");
@@ -1409,6 +1412,7 @@ async fn a_session_from_another_machine_is_restored_first() {
         plan.native_path,
         Some(std::path::PathBuf::from(format!("/restored/{}.jsonl", row.handle.session)))
     );
+    assert_eq!(state.note.as_deref(), Some("restored the thread from sync"));
 }
 
 /// An enter waiting on its session's plan, or on its restore from sync, and then an idle refresh
@@ -1633,7 +1637,7 @@ impl Resumer for GatedRestores {
         source: &dyn SessionSource,
         session: &super::source::SessionRow,
         restore: &super::resumer::Restore,
-    ) -> Result<super::resumer::ResumePlan, super::resumer::NotResumable> {
+    ) -> Result<super::resumer::Restored, super::resumer::NotResumable> {
         self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.gate.acquire().await.unwrap().forget();
         self.inner.restore(source, session, restore).await

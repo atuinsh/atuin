@@ -183,6 +183,13 @@ pub fn output(command: Command) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// The messages `command` showed the user on stderr, asserting it succeeded.
+pub fn messages(command: Command) -> String {
+    let out = Process::spawn(command).wait();
+    assert!(out.status.success(), "command failed: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stderr).unwrap()
+}
+
 pub fn wait_until(what: &str, mut pred: impl FnMut() -> bool) {
     let deadline = Instant::now() + TIMEOUT;
     while !pred() {

@@ -37,9 +37,9 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
-    Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
+    Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after, scan_sessions,
 };
-use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
@@ -140,6 +140,20 @@ fn settings_session_dir(agent_dir: &Path) -> Option<PathBuf> {
 
 impl Sessions for PiSessions {
     type Listener = PiListener;
+
+    /// When pi and omp share the root, only this flavour's session files count. Otherwise, use of
+    /// the other agent would make this one look recently used.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let Some(flavour) = self.only(&root) else {
+            return crate::fs::newest_modified(root);
+        };
+        crate::fs::newest_modified_where(root, |entry| {
+            let path = entry.path();
+            let is_omp = || belongs_to_omp(&path).unwrap_or(false);
+            PiListener::is_session_file(&path) && is_omp() == (flavour == Flavour::Omp)
+        })
+    }
 
     fn listener(&self) -> Result<PiListener, RuntimeError> {
         let root = self.resolve_root();
@@ -371,7 +385,7 @@ fn read_header(path: &Path) -> io::Result<Header> {
 }
 
 /// [`read_header`], taking a session of the other flavour for no session when `only` says whose
-/// files to take: omp's start with their title slot, pi's never do.
+/// files to take. [`belongs_to_omp`] says whose a file is.
 fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     let header = read_header(path)?;
     let Some(flavour) = only else {
@@ -380,15 +394,38 @@ fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     if !matches!(header, Header::Session { .. }) {
         return Ok(header);
     }
-    let mut first = Vec::new();
-    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
-    let titled = crate::json::js::from_slice::<serde_json::Value>(&first)
-        .is_ok_and(|entry| entry["type"] == "title");
-    Ok(if titled == (flavour == Flavour::Omp) {
+    Ok(if belongs_to_omp(path)? == (flavour == Flavour::Omp) {
         header
     } else {
         Header::Other
     })
+}
+
+/// Whether the file is one of omp's own sessions. omp's sessions start with their title slot, and
+/// pi's never do. Returns `false` when the file can't be read.
+///
+/// The transcripts of omp's subagents and advisors have no title slot, so this returns `false` for
+/// them. By contrast, [`belongs_to_omp`] counts them as omp's.
+pub(crate) fn is_omp_session_file(path: &Path) -> bool {
+    starts_with_title_slot(path).unwrap_or(false)
+}
+
+/// Whether the file belongs to omp, as a session or as a transcript that one of its sessions
+/// started.
+///
+/// omp's sessions start with their title slot, and pi's never do. However, only top-level omp
+/// sessions start with the title slot, so for subagent transcripts, we check the parent session to
+/// determine whether the subagent transcript belongs to omp.
+fn belongs_to_omp(path: &Path) -> io::Result<bool> {
+    let owner = path.parent().map(owner_file).filter(|owner| owner.is_file());
+    starts_with_title_slot(owner.as_deref().unwrap_or(path))
+}
+
+fn starts_with_title_slot(path: &Path) -> io::Result<bool> {
+    let mut first = Vec::new();
+    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
+    Ok(crate::json::js::from_slice::<serde_json::Value>(&first)
+        .is_ok_and(|entry| entry["type"] == "title"))
 }
 
 /// The session id pi's own file naming (`<timestamp>_<id>.jsonl`, session-manager.ts
@@ -420,34 +457,9 @@ impl PiSession {
         }
     }
 
-    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
-    /// was taken after, else the transcript's start.
+    /// The byte offset to read from (see [`checkpoint_offset`]).
     async fn start(&self, from: Checkpoint) -> u64 {
-        let path = self.path.clone();
-        let found = self
-            .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
-            .await
-            .map_err(io::Error::other)
-            .and_then(|found| found);
-        match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
-            Ok(_) => {
-                tracing::debug!(
-                    path = %self.path.display(),
-                    "the checkpoint no longer names its line; reading from the start"
-                );
-                0
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    "failed to read the line a checkpoint names; reading from the start"
-                );
-                0
-            }
-        }
+        checkpoint_offset(&self.path, &self.pool, from).await
     }
 }
 
@@ -1441,8 +1453,8 @@ mod tests {
         assert_eq!(got.len(), 2);
     }
 
-    /// pi and omp sharing a session directory each take only their own sessions there: omp's
-    /// start with a title slot.
+    /// pi and omp sharing a session directory each take only their own sessions there. omp's
+    /// sessions start with a title slot, and omp's subagent transcripts belong to omp too.
     #[rstest]
     #[tokio::test]
     async fn a_shared_session_dir_is_split_by_flavour(
@@ -1456,15 +1468,52 @@ mod tests {
         std::fs::write(dir.path().join("1_p.jsonl"), header("p")).unwrap();
         let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
         std::fs::write(dir.path().join("2_o.jsonl"), slot + &header("o")).unwrap();
+        // An omp subagent's transcript has no title slot. It is omp's because its parent is.
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        std::fs::write(dir.path().join("2_o").joined("0-Scout.jsonl"), header("c")).unwrap();
 
         let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
-        let ids: Vec<String> =
+        let mut ids: Vec<String> =
             sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
-        let want = match flavour {
-            Flavour::Pi => "p",
-            Flavour::Omp => "o",
+        ids.sort();
+        let want: &[&str] = match flavour {
+            Flavour::Pi => &["p"],
+            Flavour::Omp => &["c", "o"],
         };
-        assert_eq!(ids, vec![want.to_owned()]);
+        assert_eq!(ids, want);
+    }
+
+    /// When pi and omp share a session directory, each one's last use counts only its own
+    /// sessions. Daily use of omp doesn't make an uninstalled pi look recently used. That includes
+    /// omp's subagent transcripts, which have no title slot of their own.
+    #[rstest]
+    fn a_shared_session_dir_splits_last_active_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        let (pi, omp) = (dir.path().join("1_p.jsonl"), dir.path().join("2_o.jsonl"));
+        std::fs::write(&pi, header("p")).unwrap();
+        std::fs::write(&omp, slot + &header("o")).unwrap();
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        let child = dir.path().join("2_o").joined("0-Scout.jsonl");
+        std::fs::write(&child, header("c")).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let (pi_at, omp_at, child_at) = (at(1_000), at(2_000), at(3_000));
+        File::options().write(true).open(&pi).unwrap().set_modified(pi_at).unwrap();
+        File::options().write(true).open(&omp).unwrap().set_modified(omp_at).unwrap();
+        File::options().write(true).open(&child).unwrap().set_modified(child_at).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let want = match flavour {
+            Flavour::Pi => pi_at,
+            Flavour::Omp => child_at,
+        };
+        assert_eq!(sessions.last_active(), Some(want));
     }
 
     #[rstest]

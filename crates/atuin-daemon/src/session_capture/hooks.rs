@@ -22,6 +22,8 @@ pub enum Point {
     CapturePushing,
     /// Capture pushed its record, before projecting it. A panic fault panics the capture.
     CapturePushed,
+    /// An append is about to wait for capture's locks.
+    Appending,
     /// The warm-up of a resumed session, before one of its steps. A fault fails the step.
     WarmRead(WarmStep),
 }

@@ -1,0 +1,12 @@
+scripts-records-skipped = skipped { $skipped } script records that could not be decrypted or decoded
+scripts-stdin-write-failed = failed to write to stdin: { $error }
+scripts-stdin-flush-failed = failed to flush stdin: { $error }
+scripts-stdout-write-failed = failed to write to stdout: { $error }
+scripts-stdout-flush-failed = failed to flush stdout: { $error }
+scripts-stdout-read-failed = failed to read from process stdout: { $error }
+scripts-stderr-write-failed = failed to write to stderr: { $error }
+scripts-stderr-flush-failed = failed to flush stderr: { $error }
+scripts-stderr-read-failed = failed to read from process stderr: { $error }
+scripts-wait-failed = failed to wait for child process: { $error }
+scripts-stdout-join-failed = failed to join stdout task: { $error }
+scripts-stderr-join-failed = failed to join stderr task: { $error }

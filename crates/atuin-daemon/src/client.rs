@@ -6,41 +6,49 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
+use atuin_common::userio::log::{Message, SINK};
 use easy_cast::Conv;
 use eyre::Result;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use time::OffsetDateTime;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::Code;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{Level, instrument, span, warn};
 
-use crate::grpc::ai::agent::pb::Session as AiSession;
+use crate::grpc::ai::agent::pb::{HarnessSession as AgentHarnessSession, Session as AiSession};
 use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
 use crate::grpc::ai::session::pb::{
     GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
-    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
-    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
+    ListSessionsRequest, ProjectSyncedRequest, PushMessagesReply, PushMessagesRequest,
+    RebuildSessionsRequest, SearchSessionsMatch, SearchSessionsRequest, TailSessionsEvent,
+    TailSessionsRequest,
 };
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     CompactStoreReply, CompactStoreRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    ImportHistoryRequest, LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
-use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
+use crate::grpc::request::ClientInterceptor;
+use crate::grpc::userio::pb::ListenLogsRequest;
+use crate::grpc::userio::pb::user_io_client::UserIoClient;
+use crate::grpc::versioning::{VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
-    SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, RebuildIndexRequest,
+    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
+use crate::session_capture::Origin;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {
@@ -52,7 +60,7 @@ pub enum FromSettingsError {
 
 /// A connection to the daemon that stamps every request with this client's
 /// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
-type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+type DaemonChannel = InterceptedService<Channel, ClientInterceptor>;
 
 #[derive(Clone)]
 pub struct HistoryClient {
@@ -103,7 +111,7 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 impl From<Channel> for HistoryClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: HistoryServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -193,6 +201,22 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
+    /// Have the daemon import `shell`'s history file after replying.
+    pub async fn import_history(
+        &mut self,
+        shell: &str,
+        histfile: Option<String>,
+        fish_history: Option<String>,
+    ) -> Result<()> {
+        let request = ImportHistoryRequest {
+            shell: shell.to_owned(),
+            histfile,
+            fish_history,
+        };
+        self.client.import_history(request).await?;
+        Ok(())
+    }
+
     pub async fn status(&mut self) -> Result<StatusReply, tonic::Status> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
     }
@@ -221,6 +245,12 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+
+    /// Tells the daemon `atuin login` saved a session, so the uploads it holds back for one go now.
+    pub async fn logged_in(&mut self) -> Result<(), tonic::Status> {
+        self.client.logged_in(LoggedInRequest {}).await?;
+        Ok(())
     }
 
     pub async fn register_command_output(
@@ -301,7 +331,7 @@ pub struct SearchClient {
 impl From<Channel> for SearchClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: SearchServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -369,6 +399,12 @@ impl SearchClient {
         self.client.prepare_index(request).await?;
         Ok(())
     }
+
+    /// Tell the daemon to rebuild the search index from the history DB.
+    pub async fn rebuild_index(&mut self) -> Result<()> {
+        self.client.rebuild_index(RebuildIndexRequest {}).await?;
+        Ok(())
+    }
 }
 
 impl From<FilterMode> for RpcFilterMode {
@@ -391,8 +427,51 @@ impl From<Context> for RpcSearchContext {
             cwd: context.cwd,
             hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
-            git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
+            vcs_root: context.vcs_root.map(|path| path.to_string_lossy().to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use std::path::PathBuf;
+
+    use atuin_domain::record::CmdOrigin;
+    use rstest::rstest;
+
+    use crate::client::{
+        Context, FilterMode, OrFilter, RpcFilterMode, SearchParams, SearchRequest,
+    };
+
+    #[rstest]
+    #[case::no_repository(None)]
+    #[case::repository(Some("/work/repo"))]
+    #[case::unicode_repository(Some("/work/répo"))]
+    fn search_request_preserves_vcs_context(#[case] root: Option<&str>) {
+        let request = SearchRequest::from(SearchParams {
+            query: "cargo build".to_string(),
+            query_id: 42,
+            filter_mode: FilterMode::Workspace,
+            context: Some(Context {
+                session: "session".to_string(),
+                cwd: "/work/repo/sub".to_string(),
+                cmd_origin: CmdOrigin::try_from("host:user").unwrap(),
+                host_id: "host-id".to_string(),
+                vcs_root: root.map(PathBuf::from),
+            }),
+            shells: OrFilter::default(),
+        });
+
+        assert_eq!(request.query, "cargo build");
+        assert_eq!(request.query_id, 42);
+        assert_eq!(request.filter_mode, i32::from(RpcFilterMode::Workspace));
+        assert!(request.shells.is_empty());
+        let context = request.context.unwrap();
+        assert_eq!(context.session_id, "session");
+        assert_eq!(context.cwd, "/work/repo/sub");
+        assert_eq!(context.hostname, "host:user");
+        assert_eq!(context.host_id, "host-id");
+        assert_eq!(context.vcs_root.as_deref(), root);
     }
 }
 
@@ -412,7 +491,7 @@ impl AiClient {
     /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
     /// The daemon is local and trusted (the server encodes any size by default).
     fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
-        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
+        AiSessionServiceClient::with_interceptor(channel, ClientInterceptor)
             .max_decoding_message_size(usize::MAX)
     }
 
@@ -545,14 +624,100 @@ impl AiClient {
         Ok(())
     }
 
+    /// Hand the daemon messages of `session`, each a line of `atuin threads push` input, to
+    /// capture: one push, sent a batch at a time.
+    pub async fn push_messages(
+        &mut self,
+        session: HarnessSession,
+        batches: Vec<Vec<String>>,
+        origin: Origin,
+    ) -> Result<PushMessagesReply> {
+        let session = AgentHarnessSession::from(session);
+        let requests = batches.into_iter().map(move |lines| PushMessagesRequest {
+            session: Some(session.clone()),
+            lines,
+            imported: origin == Origin::Import,
+        });
+        Ok(self.client.push_messages(futures::stream::iter(requests)).await?.into_inner())
+    }
+
     pub async fn import_sessions(
         &mut self,
         harness: Option<HarnessKind>,
     ) -> Result<tonic::Streaming<ImportSessionsEvent>> {
         let request = ImportSessionsRequest {
             harness: harness.map(|h| h as i32),
+            background: false,
         };
         Ok(self.client.import_sessions(request).await?.into_inner())
+    }
+
+    /// Have the daemon import every harness's sessions after replying.
+    pub async fn import_sessions_in_background(&mut self) -> Result<()> {
+        let request = ImportSessionsRequest {
+            harness: None,
+            background: true,
+        };
+        self.client.import_sessions(request).await?;
+        Ok(())
+    }
+}
+
+/// Shows on [`SINK`] what the daemon logs for the user while serving a request, from
+/// [`listen`](Self::listen) until [`finish`](Self::finish).
+pub(crate) struct LogListener {
+    /// Dropped to close this side of the stream, which has the daemon send the messages it has
+    /// left and end it.
+    close: Option<oneshot::Sender<()>>,
+    shown: JoinHandle<()>,
+}
+
+impl LogListener {
+    /// Listens to the daemon over `channel` for the request of the current
+    /// [`scope`](crate::grpc::request::scope),
+    /// showing every message it logs for it from when this returns on.
+    pub(crate) async fn listen(channel: Channel) -> Result<Self, tonic::Status> {
+        let (close, closed) = oneshot::channel::<()>();
+        let requests = futures::stream::once(closed)
+            .filter_map(|_| std::future::ready(None::<ListenLogsRequest>));
+        let mut replies = UserIoClient::with_interceptor(channel, ClientInterceptor)
+            .listen_logs(requests)
+            .await?
+            .into_inner();
+
+        // Runs until the daemon ends the stream, which dropping `close` asks for.
+        let shown = tokio::spawn(async move {
+            while let Ok(Some(reply)) = replies.message().await {
+                let Some(message) = reply.message else {
+                    continue;
+                };
+                match Message::try_from(message) {
+                    Ok(message) => SINK.show(message),
+                    Err(err) => warn!(?err, "dropped a message from the daemon"),
+                }
+            }
+        });
+
+        Ok(Self {
+            close: Some(close),
+            shown,
+        })
+    }
+
+    /// Shows the messages the daemon has logged until now, then stops listening.
+    pub(crate) async fn finish(mut self) {
+        /// How long the daemon has to send what it queued for the request.
+        const FINISH_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+        drop(self.close.take());
+        // One that panicked has shown what it could, and one still running is aborted on drop.
+        let _ = tokio::time::timeout(FINISH_WAIT, &mut self.shown).await;
+    }
+}
+
+impl Drop for LogListener {
+    fn drop(&mut self) {
+        self.shown.abort();
     }
 }
 
@@ -598,7 +763,7 @@ mod rebuild_tests {
     use super::AiClient;
     use crate::grpc::AiSessionService;
     use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+    use crate::session_capture::{AiHarnessSessionCapture, Origin, StoreState};
 
     /// A client of an AI-session service over a real socket, in the given recovery state.
     async fn serve(state: StoreState) -> (AiClient, watch::Sender<StoreState>, tempfile::TempDir) {
@@ -609,6 +774,36 @@ mod rebuild_tests {
         let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
         tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
         (AiClient::new(path).await.unwrap(), state, dir)
+    }
+
+    /// A push whose later batch is bad still stores what the batches before it held, a line
+    /// waiting for a timed one included.
+    #[rstest]
+    #[tokio::test]
+    async fn a_bad_batch_keeps_the_batches_before_it() {
+        use atuin_client::ai_session::{HarnessKind, HarnessSession};
+        use futures::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.sock");
+        let (capture, _state) = AiHarnessSessionCapture::with_state(StoreState::Ready).await;
+        let capture = Arc::new(capture);
+        let service = AiSessionServer::new(AiSessionService::new(capture.clone()));
+        let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
+        tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
+        let mut client = AiClient::new(path).await.unwrap();
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Amp,
+            session: "T-1".to_owned().into(),
+        };
+        let untimed = r#"{"v":1,"id":"m1","role":"user","content":[{"type":"text","text":"hi"}]}"#;
+        let batches = vec![vec![untimed.to_owned()], vec!["not a message".to_owned()]];
+        assert!(client.push_messages(handle.clone(), batches, Origin::Live).await.is_err());
+
+        let stored: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].source_id.as_ref(), "m1");
     }
 
     #[rstest]

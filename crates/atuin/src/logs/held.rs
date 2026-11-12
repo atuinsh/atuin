@@ -1,21 +1,24 @@
 use std::fmt::{self, Write as _};
 use std::sync::mpsc;
 
+use atuin_common::userio::log::{SINK, UserFilterExt as _, UserLayer};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt as _};
 
 /// The warnings and errors logged before logging is set up, as by loading the settings it is set up
-/// from, held to log once it is.
+/// from, held to log once it is. Messages for the user don't wait: they show as they're logged.
 pub struct HeldEvents(mpsc::Receiver<(Level, String)>);
 
 impl HeldEvents {
     /// Runs `f`, holding the warnings and errors it logs.
     pub fn hold<T>(f: impl FnOnce() -> T) -> (T, Self) {
         let (sender, receiver) = mpsc::channel();
-        let subscriber =
-            tracing_subscriber::registry().with(Holder(sender).with_filter(LevelFilter::WARN));
+        let held = Targets::new().with_default(LevelFilter::WARN).without_user_messages();
+        let subscriber = tracing_subscriber::registry()
+            .with(Holder(sender).with_filter(held))
+            .with(UserLayer::new(&SINK));
         (tracing::subscriber::with_default(subscriber, f), Self(receiver))
     }
 

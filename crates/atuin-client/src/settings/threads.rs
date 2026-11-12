@@ -1,7 +1,7 @@
 //! `[threads]`: capturing coding agents' threads, and the `atuin threads resume` picker.
 //!
 //! Before `[threads]`, these were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`,
-//! which are still read for any it doesn't set (see `Settings::with_legacy_threads`).
+//! which are still read for any it doesn't set (see `Settings::with_legacy_keys`).
 //!
 //! Only the picker-specific knobs live here. The look and feel (`style`, `invert`, `show_preview`,
 //! `max_preview_height`, `enter_accept`, `keymap_mode`, `theme`) is read from the top-level
@@ -69,9 +69,15 @@ pub struct AiSessionResume {
     #[serde(alias = "claude-code", alias = "claude_code")]
     pub claude: Option<String>,
     pub codex: Option<String>,
+    #[serde(alias = "grok-build", alias = "grok_build")]
+    pub grok: Option<String>,
     pub opencode: Option<String>,
     pub pi: Option<String>,
     pub omp: Option<String>,
+    pub copilot: Option<String>,
+    pub amp: Option<String>,
+    pub kiro: Option<String>,
+    pub hermes: Option<String>,
 }
 
 impl AiSessionResume {
@@ -81,10 +87,15 @@ impl AiSessionResume {
         match harness {
             HarnessKind::ClaudeCode => self.claude.as_deref(),
             HarnessKind::Codex => self.codex.as_deref(),
+            HarnessKind::Grok => self.grok.as_deref(),
             HarnessKind::Opencode => self.opencode.as_deref(),
             HarnessKind::Pi => self.pi.as_deref(),
             HarnessKind::Omp => self.omp.as_deref(),
-            HarnessKind::Copilot | HarnessKind::Unknown => None,
+            HarnessKind::Copilot => self.copilot.as_deref(),
+            HarnessKind::Amp => self.amp.as_deref(),
+            HarnessKind::Kiro => self.kiro.as_deref(),
+            HarnessKind::Hermes => self.hermes.as_deref(),
+            HarnessKind::Unknown => None,
         }
     }
 }

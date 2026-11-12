@@ -138,7 +138,7 @@ impl TestEnvBuilder {
 
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
-        let search_component = SearchComponent::new();
+        let search_component = SearchComponent::default();
         let index = search_component.index();
         let search_service = search_component.grpc_service(output_capture.store());
 
@@ -400,7 +400,8 @@ impl TestEnv {
 
     /// Ids the live index returns for `query` (global filter, generous limit).
     pub async fn index_hits(&self, query: &str) -> Vec<HistoryId> {
-        self.index.read().await.search(query, &IndexFilterMode::Global, 200).collect()
+        let index = self.index.read().await;
+        index.search(query, &IndexFilterMode::Global, 200, &self.history_db).await.collect()
     }
 
     /// Ids the Search RPC returns for `query`, i.e. what the TUI would show.

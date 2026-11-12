@@ -17,4 +17,8 @@ pub enum DaemonEvent {
     // ---- Lifecycle ----
     /// Request graceful shutdown of the daemon.
     ShutdownRequested,
+
+    // ---- Account ----
+    /// `atuin login` saved a session.
+    LoggedIn,
 }

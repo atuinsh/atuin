@@ -15,8 +15,13 @@
 //!   history since the previous compaction. A branch summary is written the same way.
 //! - **Settings entries** (model and thinking-level changes, labels, extension state) carry no
 //!   content and are skipped, so pi starts on its configured thinking level; the model is named
-//!   by each assistant turn, its provider as captured or (for rows captured before providers were) guessed from the model's name,
-//!   and pi falls back to its default model when it can't use it. A system-role text entry is skipped too.
+//!   by each assistant turn, its provider as captured or (for rows captured before providers were) guessed from the model's name.
+//!   A new file opens with a `model_change` entry naming the agent's configured default model
+//!   (`StartModel`), the one it starts the session on: pi falls back to that default by itself
+//!   when it can't use the model a turn names, but omp refuses to open a session whose turns
+//!   name no model, or one it has no provider for, unless a `model_change` on the path names one
+//!   it can use. The entry is the same in every write of the session (see `Writer::opening_id`),
+//!   so copies on two machines share their root. A system-role text entry is skipped too.
 //! - **Tool calls captured without their input** (`threads.capture_tools` off, or a policy withheld
 //!   it): pi-ai sends a `toolCall` without `arguments` as an empty input to Anthropic and as
 //!   `"null"` to OpenAI, a call on nothing either way, so each becomes a note in its turn's text
@@ -46,7 +51,7 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 use super::Flavour;
-use super::session::{default_root, locate, new_session_dir};
+use super::session::{default_root, is_omp_session_file, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
     merge_uncaptured_runs, on_parent_cycles, record_merged,
@@ -68,18 +73,21 @@ pub async fn rehydrate(
     let session = session.clone();
     tokio::task::spawn_blocking(move || {
         let dir = new_session_dir(flavour, &session.cwd);
-        rehydrate_into(flavour, &default_root(flavour), &dir, &session)
+        let start = StartModel::configured(flavour);
+        rehydrate_into(flavour, &default_root(flavour), &dir, &session, start.as_ref())
     })
     .await
     .map_err(|e| RehydrateError::Other(e.to_string()))?
 }
 
-/// [`rehydrate`], looking for an existing copy under `root` and writing into `dir`.
+/// [`rehydrate`], looking for an existing copy under `root` and writing into `dir`, the file
+/// opening on `start` when there is one.
 pub(crate) fn rehydrate_into(
     flavour: Flavour,
     root: &Path,
     dir: &Path,
     session: &RehydrateSession,
+    start: Option<&StartModel>,
 ) -> Result<PathBuf, RehydrateError> {
     if !resume::is_plain_name(&session.id) {
         return Err(RehydrateError::Other(format!("not a session id: {:?}", session.id)));
@@ -96,7 +104,7 @@ pub(crate) fn rehydrate_into(
     // pi's own name: the start time with `:` and `.` made file-safe, then the id.
     let started = timestamp(session.started_at).replace([':', '.'], "-");
     let path = dir.join(format!("{started}_{}.jsonl", session.id));
-    let mut body = transcript(session);
+    let mut body = transcript(session, start);
     if flavour == Flavour::Omp {
         body.insert_str(0, &title_slot(session.started_at));
     }
@@ -108,6 +116,146 @@ pub(crate) fn rehydrate_into(
         }
     })?;
     Ok(path)
+}
+
+/// The model an agent starts a new session on: its configured default. pi's is
+/// `settings.json` `defaultProvider` and `defaultModel` (pi-mono coding-agent
+/// `settings-manager.ts`); omp's is `config.yml` `modelRoles.default`, as `<provider>/<id>`
+/// (omp `config.ts`). omp with no default picks one itself from the providers it can use, so
+/// then it is the one omp last started a session on. Each names it in its own `model_change`
+/// shape: pi `provider` and `modelId`, omp `model` as `<provider>/<id>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StartModel {
+    pub flavour: Flavour,
+    pub provider: String,
+    pub id: String,
+}
+
+impl StartModel {
+    /// The default model the agent's config directory names, else (omp) the one it last started
+    /// a session on.
+    pub(crate) fn configured(flavour: Flavour) -> Option<Self> {
+        Self::configured_in(flavour, &flavour.agent_dir(), &default_root(flavour))
+    }
+
+    pub(crate) fn configured_in(
+        flavour: Flavour,
+        agent_dir: &Path,
+        sessions: &Path,
+    ) -> Option<Self> {
+        let (provider, id) = match flavour {
+            Flavour::Pi => {
+                let raw = std::fs::read_to_string(agent_dir.join("settings.json")).ok()?;
+                let settings: Value =
+                    serde_json::from_str(raw.strip_prefix('\u{feff}').unwrap_or(&raw)).ok()?;
+                let field = |name: &str| {
+                    settings
+                        .get(name)?
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_owned)
+                };
+                (field("defaultProvider")?, field("defaultModel")?)
+            }
+            Flavour::Omp => {
+                let configured = std::fs::read_to_string(agent_dir.join("config.yml"))
+                    .ok()
+                    .and_then(|raw| yaml_model_role_default(&raw));
+                let model = configured.or_else(|| last_started_model(sessions))?;
+                let (provider, id) = model.split_once('/')?;
+                (provider.to_owned(), id.to_owned())
+            }
+        };
+        Some(Self {
+            flavour,
+            provider,
+            id,
+        })
+    }
+
+    /// The `model_change` entry naming this model, with `id` for the entries after it to hang from.
+    fn entry(&self, id: &str, at: OffsetDateTime) -> Value {
+        let mut entry = json!({
+            "type": "model_change",
+            "id": id,
+            "parentId": Value::Null,
+            "timestamp": timestamp(at),
+        });
+        match self.flavour {
+            Flavour::Pi => {
+                entry["provider"] = json!(self.provider);
+                entry["modelId"] = json!(self.id);
+            }
+            Flavour::Omp => entry["model"] = json!(format!("{}/{}", self.provider, self.id)),
+        }
+        entry
+    }
+}
+
+/// `modelRoles.default` from omp's `config.yml`: the first `default:` scalar indented under a
+/// top-level `modelRoles:` key. omp writes the file itself, so a plain scalar (quoted or not)
+/// on its own line is all it ever holds there.
+fn yaml_model_role_default(yaml: &str) -> Option<String> {
+    let mut in_roles = false;
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        let indented = line.len() > trimmed.len();
+        if !indented {
+            in_roles = trimmed.trim_end() == "modelRoles:";
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("default:").filter(|_| in_roles) {
+            let value = value.split('#').next().unwrap_or_default().trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value);
+            return Some(value.to_owned()).filter(|v| !v.is_empty());
+        }
+    }
+    None
+}
+
+/// The model omp started its newest session under `sessions` on: that file's last
+/// `model_change` of omp's own (`<provider>/<id>`). pi may keep its sessions in the same
+/// directory, so only omp's files count. Files only atuin wrote have no `model_change` of omp's:
+/// their opening entry is atuin's (`atuin-` ids). The newest few omp files are enough to find one.
+fn last_started_model(sessions: &Path) -> Option<String> {
+    const LOOK_AT: usize = 16;
+    let mut files = Vec::new();
+    let mut dirs = vec![sessions.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => dirs.push(path),
+                Ok(t) if t.is_file() && path.extension().is_some_and(|e| e == "jsonl") => {
+                    if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+                        files.push((modified, path));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    files.into_iter().filter(|(_, path)| is_omp_session_file(path)).take(LOOK_AT).find_map(
+        |(_, path)| {
+            let raw = std::fs::read_to_string(path).ok()?;
+            raw.lines()
+                .rev()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|entry| entry["type"] == "model_change")
+                .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
+                .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
+                .find(|model| model.contains('/'))
+        },
+    )
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.
@@ -134,7 +282,7 @@ fn millis(at: OffsetDateTime) -> i64 {
     i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
 }
 
-fn transcript(session: &RehydrateSession) -> String {
+fn transcript(session: &RehydrateSession, start: Option<&StartModel>) -> String {
     let mut header = json!({
         "type": "session",
         "version": VERSION,
@@ -148,7 +296,7 @@ fn transcript(session: &RehydrateSession) -> String {
     }
     let mut out = header.to_string();
     out.push('\n');
-    for line in lines(session, &Continuing::default(), true) {
+    for line in lines(session, &Continuing::default(), true, start) {
         out.push_str(&line.to_string());
         out.push('\n');
     }
@@ -166,15 +314,17 @@ pub(crate) struct Continuing<'a> {
 }
 
 /// The entries for `session`'s rows, calls captured without their input flattened into notes
-/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, or for rows appended to
-/// the file `continuing` describes. The rows written as no entry of their own are recorded on the
-/// entries they went into ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
+/// ([`Flatten::Runs`]), and its title when `title`: for a whole session, opening on `start` when
+/// there is one, or for rows appended to the file `continuing` describes. The rows written as no
+/// entry of their own are recorded on the entries they went into
+/// ([`MERGED_FIELD`](crate::harnesstools::rehydrate::MERGED_FIELD)).
 ///
 /// [`Flatten::Runs`]: crate::harnesstools::rehydrate::Flatten::Runs
 pub(crate) fn lines(
     session: &RehydrateSession,
     continuing: &Continuing<'_>,
     title: bool,
+    start: Option<&StartModel>,
 ) -> Vec<Value> {
     let (messages, hosts) = merge_uncaptured_runs(&session.messages);
     let session = &RehydrateSession {
@@ -182,6 +332,9 @@ pub(crate) fn lines(
         ..session.clone()
     };
     let mut writer = Writer::new(session, continuing);
+    if let Some(start) = start.filter(|_| continuing.after.is_none()) {
+        writer.start(start);
+    }
     for message in &session.messages {
         writer.push(message);
     }
@@ -212,6 +365,8 @@ struct Writer<'a> {
     on_cycle: HashSet<&'a str>,
     /// The last row written.
     last: Option<&'a str>,
+    /// The entry the file opens on, when it opens on a model: what a root row hangs from.
+    start_id: Option<String>,
     /// The first entry since the last compaction written: the next compaction keeps from it.
     kept_from: Option<&'a str>,
     /// Each tool call's name, by call id.
@@ -240,6 +395,7 @@ impl<'a> Writer<'a> {
             writable: HashSet::new(),
             written: HashSet::new(),
             last: continuing.after,
+            start_id: None,
             kept_from: continuing.kept_from,
             tools,
             merged: Vec::new(),
@@ -284,11 +440,41 @@ impl<'a> Writer<'a> {
         self.last
     }
 
+    /// Open the file on `start`: the entry the root rows hang from.
+    fn start(&mut self, start: &StartModel) {
+        let id = self.opening_id();
+        self.lines.push(start.entry(&id, self.session.started_at));
+        self.start_id = Some(id);
+    }
+
+    /// The id the file opens under, the same in every write of the session: capture keeps the
+    /// opening entry as a row, so a root minted afresh by each machine's write would split the
+    /// synced session at its root, and no copy could catch up with another. It is the captured
+    /// `model_change` the first written row hangs from (an earlier write's opening, or a native
+    /// session's own), else one derived from the session.
+    fn opening_id(&self) -> String {
+        let model_change = Role::Other("model_change".to_owned());
+        let first =
+            self.session.messages.iter().find(|m| self.writable.contains(m.source_id.as_str()));
+        let mut parent = first.and_then(|m| m.parent_source_id.as_deref());
+        // At most one step per row.
+        for _ in 0..=self.by_id.len() {
+            let Some(row) = parent.and_then(|p| self.by_id.get(p)) else {
+                break;
+            };
+            if row.role == model_change && row.parent_source_id.is_none() {
+                return row.source_id.clone();
+            }
+            parent = row.parent_source_id.as_deref();
+        }
+        format!("atuin-model-{}", self.session.id)
+    }
+
     fn push(&mut self, m: &'a RehydrateMessage) {
-        let parent = self.parent(m);
+        let parent = self.parent(m).map(str::to_owned).or_else(|| self.start_id.clone());
         let Some(mut entry) = self.entry(m) else {
             // Before any line (settings entries at the start): merged into none.
-            self.merged.push((m.source_id.clone(), parent.unwrap_or_default().to_owned()));
+            self.merged.push((m.source_id.clone(), parent.unwrap_or_default()));
             return;
         };
         let compaction = entry["type"] == "compaction";
@@ -335,7 +521,7 @@ impl<'a> Writer<'a> {
         self.lines.push(json!({
             "type": "session_info",
             "id": id,
-            "parentId": self.last,
+            "parentId": self.last.map(str::to_owned).or_else(|| self.start_id.clone()),
             "timestamp": timestamp(at),
             "name": title,
         }));

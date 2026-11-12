@@ -3,55 +3,72 @@ set -eu
 
 ATUIN_NON_INTERACTIVE="no"
 
+# Everything but --non-interactive is for `atuin setup`, e.g. `sh -s -- --no-up-arrow --sync off`.
 for arg in "$@"; do
+  shift
   case "$arg" in
     --non-interactive) ATUIN_NON_INTERACTIVE="yes" ;;
-    *) ;;
+    *) set -- "$@" "$arg" ;;
   esac
 done
 
 if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
   ATUIN_NON_INTERACTIVE=yes
-  if { exec 3</dev/tty; } 2>/dev/null; then
-    if [ -t 3 ]; then
-        ATUIN_NON_INTERACTIVE=no
-    fi
-    exec 3<&-
+  # In a subshell: without a terminal, `exec`'s failed redirection would end the script.
+  if (exec 3</dev/tty && [ -t 3 ]) 2>/dev/null; then
+    ATUIN_NON_INTERACTIVE=no
   fi
 fi
 
-cat << EOF
- _______  _______  __   __  ___   __    _
-|   _   ||       ||  | |  ||   | |  |  | |
-|  |_|  ||_     _||  | |  ||   | |   |_| |
-|       |  |   |  |  |_|  ||   | |       |
-|       |  |   |  |       ||   | |  _    |
-|   _   |  |   |  |       ||   | | | |   |
-|__| |__|  |___|  |_______||___| |_|  |__|
+if [ -t 1 ]; then
+  GREEN=$(printf '\033[32m')
+  RESET=$(printf '\033[0m')
+  BACK='\r'
+else
+  GREEN=""
+  RESET=""
+  BACK='\n'
+fi
 
-Magical shell history
-
-Atuin setup
-https://github.com/atuinsh/atuin
-https://forum.atuin.sh
-
-Please file an issue or reach out on the forum if you encounter any problems!
-
-===============================================================================
-
-EOF
+if ! command -v curl > /dev/null; then
+  echo "Atuin needs curl to install. Please install it, then try again."
+  exit 1
+fi
 
 __atuin_install_binary(){
-  install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh)
+  install_script=$(curl --proto '=https' --tlsv1.2 -LsSf https://github.com/atuinsh/atuin/releases/latest/download/atuin-installer.sh) || return
   echo "$install_script" | sh
 }
 
-if ! command -v curl > /dev/null; then
-    echo "curl not installed. Please install curl."
-    exit
-fi
+ATUIN_BIN="$HOME/.atuin/bin/atuin"
+ATUIN_INSTALL_LOG=$(mktemp)
+trap 'rm -f "$ATUIN_INSTALL_LOG"' EXIT
 
-__atuin_install_binary
+printf '\n  Installing Atuin...'
+# What the installer says only matters if it fails.
+if ! __atuin_install_binary > "$ATUIN_INSTALL_LOG" 2>&1; then
+  printf '\n\n'
+  cat "$ATUIN_INSTALL_LOG"
+  printf '\nAtuin did not install. Please file an issue, or ask on the forum: https://forum.atuin.sh\n'
+  exit 1
+fi
+printf '%b  %s✓%s Installed Atuin %s\n' "$BACK" "$GREEN" "$RESET" "$("$ATUIN_BIN" --version | cut -d' ' -f2)"
+
+# An `atuin setup` that takes flags does everything below itself: hooks, import and sync. This
+# script is served from main, but installs the latest release, which may not have it yet.
+if "$ATUIN_BIN" setup --help 2>/dev/null | grep -q -- "--no-up-arrow"; then
+  if [ "$ATUIN_NON_INTERACTIVE" != "yes" ]; then
+    if ! "$ATUIN_BIN" setup "$@" </dev/tty; then
+      echo ""
+      echo "Setup did not complete. You can run 'atuin setup' any time to finish."
+    fi
+  # Nobody to sign in, and an import handed to the daemon may not outlive a CI job.
+  elif ! "$ATUIN_BIN" setup --yes --no-import "$@"; then
+    echo ""
+    echo "Setup did not complete. You can run 'atuin setup' any time to finish."
+  fi
+  exit 0
+fi
 
 # TODO: Check which shell is in use
 # Use of single quotes around $() is intentional here
@@ -72,8 +89,6 @@ if [ -f "$HOME/.config/fish/config.fish" ]; then
     printf '\nif status is-interactive\n    atuin init fish | source\nend\n' >> "$HOME/.config/fish/config.fish"
   fi
 fi
-
-ATUIN_BIN="$HOME/.atuin/bin/atuin"
 
 __atuin_install_agent_hook(){
   agent="$1"

@@ -21,7 +21,7 @@ use atuin_kv::database::Database as KvDatabase;
 use atuin_scripts::database::Database as ScriptsDatabase;
 use enum_dispatch::enum_dispatch;
 use eyre::{Context, Result};
-use tokio::sync::{RwLock, RwLockReadGuard, broadcast};
+use tokio::sync::{Notify, RwLock, RwLockReadGuard, broadcast};
 
 use crate::components::SearchComponent;
 use crate::events::DaemonEvent;
@@ -52,6 +52,9 @@ pub struct DaemonState {
 
     // Reads the server's advertised capabilities (e.g. the packfile record count).
     caps: Arc<CapClient>,
+
+    // Wakes the sync worker before its interval is up.
+    sync_requested: Notify,
 }
 
 // ============================================================================
@@ -114,6 +117,16 @@ impl DaemonHandle {
     /// Request graceful shutdown of the daemon.
     pub fn shutdown(&self) {
         self.emit(DaemonEvent::ShutdownRequested);
+    }
+
+    /// Have the sync worker sync now rather than at its next interval, as after an import.
+    pub fn request_sync(&self) {
+        self.state.sync_requested.notify_one();
+    }
+
+    /// Until [`Self::request_sync`] is called.
+    pub async fn sync_requested(&self) {
+        self.state.sync_requested.notified().await;
     }
 
     // ---- Configuration ----
@@ -408,7 +421,7 @@ impl Daemon {
 ///     .history_db(history_db)
 ///     .kv_db(kv_db)
 ///     .scripts_db(scripts_db)
-///     .component(SearchComponent::new())
+///     .component(SearchComponent::new(settings.clone()).await)
 ///     .build()
 ///     .await?;
 ///
@@ -505,6 +518,7 @@ impl DaemonBuilder {
             scripts_db,
             store,
             caps,
+            sync_requested: Notify::new(),
         });
 
         // Create the handle (just a reference to the state)

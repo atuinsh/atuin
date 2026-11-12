@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_common::db::sqlite::fts::{
     TextHighlighter, match_any_expression, match_expression, prefix_match_expression,
 };
-use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
+use atuin_common::db::sqlite::{Access, Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 6;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -55,7 +55,7 @@ const DAY_MILLIS: f64 = 86_400_000.0;
 
 /// The most a row stores of each usage count: far past any model call, and small enough that a
 /// session's totals, adding up millions of calls, never overflow.
-const MAX_ROW_TOKENS: u64 = 1 << 40;
+pub const MAX_ROW_TOKENS: u64 = 1 << 40;
 
 /// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
 const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
@@ -453,7 +453,7 @@ impl AiSessionDatabase {
     /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
+        let db = Sqlite::builder(path.as_ref().as_os_str()).access(Access::ReadOnly).open().await?;
         let db = Self::from_sqlite(db, None);
         db.check_schema().await?;
         Ok(db)
@@ -617,6 +617,20 @@ impl AiSessionDatabase {
         .fetch_all(self.db.pool())
         .await?;
         Ok(ids.into_iter().map(SourceId::from).collect())
+    }
+
+    /// Each directory the session's rows name, once, the one named first first.
+    pub async fn directories(&self, session: &HarnessSession) -> Result<Vec<PathBuf>, DbError> {
+        let dirs: Vec<String> = db::query_scalar(
+            "SELECT (SELECT value FROM interned WHERE id = cwd) FROM messages WHERE session = \
+             (SELECT id FROM sessions WHERE harness = ? AND session_id = ?) AND cwd IS NOT NULL \
+             GROUP BY cwd ORDER BY MIN(timestamp), MIN(rowid)",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(dirs.into_iter().map(PathBuf::from).collect())
     }
 
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
@@ -1569,6 +1583,10 @@ impl AiSessionDatabase {
             4 => Ok(HarnessKind::Opencode),
             5 => Ok(HarnessKind::Pi),
             6 => Ok(HarnessKind::Omp),
+            7 => Ok(HarnessKind::Grok),
+            8 => Ok(HarnessKind::Amp),
+            9 => Ok(HarnessKind::Kiro),
+            10 => Ok(HarnessKind::Hermes),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -1934,11 +1952,11 @@ impl QueryTerms {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use atuin_common::db;
-    use atuin_common::db::sqlite::Sqlite;
     use atuin_common::db::sqlite::fts::TextHighlighter;
+    use atuin_common::db::sqlite::{Access, Sqlite};
     use atuin_common::harnesstools::session::{
         Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
@@ -2413,6 +2431,29 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn directories_names_each_one_once_in_the_order_rows_reached_it() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let other = handle(HarnessKind::ClaudeCode, "other");
+        for (session, at, cwd) in [
+            (&session, 3, Some("/work")),
+            (&session, 1, Some("/fork")),
+            (&session, 2, None),
+            (&session, 4, Some("/fork")),
+            (&other, 0, Some("/elsewhere")),
+        ] {
+            let mut m = message_in(session, at, "x");
+            m.cwd = cwd.map(PathBuf::from);
+            db.append(&m).await.unwrap();
+        }
+
+        let dirs = db.directories(&session).await.unwrap();
+
+        assert_eq!(dirs, [PathBuf::from("/fork"), PathBuf::from("/work")]);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn source_ids_with_prefix_lists_only_matching_rows() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
@@ -2852,6 +2893,71 @@ mod tests {
             count("SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'blocks'"),
             1
         );
+    }
+
+    /// Migration 5 empties what earlier builds projected, rows they read as an unknown harness
+    /// among it, and clears the watermarks, so the next reprojection names Kiro's rows.
+    #[rstest]
+    fn the_kiro_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 0, 'sess_1', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 0, 1, 'a', 0, 1, '[]');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        let generation = count("SELECT generation FROM projection_state");
+
+        conn.execute_batch(include_str!("migrations/0005_reproject_for_kiro.sql")).unwrap();
+
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
+    }
+
+    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
+    /// harness before they knew Hermes.
+    #[rstest]
+    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+            include_str!("migrations/0005_reproject_for_kiro.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 0, 'local-1', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 0, 1, '1', 0, 1, '[]');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        let generation = count("SELECT generation FROM projection_state");
+
+        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
+
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
     fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
@@ -5093,6 +5199,29 @@ mod tests {
         assert!(db.rehydrate_session(&missing, here).await.unwrap().is_none());
     }
 
+    /// A continuation from a machine whose clock is behind is stored before the rows it follows;
+    /// the transcript still has it after them (see `rehydrate::parent_order`).
+    #[rstest]
+    #[tokio::test]
+    async fn a_continuation_from_a_slow_clock_follows_its_parent() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let s = sample_handle();
+        let prompt = message_with(&s, 10, Role::User, vec![text("first")]);
+        let mut reply = message_with(&s, 11, Role::Assistant, vec![text("reply")]);
+        reply.parent_source_id = Some(SourceId::from("source-10".to_owned()));
+        let mut later_prompt = message_with(&s, 2, Role::User, vec![text("go on")]);
+        later_prompt.parent_source_id = Some(SourceId::from("source-11".to_owned()));
+        let mut later_reply = message_with(&s, 3, Role::Assistant, vec![text("went on")]);
+        later_reply.parent_source_id = Some(SourceId::from("source-2".to_owned()));
+        for m in [&prompt, &reply, &later_prompt, &later_reply] {
+            db.append(m).await.unwrap();
+        }
+
+        let session = db.rehydrate_session(&s, "/local".into()).await.unwrap().unwrap();
+        let ids: Vec<&str> = session.messages.iter().map(|m| m.source_id.as_str()).collect();
+        assert_eq!(ids, ["source-10", "source-11", "source-2", "source-3"]);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_summary_is_reply_text() {
@@ -5265,7 +5394,8 @@ mod tests {
         assert!(message.contains(&path.display().to_string()), "{message}");
         assert!(message.contains("delete"), "{message}");
 
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await
@@ -5293,7 +5423,8 @@ mod tests {
 
         let err = AiSessionDatabase::open(&path).await.expect_err("must refuse");
         assert!(matches!(err, DbError::IncompatibleSchema { .. }), "{err}");
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await

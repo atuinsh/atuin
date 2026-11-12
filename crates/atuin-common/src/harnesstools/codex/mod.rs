@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
@@ -32,6 +32,14 @@ impl Harness for Codex {
         "codex"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn program(&self) -> &'static str {
+        "codex"
+    }
+
     /// Install the hooks on the current active user's machine, trusted (see `hook_trust`).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Codex reads Claude-Code-style hooks from $CODEX_HOME/hooks.json.
@@ -55,7 +63,7 @@ impl Harness for Codex {
     /// the session's directory or the current one when they differ.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let id = session::resume_id(&target.id);
-        Ok(resume::plan(target, CwdRequirement::Preferred, "codex", [
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), [
             "resume".to_owned(),
             id.to_owned(),
         ]))
@@ -66,7 +74,7 @@ impl Harness for Codex {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }

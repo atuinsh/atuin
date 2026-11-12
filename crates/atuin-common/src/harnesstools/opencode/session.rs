@@ -246,6 +246,12 @@ pub(crate) async fn locate(db: &Path, id: &str) -> Option<PathBuf> {
 impl Sessions for OpencodeSessions {
     type Listener = OpencodeListener;
 
+    /// When opencode last wrote its database. This is the newer of the modification times of the
+    /// database file and its `-wal` file.
+    fn last_active(&self) -> Option<SystemTime> {
+        Self::recency(&self.resolve_db().ok()?)
+    }
+
     fn existing(
         &self,
     ) -> Result<

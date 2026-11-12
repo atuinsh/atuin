@@ -12,6 +12,7 @@ use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeT
 use atuin_common::time::{
     AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
 };
+use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
 use config::builder::DefaultState;
@@ -554,13 +555,26 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
+/// `[teams]`: Atuin for Teams, which `atuin setup --teams` turns on.
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Octavo {
+pub struct Teams {
     pub enabled: bool,
-    /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
-    /// both on.
+    /// Whether captured command output goes to Atuin for Teams too, while `enabled` and output
+    /// capture are both on.
     pub upload_output: bool,
+    #[serde(rename = "__debug__", default, skip_serializing)]
+    pub debug: TeamsDebug,
+}
+
+/// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
+/// purpose.
+#[cfg(feature = "octavo")]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TeamsDebug {
+    /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
+    /// self-hosted hub.
+    pub address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1069,6 +1083,11 @@ pub struct Settings {
     /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
     /// the hidden `--shell-up-key-binding` option was passed.
     pub shell_up_key_binding: bool,
+    /// Whether `atuin init` binds ctrl-r to search. `--disable-ctrl-r` turns it off either way.
+    pub bind_ctrl_r: bool,
+    /// Whether `atuin init` binds the up arrow to search. `--disable-up-arrow` turns it off either
+    /// way.
+    pub bind_up_arrow: bool,
     pub inline_height: u16,
     pub inline_height_shell_up_key_binding: Option<u16>,
     pub invert: bool,
@@ -1076,6 +1095,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub show_whats_new: bool,
     pub show_numeric_shortcuts: bool,
     pub auto_hide_height: u16,
     pub exit_mode: ExitMode,
@@ -1141,7 +1161,7 @@ pub struct Settings {
 
     #[cfg(feature = "octavo")]
     #[serde(default)]
-    pub octavo: Octavo,
+    pub teams: Teams,
 
     #[serde(default)]
     pub search: Search,
@@ -1487,14 +1507,14 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
+    pub fn default_filter_mode(&self, has_vcs_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
             .or_else(|| {
                 self.search
                     .filters
                     .iter()
-                    .find(|x| match (x, git_root, self.workspaces) {
+                    .find(|x| match (x, has_vcs_root, self.workspaces) {
                         (FilterMode::Workspace, true, true) => true,
                         (FilterMode::Workspace, _, _) => false,
                         (_, _, _) => true,
@@ -1555,12 +1575,14 @@ impl Settings {
             match ShellExpanded::expand(&raw) {
                 Ok(_) => {}
                 Err(ExpandError::Empty) => {
-                    tracing::warn!("{key} is empty, so Atuin uses its default");
+                    userio::log::warn!("settings-path-empty", key = key);
                     emptied.push((key, default));
                 }
-                Err(err @ ExpandError::Variable { .. }) => tracing::warn!(
-                    "{key}: failed to expand {raw:?} ({err}), so Atuin uses it as written; write \
-                     $$ for a literal $"
+                Err(err @ ExpandError::Variable { .. }) => userio::log::warn!(
+                    "settings-path-unexpanded",
+                    key = key,
+                    raw = format!("{raw:?}"),
+                    error = err.to_string()
                 ),
             }
         }
@@ -1604,12 +1626,15 @@ impl Settings {
             .set_default("search_mode", "fuzzy")?
             .set_default("filter_mode", None::<String>)?
             .set_default("style", "compact")?
+            .set_default("bind_ctrl_r", true)?
+            .set_default("bind_up_arrow", true)?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("show_whats_new", true)?
             .set_default("show_numeric_shortcuts", true)?
             .set_default("auto_hide_height", 8)?
             .set_default("invert", false)?
@@ -1686,17 +1711,19 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?;
-        #[cfg(feature = "octavo")]
-        let builder = builder
-            .set_default("octavo.enabled", false)?
-            .set_default("octavo.upload_output", false)?;
 
         Ok(builder)
     }
 
     /// The `ATUIN_*` environment variables, as a config source.
+    ///
+    /// `config` reads the process environment itself, past `atuin_common::env`, so a test's mock
+    /// environment is handed to it as the source instead.
     fn environment() -> Environment {
-        Environment::with_prefix("atuin").prefix_separator("_").separator("__")
+        Environment::with_prefix("atuin")
+            .prefix_separator("_")
+            .separator("__")
+            .source(atuin_common::env::mocked_vars().map(|vars| vars.into_iter().collect()))
     }
 
     /// Layers a config file over `builder`, with `env` on top of it again so that environment
@@ -1792,23 +1819,23 @@ impl Settings {
             .set_override("data_dir", effective_data_dir.to_str().map(ShellExpanded::escape))?;
 
         Ok(Self::with_lenient_paths(
-            Self::with_legacy_threads(config_builder.build()?)?,
+            Self::with_legacy_keys(config_builder.build()?)?,
             Self::path_defaults(&effective_data_dir),
         )?)
     }
 
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
-    /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
-    /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
-    /// value.
-    /// `(legacy key, current key)` pairs that [`Self::with_legacy_threads`] migrates.
-    const LEGACY_THREADS: [(&str, &str); 3] = [
+    /// `(legacy key, current key)` pairs that [`Self::with_legacy_keys`] migrates.
+    const LEGACY_KEYS: [(&str, &str); 4] = [
         ("ai.capture_sessions", "threads.capture"),
         ("ai.capture_tools", "threads.capture_tools"),
         ("ai.sessions", "threads"),
+        ("octavo", "teams"),
     ];
 
-    fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
+    /// Read renamed keys under their new names, for any key the new name doesn't set itself:
+    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
+    /// was `[octavo]`. The defaults are set here, under them, so they never hide a legacy value.
+    fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
                 config::ValueKind::Table(table) => {
@@ -1821,22 +1848,25 @@ impl Settings {
         }
 
         let mut legacy = Vec::new();
-        for (old, new) in Self::LEGACY_THREADS {
+        for (old, new) in Self::LEGACY_KEYS {
             if let Ok(value) = config.get::<config::Value>(old) {
                 leaves(new.to_string(), value, &mut legacy);
             }
         }
         legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
 
+        let defaults = Config::builder()
+            .set_default("threads.capture", false)?
+            .set_default("threads.capture_tools", true)?;
+        #[cfg(feature = "octavo")]
+        let defaults = defaults
+            .set_default("teams.enabled", false)?
+            .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
-            .try_fold(
-                Config::builder()
-                    .set_default("threads.capture", false)?
-                    .set_default("threads.capture_tools", true)?
-                    .add_source(config),
-                |builder, (key, value)| builder.set_override(key, value),
-            )?
+            .try_fold(defaults.add_source(config), |builder, (key, value)| {
+                builder.set_override(key, value)
+            })?
             .build()
     }
 
@@ -1984,8 +2014,8 @@ impl Settings {
                 return;
             };
             let key = path.to_string();
-            // Legacy keys still apply through `with_legacy_threads`, which leaves them in place.
-            if Self::legacy_threads_key(&key) {
+            // Legacy keys still apply through `with_legacy_keys`, which leaves them in place.
+            if Self::legacy_key(&key) {
                 return;
             }
             if Self::file_contains_path(file, &path) {
@@ -1993,7 +2023,7 @@ impl Settings {
             } else if let Some(legacy) = Self::legacy_name(&key)
                 && Self::file_contains_dotted(file, &legacy)
             {
-                // An unknown key migrated from `[ai.sessions]` is reported where the user wrote it.
+                // An unknown key migrated from a legacy table is reported where the user wrote it.
                 unknown.insert(legacy);
             }
         })
@@ -2012,17 +2042,16 @@ impl Settings {
         Ok(config.cache)
     }
 
-    /// Whether `key` is, or is inside, a legacy key that [`Self::with_legacy_threads`] migrates.
-    fn legacy_threads_key(key: &str) -> bool {
-        Self::LEGACY_THREADS.iter().any(|(old, _)| {
+    /// Whether `key` is, or is inside, a legacy key that [`Self::with_legacy_keys`] migrates.
+    fn legacy_key(key: &str) -> bool {
+        Self::LEGACY_KEYS.iter().any(|(old, _)| {
             key.strip_prefix(old).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
         })
     }
 
-    /// The legacy spelling of a migrated `threads` key, e.g. `ai.sessions.mouse` for
-    /// `threads.mouse`.
+    /// The legacy spelling of a migrated key, e.g. `ai.sessions.mouse` for `threads.mouse`.
     fn legacy_name(key: &str) -> Option<String> {
-        Self::LEGACY_THREADS.iter().find_map(|(old, new)| {
+        Self::LEGACY_KEYS.iter().find_map(|(old, new)| {
             let rest = key.strip_prefix(new)?;
             (rest.is_empty() || rest.starts_with('.')).then(|| format!("{old}{rest}"))
         })
@@ -2147,7 +2176,7 @@ impl Settings {
     pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
         let data_dir = atuin_common::dirs::unconfigured_data_dir();
         let config = Self::with_lenient_paths(
-            Self::with_legacy_threads(
+            Self::with_legacy_keys(
                 Self::builder_with_data_dir(&data_dir)?
                     .add_source(CanonicalAliases::new(ConfigFile::from_str(toml, FileFormat::Toml)))
                     .build()?,
@@ -2299,12 +2328,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::in_git_context(true, true, FilterMode::Workspace)]
-    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::in_vcs_repo(true, true, FilterMode::Workspace)]
+    #[case::not_in_vcs_repo(true, false, FilterMode::Host)]
     #[case::workspaces_disabled(false, true, FilterMode::Host)]
     fn workspace_filter_selection(
         #[case] workspaces: bool,
-        #[case] git_root: bool,
+        #[case] has_vcs_root: bool,
         #[case] expected: FilterMode,
     ) {
         let mut settings = super::Settings::default();
@@ -2317,7 +2346,7 @@ mod tests {
         ];
         settings.workspaces = workspaces;
 
-        assert_eq!(settings.default_filter_mode(git_root), expected);
+        assert_eq!(settings.default_filter_mode(has_vcs_root), expected);
     }
 
     /// The example config writes out the headers of tables whose keys are all commented out, so
@@ -2363,8 +2392,7 @@ mod tests {
 
     #[rstest]
     fn builder_with_data_dir_uses_custom_paths() -> Result<()> {
-        use std::path::PathBuf;
-
+        let _env = config_env::default();
         let custom_dir = PathBuf::from("/custom/data/dir");
         let builder = Settings::builder_with_data_dir(&custom_dir)?;
         let config = builder.build()?;
@@ -2391,6 +2419,36 @@ mod tests {
         assert_eq!(daemon_pidfile_path, custom_dir.join("atuin-daemon.pid").to_str().unwrap());
         assert!(!daemon_autostart);
 
+        Ok(())
+    }
+
+    /// The builder takes `ATUIN_*` overrides, and `ATUIN_HOME`, from the environment a test mocks,
+    /// not from the process: whatever a developer's shell exports, the mock decides.
+    #[rstest]
+    #[case::exported_in_the_mock(true)]
+    #[case::unset_in_the_mock(false)]
+    fn the_builder_reads_the_mocked_environment(
+        config_env: MockEnv,
+        #[case] exported: bool,
+    ) -> Result<()> {
+        let stray = std::env::current_dir()?.joined("stray");
+        if exported {
+            config_env.set("ATUIN_DAEMON__SOCKET_PATH", stray.join("atuin.sock"));
+            config_env.set("ATUIN_HOME", stray.join("home"));
+        }
+
+        let config = Settings::builder_with_data_dir(Path::new("/custom/data/dir"))?.build()?;
+        let socket_path: Option<PathBuf> = config.get("daemon.socket_path")?;
+        let logs_dir: PathBuf = config.get("logs.dir")?;
+
+        let home = std::env::current_dir()?.joined("home");
+        if exported {
+            assert_eq!(socket_path, Some(stray.join("atuin.sock")));
+            assert_eq!(logs_dir, stray.join("home").joined("logs"));
+        } else {
+            assert_eq!(socket_path, None);
+            assert_eq!(logs_dir, home.joined(".atuin").joined("logs"));
+        }
         Ok(())
     }
 
@@ -2761,10 +2819,39 @@ mod tests {
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()
             .expect("could not build config");
-        Settings::with_legacy_threads(config)
-            .expect("could not read legacy threads settings")
+        Settings::with_legacy_keys(config)
+            .expect("could not read legacy settings")
             .try_deserialize()
             .expect("could not deserialize config")
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::set(
+        "[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::legacy(
+        "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::absent("", None)]
+    fn teams_debug_address_is_read_from_its_hidden_table(
+        #[case] toml: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let settings = parse_settings(toml);
+        assert_eq!(settings.teams.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::unset("", false)]
+    #[case::teams("[teams]\nenabled = true\n", true)]
+    #[case::legacy("[octavo]\nenabled = true\n", true)]
+    #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
+    fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
+        assert_eq!(parse_settings(toml).teams.enabled, enabled);
     }
 
     #[rstest]
@@ -2805,7 +2892,7 @@ mod tests {
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
-        let config = Settings::with_legacy_threads(config::Config::default()).unwrap();
+        let config = Settings::with_legacy_keys(config::Config::default()).unwrap();
         assert!(!config.get_bool("threads.capture").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
@@ -3093,10 +3180,22 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         &[][..]
     )]
     #[case::typo_under_legacy_sessions("[ai.sessions]\nmouse_typo = false\n", &["ai.sessions.mouse_typo"][..])]
-    fn legacy_threads_keys_are_not_unknown(#[case] toml: &str, #[case] paths: &[&str]) {
+    fn legacy_keys_are_not_unknown(#[case] toml: &str, #[case] paths: &[&str]) {
+        assert_eq!(unknown_after_legacy_keys(toml), paths);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::legacy_octavo_applies_quietly("[octavo]\nenabled = true\n", &[][..])]
+    #[case::typo_under_legacy_octavo("[octavo]\nenabld = true\n", &["octavo.enabld"][..])]
+    fn legacy_octavo_keys_are_not_unknown(#[case] toml: &str, #[case] paths: &[&str]) {
+        assert_eq!(unknown_after_legacy_keys(toml), paths);
+    }
+
+    fn unknown_after_legacy_keys(toml: &str) -> Vec<String> {
         use std::path::Path;
 
-        let config = Settings::with_legacy_threads(
+        let config = Settings::with_legacy_keys(
             Settings::add_config_file(
                 Settings::defaults_builder(Path::new("/tmp/atuin-unknown-config")).unwrap(),
                 ConfigFile::from_str(toml, FileFormat::Toml),
@@ -3113,7 +3212,7 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
             .unwrap();
 
         let (_, unknown) = Settings::deserialize_config(config, Some(&file.cache)).unwrap();
-        assert_eq!(unknown, paths);
+        unknown
     }
 
     #[rstest]

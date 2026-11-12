@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
@@ -79,6 +79,17 @@ impl Harness for Pi {
         self.flavour.binary()
     }
 
+    fn display_name(&self) -> &'static str {
+        match self.flavour {
+            Flavour::Pi => "Pi",
+            Flavour::Omp => "omp",
+        }
+    }
+
+    fn program(&self) -> &'static str {
+        self.flavour.binary()
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");
@@ -117,7 +128,7 @@ impl Harness for Pi {
             Some(path) => (CwdRequirement::Preferred, resume::path_arg(path)?),
             None => (CwdRequirement::Required, target.id.clone()),
         };
-        Ok(resume::plan(target, cwd, self.flavour.binary(), ["--session".to_owned(), session]))
+        Ok(resume::plan(target, cwd, self.program(), ["--session".to_owned(), session]))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -125,7 +136,7 @@ impl Harness for Pi {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(self.flavour, session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(self.flavour, session).await.map(Rehydrated::at)
     }
 }

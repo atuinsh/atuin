@@ -2,8 +2,6 @@ use atuin_common::logs::LogConfig;
 use clap::Subcommand;
 use clap_couture::Couture;
 use eyre::Result;
-#[cfg(not(windows))]
-use rustix::{fs::Mode, process::umask};
 
 use crate::i18n::fl;
 
@@ -63,12 +61,9 @@ pub enum AtuinCmd {
 
 impl AtuinCmd {
     pub fn run(self) -> Result<()> {
-        // set umask before we potentially open/create files
-        // or in other words, 077. Do not allow any access to any other user.
-        // Keep the previous umask so pty-proxy can restore it in the shell it
-        // spawns — the shell must not inherit ours (#3695).
-        #[cfg(not(windows))]
-        let prev_umask = umask(Mode::RWXG | Mode::RWXO);
+        // Before we potentially open/create files: do not allow any access to any other user.
+        #[cfg(unix)]
+        atuin_common::os::umask::Umask::OWNER_ONLY.install();
 
         let _log_guard = match &self {
             #[cfg(feature = "client")]
@@ -82,7 +77,7 @@ impl AtuinCmd {
 
             #[cfg(all(feature = "pty-proxy", unix))]
             Self::PtyProxy(proxy) => {
-                run_pty_proxy(proxy, prev_umask);
+                run_pty_proxy(proxy);
                 Ok(())
             }
 
@@ -107,17 +102,12 @@ impl AtuinCmd {
 }
 
 #[cfg(all(feature = "pty-proxy", unix))]
-fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy, prev_umask: Mode) {
-    // `Mode::bits()` returns u16 on macOS/BSD but u32 on Linux, where this
-    // conversion is a no-op.
-    #[allow(clippy::useless_conversion)]
-    let child_umask = Some(u32::from(prev_umask.bits()));
-
+fn run_pty_proxy(proxy: atuin_pty_proxy::PtyProxy) {
     #[cfg(feature = "daemon")]
-    proxy.run(semantic_command_capture_config, child_umask);
+    proxy.run(semantic_command_capture_config);
 
     #[cfg(not(feature = "daemon"))]
-    proxy.run(|| None, child_umask);
+    proxy.run(|| None);
 }
 
 /// Capture command output and forward it to the daemon.

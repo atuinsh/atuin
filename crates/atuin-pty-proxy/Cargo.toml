@@ -21,8 +21,10 @@ atuin-common = { workspace = true, features = ["os"] }
 atuin-vt100 = { workspace = true }
 atuin-vte = { workspace = true }
 crossterm = { workspace = true }
+i18n-embed = { workspace = true }
 libc = { workspace = true }
 portable-pty = { workspace = true }
+rust-embed = { workspace = true }
 rustix = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

@@ -14,10 +14,12 @@ use std::time::Duration;
 
 use atuin_common::futures::Backoff;
 use atuin_common::url::UrlAppendExt;
+use atuin_common::userio;
 use atuin_domain::api::{
-    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeResponse, CliVerifyResponse, ErrorResponse,
-    LinkAccountRequest,
+    ATUIN_CARGO_VERSION, ATUIN_HEADER_VERSION, CliCodeRequest, CliCodeResponse, CliVerifyResponse,
+    ErrorResponse, LinkAccountRequest,
 };
+use atuin_domain::record::CmdHost;
 use eyre::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::header::USER_AGENT;
@@ -41,13 +43,20 @@ pub struct HubAuthSession {
     pub hub_address: Url,
 }
 
+/// A hub session a login just got: its token, and the id of the user it logs in when the hub said.
+#[derive(Debug, Clone)]
+pub struct NewHubSession {
+    pub token: SecretString,
+    pub user_id: Option<String>,
+}
+
 /// The result of polling for hub auth completion
 #[derive(Debug, Clone)]
 pub enum HubAuthStatus {
     /// Still waiting for user authorization
     Pending,
-    /// Authorization complete, contains the session token
-    Complete(SecretString),
+    /// Authorization complete, with the new session
+    Complete(NewHubSession),
     /// Authorization failed with an error
     Failed(String),
 }
@@ -101,6 +110,9 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Default timeout for the entire auth flow
 pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// How much of the code `HubAuthSession::short_code` shows; the Hub's approval page shows as much.
+const SHORT_CODE_LEN: usize = 8;
+
 impl HubAuthSession {
     /// Start a new hub authentication session
     ///
@@ -123,6 +135,14 @@ impl HubAuthSession {
         })
     }
 
+    /// The start of the code, for the user to match against what the Hub's approval page
+    /// shows: a link someone else made shows a different one.
+    #[must_use]
+    pub fn short_code(&self) -> &str {
+        let code = self.code.expose_secret();
+        &code[..code.len().min(SHORT_CODE_LEN)]
+    }
+
     /// Poll for the authentication status
     ///
     /// Returns the current status of the authentication flow.
@@ -131,7 +151,10 @@ impl HubAuthSession {
             Ok(response) => {
                 if let Some(token) = response.token {
                     debug!("Authentication complete, received token");
-                    Ok(HubAuthStatus::Complete(token))
+                    Ok(HubAuthStatus::Complete(NewHubSession {
+                        token,
+                        user_id: response.user_id,
+                    }))
                 } else if let Some(error) = response.error {
                     debug!("Authentication failed: {}", error);
                     Ok(HubAuthStatus::Failed(error))
@@ -192,7 +215,7 @@ impl HubAuthSession {
         timeout: Duration,
         poll_interval: Duration,
         waiting_message: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<NewHubSession> {
         debug!("Polling for Hub authentication completion...");
 
         let spinner = ProgressBar::new_spinner();
@@ -204,7 +227,7 @@ impl HubAuthSession {
             .retry(
                 || async move {
                     match self.poll().await {
-                        Ok(HubAuthStatus::Complete(token)) => ControlFlow::Break(Ok(token)),
+                        Ok(HubAuthStatus::Complete(session)) => ControlFlow::Break(Ok(session)),
                         Ok(HubAuthStatus::Failed(error)) => {
                             ControlFlow::Break(Err(eyre::eyre!("Authentication failed: {error}")))
                         }
@@ -246,12 +269,17 @@ fn browser_launcher(is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
     }
 }
 
-/// Save a hub session token
+/// Save a hub session
 ///
-/// This saves the token to the meta store so it can be used for subsequent Hub API calls.
+/// This saves the session to the meta store so it can be used for subsequent Hub API calls.
 /// Note: This is separate from the sync session token.
-pub async fn save_session(token: &SecretString, settings: &Settings) -> Result<()> {
-    settings.meta_store().await?.save_hub_session(token).await.context("Failed to save hub session")
+pub async fn save_session(session: &NewHubSession, settings: &Settings) -> Result<()> {
+    settings
+        .meta_store()
+        .await?
+        .save_hub_session(&session.token, session.user_id.as_deref())
+        .await
+        .context("Failed to save hub session")
 }
 
 /// Delete the hub session token (logout from Hub)
@@ -326,7 +354,7 @@ pub async fn link_account(
 
     handle_resp_error(resp).await?;
 
-    info!("Successfully linked CLI account to Hub");
+    userio::log::info!("hub-linked");
     Ok(())
 }
 
@@ -354,6 +382,9 @@ async fn request_code(address: &Url) -> Result<CliCodeResponse, HubError> {
         .post(url)
         .header(USER_AGENT, APP_USER_AGENT)
         .header(ATUIN_HEADER_VERSION, ATUIN_CARGO_VERSION)
+        .json(&CliCodeRequest {
+            hostname: CmdHost::probe_current().into_inner(),
+        })
         .send()
         .await?;
     let resp = handle_resp_error(resp).await?;
@@ -402,6 +433,7 @@ mod tests {
         };
 
         assert!(!format!("{session:?}").contains("s3cret-code"));
+        assert_eq!(session.short_code(), "s3cret-c");
     }
 
     #[rstest]
