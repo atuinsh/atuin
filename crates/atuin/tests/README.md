@@ -10,7 +10,7 @@ Install Bash, Zsh, Fish, and ble.sh first. Missing dependencies fail with
 `ATUIN_E2E_REQUIRE_SHELLS=1`; otherwise their cases skip. CI runs on Linux and
 macOS, with Homebrew Bash on macOS.
 
-- `e2e_fresh_install`: CLI startup, keys, shell init, and doctor.
+- `e2e_fresh_install`: CLI startup, keys, shell init, doctor, and a read-only home.
 - `e2e_pty`: shell hooks, search, selection, quoting, resize, and filters.
 - `e2e_daemon`: startup, concurrent writers, persistence, and restart.
 - `e2e_sync`: `atuin sync` with a running daemon, between two machines on an

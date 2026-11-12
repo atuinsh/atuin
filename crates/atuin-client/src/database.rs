@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::time::Duration;
 
-use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Access, Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::path::DisplayRichExt;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
@@ -389,7 +389,8 @@ impl Sqlite {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        Self::from_builder(CommonSqlite::builder(path), timeout).await
+        Self::from_builder(CommonSqlite::builder(path).access(Access::PreferReadWrite), timeout)
+            .await
     }
 
     pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
@@ -3043,5 +3044,39 @@ mod test {
 
         assert!(matches!(error, DbSetupError::Migrate(_)));
         assert_eq!(error.to_string(), raw);
+    }
+
+    /// History on storage that refuses writes, as a read-only filesystem does, opens and lists.
+    /// Only a write fails. Regression for #2999.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn history_on_read_only_storage_opens_for_reading() {
+        const SQLITE_READONLY: u32 = 8;
+
+        let dir = tempfile::tempdir().unwrap();
+        let written = dir.path().join("written.db");
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let path = data.join("history.db");
+
+        let writer = Sqlite::new(&written, test_local_timeout()).await.unwrap();
+        new_history_item(&writer, "ls").await.unwrap();
+        // A clean shutdown leaves the main file alone, with no WAL beside it to read through.
+        db::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(writer.sqlite.pool()).await.unwrap();
+        std::fs::copy(&written, &path).unwrap();
+
+        let Some(_locked) = atuin_common::test_utils::ReadOnlyTree::lock(&data) else {
+            return;
+        };
+
+        let db = Sqlite::new(&path, test_local_timeout()).await.unwrap();
+        let listed =
+            db.list([FilterMode::Global], &new_context(), None, false, false, None).await.unwrap();
+        assert_eq!(listed.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), ["ls"]);
+
+        let err = new_history_item(&db, "pwd").await.expect_err("read-only history took a write");
+        let code = err.as_database_error().and_then(|e| e.code()).expect("a database error");
+        assert_eq!(code.parse::<u32>().unwrap() & 0xff, SQLITE_READONLY, "{err}");
     }
 }

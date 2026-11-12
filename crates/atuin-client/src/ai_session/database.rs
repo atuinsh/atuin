@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_common::db::sqlite::fts::{
     TextHighlighter, match_any_expression, match_expression, prefix_match_expression,
 };
-use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
+use atuin_common::db::sqlite::{Access, Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
@@ -453,7 +453,7 @@ impl AiSessionDatabase {
     /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
+        let db = Sqlite::builder(path.as_ref().as_os_str()).access(Access::ReadOnly).open().await?;
         let db = Self::from_sqlite(db, None);
         db.check_schema().await?;
         Ok(db)
@@ -1955,8 +1955,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use atuin_common::db;
-    use atuin_common::db::sqlite::Sqlite;
     use atuin_common::db::sqlite::fts::TextHighlighter;
+    use atuin_common::db::sqlite::{Access, Sqlite};
     use atuin_common::harnesstools::session::{
         Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
     };
@@ -5394,7 +5394,8 @@ mod tests {
         assert!(message.contains(&path.display().to_string()), "{message}");
         assert!(message.contains("delete"), "{message}");
 
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await
@@ -5422,7 +5423,8 @@ mod tests {
 
         let err = AiSessionDatabase::open(&path).await.expect_err("must refuse");
         assert!(matches!(err, DbError::IncompatibleSchema { .. }), "{err}");
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await

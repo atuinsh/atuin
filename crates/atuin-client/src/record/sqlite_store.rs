@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::time::Duration;
 
-use atuin_common::db::sqlite::{Sqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Access, Sqlite, SqliteBuilder};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::{db, userio};
 use atuin_domain::record::{
@@ -113,7 +113,7 @@ impl SqliteStore {
 
         debug!("opening sqlite database at {path:?}");
 
-        Self::from_builder(Sqlite::builder(path), timeout).await
+        Self::from_builder(Sqlite::builder(path).access(Access::PreferReadWrite), timeout).await
     }
 
     pub async fn in_memory(timeout: Duration) -> Result<Self> {

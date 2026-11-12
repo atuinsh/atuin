@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::db;
-use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Access, Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use secrecy::{ExposeSecret, SecretString};
@@ -58,7 +58,7 @@ impl MetaStore {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
-        let builder = Sqlite::builder(path);
+        let builder = Sqlite::builder(path).access(Access::PreferReadWrite);
         let ephemeral = builder.is_memory();
 
         let store = Self::from_builder(builder, timeout).await?;

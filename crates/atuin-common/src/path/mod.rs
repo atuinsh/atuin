@@ -24,6 +24,14 @@ pub trait PathExt {
     /// normalized and symlinks resolved. This requires both paths to exist; if they do not, this
     /// function performs a naive comparison of the path contents.
     fn is_same_path(&self, other: impl AsRef<Path>) -> bool;
+
+    /// Check whether this process may write the file, or create files in the directory, at this
+    /// path.
+    ///
+    /// On Unix this asks `access(2)`, which also refuses on a read-only filesystem. Elsewhere it
+    /// only sees a file marked read-only, since a directory's read-only mark doesn't stop anyone
+    /// creating files in it.
+    fn is_writable(&self) -> bool;
 }
 
 impl<P: AsRef<Path>> PathExt for P {
@@ -44,6 +52,17 @@ impl<P: AsRef<Path>> PathExt for P {
             return false;
         };
         this == other
+    }
+
+    fn is_writable(&self) -> bool {
+        let path: &Path = self.as_ref();
+
+        #[cfg(unix)]
+        return rustix::fs::access(path, rustix::fs::Access::WRITE_OK).is_ok();
+
+        #[cfg(not(unix))]
+        return std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_dir() || !meta.permissions().readonly());
     }
 }
 
@@ -112,5 +131,22 @@ mod tests {
         std::fs::create_dir(&target).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(link.is_same_path(&target));
+    }
+
+    /// A file and its directory are writable until they're locked.
+    #[cfg(unix)]
+    #[rstest]
+    fn is_writable_sees_a_lock(#[values(false, true)] locked: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+
+        let _lock = match locked.then(|| crate::test_utils::ReadOnlyTree::lock(dir.path())) {
+            Some(None) => return,
+            lock => lock,
+        };
+
+        assert_eq!(dir.path().is_writable(), !locked);
+        assert_eq!(file.is_writable(), !locked);
     }
 }
