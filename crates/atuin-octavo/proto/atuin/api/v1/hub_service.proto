@@ -290,6 +290,15 @@ service HubService {
   // `INVALID_ORG_THREADS_REQUEST` for its slug, `INVALID_PAGE_SIZE` for its page size.
   rpc ListOrgThreads(ListOrgThreadsRequest) returns (ListOrgThreadsResponse);
 
+  // Return the latest share that opens the thread with this id to the members of the organization
+  // with this slug, for a caller who belongs to it. Its owner belongs to the organization too, and
+  // has Octavo. Like `GetShare`, it needs Octavo on neither the caller nor the organization.
+  //
+  // Fails with `NOT_FOUND` (`THREAD_NOT_FOUND`) when the caller belongs to no organization with this
+  // slug, or no share opens such a thread to it, and with `INVALID_ARGUMENT` for a request out of
+  // the bounds below: `INVALID_ORG_THREADS_REQUEST` for its slug, `INVALID_THREAD_ID` for its id.
+  rpc GetOrgThreadShare(GetOrgThreadShareRequest) returns (GetOrgThreadShareResponse);
+
   // Stream the threads that members have shared with the organization with this slug. The stream
   // sends the most recently active threads first, and then each change.
   //
@@ -958,6 +967,21 @@ message ListOrgThreadsResponse {
   repeated OrgThread threads = 1;
   // Opaque. Empty on the last page.
   string next_page_token = 2;
+}
+
+message GetOrgThreadShareRequest {
+  // The organization's slug, matched without regard to case.
+  string org_slug = 1 [(buf.validate.field).string = {
+    min_len: 1
+    not_contains: "\x00"
+  }];
+  // The thread's `Thread.id`.
+  UuidV7 thread_id = 2 [(buf.validate.field).required = true];
+}
+
+message GetOrgThreadShareResponse {
+  // Logically required.
+  Share share = 1 [(buf.validate.field).required = true];
 }
 
 message WatchOrgThreadsRequest {
