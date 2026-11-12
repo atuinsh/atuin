@@ -4,6 +4,8 @@ use std::sync::Arc;
 use atuin_client::history::HistoryId;
 #[cfg(feature = "octavo")]
 use atuin_client::record::sqlite_store::SqliteStore;
+#[cfg(feature = "octavo")]
+use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::string::StrExt;
 use atuin_common::userio;
@@ -14,7 +16,7 @@ use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
 #[cfg(feature = "octavo")]
 use atuin_domain::caps::OctavoCap;
 #[cfg(feature = "octavo")]
-use atuin_domain::record::{HostId, RecordTag};
+use atuin_domain::record::{HostId, RecordIdx, RecordStatus, RecordTag};
 #[cfg(feature = "octavo")]
 use atuin_octavo::hub::{HubCallError, HubClient, UserId};
 #[cfg(feature = "octavo")]
@@ -25,6 +27,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
 #[cfg(feature = "octavo")]
 use eyre::WrapErr;
+#[cfg(feature = "octavo")]
+use itertools::Itertools as _;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
@@ -415,33 +419,62 @@ struct OctavoOnboarding {
     threads: Option<StoredThreads>,
 }
 
-/// The thread records in the record store: every `ai-session` series.
+/// The account's thread records: every `ai-session` series, on this machine or the server.
 #[cfg(feature = "octavo")]
 struct StoredThreads {
-    hosts: Vec<HostId>,
+    /// Each series' host, with the idx of the last record to upload. This machine's is `None`, for
+    /// the daemon to fix once it sees Octavo on, as capture appends to it until then.
+    tails: Vec<(HostId, Option<RecordIdx>)>,
     /// How many records the series hold together.
     messages: u64,
 }
 
 #[cfg(feature = "octavo")]
 impl StoredThreads {
-    /// The thread records `settings`' record store holds, or `None` when it holds none.
-    async fn read(settings: &Settings) -> Result<Option<Self>> {
+    /// The thread records `settings`' record store or its server holds, or `None` when neither
+    /// holds any.
+    ///
+    /// The server is asked too, so the records that a sync in progress has yet to download go up
+    /// as well. Nothing else uploads another machine's threads.
+    async fn read(settings: &Arc<Settings>) -> Result<Option<Self>> {
         let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
-        let messages = store.len_tag(&RecordTag::AiSession).await?;
-        if messages == 0 {
-            return Ok(None);
+        let remote = async {
+            SyncSession::builder()
+                .store(store.clone())
+                .client_source(ClientSource::FromSettings {
+                    settings,
+                    caps: None,
+                })
+                .build()
+                .connect()
+                .await?
+                .record_status()
+                .await
+        };
+        let remote = remote.await.wrap_err(
+            "failed to ask the server which threads your account holds; run `atuin config enable \
+             octavo` again to retry",
+        )?;
+        Ok(Self::of(settings.host_id().await?, &store.status().await?, &remote))
+    }
+
+    /// The `ai-session` series `local` or `remote` holds, each at the later of its tails, with
+    /// `here` this machine's host.
+    fn of(here: HostId, local: &RecordStatus, remote: &RecordStatus) -> Option<Self> {
+        let tails = [local, remote]
+            .into_iter()
+            .flat_map(|status| &status.hosts)
+            .filter_map(|(&host, tails)| Some((host, *tails.get(&RecordTag::AiSession)?)))
+            .into_grouping_map()
+            .max();
+        if tails.is_empty() {
+            return None;
         }
 
-        let hosts = store
-            .status()
-            .await?
-            .hosts
-            .into_iter()
-            .filter(|(_, tails)| tails.contains_key(&RecordTag::AiSession))
-            .map(|(host, _)| host)
-            .collect();
-        Ok(Some(Self { hosts, messages }))
+        let messages = tails.values().map(|tail| tail.saturating_add(1)).sum();
+        let tails =
+            tails.into_iter().map(|(host, tail)| (host, (host != here).then_some(tail))).collect();
+        Some(Self { tails, messages })
     }
 }
 
@@ -458,9 +491,9 @@ impl OctavoOnboarding {
         if self.old > 0 {
             userio::log::info!("config-enable-octavo-backfill-old", count = self.old);
         }
-        // The daemon walks each series up to its tail as of when it sees Octavo on.
-        if let Some(StoredThreads { hosts, messages }) = self.threads {
-            self.queue.request_thread_backfill(&self.user, hosts).await.wrap_err(
+        // The daemon fixes this machine's bound at its tail as of when it sees Octavo on.
+        if let Some(StoredThreads { tails, messages }) = self.threads {
+            self.queue.request_thread_backfill(&self.user, tails).await.wrap_err(
                 "failed to queue your threads for upload; run `atuin config enable octavo` again \
                  to retry",
             )?;
@@ -924,6 +957,8 @@ fn set_deep_key(doc: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "octavo")]
+    use atuin_domain::record::RecordSeriesKey;
     use rstest::rstest;
 
     use super::*;
@@ -1301,5 +1336,41 @@ mod tests {
         for fragment in expected_err {
             assert!(err.contains(fragment), "error should mention `{fragment}`, got: {err}");
         }
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    fn stored_threads_bound_other_machines_series_at_the_later_tail() {
+        let [here, behind, remote_only] = [1, 2, 3].map(|n| HostId(uuid::Uuid::from_u128(n)));
+        let threads = |host| RecordSeriesKey::new(host, RecordTag::AiSession);
+        let local = RecordStatus::from_points([
+            (threads(here), 5),
+            (threads(behind), 3),
+            (RecordSeriesKey::new(remote_only, RecordTag::History), 7),
+        ]);
+        let remote = RecordStatus::from_points([
+            (threads(here), 4),
+            (threads(behind), 9),
+            (threads(remote_only), 2),
+        ]);
+
+        let StoredThreads {
+            mut tails,
+            messages,
+        } = StoredThreads::of(here, &local, &remote).expect("both hold threads");
+
+        tails.sort();
+        assert_eq!(tails, [(here, None), (behind, Some(9)), (remote_only, Some(2))]);
+        assert_eq!(messages, 6 + 10 + 3);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    fn stored_threads_are_none_without_a_thread_series() {
+        let host = HostId(uuid::Uuid::from_u128(1));
+        let history =
+            RecordStatus::from_points([(RecordSeriesKey::new(host, RecordTag::History), 7)]);
+
+        assert!(StoredThreads::of(host, &history, &RecordStatus::new()).is_none());
     }
 }

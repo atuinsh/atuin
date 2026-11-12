@@ -616,15 +616,10 @@ impl EngineInner {
         for ThreadBackfill { host_id, .. } in
             backfills.into_iter().filter(|backfill| backfill.until_idx.is_none())
         {
-            let series = RecordSeriesKey::new(host_id, RecordTag::AiSession);
-            let tail = self.handle.store().last(&series).await.map_err(|err| {
-                tracing::warn!(?err, "failed to read a thread series' tail; retrying later");
-                RetryLater
-            })?;
             // A series gone since the backfill was asked for stays unfixed, and unwalked, until
             // it is back.
-            if let Some(tail) = tail {
-                tails.push((host_id, tail.idx));
+            if let Some(tail) = self.thread_tail(host_id).await? {
+                tails.push((host_id, tail));
             }
         }
 
@@ -651,6 +646,10 @@ impl EngineInner {
             let Some(until_idx) = until_idx.filter(|&until| next_idx < until) else {
                 continue;
             };
+            // Read before the page. Sync only appends past the tail, so a gap below a tail read
+            // first never fills. A tail read after the page could take in records sync stored in
+            // between.
+            let tail = self.thread_tail(host_id).await?;
             let series = RecordSeriesKey::new(host_id, RecordTag::AiSession);
             let read = self.records.page(&series, next_idx..until_idx, BACKFILL_PAGE);
             let page = read.await.map_err(|err| {
@@ -658,9 +657,12 @@ impl EngineInner {
                 RetryLater
             })?;
 
-            // Nothing is stored in what is left of it.
+            // Nothing is stored in what is left of it. Places past the tail wait for sync, which
+            // downloads a series in order. A gap below the tail is done.
             let Some(&(last, _, _)) = page.last() else {
-                self.advance_backfill(login, host_id, until_idx).await?;
+                if tail.is_some_and(|tail| tail >= until_idx) {
+                    self.advance_backfill(login, host_id, until_idx).await?;
+                }
                 continue;
             };
             let sent = self.send_backfill_page(login, page).await?;
@@ -721,6 +723,16 @@ impl EngineInner {
         })?;
 
         upload_thread_messages(login, converted(ready).await).await
+    }
+
+    /// The idx of the last record stored of `host`'s thread series, if it has one.
+    async fn thread_tail(&self, host: HostId) -> Result<Option<RecordIdx>, RetryLater> {
+        let series = RecordSeriesKey::new(host, RecordTag::AiSession);
+        let tail = self.handle.store().last(&series).await.map_err(|err| {
+            tracing::warn!(?err, "failed to read a thread series' tail; retrying later");
+            RetryLater
+        })?;
+        Ok(tail.map(|tail| tail.idx))
     }
 
     async fn advance_backfill(

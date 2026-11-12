@@ -394,21 +394,22 @@ impl UploadQueue {
         Ok(marked.is_some())
     }
 
-    /// Starts `user`'s backfill of each of `hosts` over from its first record, with the bound
-    /// unfixed.
+    /// Starts `user`'s backfill of each host's series over from its first record: `tails` maps a
+    /// host to the idx of the last record to upload, or to `None` to leave the bound unfixed.
     pub async fn request_thread_backfill(
         &self,
         user: &UserId,
-        hosts: impl IntoIterator<Item = HostId>,
+        tails: impl IntoIterator<Item = (HostId, Option<RecordIdx>)>,
     ) -> Result<(), QueueError> {
         let mut tx = self.db.pool().begin().await?;
-        for host in hosts {
+        for (host, tail) in tails {
             db::query(
                 "INSERT OR REPLACE INTO thread_backfills (user_id, host_id, next_idx, until_idx) \
-                 VALUES (?1, ?2, 0, NULL)",
+                 VALUES (?1, ?2, 0, ?3)",
             )
             .bind(user.as_str())
             .bind(host)
+            .bind(tail.map(|tail| stored_idx(tail.saturating_add(1))))
             .execute(&mut *tx)
             .await?;
         }
@@ -749,9 +750,8 @@ mod tests {
     ) {
         let user = UserId::new("alice");
         let (fixed, unfixed) = (HostId(uuid_v7()), HostId(uuid_v7()));
-        queue.queue.request_thread_backfill(&user, [fixed]).await.expect("request");
-        queue.queue.fix_thread_backfills(&user, [(fixed, 9)]).await.expect("fix");
-        queue.queue.request_thread_backfill(&user, [unfixed]).await.expect("request");
+        let tails = [(fixed, Some(9)), (unfixed, None)];
+        queue.queue.request_thread_backfill(&user, tails).await.expect("request");
 
         let settled = match settle {
             Settle::Fix => {
@@ -773,20 +773,25 @@ mod tests {
     }
 
     #[rstest]
+    #[case::unfixed(None, None)]
+    #[case::fixed(Some(19), Some(20))]
     #[tokio::test]
-    async fn request_thread_backfill_starts_a_done_backfill_over(#[future(awt)] queue: TempQueue) {
+    async fn request_thread_backfill_starts_a_done_backfill_over(
+        #[future(awt)] queue: TempQueue,
+        #[case] tail: Option<RecordIdx>,
+        #[case] until_idx: Option<RecordIdx>,
+    ) {
         let user = UserId::new("alice");
         let host = HostId(uuid_v7());
-        queue.queue.request_thread_backfill(&user, [host]).await.expect("request");
-        queue.queue.fix_thread_backfills(&user, [(host, 9)]).await.expect("fix");
+        queue.queue.request_thread_backfill(&user, [(host, Some(9))]).await.expect("request");
         queue.queue.advance_thread_backfill(&user, host, 10).await.expect("advance");
 
-        queue.queue.request_thread_backfill(&user, [host]).await.expect("request");
+        queue.queue.request_thread_backfill(&user, [(host, tail)]).await.expect("request");
 
         assert_eq!(queue.queue.thread_backfills(&user).await.expect("read"), [ThreadBackfill {
             host_id: host,
             next_idx: 0,
-            until_idx: None,
+            until_idx,
         }]);
     }
 }
