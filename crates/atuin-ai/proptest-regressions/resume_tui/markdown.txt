@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 4d22e10ff858711401213695f7f3c145ab6fa2bf61d3d1d667cdaf32540f0994 # shrinks to source = "`\n```\n    ", width = 6, max_lines = 3, spacing = true, hl = []
 cc 444c8a622e0fb733f8e36ba0bcf6cd0f2b43ff55cd226caad8d582c7aef30bc6 # shrinks to source = "`    aa   `\n\n&amp;", width = 1, max_lines = 0, spacing = true, hl = []
+cc a5ca0a557a0752e88dfbd254a00b765572e04fd85172def5ad8fc12d185759a3 # shrinks to source = "𠀀\n\n_", width = 1, max_lines = 0, spacing = true, hl = []
