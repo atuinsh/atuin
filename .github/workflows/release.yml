@@ -140,6 +140,20 @@ jobs:
         if: "runner.os == 'Windows'"
         run: "pandoc --from=commonmark --to=rtf --standalone --output=crates/atuin/wix/License.rtf LICENSE"
         shell: "bash"
+      - name: "Install musl C++ toolchain"
+        if: "contains(join(matrix.targets, ','), 'musl')"
+        run: |
+          arch=$(uname -m)
+          case $arch in
+            x86_64) sha=902cb8453d5289e50dd8cf8b2e3cfdc7d3e07e3813eb62038863656444af727b ;;
+            aarch64) sha=4db8f60da440334b2a8cbbfc776947745183c5a1b60b5378da73d36d9f12522a ;;
+          esac
+          curl -fsSLo "$RUNNER_TEMP/musl.tar.xz" "https://github.com/userdocs/qbt-musl-cross-make/releases/download/2646/$arch-$arch-linux-musl.tar.xz"
+          echo "$sha  $RUNNER_TEMP/musl.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/musl.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$arch-linux-musl/bin" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_${arch^^}_UNKNOWN_LINUX_MUSL_LINKER=$arch-linux-musl-gcc" >> "$GITHUB_ENV"
+        shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
