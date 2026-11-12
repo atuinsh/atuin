@@ -81,6 +81,7 @@ where
 #[allow(unsafe_code, reason = "test-only code; must call various unsafe APIs")]
 #[cfg(test)]
 mod tests {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
     use std::process::Command;
 
     use rstest::rstest;
@@ -88,61 +89,72 @@ mod tests {
     use super::super::CommandExt as _;
     use super::*;
 
-    /// Held by each [`InheritableFd`], as tests on threads of one process would share its number.
+    /// Serializes descriptor-limit updates and inheritable-descriptor checks across test threads.
     static INHERITABLE_FD: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     /// A descriptor on /dev/null above the standard streams, open without close-on-exec as a shell
     /// may leave one. Closed on drop.
     struct InheritableFd {
-        fd: RawFd,
+        fd: OwnedFd,
         _exclusive: parking_lot::MutexGuard<'static, ()>,
     }
 
     impl InheritableFd {
-        fn open(fd: RawFd) -> Self {
-            let inheritable = Self {
-                fd,
-                _exclusive: INHERITABLE_FD.lock(),
-            };
-            raise_fd_limit_past(fd);
+        fn open(min_fd: RawFd) -> Self {
+            let exclusive = INHERITABLE_FD.lock();
+            raise_fd_limit_past(min_fd);
             let devnull = std::fs::File::open("/dev/null").unwrap();
-            // SAFETY: `dup2` touches no memory, and nothing in the test process owns `fd`. The
-            // descriptor it makes is never close-on-exec.
-            let dup = unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&devnull), fd) };
-            assert_eq!(dup, fd, "dup2: {}", std::io::Error::last_os_error());
-            inheritable
+            let mut fd = dup_from(&devnull, min_fd);
+            if min_fd < FALLBACK_FD_END && fd.as_raw_fd() >= FALLBACK_FD_END {
+                drop(fd);
+                fd = dup_from(&devnull, FIRST_NON_STD_FD);
+                assert!(
+                    fd.as_raw_fd() < FALLBACK_FD_END,
+                    "no free descriptor below {FALLBACK_FD_END}"
+                );
+            }
+            Self {
+                fd,
+                _exclusive: exclusive,
+            }
         }
 
         /// Whether a child spawned with `setup` finds this descriptor open.
         fn inherited_with(&self, setup: Setup) -> bool {
             let mut test = Command::new("test");
-            test.arg("-e").arg(format!("/dev/fd/{}", self.fd));
+            test.arg("-e").arg(format!("/dev/fd/{}", self.fd.as_raw_fd()));
             setup.apply(&mut test);
             test.status().unwrap().success()
         }
     }
 
-    impl Drop for InheritableFd {
-        fn drop(&mut self) {
-            // SAFETY: `open` dup'ed it, and nothing else owns it.
-            unsafe { libc::close(self.fd) };
-        }
+    /// Duplicate `file` onto an unused descriptor at or above `min_fd` without close-on-exec.
+    fn dup_from(file: &std::fs::File, min_fd: RawFd) -> OwnedFd {
+        // SAFETY: `file` is an open descriptor. `F_DUPFD` allocates a fresh descriptor at or above
+        // `min_fd` and leaves close-on-exec cleared.
+        let raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, min_fd) };
+        assert!(raw >= min_fd, "fcntl(F_DUPFD, {min_fd}): {}", std::io::Error::last_os_error());
+        // SAFETY: `fcntl(F_DUPFD)` returned a new open descriptor that nothing else owns.
+        unsafe { OwnedFd::from_raw_fd(raw) }
     }
 
-    /// Raise the soft limit on open descriptors, if need be, so that `fd` can be opened: `dup2`
-    /// fails with `EBADF` at or above it, and macOS starts at 256.
-    fn raise_fd_limit_past(fd: RawFd) {
+    /// Raise the soft limit on open descriptors so `F_DUPFD` has room at or above `min_fd`.
+    /// macOS starts with a soft limit of 256.
+    fn raise_fd_limit_past(min_fd: RawFd) {
         use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 
-        let needed = u64::try_from(fd).unwrap() + 1;
         let limit = getrlimit(Resource::Nofile);
+        let mut needed = u64::try_from(min_fd).unwrap() + 64;
+        if let Some(max) = limit.maximum {
+            needed = needed.min(max);
+        }
         if limit.current.is_some_and(|current| current < needed) {
             let raised = Rlimit {
                 current: Some(needed),
                 maximum: limit.maximum,
             };
             setrlimit(Resource::Nofile, raised)
-                .unwrap_or_else(|e| panic!("raising the limit past descriptor {fd}: {e}"));
+                .unwrap_or_else(|e| panic!("raising the limit past descriptor {min_fd}: {e}"));
         }
     }
 
@@ -183,10 +195,10 @@ mod tests {
     #[case::one_past_the_fallbacks_end(Setup::Fallback, FALLBACK_FD_END, true)]
     fn the_child_inherits_a_descriptor(
         #[case] setup: Setup,
-        #[case] fd: RawFd,
+        #[case] min_fd: RawFd,
         #[case] inherited: bool,
     ) {
-        assert_eq!(InheritableFd::open(fd).inherited_with(setup), inherited);
+        assert_eq!(InheritableFd::open(min_fd).inherited_with(setup), inherited);
     }
 
     /// Std reports a failed `exec` through a pipe in the child, which `close_fds` must leave open
