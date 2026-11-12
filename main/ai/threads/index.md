@@ -28,7 +28,7 @@ Amp keeps its threads on its servers, not on disk, so a plugin hands them to Atu
 atuin hook install amp
 ```
 
-Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
+This writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
 
 ```
 atuin threads import --harness amp
