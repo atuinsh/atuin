@@ -1099,9 +1099,10 @@ The agent is listed as `atuin` in System Settings, under General > Login Items.
 Switched off there, Atuin leaves it off and works without the daemon until you
 switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's
 logs directory says why. The agent gets the environment variables your
-config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`,
-with the values they had when Atuin installed it. After you add one, run
-`atuin daemon restart`.
+config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`.
+It also gets the ones that say where your coding agents keep their sessions,
+such as `CODEX_HOME` or `HERMES_HOME`. It keeps the values they had when Atuin
+installed it, so after you add or change one, run `atuin daemon restart`.
 
 `atuin daemon stop` stops the agent, but with `autostart` on, the next command
 that needs the daemon starts it again. `atuin config disable daemon` turns the

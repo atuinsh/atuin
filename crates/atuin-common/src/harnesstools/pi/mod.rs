@@ -90,6 +90,10 @@ impl Harness for Pi {
         self.flavour.binary()
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");

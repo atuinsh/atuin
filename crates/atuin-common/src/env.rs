@@ -70,14 +70,21 @@ pub use mock::MockEnv;
 #[cfg(any(test, feature = "test-utils"))]
 pub(crate) mod mock {
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::env::VarError;
     use std::ffi::{OsStr, OsString};
     use std::marker::PhantomData;
 
+    #[derive(Debug, Default)]
+    struct Mock {
+        vars: HashMap<OsString, OsString>,
+        /// Every name looked up since the mock was installed, set or not.
+        read: BTreeSet<OsString>,
+    }
+
     thread_local! {
         /// The current thread's mock environment, if one is installed.
-        static MOCK: RefCell<Option<HashMap<OsString, OsString>>> = const { RefCell::new(None) };
+        static MOCK: RefCell<Option<Mock>> = const { RefCell::new(None) };
     }
 
     /// Whether the current thread has a mock environment installed.
@@ -86,15 +93,20 @@ pub(crate) mod mock {
     }
 
     pub(super) fn get_os(key: &OsStr) -> Option<Option<OsString>> {
-        MOCK.with_borrow(|mock| mock.as_ref().map(|vars| vars.get(key).cloned()))
+        MOCK.with_borrow_mut(|mock| {
+            let mock = mock.as_mut()?;
+            mock.read.insert(key.to_owned());
+            Some(mock.vars.get(key).cloned())
+        })
     }
 
     /// The mock's variables, leaving out any whose name or value isn't Unicode: a source map holds
     /// strings, and `config::Environment` skips such names anyway.
     pub(super) fn vars() -> Option<HashMap<String, String>> {
         MOCK.with_borrow(|mock| {
-            mock.as_ref().map(|vars| {
-                vars.iter()
+            mock.as_ref().map(|mock| {
+                mock.vars
+                    .iter()
                     .filter_map(|(key, value)| {
                         Some((key.to_str()?.to_owned(), value.to_str()?.to_owned()))
                     })
@@ -129,7 +141,7 @@ pub(crate) mod mock {
         pub fn install() -> Self {
             MOCK.with_borrow_mut(|mock| {
                 assert!(mock.is_none(), "a mock environment is already installed on this thread");
-                *mock = Some(HashMap::new());
+                *mock = Some(Mock::default());
             });
             Self {
                 _not_send: PhantomData,
@@ -144,9 +156,19 @@ pub(crate) mod mock {
             Self::with_vars(|vars| vars.remove(key.as_ref()));
         }
 
+        /// The names of the variables read since the mock was installed, whether or not they were
+        /// set, as a test needs to check what some code depends on.
+        #[must_use]
+        pub fn read(&self) -> BTreeSet<String> {
+            MOCK.with_borrow(|mock| {
+                let mock = mock.as_ref().expect("the mock environment is installed");
+                mock.read.iter().map(|name| name.to_string_lossy().into_owned()).collect()
+            })
+        }
+
         fn with_vars<T>(f: impl FnOnce(&mut HashMap<OsString, OsString>) -> T) -> T {
             MOCK.with_borrow_mut(|mock| {
-                f(mock.as_mut().expect("the mock environment is installed"))
+                f(&mut mock.as_mut().expect("the mock environment is installed").vars)
             })
         }
     }
@@ -197,6 +219,15 @@ mod tests {
         let value = OsString::from_vec(vec![0xff]);
         env.set("ATUIN_TEST_VAR", value.clone());
         assert_eq!(var("ATUIN_TEST_VAR"), Err(VarError::NotUnicode(value)));
+    }
+
+    #[rstest]
+    fn the_mock_records_what_is_read(env: MockEnv) {
+        env.set("ATUIN_TEST_SET", "value");
+        let _ = var_os("ATUIN_TEST_SET");
+        let _ = var("ATUIN_TEST_UNSET");
+        let read: Vec<_> = env.read().into_iter().collect();
+        assert_eq!(read, ["ATUIN_TEST_SET", "ATUIN_TEST_UNSET"]);
     }
 
     #[rstest]

@@ -32,6 +32,11 @@ impl Harness for Amp {
         "amp"
     }
 
+    // Atuin doesn't follow `XDG_CONFIG_HOME` for Amp yet: it looks only in `~/.config/amp`.
+    fn home_vars(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Amp loads every plugin in `~/.config/amp/plugins/` ([Plugin API]).
     ///
     /// [Plugin API]: https://ampcode.com/docs/plugin-api

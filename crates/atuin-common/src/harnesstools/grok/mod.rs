@@ -46,6 +46,10 @@ impl Harness for Grok {
         "grok"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["GROK_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["grok-build"]
     }

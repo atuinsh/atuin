@@ -40,6 +40,10 @@ impl Harness for Copilot {
         "copilot"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["COPILOT_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["github-copilot", "copilot-cli"]
     }

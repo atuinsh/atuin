@@ -80,6 +80,11 @@ pub trait Harness: std::fmt::Debug {
     /// The command that runs the harness. It is looked up on `PATH`.
     fn program(&self) -> &'static str;
 
+    /// The environment variables that move where the harness keeps its sessions and config, as
+    /// atuin finds them. A daemon that launchd starts gets them from the shell that installed its
+    /// agent; without them it would read the harness's default home.
+    fn home_vars(&self) -> &'static [&'static str];
+
     /// Install this harness's hooks on the current user's machine, returning the path written.
     #[allow(async_fn_in_trait)]
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;
@@ -203,5 +208,38 @@ impl AnyHarness {
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::num::NonZeroUsize;
+
+    use rstest::rstest;
+
+    use super::*;
+    use crate::env::MockEnv;
+    use crate::harnesstools::session::any::SessionsExt as _;
+
+    /// Each harness declares exactly the variables atuin reads to find its sessions and config:
+    /// a launchd agent inherits only the declared ones, so one left out would be read unset.
+    #[rstest]
+    fn each_harness_declares_the_variables_that_find_it() {
+        let pool = BlockingPool::new(NonZeroUsize::MIN);
+        for harness in AnyHarness::all() {
+            let home = tempfile::tempdir().unwrap();
+            let env = MockEnv::install();
+            env.set("HOME", home.path());
+
+            let _ = harness.mcp_config_path();
+            let _ = harness.sessions(&pool).map(|sessions| sessions.last_active());
+
+            let mut read = env.read();
+            // Every harness's default home is under it, and the daemon always has it.
+            read.remove("HOME");
+            let declared: BTreeSet<_> = harness.home_vars().iter().map(|&v| v.to_owned()).collect();
+            assert_eq!(read, declared, "{}", harness.name());
+        }
     }
 }

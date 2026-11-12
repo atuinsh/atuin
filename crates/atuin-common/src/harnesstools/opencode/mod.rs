@@ -64,6 +64,10 @@ impl Harness for Opencode {
         "opencode"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_DB", "OPENCODE_DISABLE_CHANNEL_DB"]
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";

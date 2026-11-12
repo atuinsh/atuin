@@ -39,6 +39,10 @@ impl Harness for Ccode {
         "claude"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["CLAUDE_CONFIG_DIR"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["claude"]
     }

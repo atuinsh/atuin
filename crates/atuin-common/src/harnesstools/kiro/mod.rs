@@ -50,6 +50,10 @@ impl Harness for Kiro {
         "kiro-cli"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["KIRO_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["kiro-cli"]
     }

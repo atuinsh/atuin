@@ -84,6 +84,15 @@ impl Harness for Hermes {
         "hermes"
     }
 
+    /// `LOCALAPPDATA` holds the default home on Windows only.
+    fn home_vars(&self) -> &'static [&'static str] {
+        if cfg!(windows) {
+            &["HERMES_HOME", "HERMES_DATA_DIR_SUFFIX", "LOCALAPPDATA"]
+        } else {
+            &["HERMES_HOME", "HERMES_DATA_DIR_SUFFIX"]
+        }
+    }
+
     /// Writes atuin's plugin to the active home's `plugins/atuin/` and enables it (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         let atuin = super::mcp::launch_path(std::env::current_exe()?);

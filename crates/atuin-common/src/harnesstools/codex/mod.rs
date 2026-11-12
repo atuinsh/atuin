@@ -40,6 +40,10 @@ impl Harness for Codex {
         "codex"
     }
 
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["CODEX_HOME"]
+    }
+
     /// Install the hooks on the current active user's machine, trusted (see `hook_trust`).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Codex reads Claude-Code-style hooks from $CODEX_HOME/hooks.json.

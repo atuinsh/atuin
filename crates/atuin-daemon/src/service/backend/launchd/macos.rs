@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
+use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::os::macos::launchd;
 use atuin_common::os::macos::login_items::LoginItem;
 use atuin_common::os::unix::SecureTempDirError;
@@ -548,14 +549,15 @@ impl AgentPlist {
     /// one that hangs takes.
     const EXIT_TIMEOUT_SECS: i64 = 10;
 
-    /// The variables the agent reads besides atuin's settings and the XDG directories, which
+    /// The variables the agent reads besides atuin's settings, the XDG directories and the
+    /// harnesses' homes ([`home_vars`](atuin_common::harnesstools::Harness::home_vars)), which
     /// launchd doesn't set: it starts the agent with only `HOME`, `USER`, `SHELL`, a `TMPDIR` and
     /// a bare `PATH`.
     // TODO(markovejnovic): Ideally we'd have a richer environment utility that would allow us to
     //                      categorize between "config" env vars and "ephemeral env vars".
     ///
     /// `TMPDIR` isn't included here since we always set it to [`Self::tmpdir_env_pair`].
-    const INHERITED: [&str; 15] = [
+    const INHERITED: [&str; 9] = [
         // The programs it runs, such as `git` and `node`.
         "PATH",
         // The proxies sync goes through.
@@ -567,13 +569,6 @@ impl AgentPlist {
         "all_proxy",
         "NO_PROXY",
         "no_proxy",
-        // Where the harnesses whose sessions it captures keep them.
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-        "OPENCODE_DB",
-        "OPENCODE_DISABLE_CHANNEL_DB",
-        "PI_CODING_AGENT_DIR",
-        "PI_CODING_AGENT_SESSION_DIR",
     ];
 
     /// The `ATUIN_` variables that aren't settings: those a shell sets to describe itself and the
@@ -624,16 +619,17 @@ impl AgentPlist {
             working_dir,
             stderr: logs.joined("daemon.stderr.log"),
             // A plist holds only UTF-8, and `vars` would panic on anything else.
-            environment: std::env::vars_os()
-                .filter_map(|(name, value)| {
-                    let name = name
-                        .into_string()
-                        .ok()
-                        .filter(|name| Self::is_inherited(name, &config_variables))?;
-                    Some((name, value.into_string().ok()?))
-                })
-                .chain([Self::tmpdir_env_pair()?])
-                .collect(),
+            environment: Self::inherited(
+                std::env::vars_os()
+                    .filter_map(|(name, value)| {
+                        Some((name.into_string().ok()?, value.into_string().ok()?))
+                    })
+                    .collect(),
+                &config_variables,
+            )
+            .into_iter()
+            .chain([Self::tmpdir_env_pair()?])
+            .collect(),
         })
     }
 
@@ -662,14 +658,40 @@ impl AgentPlist {
         }
     }
 
-    /// Whether the agent inherits the variable `name` from this client's environment, whose config
-    /// expands `config_variables`.
-    fn is_inherited(name: &str, config_variables: &BTreeSet<String>) -> bool {
+    /// The variables of `environment`, this client's, that the agent inherits, when the config's
+    /// paths expand `config_variables`.
+    ///
+    /// A harness's home can name other variables, such as `AGENT_ROOT` in
+    /// `HERMES_HOME='$AGENT_ROOT/hermes'`, which Hermes expands itself. The agent inherits those
+    /// too, rather than the home expanded: only some harnesses expand theirs, and each by its own
+    /// rules.
+    fn inherited(
+        environment: Vec<(String, String)>,
+        config_variables: &BTreeSet<String>,
+    ) -> Vec<(String, String)> {
+        let mut expanded = config_variables.clone();
+        for (name, value) in &environment {
+            if Self::is_harness_home(name) {
+                expanded.extend(ShellExpanded::variables(value));
+            }
+        }
+        environment.into_iter().filter(|(name, _)| Self::is_inherited(name, &expanded)).collect()
+    }
+
+    /// Whether the agent inherits the variable `name` from this client's environment, when the
+    /// config's paths and the harnesses' homes expand `expanded`.
+    fn is_inherited(name: &str, expanded: &BTreeSet<String>) -> bool {
         !Self::NOT_INHERITED.contains(&name)
             && (name.starts_with("ATUIN_")
                 || name.starts_with("XDG_")
                 || Self::INHERITED.contains(&name)
-                || config_variables.contains(name))
+                || Self::is_harness_home(name)
+                || expanded.contains(name))
+    }
+
+    /// Whether `name` says where a harness keeps its sessions or config.
+    fn is_harness_home(name: &str) -> bool {
+        AnyHarness::all().iter().any(|harness| harness.home_vars().contains(&name))
     }
 
     fn to_xml(&self) -> Result<String, LaunchdError> {
@@ -782,6 +804,8 @@ mod tests {
     #[case::path("PATH", true)]
     #[case::proxy("https_proxy", true)]
     #[case::harness_config("CLAUDE_CONFIG_DIR", true)]
+    #[case::harness_home("HERMES_HOME", true)]
+    #[case::another_harness_home("KIRO_HOME", true)]
     #[case::unread("EDITOR", false)]
     #[case::login_session("SSH_AUTH_SOCK", false)]
     #[case::launchd_label("XPC_SERVICE_NAME", false)]
@@ -793,6 +817,22 @@ mod tests {
         // A config whose paths expand these.
         let config_variables = BTreeSet::from(["HISTDIR".to_owned(), "ATUIN_PASSWORD".to_owned()]);
         assert_eq!(AgentPlist::is_inherited(name, &config_variables), inherited);
+    }
+
+    /// The variables a harness's home names come along with it, as Hermes expands them; those
+    /// another variable names don't.
+    #[rstest]
+    fn agent_inherits_the_variables_a_harness_home_names() {
+        let environment = [
+            ("HERMES_HOME", "$AGENT_ROOT/hermes"),
+            ("AGENT_ROOT", "/srv/agents"),
+            ("EDITOR", "$VISUAL"),
+            ("VISUAL", "vim"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let inherited = AgentPlist::inherited(environment.to_vec(), &BTreeSet::new());
+        let names: Vec<_> = inherited.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["HERMES_HOME", "AGENT_ROOT"]);
     }
 
     /// launchd holds no socket for the agent, and so creates no directory for one as root: the
