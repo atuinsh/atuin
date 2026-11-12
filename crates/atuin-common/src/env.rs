@@ -51,6 +51,19 @@ pub fn var_abspath(name: &str) -> Option<AbsPathBuf> {
         .ok()
 }
 
+/// This process's environment, or the mock's in a test, without the variables whose name or value
+/// isn't Unicode: a copy kept in a config file holds only text.
+#[must_use]
+pub fn vars_utf8() -> Vec<(String, String)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(vars) = mock::vars() {
+        return vars.into_iter().collect();
+    }
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
 /// The variables of the current thread's mock environment, if one is installed.
 ///
 /// For a reader that takes the whole environment from the process itself, such as

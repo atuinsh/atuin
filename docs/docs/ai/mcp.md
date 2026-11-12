@@ -91,7 +91,7 @@ mcp_servers:
     env: {}
 ```
 
-Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. If you set `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, add them to the server's `env`, or it reads the default Atuin data:
+Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. To make up for that, `atuin mcp install hermes` copies the `ATUIN_*` settings in your shell that say where Atuin's config and data are into the server's `env`: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`. It copies nothing else, so no secret reaches Hermes's config. Run it again after you change one. If your config's paths use other variables, such as `$HISTDIR`, or you set the server up by hand, add them to its `env` yourself, or it reads the default Atuin data:
 
 ```shell
 hermes config set mcp_servers.atuin.env '{"ATUIN_CONFIG_DIR": "/path/to/config"}'
