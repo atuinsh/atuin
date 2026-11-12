@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.7
+
+### Bug Fixes
+
+- *(ai)* Leave no line for a paragraph whose glyphs are all too wide ([#4712](https://github.com/atuinsh/atuin/issues/4712))
+- *(client)* Read history on storage that refuses writes ([#4711](https://github.com/atuinsh/atuin/issues/4711))
+- *(daemon)* Give the launchd agent every harness's home variables ([#4713](https://github.com/atuinsh/atuin/issues/4713))
+- *(hooks)* Follow XDG_CONFIG_HOME for Amp's plugin and MCP detection ([#4714](https://github.com/atuinsh/atuin/issues/4714))
+- *(nix)* Add libstdc++ to atuin's rpath for the luau vm
+- *(nix)* Check atuin starts before generating completions
+- *(threads)* Keep a restored fork's stored parent through a read from the start ([#4702](https://github.com/atuinsh/atuin/issues/4702))
+- *(threads)* Keep an import from deadlocking on capture's locks ([#4708](https://github.com/atuinsh/atuin/issues/4708))
+- *(threads)* Keep messages omp agents send each other ([#4716](https://github.com/atuinsh/atuin/issues/4716))
+
+
+### Features
+
+- *(config)* Read atuin.lua and .atuin.lua config files
+- *(hub)* Open org threads at /<org>/threads/<id>
+- *(hub,client)* Name CLI login tokens for the machine they log in from
+- *(mcp)* Forward thread tools to Atuin for Teams while it is on, from a cached tool list ([#4720](https://github.com/atuinsh/atuin/issues/4720))
+- *(search)* Show hand-written what's new notes once after an upgrade ([#4704](https://github.com/atuinsh/atuin/issues/4704))
+- *(threads)* Hermes Agent harness ([#4689](https://github.com/atuinsh/atuin/issues/4689))
+- *(threads)* Capture Hermes subagents as child sessions ([#4691](https://github.com/atuinsh/atuin/issues/4691))
+- *(threads)* Write, fork and continue into Hermes sessions ([#4701](https://github.com/atuinsh/atuin/issues/4701))
+
+
+### Miscellaneous Tasks
+
+- *(release)* Publish stable releases to WinGet ([#4695](https://github.com/atuinsh/atuin/issues/4695))
+
+
+### Performance
+
+- *(daemon)* Reduce index rebuilds on startup from shell mismatch ([#4698](https://github.com/atuinsh/atuin/issues/4698))
+- *(daemon)* Cap fuzzy matcher at 8 threads ([#4703](https://github.com/atuinsh/atuin/issues/4703))
+
+
+### Refactor
+
+- *(deps)* Bump proptest from 1.11.0 to 1.12.0 ([#4628](https://github.com/atuinsh/atuin/issues/4628))
+
+
+
 ## 18.24.6
 
 ### Bug Fixes
