@@ -917,7 +917,7 @@ atuin hook install hermes
 
 This writes Atuin's plugin to `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`) and runs `hermes plugins enable atuin`, which turns the plugin on in `config.yaml` and loads it into a running Hermes gateway, so nothing needs a restart. If `hermes` isn't on your `PATH`, or the command fails, the install says so and prints the command to run yourself.
 
-The plugin records each command Hermes's `terminal` tool runs, with author `hermes`. Hermes runs plugins in its gateway, not in your shell, which is why the plugin calls Atuin by the full path of the `atuin` that installed it (if you move Atuin, install again), and looks up the directory each command runs in, following the agent's `cd`s.
+The plugin records each command Hermes's `terminal` tool runs, with author `hermes`. Hermes runs plugins in its gateway, not in your shell, which is why the plugin calls Atuin by the full path of the `atuin` that installed it (if you move Atuin, install again), and looks up the directory each command runs in, following the agent's `cd`s. For the same reason, the install writes into the plugin the `ATUIN_*` settings in your shell that say where Atuin's config and data are: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, and nothing else. If you change one, install again.
 
 Each Hermes profile is a home of its own, with its own plugins. The install picks the home as `hermes` does: `HERMES_HOME` if you have set it to a profile's directory, else the profile that `hermes profile use` made active, else `~/.hermes` (or the `HERMES_HOME` you set). To record another profile's commands, install into it too:
 
@@ -6378,7 +6378,7 @@ mcp_servers:
     env: {}
 ```
 
-Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. If you set `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, add them to the server's `env`, or it reads the default Atuin data:
+Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. To make up for that, `atuin mcp install hermes` copies the `ATUIN_*` settings in your shell that say where Atuin's config and data are into the server's `env`: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`. It copies nothing else, so no secret reaches Hermes's config. Run it again after you change one. If your config's paths use other variables, such as `$HISTDIR`, or you set the server up by hand, add them to its `env` yourself, or it reads the default Atuin data:
 
 ```
 hermes config set mcp_servers.atuin.env '{"ATUIN_CONFIG_DIR": "/path/to/config"}'
