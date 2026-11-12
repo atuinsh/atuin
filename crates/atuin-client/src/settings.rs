@@ -575,6 +575,9 @@ pub struct TeamsDebug {
     /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
     /// self-hosted hub.
     pub address: Option<Url>,
+    /// `atuin mcp` forwards thread tools to this MCP server. It is honored only while
+    /// `sync_address` is a self-hosted hub.
+    pub mcp_address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

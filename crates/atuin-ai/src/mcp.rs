@@ -8,8 +8,14 @@
 //! History search reads the sqlite database directly and works without the
 //! daemon; output retrieval and output search talk to the daemon and return a
 //! tool error when it is not running.
+//!
+//! While the user uploads threads to Octavo, the thread tools are Octavo's own, forwarded to its
+//! MCP server, in place of the local ones: they search every machine's threads and the threads
+//! the user's organizations share.
 
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
@@ -21,10 +27,14 @@ use rmcp::model::{
     Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
     ServerConfig, Tool, ToolAnnotations,
 };
-use rmcp::service::RequestContext;
-use rmcp::{RoleServer, ServerHandler, ServiceExt};
+use rmcp::service::{Peer, RequestContext, RunningService};
+use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::{RoleClient, RoleServer, ServerHandler, ServiceExt};
+use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 use strum::IntoEnumIterator;
+use tokio::sync::Mutex;
 
 use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::session::caller::{Caller, OwnSession};
@@ -40,13 +50,123 @@ struct AtuinMcp {
     db: Sqlite,
     settings: Arc<Settings>,
     own_session: OwnSession,
+    octavo: Option<Arc<Remote>>,
+}
+
+/// This says where Octavo's MCP server is. It is given while the user uploads threads to it.
+pub struct Octavo {
+    pub url: String,
+    pub token: SecretString,
+    /// These are the organizations the server's directory shares its threads with.
+    pub orgs: Vec<String>,
+}
+
+/// This is Octavo's MCP server, which is connected on first use. It holds Octavo's tools as the
+/// last session listed them.
+struct Remote {
+    octavo: Octavo,
+    client: Mutex<Option<RunningService<RoleClient, ()>>>,
+    tools: Vec<Tool>,
+    /// The listed tools are kept here for the next session, which starts from them.
+    cache: PathBuf,
+}
+
+/// The local tools cover these Octavo tools better. Local history is complete and immediate,
+/// while Octavo holds only what has been uploaded.
+const LOCAL_ON_OCTAVO: [&str; 3] = ["search_history", "tally_history", "get_command_output"];
+
+/// Returns the Octavo tools that are forwarded to it.
+fn forwarded(mut tools: Vec<Tool>) -> Vec<Tool> {
+    tools.retain(|t| !LOCAL_ON_OCTAVO.contains(&t.name.as_ref()));
+    tools
+}
+
+/// Returns the tools to list. Octavo's tools take the place of the local thread tools.
+fn listed_tools(octavo: Option<&[Tool]>) -> Vec<Tool> {
+    match octavo {
+        Some(octavo) => {
+            let local = TOOLS.iter().filter(|t| !t.name.starts_with("atuin_threads_"));
+            local.chain(octavo).cloned().collect()
+        }
+        None => TOOLS.clone(),
+    }
+}
+
+/// These are how long Octavo has to connect, and then to answer a tool call.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A session trusts the cached tools for this long before it lists them again.
+const CACHE_FRESH: Duration = Duration::from_hours(1);
+
+impl Remote {
+    /// Returns the connection. It is made again when the last one has closed.
+    async fn peer(&self) -> Result<Peer<RoleClient>> {
+        let mut client = self.client.lock().await;
+        if let Some(open) = client.as_ref().filter(|c| !c.is_transport_closed()) {
+            return Ok(open.peer().clone());
+        }
+        let config = StreamableHttpClientTransportConfig::with_uri(self.octavo.url.clone())
+            .auth_header(self.octavo.token.expose_secret());
+        let connect = ().serve(StreamableHttpClientTransport::from_config(config));
+        let open = tokio::time::timeout(CONNECT_TIMEOUT, connect).await??;
+        let peer = open.peer().clone();
+        *client = Some(open);
+        drop(client);
+        Ok(peer)
+    }
+
+    async fn call(&self, request: CallToolRequestParams) -> CallToolResult {
+        let call = async { eyre::Ok(self.peer().await?.call_tool(request).await?) };
+        match tokio::time::timeout(CALL_TIMEOUT, call).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => self.failed(format!("Octavo failed: {e:#}")).await,
+            Err(_) => self.failed("Octavo did not answer in time".into()).await,
+        }
+    }
+
+    /// Drops the connection and the cache. The next session then starts with local threads.
+    async fn failed(&self, error: String) -> CallToolResult {
+        tracing::warn!("{error}");
+        self.client.lock().await.take();
+        let _ = fs_err::remove_file(&self.cache);
+        CallToolResult::error(vec![ContentBlock::text(error)])
+    }
+
+    /// Lists Octavo's tools into the cache, unless the cache is fresh. Then it closes the
+    /// connection until a tool call needs it.
+    async fn refresh(self: Arc<Self>) {
+        let age = fs_err::metadata(&self.cache).and_then(|m| m.modified()).ok();
+        if age.and_then(|t| t.elapsed().ok()).is_some_and(|age| age < CACHE_FRESH) {
+            return;
+        }
+        let saved = async {
+            let peer = self.peer().await?;
+            let tools =
+                forwarded(tokio::time::timeout(CALL_TIMEOUT, peer.list_all_tools()).await??);
+            // Written aside and renamed, so another session never reads half of it.
+            let dir = self.cache.parent().unwrap_or(&self.cache);
+            let mut file = tempfile::NamedTempFile::new_in(dir)?;
+            serde_json::to_writer(&mut file, &tools)?;
+            file.persist(&self.cache)?;
+            eyre::Ok(())
+        };
+        match saved.await {
+            Ok(()) => drop(self.client.lock().await.take()),
+            Err(e) => drop(self.failed(format!("Octavo failed: {e:#}")).await),
+        }
+    }
+
+    fn instructions(&self) -> String {
+        octavo_instructions(&self.octavo.orgs)
+    }
 }
 
 /// Server-level instructions, surfaced by MCP clients (Claude Code injects
 /// them into the model's system prompt). This is the main lever for making
 /// agents reach for Atuin instead of guessing: it frames the history as the
 /// ground truth for "what actually happened in the terminal".
-const SERVER_INSTRUCTIONS: &str =
+const HISTORY_INSTRUCTIONS: &str =
     "\
 Atuin is the ground truth for what actually happened in the user's terminal. It records shell \
      history from every session and machine: each command with its timestamp, working directory, \
@@ -69,24 +189,48 @@ When a question is about the user themselves — 'what do I use', 'how do I conn
 Do not use `history`, ~/.bash_history, or ~/.zsh_history: they are typically empty or stale in \
      non-interactive shells and lack exit codes and output. Atuin is the reliable source. Prefer \
      atuin_output over re-running an expensive or side-effectful command just to see its output \
-     again.
+     again.";
 
+const LOCAL_THREADS_INSTRUCTIONS: &str =
+    "\
 Atuin also records AI agent sessions as threads. Use atuin_threads_search or atuin_threads_list, \
      then atuin_threads_read, whenever a task points at earlier work: 'last time', 'again', \
      'still', 'continue', what was decided, or whether something is a known issue. Otherwise do \
      one quick search only when earlier threads would clearly help; skip self-contained tasks.";
 
+const OCTAVO_THREADS_INSTRUCTIONS: &str = "\
+Octavo holds the user's AI agent threads from every machine, and those their organizations shared. \
+                                           Before exploring or designing anything, however small, \
+                                           search_threads for prior work. Without org_slug it \
+                                           reads only the user's own. Read a hit with get_thread \
+                                           from its message_id.";
+
+/// Returns the instructions for when the thread tools are Octavo's. They name `orgs`, the
+/// organizations this project shares its threads with.
+fn octavo_instructions(orgs: &[String]) -> String {
+    let mut text = format!("{HISTORY_INSTRUCTIONS}\n\n{OCTAVO_THREADS_INSTRUCTIONS}");
+    if !orgs.is_empty() {
+        let slugs = orgs.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(", ");
+        text.push_str(&format!("\n\nThis project's organization is {slugs}: pass it as org_slug."));
+    }
+    text
+}
+
+fn local_instructions() -> String {
+    format!("{HISTORY_INSTRUCTIONS}\n\n{LOCAL_THREADS_INSTRUCTIONS}")
+}
+
 /// The initialize result, separated from the handler so tests can assert on
 /// it without constructing a database-backed server.
-fn server_info() -> ServerConfig {
+fn server_info(instructions: String) -> ServerConfig {
     ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("atuin", env!("CARGO_PKG_VERSION")))
-        .with_instructions(SERVER_INSTRUCTIONS)
+        .with_instructions(instructions)
 }
 
 impl ServerHandler for AtuinMcp {
     fn get_info(&self) -> ServerConfig {
-        server_info()
+        server_info(self.octavo.as_deref().map_or_else(local_instructions, Remote::instructions))
     }
 
     async fn list_tools(
@@ -94,7 +238,8 @@ impl ServerHandler for AtuinMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(TOOLS.clone())
+        let tools = listed_tools(self.octavo.as_ref().map(|remote| &remote.tools[..]));
+        Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
     }
@@ -104,6 +249,11 @@ impl ServerHandler for AtuinMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        if let Some(remote) = &self.octavo
+            && remote.tools.iter().any(|t| t.name == request.name)
+        {
+            return Ok(remote.call(request).await.into());
+        }
         let arguments = request.arguments.unwrap_or_default();
         // Stateless clients (protocol 2026-07-28, e.g. Claude Code) skip `initialize` and send
         // their client info in each request's `_meta`.
@@ -187,11 +337,27 @@ fn invalid_arguments(tool: &str, err: impl std::fmt::Display) -> ToolOutcome {
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
-pub async fn run(db: &Sqlite, settings: Arc<Settings>) -> Result<()> {
+///
+/// With `octavo`, the thread tools are Octavo's, as listed by the last session that reached it.
+/// They are refreshed in the background, so the client never waits on Octavo to start.
+pub async fn run(db: &Sqlite, settings: Arc<Settings>, octavo: Option<Octavo>) -> Result<()> {
+    let octavo = octavo.map(|octavo| {
+        let cache = settings.data_dir.join("octavo_mcp_tools.json");
+        let tools = fs_err::read(&cache).ok().and_then(|json| serde_json::from_slice(&json).ok());
+        let remote = Arc::new(Remote {
+            octavo,
+            client: Mutex::new(None),
+            tools: tools.unwrap_or_default(),
+            cache,
+        });
+        tokio::spawn(Arc::clone(&remote).refresh());
+        remote
+    });
     let server = AtuinMcp {
         db: db.clone(),
         settings,
         own_session: OwnSession::default(),
+        octavo: octavo.filter(|remote| !remote.tools.is_empty()),
     }
     .serve(rmcp::transport::stdio())
     .await?;
@@ -514,9 +680,76 @@ mod tests {
         );
     }
 
+    fn octavo_tool(name: &'static str) -> Tool {
+        Tool::new(name, "", JsonObject::new())
+    }
+
+    #[rstest]
+    fn octavo_thread_tools_replace_the_local_ones_and_its_history_tools_are_dropped() {
+        let octavo = forwarded(
+            [
+                "search_threads",
+                "get_thread",
+                "search_history",
+                "tally_history",
+                "get_command_output",
+            ]
+            .map(octavo_tool)
+            .to_vec(),
+        );
+        let names: Vec<_> = listed_tools(Some(&octavo)).into_iter().map(|t| t.name).collect();
+        assert_eq!(names, [
+            "atuin_history",
+            "atuin_output",
+            "atuin_output_search",
+            "search_threads",
+            "get_thread",
+        ]);
+        assert_eq!(listed_tools(None).len(), TOOLS.len());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_call_octavo_fails_drops_the_cache_so_the_next_session_is_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("octavo_mcp_tools.json");
+        fs_err::write(&cache, "[]").unwrap();
+        let remote = Remote {
+            octavo: Octavo {
+                // Nothing listens on port 1, so the connection is refused at once.
+                url: "http://127.0.0.1:1/".into(),
+                token: SecretString::from("atapi_test"),
+                orgs: Vec::new(),
+            },
+            client: Mutex::new(None),
+            tools: Vec::new(),
+            cache: cache.clone(),
+        };
+
+        let result = remote.call(CallToolRequestParams::new("search_threads")).await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(!cache.exists());
+    }
+
+    #[rstest]
+    fn octavo_instructions_name_the_project_orgs_and_stay_concise() {
+        let org = "an-organization-slug-at-the-length-limit".to_owned();
+        let instructions = octavo_instructions(std::slice::from_ref(&org));
+        assert!(instructions.contains("search_threads"));
+        assert!(
+            instructions.ends_with(&format!("organization is \"{org}\": pass it as org_slug."))
+        );
+        assert!(!instructions.contains("atuin_threads_"));
+        assert!(instructions.len() < MAX_INSTRUCTIONS_LEN, "instructions should stay concise");
+        assert!(!octavo_instructions(&[]).contains("This project"));
+    }
+
     #[rstest]
     fn server_info_carries_instructions() {
-        let instructions = server_info().instructions.expect("initialize result has instructions");
+        let instructions = server_info(local_instructions())
+            .instructions
+            .expect("initialize result has instructions");
         assert!(instructions.contains("atuin_history"));
         assert!(instructions.contains("atuin_output"));
         assert!(instructions.contains("atuin_output_search"));

@@ -484,6 +484,7 @@ mod tests {
             teams: Teams {
                 debug: TeamsDebug {
                     address: debug_address.map(|url| Url::parse(url).unwrap()),
+                    mcp_address: None,
                 },
                 ..Teams::default()
             },

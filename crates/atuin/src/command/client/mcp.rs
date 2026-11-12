@@ -30,7 +30,10 @@ pub struct Cmd {
 impl Cmd {
     pub async fn run(self, db: &Sqlite, settings: Settings) -> Result<()> {
         match self.action {
-            None => Box::pin(atuin_ai::mcp::run(db, Arc::new(settings))).await,
+            None => {
+                let octavo = octavo(&settings).await;
+                Box::pin(atuin_ai::mcp::run(db, Arc::new(settings), octavo)).await
+            }
             Some(Action::Install { agent: Some(agent) }) => {
                 install(AnyHarness::from_name(&agent)?).await?;
                 print_capture_tip();
@@ -39,6 +42,43 @@ impl Cmd {
             Some(Action::Install { agent: None }) => install_all().await,
         }
     }
+}
+
+/// Returns Octavo's MCP server while the user uploads threads to it. Otherwise the threads are
+/// only local.
+#[cfg(feature = "octavo")]
+async fn octavo(settings: &Settings) -> Option<atuin_ai::mcp::Octavo> {
+    use atuin_client::settings::{DEFAULT_HUB_URL, SyncAuth};
+
+    if !settings.teams.enabled {
+        return None;
+    }
+    let url = if settings.hub_endpoint() == *DEFAULT_HUB_URL {
+        "https://mcp.atuin.sh".to_owned()
+    } else {
+        settings.teams.debug.mcp_address.as_ref()?.to_string()
+    };
+    let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
+        return None;
+    };
+    let configs = atuin_octavo::shares::Configs::new(
+        atuin_common::dirs::try_atuin_home().ok().map(std::path::PathBuf::from),
+    );
+    let orgs = match std::env::current_dir() {
+        Ok(dir) => configs.orgs_of_dir(dir).await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    Some(atuin_ai::mcp::Octavo {
+        url,
+        token,
+        orgs: orgs.iter().map(ToString::to_string).collect(),
+    })
+}
+
+#[cfg(not(feature = "octavo"))]
+#[expect(clippy::unused_async, reason = "matches the octavo build")]
+async fn octavo(_: &Settings) -> Option<atuin_ai::mcp::Octavo> {
+    None
 }
 
 async fn install_all() -> Result<()> {
