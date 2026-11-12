@@ -73,29 +73,13 @@ impl Backoff {
             ControlFlow::Continue(reason) => reason,
         };
 
+        let mut delays = self.delays();
         tokio::time::timeout(timeout, async {
-            match self {
-                Self::Constant(period) => loop {
-                    tokio::time::sleep(jittered(period)).await;
-                    match fxn().await {
-                        ControlFlow::Break(value) => return value,
-                        ControlFlow::Continue(reason) => last = reason,
-                    }
-                },
-                Self::Exponential {
-                    initial,
-                    max,
-                    factor,
-                } => {
-                    let mut backoff = initial.min(max);
-                    loop {
-                        tokio::time::sleep(jittered(backoff).min(max)).await;
-                        backoff = backoff.saturating_mul(factor.get()).min(max);
-                        match fxn().await {
-                            ControlFlow::Break(value) => return value,
-                            ControlFlow::Continue(reason) => last = reason,
-                        }
-                    }
+            loop {
+                tokio::time::sleep(delays.next_delay()).await;
+                match fxn().await {
+                    ControlFlow::Break(value) => return value,
+                    ControlFlow::Continue(reason) => last = reason,
                 }
             }
         })
@@ -124,13 +108,10 @@ impl Backoff {
         };
 
         let deadline = Instant::now().checked_add(timeout);
-        let (mut backoff, max) = match self {
-            Self::Constant(period) => (period, Duration::MAX),
-            Self::Exponential { initial, max, .. } => (initial.min(max), max),
-        };
+        let mut delays = self.delays();
 
         loop {
-            let mut nap = jittered(backoff).min(max);
+            let mut nap = delays.next_delay();
             if let Some(deadline) = deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -139,10 +120,6 @@ impl Backoff {
                 nap = nap.min(remaining);
             }
             std::thread::sleep(nap);
-
-            if let Self::Exponential { factor, .. } = self {
-                backoff = backoff.saturating_mul(factor.get()).min(max);
-            }
 
             match fxn() {
                 ControlFlow::Break(value) => return Ok(value),
@@ -193,27 +170,51 @@ impl Backoff {
         I: FnMut() -> Interrupted,
         Interrupted: Future,
     {
-        let first = match self {
-            Self::Constant(period) => period,
-            Self::Exponential { initial, max, .. } => initial.min(max),
-        };
-        let mut backoff = first;
+        let mut delays = self.delays();
         loop {
             if let ControlFlow::Break(value) = fxn().await {
                 return value;
             }
 
-            let (delay, next) = match self {
-                Self::Constant(_) => (jittered(backoff), backoff),
-                Self::Exponential { max, factor, .. } => {
-                    (jittered(backoff).min(max), backoff.saturating_mul(factor.get()).min(max))
-                }
-            };
             tokio::select! {
-                () = tokio::time::sleep(delay) => backoff = next,
-                _ = interrupt() => backoff = first,
+                () = tokio::time::sleep(delays.next_delay()) => {}
+                _ = interrupt() => delays = self.delays(),
             }
         }
+    }
+
+    /// The delays between calls, in turn, as [`Self::retry_forever`] waits them out, for a caller
+    /// that keeps a backoff across calls of its own.
+    #[must_use]
+    pub fn delays(self) -> Delays {
+        let next = match self {
+            Self::Constant(period) => period,
+            Self::Exponential { initial, max, .. } => initial.min(max),
+        };
+        Delays {
+            backoff: self,
+            next,
+        }
+    }
+}
+
+/// See [`Backoff::delays`].
+#[derive(Debug, Clone)]
+pub struct Delays {
+    backoff: Backoff,
+    /// The next delay, before jitter.
+    next: Duration,
+}
+
+impl Delays {
+    /// The next delay, jittered.
+    pub fn next_delay(&mut self) -> Duration {
+        let delay = jittered(self.next);
+        let Backoff::Exponential { max, factor, .. } = self.backoff else {
+            return delay;
+        };
+        self.next = self.next.saturating_mul(factor.get()).min(max);
+        delay.min(max)
     }
 }
 
@@ -289,5 +290,38 @@ mod tests {
         let result: Result<(), u32> =
             backoff.retry_blocking(|| ControlFlow::Continue(7), Duration::from_millis(20));
         assert_eq!(result, Err(7));
+    }
+
+    #[rstest]
+    #[case::constant(Backoff::Constant(Duration::from_secs(10)), &[10, 10, 10])]
+    #[case::exponential_up_to_max(
+        Backoff::Exponential {
+            initial: Duration::from_secs(10),
+            max: Duration::from_secs(60),
+            factor: NonZeroU32::new(2).unwrap(),
+        },
+        &[10, 20, 40, 60, 60],
+    )]
+    #[case::initial_past_max(
+        Backoff::Exponential {
+            initial: Duration::from_secs(90),
+            max: Duration::from_secs(60),
+            factor: NonZeroU32::new(2).unwrap(),
+        },
+        &[60, 60],
+    )]
+    fn delays_follow_the_schedule(#[case] backoff: Backoff, #[case] secs: &[u64]) {
+        let mut delays = backoff.delays();
+        for &secs in secs {
+            let expected = Duration::from_secs(secs);
+            let delay = delays.next_delay();
+            assert!(
+                (expected * 9 / 10..=expected * 11 / 10).contains(&delay),
+                "{delay:?} is not within 10% of {expected:?}"
+            );
+            if let Backoff::Exponential { max, .. } = backoff {
+                assert!(delay <= max, "{delay:?} is past the max, {max:?}");
+            }
+        }
     }
 }
