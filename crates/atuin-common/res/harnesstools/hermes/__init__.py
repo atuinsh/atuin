@@ -36,6 +36,10 @@ import uuid
 # shell's PATH.
 ATUIN = "atuin"
 
+# Replaced at install with where the installing shell's atuin keeps its config and data
+# (ATUIN_HOME and the like), which a gateway that launchd or systemd starts doesn't have either.
+ATUIN_ENV = {}
+
 # A hung atuin is killed after this many seconds, so it can't stall the events behind it.
 _SEND_TIMEOUT_S = 10
 
@@ -144,6 +148,7 @@ def _send(event):
     try:
         proc = subprocess.Popen(
             [ATUIN, "hook", "hermes"],
+            env={**os.environ, **ATUIN_ENV},
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

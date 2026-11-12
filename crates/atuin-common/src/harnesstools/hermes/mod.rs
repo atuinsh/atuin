@@ -7,6 +7,7 @@
 //! is never caught up or switched, and sync forks instead. What atuin knows of the store was
 //! verified against Hermes v0.23.0 and its main branch at d70cbc5205.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,7 @@ use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget}
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
-use crate::path::{PathBufExt as _, ShellExpanded};
+use crate::path::{AbsPathBuf, PathBufExt as _, ShellExpanded};
 
 pub mod cli;
 pub mod home;
@@ -59,6 +60,50 @@ fn home_from(var: Option<&OsStr>, suffix: Option<&OsStr>, home: &Path) -> PathBu
     base.joined(name)
 }
 
+/// The variables of `environment`, this shell's, that an atuin Hermes runs needs to read the same
+/// config and data: the `ATUIN_` settings that say where something is, by name, those ending
+/// `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`.
+///
+/// Hermes runs atuin from its gateway, without the shell's variables: as an MCP server it passes
+/// on only a few of its own, and a gateway that `launchd` or `systemd` starts has hardly any. So
+/// installs write these into what Hermes keeps, the MCP server's entry in `config.yaml` and the
+/// hook plugin. Only these, as a list of what to keep rather than of what to leave out: people
+/// share those files, and an `ATUIN_` variable can hold a secret, such as `ATUIN_AI__API_TOKEN`.
+/// A setting left out is read from atuin's config instead.
+///
+/// A relative `ATUIN_CONFIG_DIR` is made absolute against this process's directory, where atuin
+/// reads it from (`dirs::config_path`): Hermes runs atuin from a directory of its own. The other
+/// relative values stay as they are, since atuin reads them the same anywhere: `ATUIN_HOME` must
+/// be absolute or is ignored, and a setting's path is relative to the config directory.
+pub fn atuin_env(
+    environment: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    environment
+        .into_iter()
+        .filter(|(name, _)| {
+            name.starts_with("ATUIN_")
+                && ["_HOME", "_DIR", "_PATH"].iter().any(|suffix| name.ends_with(suffix))
+        })
+        .map(|(name, value)| {
+            let value = if name == "ATUIN_CONFIG_DIR" {
+                absolute(value)
+            } else {
+                value
+            };
+            (name, value)
+        })
+        .collect()
+}
+
+/// `path` made absolute against this process's directory, or as it was when it can't be: the
+/// directory is gone, or isn't Unicode.
+fn absolute(path: String) -> String {
+    AbsPathBuf::from_current_dir(&path)
+        .ok()
+        .and_then(|absolute| PathBuf::from(absolute).into_os_string().into_string().ok())
+        .unwrap_or(path)
+}
+
 /// The home installs go to: the one a bare `hermes` uses (see [`home::InstallHome::resolve`]).
 pub(crate) fn install_home() -> home::InstallHome {
     home::InstallHome::resolve(&hermes_home())
@@ -96,7 +141,8 @@ impl Harness for Hermes {
     /// Writes atuin's plugin to the active home's `plugins/atuin/` and enables it (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         let atuin = super::mcp::launch_path(std::env::current_exe()?);
-        hooks::install(&install_home(), &atuin).await
+        let env = atuin_env(crate::env::vars_utf8());
+        hooks::install(&install_home(), &atuin, &env).await
     }
 
     /// Yes: Hermes's import takes every row it's given as live, so a turn `/undo` dropped would
@@ -159,6 +205,39 @@ mod tests {
     fn a_profiles_session_resumes_under_its_profile(#[case] db: &str, #[case] want: &[&str]) {
         let target = ResumeTarget::new("s1").with_native_path(db);
         assert_eq!(Hermes.resume_plan(&target).unwrap().args, want);
+    }
+
+    /// Only where atuin's config and data are: never a secret, shell state, or anything else.
+    #[rstest]
+    #[case::home("ATUIN_HOME", true)]
+    #[case::config_dir("ATUIN_CONFIG_DIR", true)]
+    #[case::db_path("ATUIN_DB_PATH", true)]
+    #[case::nested_path("ATUIN_DAEMON__SOCKET_PATH", true)]
+    #[case::key_path("ATUIN_KEY_PATH", true)]
+    #[case::ai_token("ATUIN_AI__API_TOKEN", false)]
+    #[case::extra_header("ATUIN_EXTRA_HEADERS__CF_ACCESS_CLIENT_SECRET", false)]
+    #[case::password("ATUIN_PASSWORD", false)]
+    #[case::session("ATUIN_SESSION", false)]
+    #[case::other_setting("ATUIN_SEARCH_MODE", false)]
+    #[case::not_atuin("HISTDIR", false)]
+    fn atuin_env_holds_only_locations(#[case] name: &str, #[case] kept: bool) {
+        let env = atuin_env([(name.to_owned(), "x".to_owned())]);
+        assert_eq!(env.contains_key(name), kept);
+    }
+
+    /// A relative `ATUIN_CONFIG_DIR` names the directory where it was set, not where Hermes runs;
+    /// a relative setting's path is the config directory's, wherever atuin runs.
+    #[rstest]
+    fn a_relative_config_dir_is_made_absolute() {
+        let env = atuin_env([
+            ("ATUIN_CONFIG_DIR".to_owned(), "config".to_owned()),
+            ("ATUIN_DB_PATH".to_owned(), "history.db".to_owned()),
+            ("ATUIN_HOME".to_owned(), "/srv/atuin".to_owned()),
+        ]);
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(env["ATUIN_CONFIG_DIR"], here.join("config").to_str().unwrap());
+        assert_eq!(env["ATUIN_DB_PATH"], "history.db");
+        assert_eq!(env["ATUIN_HOME"], "/srv/atuin");
     }
 
     #[rstest]

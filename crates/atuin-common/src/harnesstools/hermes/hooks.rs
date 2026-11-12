@@ -9,6 +9,7 @@
 //! enable` writes; that also loads it into a running gateway. Each profile is a home of its own,
 //! with its own `plugins/` and `config.yaml`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::super::InstallHookError;
@@ -22,6 +23,9 @@ const PLUGIN: &str = include_str!("../../../res/harnesstools/hermes/__init__.py"
 /// The line of [`PLUGIN`] that install replaces with atuin's own path.
 const ATUIN_LINE: &str = r#"ATUIN = "atuin""#;
 
+/// The line of [`PLUGIN`] that install replaces with the variables atuin runs with.
+const ENV_LINE: &str = "ATUIN_ENV = {}";
+
 /// The plugin's name, which is also its directory's and what `hermes plugins enable` takes.
 const NAME: &str = "atuin";
 
@@ -31,9 +35,14 @@ const NAME: &str = "atuin";
 ///
 /// `executable` is atuin by absolute path, since the gateway that runs hooks doesn't have the
 /// shell's `PATH`: the one `mcp::launch_path` gives, which
-/// outlasts a package manager's upgrade.
-pub async fn install(home: &InstallHome, executable: &Path) -> Result<PathBuf, InstallHookError> {
-    install_with(home.path(), executable, &HermesCommand::new(home)).await
+/// outlasts a package manager's upgrade. Nor does it have the shell's `ATUIN_` settings, so the
+/// plugin runs atuin with `env` ([`atuin_env`](super::atuin_env)) on top of the gateway's own.
+pub async fn install(
+    home: &InstallHome,
+    executable: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<PathBuf, InstallHookError> {
+    install_with(home.path(), executable, env, &HermesCommand::new(home)).await
 }
 
 /// [`install`], enabling the plugin with `hermes`.
@@ -44,13 +53,15 @@ pub async fn install(home: &InstallHome, executable: &Path) -> Result<PathBuf, I
 async fn install_with(
     home: &Path,
     executable: &Path,
+    env: &BTreeMap<String, String>,
     hermes: &impl HermesCli,
 ) -> Result<PathBuf, InstallHookError> {
     let dir = home.join("plugins").joined(NAME);
     tokio::fs::create_dir_all(&dir).await?;
 
     // The manifest last: Hermes finds a plugin by it.
-    let files = [("__init__.py", plugin_source(executable)?), ("plugin.yaml", MANIFEST.to_owned())];
+    let files =
+        [("__init__.py", plugin_source(executable, env)?), ("plugin.yaml", MANIFEST.to_owned())];
     let mut changed = false;
     for (name, contents) in files {
         let path = dir.join(name);
@@ -80,13 +91,20 @@ async fn install_with(
     }
 }
 
-/// [`PLUGIN`] with `executable` in place of the bare `atuin`, as a Python string literal: a JSON
-/// string is one, escapes and all.
-fn plugin_source(executable: &Path) -> Result<String, InstallHookError> {
+/// [`PLUGIN`] with `executable` in place of the bare `atuin` and `env` in place of the empty
+/// mapping, as Python literals: a JSON string is one, escapes and all, and so is a JSON object of
+/// strings.
+fn plugin_source(
+    executable: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<String, InstallHookError> {
     let path = executable
         .to_str()
         .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;
-    Ok(PLUGIN.replacen(ATUIN_LINE, &format!("ATUIN = {}", serde_json::Value::from(path)), 1))
+    let env = serde_json::to_string(env).expect("a map of strings is JSON");
+    Ok(PLUGIN
+        .replacen(ATUIN_LINE, &format!("ATUIN = {}", serde_json::Value::from(path)), 1)
+        .replacen(ENV_LINE, &format!("ATUIN_ENV = {env}"), 1))
 }
 
 #[cfg(test)]
@@ -103,6 +121,7 @@ mod tests {
     #[rstest]
     fn the_plugin_names_atuin_once() {
         assert_eq!(PLUGIN.matches(ATUIN_LINE).count(), 1);
+        assert_eq!(PLUGIN.matches(ENV_LINE).count(), 1);
     }
 
     #[rstest]
@@ -112,7 +131,9 @@ mod tests {
         let hermes = FakeHermes::default();
 
         let dir =
-            install_with(home.path(), Path::new("/opt/atuin/bin/atuin"), &hermes).await.unwrap();
+            install_with(home.path(), Path::new("/opt/atuin/bin/atuin"), &BTreeMap::new(), &hermes)
+                .await
+                .unwrap();
 
         assert_eq!(dir, home.path().join("plugins").joined("atuin"));
         assert_eq!(read(&dir.join("plugin.yaml")), MANIFEST);
@@ -129,11 +150,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let hermes = FakeHermes::default();
         let atuin = Path::new("/opt/atuin/bin/atuin");
-        let dir = install_with(home.path(), atuin, &hermes).await.unwrap();
+        let dir = install_with(home.path(), atuin, &BTreeMap::new(), &hermes).await.unwrap();
         let written = read(&dir.join("__init__.py"));
 
         assert!(matches!(
-            install_with(home.path(), atuin, &hermes).await,
+            install_with(home.path(), atuin, &BTreeMap::new(), &hermes).await,
             Err(InstallHookError::AlreadyInstalled)
         ));
         assert_eq!(read(&dir.join("__init__.py")), written);
@@ -145,9 +166,13 @@ mod tests {
     async fn a_moved_binary_is_written_over() {
         let home = tempfile::tempdir().unwrap();
         let hermes = FakeHermes::default();
-        install_with(home.path(), Path::new("/old/atuin"), &hermes).await.unwrap();
+        install_with(home.path(), Path::new("/old/atuin"), &BTreeMap::new(), &hermes)
+            .await
+            .unwrap();
 
-        let dir = install_with(home.path(), Path::new("/new/atuin"), &hermes).await.unwrap();
+        let dir = install_with(home.path(), Path::new("/new/atuin"), &BTreeMap::new(), &hermes)
+            .await
+            .unwrap();
 
         let source = read(&dir.join("__init__.py"));
         assert!(source.lines().any(|line| line == r#"ATUIN = "/new/atuin""#), "{source}");
@@ -162,7 +187,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let hermes = FakeHermes::missing();
 
-        let dir = install_with(home.path(), Path::new("/opt/atuin"), &hermes).await.unwrap();
+        let dir = install_with(home.path(), Path::new("/opt/atuin"), &BTreeMap::new(), &hermes)
+            .await
+            .unwrap();
 
         assert!(dir.join("__init__.py").is_file());
         assert!(dir.join("plugin.yaml").is_file());
@@ -171,8 +198,20 @@ mod tests {
 
     #[rstest]
     fn the_path_is_a_python_string() {
-        let source = plugin_source(Path::new(r#"/opt/Atuin's "bin"\atuin"#)).unwrap();
+        let source =
+            plugin_source(Path::new(r#"/opt/Atuin's "bin"\atuin"#), &BTreeMap::new()).unwrap();
         assert!(source.contains(r#"ATUIN = "/opt/Atuin's \"bin\"\\atuin""#), "{source}");
+    }
+
+    #[rstest]
+    fn the_env_is_a_python_dict() {
+        let env =
+            BTreeMap::from([("ATUIN_HOME".to_owned(), r#"/srv/Atuin's "home"\x"#.to_owned())]);
+        let source = plugin_source(Path::new("/opt/atuin"), &env).unwrap();
+        assert!(
+            source.contains(r#"ATUIN_ENV = {"ATUIN_HOME":"/srv/Atuin's \"home\"\\x"}"#),
+            "{source}"
+        );
     }
 
     #[cfg(unix)]
@@ -180,7 +219,10 @@ mod tests {
     fn a_path_that_is_not_utf8_is_refused() {
         use std::os::unix::ffi::OsStrExt as _;
         let path = Path::new(std::ffi::OsStr::from_bytes(b"/opt/\xffatuin"));
-        assert!(matches!(plugin_source(path), Err(InstallHookError::NonUtf8Executable(_))));
+        assert!(matches!(
+            plugin_source(path, &BTreeMap::new()),
+            Err(InstallHookError::NonUtf8Executable(_))
+        ));
     }
 
     /// Whether `python3` is here to run the plugin.
@@ -350,7 +392,9 @@ print(code)
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let plugin =
-            install_with(&home, Path::new("/opt/atuin"), &FakeHermes::default()).await.unwrap();
+            install_with(&home, Path::new("/opt/atuin"), &BTreeMap::new(), &FakeHermes::default())
+                .await
+                .unwrap();
         std::fs::write(dir.path().join("driver.py"), IMPORT_DRIVER).unwrap();
 
         let ran = std::process::Command::new("python3")
@@ -405,8 +449,8 @@ print(code)
         std::fs::write(
             &stub,
             format!(
-                "#!/bin/sh\n[ -e {slept} ] || {{ touch {slept}; sleep 1; }}\n{{ printf '%s\\t' \
-                 \"$*\"; cat; echo; }} >> {log}\n",
+                "#!/bin/sh\n[ -e {slept} ] || {{ touch {slept}; sleep 1; }}\n{{ printf \
+                 '%s\\t%s\\t' \"$*\" \"$ATUIN_HOME\"; cat; echo; }} >> {log}\n",
                 slept = quote(&slept),
                 log = quote(&log),
             ),
@@ -414,7 +458,9 @@ print(code)
         .unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         let home = dir.path().join("home");
-        let plugin = install_with(&home, &stub, &FakeHermes::default()).await.unwrap();
+        // What the installing shell set, which the gateway's environment doesn't have.
+        let env = BTreeMap::from([("ATUIN_HOME".to_owned(), "/srv/atuin's home".to_owned())]);
+        let plugin = install_with(&home, &stub, &env, &FakeHermes::default()).await.unwrap();
         std::fs::write(dir.path().join("driver.py"), DRIVER).unwrap();
 
         let ran = std::process::Command::new("python3")
@@ -427,8 +473,11 @@ print(code)
         let sent: Vec<serde_json::Value> = read(&log)
             .lines()
             .map(|line| {
-                let (args, payload) = line.split_once('\t').unwrap();
+                let mut fields = line.splitn(3, '\t');
+                let (args, home, payload) =
+                    (fields.next().unwrap(), fields.next().unwrap(), fields.next().unwrap());
                 assert_eq!(args, "hook hermes");
+                assert_eq!(home, "/srv/atuin's home");
                 serde_json::from_str(payload).unwrap()
             })
             .collect();

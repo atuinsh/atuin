@@ -165,10 +165,10 @@ impl InstallMcp for Hermes {
 
     /// Through `hermes config set` (see [`hermes::mcp::install`]), so `mcp_program` stays the
     /// default, `hermes`, with where this shell's atuin keeps its config and data in the server's
-    /// `env` ([`hermes::mcp::server_env`]). `executable()` already goes through `launch_path`.
+    /// `env` ([`hermes::atuin_env`]). `executable()` already goes through `launch_path`.
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let hermes = HermesCommand::new(&hermes::install_home());
-        let env = hermes::mcp::server_env(crate::env::vars_utf8());
+        let env = hermes::atuin_env(crate::env::vars_utf8());
         Ok(hermes::mcp::install(&hermes, &executable()?, &env).await?)
     }
 }
