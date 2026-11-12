@@ -140,6 +140,17 @@ jobs:
         if: "runner.os == 'Windows'"
         run: "pandoc --from=commonmark --to=rtf --standalone --output=crates/atuin/wix/License.rtf LICENSE"
         shell: "bash"
+      - name: "Install WiX 3.14.1"
+        if: "runner.os == 'Windows' && runner.arch == 'ARM64'"
+        run: |
+          $zip = "$env:RUNNER_TEMP\wix314-binaries.zip"
+          Invoke-WebRequest https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip -OutFile $zip
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne '6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31') { throw "sha256 $sha" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\wix\bin"
+          "WIX=$env:RUNNER_TEMP\wix\" >> $env:GITHUB_ENV
+          "$env:RUNNER_TEMP\wix\bin" >> $env:GITHUB_PATH
+        shell: "pwsh"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
