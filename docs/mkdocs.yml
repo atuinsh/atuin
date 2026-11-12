@@ -300,6 +300,7 @@ nav:
   - AI:
       - Introduction: ai/introduction.md
       - Settings: ai/settings.md
+      - Threads: ai/threads.md
       - "Slash Commands": ai/slash-commands.md
       - Skills: ai/skills.md
       - "Tools & Permissions": ai/tools-permissions.md
