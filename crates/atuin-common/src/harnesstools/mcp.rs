@@ -8,7 +8,7 @@ use enum_dispatch::enum_dispatch;
 use serde_json::{Value, json};
 
 use super::Harness;
-use super::amp::Amp;
+use super::amp::{self, Amp};
 use super::ccode::Ccode;
 use super::codex::{self, Codex};
 use super::copilot::{self, Copilot};
@@ -96,7 +96,7 @@ pub trait InstallMcp: Harness {
 
 impl InstallMcp for Amp {
     fn mcp_config_path(&self) -> PathBuf {
-        home_dir().joined(".config").joined("amp").joined("settings.json")
+        amp::config_dir().joined("settings.json")
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
@@ -379,6 +379,7 @@ mod tests {
     };
 
     #[rstest]
+    #[case("amp", ".config/amp/settings.json")]
     #[case("claude-code", ".claude.json")]
     #[case("codex", ".codex/config.toml")]
     #[case("copilot", ".copilot/mcp-config.json")]
@@ -406,6 +407,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case("amp", "XDG_CONFIG_HOME", "amp/settings.json")]
     #[case("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json")]
     #[case("codex", "CODEX_HOME", "config.toml")]
     #[case("copilot", "COPILOT_HOME", "mcp-config.json")]

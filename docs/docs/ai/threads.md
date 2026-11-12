@@ -42,6 +42,8 @@ Atuin instead:
 atuin hook install amp
 ```
 
+This writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to
+`$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
 Then restart Amp. At the end of each turn, the plugin pushes the turn's
 messages with `atuin threads push`. Only turns taken with the plugin installed,
 while the daemon is running, are captured. To bring in the rest (threads from

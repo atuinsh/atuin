@@ -11,6 +11,7 @@ use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget}
 use super::session::any::{AnySessions, ObservableExt};
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
+use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
@@ -18,6 +19,14 @@ pub mod export;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Amp;
+
+/// Amp's config directory, where it reads its settings and loads plugins from:
+/// `$XDG_CONFIG_HOME/amp`, falling back to `~/.config/amp`.
+pub(crate) fn config_dir() -> PathBuf {
+    var_nonempty("XDG_CONFIG_HOME")
+        .map_or_else(|| home_dir().joined(".config"), PathBuf::from)
+        .joined("amp")
+}
 
 impl Harness for Amp {
     fn name(&self) -> &'static str {
@@ -32,18 +41,18 @@ impl Harness for Amp {
         "amp"
     }
 
-    // Atuin doesn't follow `XDG_CONFIG_HOME` for Amp yet: it looks only in `~/.config/amp`.
     fn home_vars(&self) -> &'static [&'static str] {
-        &[]
+        &["XDG_CONFIG_HOME"]
     }
 
-    /// Amp loads every plugin in `~/.config/amp/plugins/` ([Plugin API]).
+    /// Amp loads every plugin in `plugins/` under its config directory, `$XDG_CONFIG_HOME/amp` or
+    /// `~/.config/amp` ([Plugin API]).
     ///
     /// [Plugin API]: https://ampcode.com/docs/plugin-api
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/amp/atuin.ts");
 
-        let plugins_dir = home_dir().joined(".config").joined("amp").joined("plugins");
+        let plugins_dir = config_dir().joined("plugins");
         let plugin_path = plugins_dir.clone().joined("atuin.ts");
         let installed = tokio::fs::read_to_string(&plugin_path).await;
         if installed.is_ok_and(|existing| existing == PLUGIN_SOURCE) {
@@ -85,6 +94,28 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// The plugin goes where Amp loads plugins from, which `XDG_CONFIG_HOME` moves.
+    #[rstest]
+    #[case::default(None, ".config/amp/plugins/atuin.ts")]
+    #[case::xdg(Some("xdg"), "xdg/amp/plugins/atuin.ts")]
+    #[tokio::test]
+    async fn installs_the_plugin_where_amp_loads_it(
+        #[case] xdg: Option<&str>,
+        #[case] relative: &str,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let env = crate::env::MockEnv::install();
+        env.set("HOME", home.path());
+        if let Some(xdg) = xdg {
+            env.set("XDG_CONFIG_HOME", home.path().join(xdg));
+        }
+
+        let installed = Amp.install_hooks().await.unwrap();
+
+        assert_eq!(installed, home.path().join(relative));
+        assert!(installed.is_file());
+    }
 
     #[rstest]
     fn resumes_by_continuing_the_thread() {
