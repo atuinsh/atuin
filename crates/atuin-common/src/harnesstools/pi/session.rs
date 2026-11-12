@@ -647,6 +647,15 @@ struct PiEntry {
     usage: Option<serde_json::Value>,
     /// On `custom_message`: what an extension injected into the model's context.
     content: Option<serde_json::Value>,
+    /// This is set on a `custom_message` whose `customType` is omp's `irc:incoming`. Such an
+    /// entry is a message that another agent sent this one.
+    #[serde(rename = "customType", default, deserialize_with = "is_agent_message")]
+    agent_message: bool,
+}
+
+/// This returns whether a `customType` is `irc:incoming`. Any other value, string or not, is not.
+fn is_agent_message<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(deserializer)? == "irc:incoming")
 }
 
 /// Entry types whose top-level `usage` records a model call of their own.
@@ -742,6 +751,9 @@ impl Message for PiMessage {
             // Summaries pi feeds back to the model as context (session-manager.ts
             // `sessionEntryToContextMessages`); neither the user nor the model said them.
             "compaction" | "branch_summary" => return Role::System,
+            // Since omp 18.18.9, a message from another agent reaches the agent as a user turn.
+            // It is the only copy of the message in this session.
+            "custom_message" if self.entry.agent_message => return Role::User,
             "custom_message" => "custom",
             other => other,
         };
@@ -1786,6 +1798,19 @@ mod tests {
         assert_eq!(m.role(), Role::Other("custom".to_owned()));
         assert_eq!(m.id(), Some(MessageId::from("x1".to_owned())));
         assert_eq!(m.usage(), None);
+    }
+
+    /// omp (18.18.9+) records a message from another agent as an `irc:incoming` entry, which it
+    /// sends to the model as a user turn.
+    #[rstest]
+    fn an_agent_message_is_a_user_turn() {
+        let m = pi(&serde_json::json!({"type": "custom_message", "customType": "irc:incoming",
+            "content": "<irc>\nIncoming IRC message from agent `subagent`:\n\nPING\n</irc>",
+            "display": true, "details": {"id": "15cb", "from": "subagent", "message": "PING"},
+            "attribution": "agent", "id": "x1", "parentId": "a1",
+            "timestamp": "2026-11-12T16:06:52.839Z"}));
+        assert_eq!(m.role(), Role::User);
+        assert!(texts(&m)[0].contains("PING"));
     }
 
     /// A tool result's `usage` is "not part of main LLM context accounting" (pi-ai types.ts
