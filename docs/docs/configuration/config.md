@@ -150,6 +150,20 @@ up, Atuin makes no network requests of its own.
 update_check = true/false
 ```
 
+### `show_whats_new`
+
+Default: `true`
+
+Configures whether search shows a short note about new features after you
+upgrade. The note appears once, over the search results. Your first key closes
+it, and that key still does what it normally does.
+
+Set to `false` to never show it.
+
+```toml
+show_whats_new = true/false
+```
+
 ### `sync_address`
 
 Default: `https://api.atuin.sh`

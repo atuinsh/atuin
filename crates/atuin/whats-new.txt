@@ -1,0 +1,4 @@
+# Shown once in search, the first time it opens after upgrading to a build with newer notes.
+# Written by a person, never generated. Two items is plenty; leave it empty and nothing shows.
+# First line is the version. Then items separated by a blank line: a headline, then a sentence
+# or two. `Backticks` pick out commands. Lines starting with # are ignored.

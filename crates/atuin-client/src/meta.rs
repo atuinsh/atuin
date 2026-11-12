@@ -28,6 +28,7 @@ const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
+const KEY_WHATS_NEW_SEEN: &str = "whats_new_seen";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
 
@@ -176,6 +177,14 @@ impl MetaStore {
 
     pub async fn save_latest_version(&self, version: &str) -> Result<()> {
         self.set(KEY_LATEST_VERSION, version).await
+    }
+
+    pub async fn whats_new_seen(&self) -> Result<Option<String>> {
+        self.get(KEY_WHATS_NEW_SEEN).await
+    }
+
+    pub async fn save_whats_new_seen(&self, version: &str) -> Result<()> {
+        self.set(KEY_WHATS_NEW_SEEN, version).await
     }
 
     pub async fn session_token(&self) -> Result<Option<SecretString>> {

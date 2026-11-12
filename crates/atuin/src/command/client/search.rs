@@ -26,6 +26,7 @@ mod inspector;
 mod interactive;
 pub mod keybindings;
 mod syntax;
+mod whats_new;
 
 use atuin_common::time::UtcOffsetSpec;
 

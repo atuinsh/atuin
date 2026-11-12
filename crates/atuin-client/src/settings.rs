@@ -1092,6 +1092,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub show_whats_new: bool,
     pub show_numeric_shortcuts: bool,
     pub auto_hide_height: u16,
     pub exit_mode: ExitMode,
@@ -1623,6 +1624,7 @@ impl Settings {
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("show_whats_new", true)?
             .set_default("show_numeric_shortcuts", true)?
             .set_default("auto_hide_height", 8)?
             .set_default("invert", false)?
