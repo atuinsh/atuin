@@ -491,13 +491,50 @@ pub struct KeyRuleConfig {
 }
 
 /// A keybinding config value: either a simple action string or an ordered list of conditional rules.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum KeyBindingConfig {
     /// Simple unconditional binding: `"ctrl-c" = "return-original"`
     Simple(String),
     /// Conditional binding: `"left" = [{ when = "cursor-at-start", action = "exit" }, { action = "cursor-left" }]`
     Rules(Vec<KeyRuleConfig>),
+}
+
+/// Dispatches on the value's shape instead of using `#[serde(untagged)]`, which buffers the
+/// value and hides fields `KeyRuleConfig` ignores from the unknown-key warning.
+impl<'de> Deserialize<'de> for KeyBindingConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BindingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BindingVisitor {
+            type Value = KeyBindingConfig;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an action string or a list of keybinding rules")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, action: &str) -> Result<Self::Value, E> {
+                Ok(KeyBindingConfig::Simple(action.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, action: String) -> Result<Self::Value, E> {
+                Ok(KeyBindingConfig::Simple(action))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut rules = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(rule) = seq.next_element()? {
+                    rules.push(rule);
+                }
+                Ok(KeyBindingConfig::Rules(rules))
+            }
+        }
+
+        deserializer.deserialize_any(BindingVisitor)
+    }
 }
 
 /// User-facing keymap configuration. Each mode maps key strings to bindings.
@@ -3272,6 +3309,26 @@ left = [{{ when = \"cursor-at-start\", action = \"exit\" }}, {{ action = \"curso
             Settings::unknown_config_warning(std::path::Path::new("config.toml"), &unknown)
                 .is_none()
         );
+    }
+
+    #[rstest]
+    fn keybinding_rule_typos_warn() {
+        let toml = "\
+[keymap.emacs]
+\"ctrl-x\" = \"exit\"
+left = [{ action = \"exit\", wheen = \"cursor-at-start\" }, { action = \"cursor-left\" }]
+";
+        let (settings, unknown) = load_with_env(toml, &[]).expect("rule typos should still load");
+        assert_eq!(unknown, vec!["keymap.emacs.left.0.wheen"]);
+        assert!(matches!(
+            settings.keymap.emacs.get("ctrl-x"),
+            Some(super::KeyBindingConfig::Simple(action)) if action == "exit"
+        ));
+        assert!(matches!(
+            settings.keymap.emacs.get("left"),
+            Some(super::KeyBindingConfig::Rules(rules))
+                if rules.len() == 2 && rules[0].action == "exit" && rules[0].when.is_none()
+        ));
     }
 
     #[rstest]
