@@ -129,7 +129,7 @@ mod tests {
             plugin.lines().filter(|l| l.starts_with("export ")).map(str::to_owned).collect()
         };
         assert_eq!(exports(PLUGIN_1), [
-            "export const AtuinPlugin: Plugin = async ({ directory }) => {"
+            "export const AtuinPlugin: Plugin = async ({ client, directory }) => {"
         ]);
         assert_eq!(exports(PLUGIN_2), ["export default { id: \"atuin\", setup };"]);
     }
@@ -148,7 +148,11 @@ mod tests {
 import plugin from "./atuin.ts";
 const hooks = {};
 const add = (kind) => (name, fn) => { (hooks[`${kind}.${name}`] ??= []).push(fn); };
-plugin.setup({ tool: { hook: add("tool") }, shell: { hook: add("shell") } });
+await plugin.setup({
+    location: { directory: process.cwd() },
+    tool: { hook: add("tool") },
+    shell: { hook: add("shell") },
+});
 const fire = async (name, payload) => { for (const fn of hooks[name] ?? []) await fn(payload); };
 async function call(id, command, after) {
     await fire("tool.execute.before", { tool: "shell", id, input: { command, description: `about ${id}` } });
@@ -222,6 +226,8 @@ await fire("tool.execute.after", { tool: "read", id: "c6", status: "completed", 
         };
         let end = |exit: i32| format!("history end h_1 --exit {exit} --duration _");
         assert_eq!(calls, [
+            // the availability probe, before any hook is registered
+            "--version".to_owned(),
             start("c1", "true"),
             end(0),
             start("c2", "false"),
