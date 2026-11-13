@@ -526,6 +526,7 @@ dependencies = [
  "ref-cast",
  "regex",
  "rmp",
+ "rmp-serde",
  "rstest",
  "rust-embed",
  "rustix",

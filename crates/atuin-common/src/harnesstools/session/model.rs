@@ -1,7 +1,10 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use derive_more::{AsRef, Display, From, Into};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::harnesstools::session::{Checkpoint, Patch};
 
@@ -23,7 +26,21 @@ pub enum Role {
     Other(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A block of a message's content.
+///
+/// Blocks are stored under their variant's name (`{"Text": "hi"}`, in records' msgpack and in
+/// JSON alike), and a name this build doesn't know reads as [`Content::Unknown`] rather than
+/// failing the whole message (`ContentVisitor`). So a new variant needs no new record version
+/// (v6 readers are the first to read this way), but:
+///
+/// - its name goes in `ContentVisitor`, which `every_kind_reads_back_as_itself` checks;
+/// - it needs a sidecar migration that bumps `projection_state.generation`, so messages projected
+///   while it was unknown are projected again, as a new `HarnessKind` does;
+/// - its data must be something JSON can hold (no map keyed by anything but strings), or a reader
+///   that doesn't know it fails on it as before.
+///
+/// Never rename a variant: its name is what's stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Content {
     Text(String),
     Reasoning(String),
@@ -46,6 +63,96 @@ pub enum Content {
     /// The changes a tool call made to files, as its harness recorded them beside the call's
     /// result (or, for Codex, after it).
     Patch(Patch),
+    /// A block of a kind a newer atuin wrote and this build doesn't know. It is written back as
+    /// it was read, and is otherwise nothing: no text, no call, no conversation.
+    #[serde(untagged)]
+    Unknown(UnknownBlock),
+}
+
+/// A [`Content::Unknown`] block: its kind's name, and its data as JSON. `None` for a kind with no
+/// data, which is stored as its name alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownBlock {
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+}
+
+impl Serialize for UnknownBlock {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.value {
+            None => serializer.serialize_str(&self.kind),
+            Some(value) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry(&self.kind, value)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Content {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ContentVisitor)
+    }
+}
+
+/// Reads a [`Content`] block, a kind it doesn't know as [`Content::Unknown`].
+///
+/// Written by hand because a derived `#[serde(untagged)]` fallback, which would also do that,
+/// reads every block into a buffer before matching it, and turns an error in a block of a known
+/// kind into an unknown block, hiding the error. Here a known kind is read straight from the input,
+/// and fails as it always did.
+struct ContentVisitor;
+
+impl<'de> Visitor<'de> for ContentVisitor {
+    type Value = Content;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a content block")
+    }
+
+    /// A kind with no data: none this build knows.
+    fn visit_str<E: de::Error>(self, kind: &str) -> Result<Content, E> {
+        Ok(Content::Unknown(UnknownBlock {
+            kind: kind.to_owned(),
+            value: None,
+        }))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Content, A::Error> {
+        let Some(kind) = map.next_key::<String>()? else {
+            return Err(de::Error::invalid_length(0, &self));
+        };
+        let content = match kind.as_str() {
+            "Text" => Content::Text(map.next_value()?),
+            "Reasoning" => Content::Reasoning(map.next_value()?),
+            "ToolUse" => Content::ToolUse(map.next_value()?),
+            "ToolResult" => Content::ToolResult(map.next_value()?),
+            "Other" => Content::Other(map.next_value()?),
+            "ReasoningSummary" => {
+                let ReasoningSummaryFields { tokens } = map.next_value()?;
+                Content::ReasoningSummary { tokens }
+            }
+            "Summary" => Content::Summary(map.next_value()?),
+            "Error" => Content::Error(map.next_value()?),
+            "Patch" => Content::Patch(map.next_value()?),
+            _ => Content::Unknown(UnknownBlock {
+                kind,
+                value: Some(map.next_value()?),
+            }),
+        };
+        if map.next_key::<de::IgnoredAny>()?.is_some() {
+            return Err(de::Error::invalid_length(2, &self));
+        }
+        Ok(content)
+    }
+}
+
+/// [`Content::ReasoningSummary`]'s fields, read as a derived struct variant's are: a sequence in
+/// records' positional msgpack, a map in JSON.
+#[derive(Deserialize)]
+struct ReasoningSummaryFields {
+    tokens: Option<u64>,
 }
 
 /// The [`Content::Summary`] of a compaction whose summary can't be read (Codex's, compacted by
@@ -289,6 +396,137 @@ mod tests {
         let id = SessionId::from(raw.to_owned());
         assert_eq!(id.to_string(), raw);
         assert_eq!(id.as_ref(), raw);
+    }
+
+    /// A block of every kind this build knows. The match fails to compile until a new kind is
+    /// listed, and then needs a block of it here.
+    fn every_kind() -> Vec<Content> {
+        use crate::harnesstools::session::{Change, FilePatch, Hunk};
+
+        let blocks = vec![
+            Content::Text("hi".to_owned()),
+            Content::Reasoning("hmm".to_owned()),
+            Content::ToolUse(ToolUse {
+                id: ToolCallId::from("t1".to_owned()),
+                name: "bash".to_owned(),
+                input: serde_json::json!({"cmd": "ls"}),
+            }),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("t1".to_owned()),
+                output: serde_json::json!("a\nb"),
+                error: true,
+            }),
+            Content::Other(serde_json::json!({"type": "image"})),
+            Content::ReasoningSummary { tokens: Some(7) },
+            Content::ReasoningSummary { tokens: None },
+            Content::Summary("so far".to_owned()),
+            Content::Error("overloaded".to_owned()),
+            Content::Patch(Patch {
+                call: ToolCallId::from("t1".to_owned()),
+                files: vec![FilePatch {
+                    path: "a.txt".to_owned(),
+                    moved_to: None,
+                    change: Change::Update,
+                    hunks: vec![Hunk {
+                        old_start: 1,
+                        old_lines: 1,
+                        new_start: 1,
+                        new_lines: 1,
+                        lines: vec!["-a".to_owned(), "+b".to_owned()],
+                    }],
+                }],
+            }),
+        ];
+        for block in &blocks {
+            match block {
+                Content::Text(_)
+                | Content::Reasoning(_)
+                | Content::ToolUse(_)
+                | Content::ToolResult(_)
+                | Content::Other(_)
+                | Content::ReasoningSummary { .. }
+                | Content::Summary(_)
+                | Content::Error(_)
+                | Content::Patch(_) => {}
+                Content::Unknown(_) => unreachable!("not a kind this build knows"),
+            }
+        }
+        blocks
+    }
+
+    /// The names [`ContentVisitor`] matches are the ones the derived `Serialize` writes.
+    #[rstest]
+    fn every_kind_reads_back_as_itself() {
+        let blocks = every_kind();
+
+        let msgpack: Vec<Content> =
+            rmp_serde::from_slice(&rmp_serde::to_vec(&blocks).unwrap()).unwrap();
+        let json: Vec<Content> =
+            serde_json::from_str(&serde_json::to_string(&blocks).unwrap()).unwrap();
+
+        assert_eq!(msgpack, blocks);
+        assert_eq!(json, blocks);
+    }
+
+    /// Kinds a newer atuin might add: one with fields, one with a value, one with no data.
+    #[derive(Serialize)]
+    enum Newer {
+        Undone {
+            through: String,
+        },
+        Marker(u32),
+        Ping,
+    }
+
+    /// A kind this build doesn't know reads as [`Content::Unknown`], next to the kinds it does,
+    /// and is written back exactly as it was read.
+    #[rstest]
+    #[case::fields(Newer::Undone { through: "u1".to_owned() }, "Undone", Some(serde_json::json!(["u1"])), Some(serde_json::json!({"through": "u1"})))]
+    #[case::value(Newer::Marker(3), "Marker", Some(serde_json::json!(3)), Some(serde_json::json!(3)))]
+    #[case::no_data(Newer::Ping, "Ping", None, None)]
+    fn an_unknown_kind_is_kept_as_it_was_written(
+        #[case] newer: Newer,
+        #[case] kind: &str,
+        // Fields are positional in records' msgpack, named in JSON.
+        #[case] msgpack_value: Option<serde_json::Value>,
+        #[case] json_value: Option<serde_json::Value>,
+    ) {
+        let text = serde_json::json!({"Text": "hi"});
+        let written = (
+            rmp_serde::to_vec(&(&text, &newer)).unwrap(),
+            serde_json::to_string(&(&text, &newer)).unwrap(),
+        );
+        let unknown = |value| {
+            Content::Unknown(UnknownBlock {
+                kind: kind.to_owned(),
+                value,
+            })
+        };
+
+        let msgpack: Vec<Content> = rmp_serde::from_slice(&written.0).unwrap();
+        let json: Vec<Content> = serde_json::from_str(&written.1).unwrap();
+
+        let hi = Content::Text("hi".to_owned());
+        assert_eq!(msgpack, vec![hi.clone(), unknown(msgpack_value)]);
+        assert_eq!(json, vec![hi, unknown(json_value)]);
+        assert_eq!(rmp_serde::to_vec(&msgpack).unwrap(), written.0);
+        assert_eq!(serde_json::to_string(&json).unwrap(), written.1);
+    }
+
+    /// A block of a known kind that doesn't hold what that kind holds is an error, as it was
+    /// before unknown kinds were read, not an unknown block.
+    #[rstest]
+    #[case::wrong_data(r#"{"Text": 5}"#)]
+    #[case::wrong_fields(r#"{"ToolUse": {"name": "bash"}}"#)]
+    #[case::two_kinds(r#"{"Text": "a", "Summary": "b"}"#)]
+    #[case::no_kind("{}")]
+    #[case::not_a_block("[1]")]
+    fn a_malformed_block_is_an_error(#[case] json: &str) {
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let msgpack = rmp_serde::to_vec(&value).unwrap();
+
+        assert!(serde_json::from_str::<Content>(json).is_err(), "{json}");
+        assert!(rmp_serde::from_slice::<Content>(&msgpack).is_err(), "{json}");
     }
 
     #[rstest]

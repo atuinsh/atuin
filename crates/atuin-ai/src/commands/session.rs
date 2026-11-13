@@ -879,8 +879,9 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
     for block in &m.content {
         match block {
             Content::Text(t) => writeln!(out, "{}", sanitize(t))?,
-            // Capture never stores reasoning text or raw blocks.
-            Content::Reasoning(_) | Content::Other(_) => {}
+            // Capture never stores reasoning text or raw blocks, and a block of a kind this build
+            // doesn't know has nothing to show.
+            Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 writeln!(out, "[thinking] {}", reasoning_label(tokens))?;
@@ -991,8 +992,9 @@ fn message_summary(m: &Message) -> Option<Summary> {
                     return Some(Summary::Text(line));
                 }
             }
-            // Capture never stores reasoning text or raw blocks.
-            Content::Reasoning(_) | Content::Other(_) => {}
+            // Capture never stores reasoning text or raw blocks, and a block of a kind this build
+            // doesn't know has nothing to show.
+            Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 return Some(Summary::Thinking(reasoning_label(tokens)));
@@ -1529,11 +1531,12 @@ fn session_json(s: &Session) -> SessionJson {
 }
 
 /// `reasoning` is the message's reasoning token count, for a summary block that lacks its own.
-/// `None` for what capture never stores (reasoning text, raw blocks).
+/// `None` for what capture never stores (reasoning text, raw blocks), and for a block of a kind
+/// this build doesn't know.
 fn content_json(block: &Content, reasoning: Option<u64>) -> Option<ContentJson> {
     Some(match block {
         Content::Text(t) => ContentJson::Text { text: t.clone() },
-        Content::Reasoning(_) | Content::Other(_) => return None,
+        Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => return None,
         Content::ReasoningSummary { tokens } => ContentJson::Thinking {
             text: reasoning_label(tokens.or(reasoning)),
         },

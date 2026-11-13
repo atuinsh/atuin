@@ -133,8 +133,11 @@ impl From<DomainStopReason> for StopReason {
     }
 }
 
-impl From<Content> for ContentBlock {
-    fn from(value: Content) -> Self {
+impl ContentBlock {
+    /// `value` as it goes over the wire, or `None` for a block of a kind this build doesn't know
+    /// ([`Content::Unknown`]): every reader takes one for nothing, so it isn't sent.
+    #[must_use]
+    pub fn of(value: Content) -> Option<Self> {
         use content_block::Block;
 
         let block = match value {
@@ -161,9 +164,10 @@ impl From<Content> for ContentBlock {
             Content::Patch(patch) => {
                 Block::Patch(serde_json::to_string(&patch).expect("a patch is always serializable"))
             }
+            Content::Unknown(_) => return None,
         };
 
-        Self { block: Some(block) }
+        Some(Self { block: Some(block) })
     }
 }
 
@@ -225,7 +229,7 @@ impl From<DomainMessage> for Message {
                 nanos: value.timestamp.nanosecond().cast_signed(),
             }),
             role: Role::from(value.role) as i32,
-            content: value.content.into_iter().map(ContentBlock::from).collect(),
+            content: value.content.into_iter().filter_map(ContentBlock::of).collect(),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
@@ -770,12 +774,12 @@ mod tests {
 
     #[rstest]
     fn uncaptured_tool_input_is_absent_on_the_wire() {
-        let call: ContentBlock = Content::ToolUse(ToolUse {
+        let call = ContentBlock::of(Content::ToolUse(ToolUse {
             id: ToolCallId::from("c1".to_owned()),
             name: "Bash".to_owned(),
             input: Value::Null,
-        })
-        .into();
+        }))
+        .unwrap();
         let content_block::Block::ToolCall(tc) = call.block.unwrap() else {
             panic!("expected a tool call block");
         };

@@ -741,7 +741,10 @@ fn bulky(msg: &Message) -> bool {
                 let lines = patch.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
                 left = left.saturating_sub(lines.map(String::len).sum());
             }
-            Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_) => {}
+            Content::Reasoning(_)
+            | Content::ReasoningSummary { .. }
+            | Content::Other(_)
+            | Content::Unknown(_) => {}
         }
         if left == 0 {
             return true;
@@ -789,7 +792,7 @@ fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
             true
         }
         Content::ReasoningSummary { .. } => true,
-        Content::Text(_) | Content::Other(_) => false,
+        Content::Text(_) | Content::Other(_) | Content::Unknown(_) => false,
     });
     // Both titles a row carries: the session's, and the one its own line set.
     let change = msg.title_change.as_mut().and_then(|change| change.text.as_mut());
@@ -2107,7 +2110,8 @@ mod tests {
         let mut messages = Box::pin(rebuilt.messages(&msg.session));
         let stored = messages.next().await.unwrap().unwrap();
         assert_eq!(stored.content, msg.content);
-        let block = crate::grpc::ai::agent::pb::ContentBlock::from(stored.content[0].clone());
+        let block =
+            crate::grpc::ai::agent::pb::ContentBlock::of(stored.content[0].clone()).unwrap();
         assert_eq!(
             block.block,
             Some(crate::grpc::ai::agent::pb::content_block::Block::ReasoningSummary(

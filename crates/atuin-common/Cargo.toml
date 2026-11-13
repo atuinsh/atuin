@@ -125,6 +125,7 @@ windows-sys = { workspace = true, optional = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+rmp-serde = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
