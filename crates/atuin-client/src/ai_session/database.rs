@@ -1455,6 +1455,10 @@ impl AiSessionDatabase {
                 Self::push_json_text(out, &tool.input);
             }
             Content::Other(value) => Self::push_json_text(out, value),
+            // This build can't tell text in the block from anything else, so the block isn't
+            // indexed. A build that knows its kind indexes it after a migration projects the
+            // message again.
+            Content::Unknown(_) => {}
             // The files a call changed are what a search for them looks for; their lines are
             // tool output like any other.
             Content::Patch(patch) => {
@@ -1958,7 +1962,7 @@ mod tests {
     use atuin_common::db::sqlite::fts::TextHighlighter;
     use atuin_common::db::sqlite::{Access, Sqlite};
     use atuin_common::harnesstools::session::{
-        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
+        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, UnknownBlock, Usage,
     };
     use atuin_domain::record::{HostId, RecordId};
     use futures::TryStreamExt;
@@ -2731,7 +2735,7 @@ mod tests {
     /// until it is named, and then fails the test until it has a sample and a bit.
     #[rstest]
     fn every_kind_of_block_has_its_own_bit() {
-        const KINDS: [&str; 10] = [
+        const KINDS: [&str; 11] = [
             "text",
             "reasoning",
             "tool use",
@@ -2742,6 +2746,7 @@ mod tests {
             "other",
             "reasoning summary",
             "tool error",
+            "unknown",
         ];
         let kind = |c: &Content| match c {
             Content::Text(_) => "text",
@@ -2754,6 +2759,7 @@ mod tests {
             Content::Error(_) => "error",
             Content::Other(_) => "other",
             Content::ReasoningSummary { .. } => "reasoning summary",
+            Content::Unknown(_) => "unknown",
         };
         let result = |error| {
             Content::ToolResult(ToolResult {
@@ -2780,6 +2786,10 @@ mod tests {
             Content::Error(String::new()),
             Content::Other(serde_json::Value::Null),
             Content::ReasoningSummary { tokens: None },
+            Content::Unknown(UnknownBlock {
+                kind: "Newer".to_owned(),
+                value: None,
+            }),
         ];
 
         let mut kinds: Vec<_> = samples.iter().map(kind).collect();

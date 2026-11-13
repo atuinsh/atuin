@@ -382,6 +382,8 @@ impl ContentBlock {
                 Block::ReasoningSummary(content_block::ReasoningSummary { tokens: None })
             }
             Content::Other(_) => return Ok(None),
+            // The store holds back a message with an unknown block until a build knows its kind.
+            Content::Unknown(_) => return Ok(None),
             Content::ReasoningSummary { tokens } => {
                 Block::ReasoningSummary(content_block::ReasoningSummary { tokens })
             }

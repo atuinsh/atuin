@@ -429,6 +429,7 @@ pub(crate) mod tests {
                     .collect(),
             },
             Content::Other(value) => return Block::Other(value),
+            Content::Unknown(_) => unreachable!("a harness's reader makes no unknown block"),
         })
     }
 

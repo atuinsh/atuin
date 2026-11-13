@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use atuin_common::encryption::paseto_v4::{EncryptedData, Key};
-use atuin_common::harnesstools::session::Role;
 use atuin_common::harnesstools::session::synthetic::SYNTHETIC;
+use atuin_common::harnesstools::session::{Content, Role};
 use atuin_domain::record::{
     DecryptedData, Host, HostId, Record, RecordId, RecordIdx, RecordSeriesKey, RecordTag,
     RecordVersion,
@@ -100,7 +100,9 @@ pub enum Loaded {
     /// it.
     Missing,
     /// Stored, but this build can't read it yet: under another key, or of a kind or version from a
-    /// later build.
+    /// later build. A message that holds a [`Content::Unknown`] block is held too. Octavo keeps
+    /// the first copy of a message that it's given, so the message waits for a build that reads
+    /// all of it.
     Held,
     /// Stored, and no build will read it: of another tag, retired, undecodable, or an api-request
     /// blob.
@@ -140,6 +142,10 @@ impl AiSessionRecord {
     /// what they can't decode for good, and hold a version they don't know until they're
     /// upgraded. v5 readers read a harness they don't know as [`HarnessKind::Unknown`], so later
     /// harnesses need no version of their own.
+    ///
+    /// A message that holds a block v5 readers don't know is written as v6. v6 readers read a
+    /// block that they don't know as [`Content::Unknown`]. So later blocks need no version of
+    /// their own either.
     #[must_use]
     pub fn version(&self) -> RecordVersion {
         match self {
@@ -160,7 +166,24 @@ impl AiSessionRecord {
                             | HarnessKind::Grok
                     )
                 };
-                if !harnesses.iter().all(v4_knows) {
+                // This match names every block kind, so a new kind has to be placed in it. v5
+                // readers know no kind added since.
+                let v5_knows = |c: &Content| match c {
+                    Content::Text(_)
+                    | Content::Reasoning(_)
+                    | Content::ToolUse(_)
+                    | Content::ToolResult(_)
+                    | Content::Other(_)
+                    | Content::ReasoningSummary { .. }
+                    | Content::Summary(_)
+                    | Content::Error(_)
+                    | Content::Patch(_) => true,
+                    // A block kept from a newer build's record. v5 readers don't know it either.
+                    Content::Unknown(_) => false,
+                };
+                if !msg.content.iter().all(v5_knows) {
+                    RecordVersion::V6
+                } else if !harnesses.iter().all(v4_knows) {
                     RecordVersion::V5
                 } else if harnesses.contains(&HarnessKind::Grok) {
                     RecordVersion::V4
@@ -198,7 +221,11 @@ impl AiSessionRecord {
         match version {
             RecordVersion::V0 => Err(DecodeError::Retired(RecordVersion::V0)),
             RecordVersion::V1 => Ok(Self::Message(rmp_serde::from_slice(body)?)),
-            RecordVersion::V2 | RecordVersion::V3 | RecordVersion::V4 | RecordVersion::V5 => {
+            RecordVersion::V2
+            | RecordVersion::V3
+            | RecordVersion::V4
+            | RecordVersion::V5
+            | RecordVersion::V6 => {
                 let body = zstd::stream::decode_all(body).map_err(DecodeError::Decompress)?;
                 Ok(Self::Message(rmp_serde::from_slice(&body)?))
             }
@@ -864,6 +891,11 @@ enum Decoded {
 impl From<Decoded> for Loaded {
     fn from(decoded: Decoded) -> Self {
         match decoded {
+            Decoded::Message(msg)
+                if msg.content.iter().any(|c| matches!(c, Content::Unknown(_))) =>
+            {
+                Self::Held
+            }
             Decoded::Message(msg) => Self::Message(msg),
             Decoded::Held => Self::Held,
             Decoded::Skipped => Self::Skipped,
@@ -903,7 +935,7 @@ enum Pass {
 mod tests {
     use std::ops::Range;
 
-    use atuin_common::harnesstools::session::{Content, Role};
+    use atuin_common::harnesstools::session::{Content, Role, UnknownBlock};
     use atuin_domain::record::HostId;
     use futures::TryStreamExt;
     use proptest::prelude::*;
@@ -1055,6 +1087,46 @@ mod tests {
         let AiSessionRecord::Message(got) =
             AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version).unwrap();
         assert_eq!(got, msg);
+    }
+
+    /// `sample_message`, with a block after its text of a kind that a newer build added.
+    fn with_unknown_block() -> Message {
+        let mut msg = sample_message();
+        msg.content.push(Content::Unknown(UnknownBlock {
+            kind: "Undone".to_owned(),
+            value: Some(serde_json::json!(["u1"])),
+        }));
+        msg
+    }
+
+    /// A message can hold a block of a kind that this build doesn't know, from a newer build's
+    /// record. Such a message is stored as v6, so v5 readers hold it rather than skip it. It reads
+    /// back with the block as it was. It projects into the sidecar the same way. Octavo doesn't
+    /// get the message yet. Octavo keeps the first copy of a message, so the message waits for a
+    /// build that knows the block.
+    #[rstest]
+    #[tokio::test]
+    async fn a_message_with_an_unknown_block_is_kept_whole() {
+        let store = SqliteStore::in_memory(test_local_timeout()).await.unwrap();
+        let s = AiSessionStore::builder().store(store.clone()).host_id(hid()).key(key()).build();
+        let msg = with_unknown_block();
+        s.push(&msg).await.unwrap();
+
+        let recs = store.all_tagged(&RecordTag::AiSession).await.unwrap();
+        let decrypted = recs[0].decrypt(&key()).unwrap();
+        assert_eq!(decrypted.version, RecordVersion::V6);
+        let AiSessionRecord::Message(got) =
+            AiSessionRecord::deserialize(&decrypted.data.0, &decrypted.version).unwrap();
+        assert_eq!(got, msg);
+
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        s.build(&db).await.unwrap();
+        let projected: Vec<_> = db.messages(&msg.session).try_collect().await.unwrap();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].content, msg.content);
+
+        let loaded = s.load(&[msg.id]).await.unwrap();
+        assert_eq!(loaded, vec![(msg.id, Loaded::Held)]);
     }
 
     #[rstest]
