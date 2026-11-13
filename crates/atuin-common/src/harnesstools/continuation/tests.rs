@@ -1112,6 +1112,28 @@ fn calls_carry_over_in_the_targets_rows(#[case] target: AnyHarness, #[case] want
     assert_eq!(c.flattened.summary(), "");
 }
 
+/// Each step of a turn keeps the time of the row it was in, not the turn's start.
+#[rstest]
+fn steps_keep_their_original_times(
+    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] target: AnyHarness,
+) {
+    let original = session_of("orig", vec![
+        msg(Role::User, vec![text("fix the flaky test")], 10),
+        msg(Role::Assistant, vec![call_as("c1", "Bash", json!({"command": "cargo test"}))], 20),
+        msg(Role::Tool, vec![answer("c1", "1 failed")], 30),
+        msg(Role::Assistant, vec![call_as("c2", "Read", json!({"file_path": "a.rs"}))], 40),
+        msg(Role::Tool, vec![answer("c2", "fn a() {}")], 50),
+        msg(Role::Assistant, vec![text("Fixed.")], 60),
+    ]);
+    let c = continue_in(CLAUDE, &original, None, target).unwrap();
+    let times: Vec<_> = c.session.messages.iter().map(|m| m.timestamp).collect();
+    for at in [20, 40, 60] {
+        let at = OffsetDateTime::from_unix_timestamp(at).unwrap();
+        assert!(times.contains(&at), "a row at {at} in {times:?}");
+    }
+    assert!(times.windows(2).all(|w| w[0] < w[1]), "every row after the one before");
+}
+
 /// opencode writes each step of a turn as a message of its own, in order: its text, then its
 /// calls with their results, the next step only once they are answered.
 #[rstest]
