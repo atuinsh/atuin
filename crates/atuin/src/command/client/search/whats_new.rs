@@ -30,7 +30,7 @@ const CHROME_HEIGHT: u16 = 2;
 /// handled by the search exactly as if it had never been there.
 pub struct WhatsNew {
     version: Version,
-    items: Vec<(String, String)>,
+    items: Vec<String>,
     drawn: bool,
     recorded: bool,
 }
@@ -122,19 +122,18 @@ impl WhatsNew {
         self.drawn = true;
     }
 
-    /// Each item is a bold headline, then a body with `code` picked out.
+    /// Each item is a paragraph, with `code` and **bold** picked out.
     fn lines(&self, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         let style = |meaning| Style::from_crossterm(theme.as_style(meaning));
         let base = style(Meaning::Base);
         let code = style(Meaning::SyntaxCommand);
 
         let mut lines = Vec::new();
-        for (headline, body) in &self.items {
+        for item in &self.items {
             if !lines.is_empty() {
                 lines.push(Line::default());
             }
-            lines.extend(wrap(headline, width, base.add_modifier(Modifier::BOLD), code));
-            lines.extend(wrap(body, width, base, code));
+            lines.extend(wrap(item, width, base, code));
         }
         lines
     }
@@ -151,19 +150,17 @@ pub fn dismisses(event: &Event) -> bool {
     }
 }
 
-/// Read the version and the items, each a headline and a body, from the notes file.
+/// Read the version and the items, each a paragraph, from the notes file.
 ///
 /// Comment lines are dropped first. Any run of blank lines then separates two items.
-fn parse(file: &str) -> Option<(Version, Vec<(String, String)>)> {
+fn parse(file: &str) -> Option<(Version, Vec<String>)> {
     let mut lines = file.lines().map(str::trim).filter(|line| !line.starts_with('#'));
     let version = Version::parse(lines.find(|line| !line.is_empty())?).ok()?;
     let lines = lines.collect::<Vec<_>>();
     let items = lines
         .split(|line| line.is_empty())
-        .filter_map(|item| {
-            let (headline, body) = item.split_first()?;
-            Some(((*headline).to_string(), body.join(" ")))
-        })
+        .filter(|item| !item.is_empty())
+        .map(|item| item.join(" "))
         .collect::<Vec<_>>();
 
     (!items.is_empty()).then_some((version, items))
@@ -174,39 +171,56 @@ fn wrap(text: &str, width: usize, base: Style, code: Style) -> Vec<Line<'static>
     let mut line = Vec::new();
     let mut column = 0;
     let mut in_code = false;
+    let mut bold = false;
+    let style = |in_code: bool, bold: bool| {
+        let style = if in_code {
+            code
+        } else {
+            base
+        };
+        if bold {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style
+        }
+    };
 
     for word in text.split_whitespace() {
-        let word_width = word.replace('`', "").width();
+        let space = style(in_code, bold);
+        // Each run of text with its style, after the `code` and **bold** markers in the word.
+        let mut parts = Vec::new();
+        let mut rest = word;
+        while !rest.is_empty() {
+            if let Some(after) = rest.strip_prefix('`') {
+                in_code = !in_code;
+                rest = after;
+                continue;
+            }
+            if !in_code && let Some(after) = rest.strip_prefix("**") {
+                bold = !bold;
+                rest = after;
+                continue;
+            }
+            let end = rest
+                .char_indices()
+                .skip(1)
+                .map(|(i, _)| i)
+                .find(|&i| rest[i..].starts_with('`') || (!in_code && rest[i..].starts_with("**")))
+                .unwrap_or(rest.len());
+            parts.push(Span::styled(rest[..end].to_string(), style(in_code, bold)));
+            rest = &rest[end..];
+        }
+        let word_width = parts.iter().map(|part| part.content.width()).sum::<usize>();
+
         if column > 0 && column + 1 + word_width > width {
             lines.push(Line::from(std::mem::take(&mut line)));
             column = 0;
         }
         if column > 0 {
-            line.push(Span::styled(
-                " ",
-                if in_code {
-                    code
-                } else {
-                    base
-                },
-            ));
+            line.push(Span::styled(" ", space));
             column += 1;
         }
-        for (i, part) in word.split('`').enumerate() {
-            if i > 0 {
-                in_code = !in_code;
-            }
-            if !part.is_empty() {
-                line.push(Span::styled(
-                    part.to_string(),
-                    if in_code {
-                        code
-                    } else {
-                        base
-                    },
-                ));
-            }
-        }
+        line.extend(parts);
         column += word_width;
     }
     if !line.is_empty() {
@@ -237,9 +251,30 @@ mod tests {
     fn items_are_separated_by_blank_lines(#[case] file: &str) {
         let (version, items) = parse(file).expect("the notes should parse");
         assert_eq!(version, Version::new(1, 2, 3));
-        assert_eq!(items, [
-            ("One".to_string(), "first body".to_string()),
-            ("Two".to_string(), "second body".to_string()),
+        assert_eq!(items, ["One first body", "Two second body"]);
+    }
+
+    #[rstest]
+    fn markers_pick_out_bold_and_code() {
+        let base = Style::default();
+        let code = Style::default().fg(ratatui::style::Color::Green);
+        let bold = base.add_modifier(Modifier::BOLD);
+        let lines = wrap("**Atuin Threads** try `atuin resume`. a*b", 80, base, code);
+        let spans =
+            lines[0].spans.iter().map(|s| (s.content.as_ref(), s.style)).collect::<Vec<_>>();
+        assert_eq!(spans, [
+            ("Atuin", bold),
+            (" ", bold),
+            ("Threads", bold),
+            (" ", base),
+            ("try", base),
+            (" ", base),
+            ("atuin", code),
+            (" ", code),
+            ("resume", code),
+            (".", base),
+            (" ", base),
+            ("a*b", base),
         ]);
     }
 

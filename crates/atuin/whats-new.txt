@@ -1,4 +1,11 @@
 # Shown once in search, the first time it opens after upgrading to a build with newer notes.
 # Written by a person, never generated. Two items is plenty; leave it empty and nothing shows.
-# First line is the version. Then items separated by a blank line: a headline, then a sentence
-# or two. `Backticks` pick out commands. Lines starting with # are ignored.
+# First line is the version. Then items separated by a blank line, a sentence or two each.
+# `Backticks` pick out commands and **asterisks** bold. Lines starting with # are ignored.
+18.24.8
+
+**Atuin Threads**: sync, search and store agent sessions just like your shell history. Resume sessions across harnesses, search them via MCP. Try it with `atuin resume`.
+
+**Workspace search** is now on by default, and supports jj.
+
+**History search via the daemon** is now much faster. Try it with `atuin config enable daemon`.
