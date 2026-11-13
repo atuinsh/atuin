@@ -75,6 +75,25 @@ async fn octavo(settings: &Settings) -> Option<atuin_ai::mcp::Octavo> {
     })
 }
 
+/// Octavo's tools are listed into the cache this often. A session trusts the cache for longer, so
+/// it does not list them itself while the daemon runs.
+#[cfg(feature = "daemon")]
+const KEEP_CACHED: std::time::Duration = std::time::Duration::from_mins(30);
+
+/// Keeps Octavo's tools cached for `atuin mcp`, so that an agent session does not wait for Octavo
+/// to start. The daemon runs this.
+#[cfg(feature = "daemon")]
+pub(super) async fn keep_octavo_tools_cached(settings: Arc<Settings>) {
+    loop {
+        if let Some(octavo) = octavo(&settings).await
+            && let Err(e) = atuin_ai::mcp::cache_tools(&settings, octavo).await
+        {
+            tracing::debug!("could not cache Octavo's tools: {e:#}");
+        }
+        tokio::time::sleep(KEEP_CACHED).await;
+    }
+}
+
 #[cfg(not(feature = "octavo"))]
 #[expect(clippy::unused_async, reason = "matches the octavo build")]
 async fn octavo(_: &Settings) -> Option<atuin_ai::mcp::Octavo> {

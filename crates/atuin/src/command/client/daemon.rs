@@ -395,6 +395,9 @@ async fn run(settings: Arc<Settings>, force: bool, launch: Launch) -> Result<()>
     let history_db = Sqlite::new(&settings.db_path, settings.local_timeout).await?;
     let store = SqliteStore::new(&settings.record_store_path, settings.local_timeout).await?;
 
+    #[cfg(feature = "ai")]
+    tokio::spawn(super::mcp::keep_octavo_tools_cached(Arc::clone(&settings)));
+
     atuin_daemon::boot(settings, listener, store, history_db).await?;
 
     Ok(())

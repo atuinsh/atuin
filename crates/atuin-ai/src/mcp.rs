@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
@@ -99,21 +99,41 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// A session trusts the cached tools for this long before it lists them again.
 const CACHE_FRESH: Duration = Duration::from_hours(1);
 
+/// A session that finds no cached tools waits this long for Octavo to list them.
+const COLD_WAIT: Duration = Duration::from_secs(2);
+
 impl Remote {
+    /// Returns Octavo's server with the tools that the cache holds.
+    fn new(settings: &Settings, octavo: Octavo) -> Self {
+        let cache = settings.data_dir.join("octavo_mcp_tools.json");
+        let tools = fs_err::read(&cache).ok().and_then(|json| serde_json::from_slice(&json).ok());
+        Self {
+            octavo,
+            client: Mutex::new(None),
+            tools: tools.unwrap_or_default(),
+            cache,
+        }
+    }
+
     /// Returns the connection. It is made again when the last one has closed.
     async fn peer(&self) -> Result<Peer<RoleClient>> {
         let mut client = self.client.lock().await;
         if let Some(open) = client.as_ref().filter(|c| !c.is_transport_closed()) {
             return Ok(open.peer().clone());
         }
-        let config = StreamableHttpClientTransportConfig::with_uri(self.octavo.url.clone())
-            .auth_header(self.octavo.token.expose_secret());
-        let connect = ().serve(StreamableHttpClientTransport::from_config(config));
-        let open = tokio::time::timeout(CONNECT_TIMEOUT, connect).await??;
+        let open = self.connect().await?;
         let peer = open.peer().clone();
         *client = Some(open);
         drop(client);
         Ok(peer)
+    }
+
+    /// Returns a new connection to Octavo.
+    async fn connect(&self) -> Result<RunningService<RoleClient, ()>> {
+        let config = StreamableHttpClientTransportConfig::with_uri(self.octavo.url.clone())
+            .auth_header(self.octavo.token.expose_secret());
+        let connect = ().serve(StreamableHttpClientTransport::from_config(config));
+        Ok(tokio::time::timeout(CONNECT_TIMEOUT, connect).await??)
     }
 
     async fn call(&self, request: CallToolRequestParams) -> CallToolResult {
@@ -125,35 +145,39 @@ impl Remote {
         }
     }
 
-    /// Drops the connection and the cache. The next session then starts with local threads.
+    /// Drops the connection and ages the cache, so the next session lists Octavo's tools again.
+    /// One failed call does not drop the cache, because Octavo is usually back by then.
     async fn failed(&self, error: String) -> CallToolResult {
         tracing::warn!("{error}");
         self.client.lock().await.take();
-        let _ = fs_err::remove_file(&self.cache);
+        let cache = fs_err::File::options().write(true).open(&self.cache);
+        let _ = cache.and_then(|file| file.set_modified(SystemTime::UNIX_EPOCH));
         CallToolResult::error(vec![ContentBlock::text(error)])
     }
 
-    /// Lists Octavo's tools into the cache, unless the cache is fresh. Then it closes the
-    /// connection until a tool call needs it.
+    /// Lists Octavo's tools into the cache and returns them. It uses a connection of its own,
+    /// because closing the shared one would fail a tool call in flight.
+    async fn list(&self) -> Result<Vec<Tool>> {
+        let octavo = self.connect().await?;
+        let tools = forwarded(tokio::time::timeout(CALL_TIMEOUT, octavo.list_all_tools()).await??);
+        // Written aside and renamed, so another session never reads half of it.
+        let dir = self.cache.parent().unwrap_or(&self.cache);
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        serde_json::to_writer(&mut file, &tools)?;
+        file.persist(&self.cache)?;
+        Ok(tools)
+    }
+
+    /// Lists Octavo's tools into the cache, unless the cache is fresh. It drops the cache when
+    /// Octavo cannot list them, and the next session then starts with local threads.
     async fn refresh(self: Arc<Self>) {
         let age = fs_err::metadata(&self.cache).and_then(|m| m.modified()).ok();
         if age.and_then(|t| t.elapsed().ok()).is_some_and(|age| age < CACHE_FRESH) {
             return;
         }
-        let saved = async {
-            let peer = self.peer().await?;
-            let tools =
-                forwarded(tokio::time::timeout(CALL_TIMEOUT, peer.list_all_tools()).await??);
-            // Written aside and renamed, so another session never reads half of it.
-            let dir = self.cache.parent().unwrap_or(&self.cache);
-            let mut file = tempfile::NamedTempFile::new_in(dir)?;
-            serde_json::to_writer(&mut file, &tools)?;
-            file.persist(&self.cache)?;
-            eyre::Ok(())
-        };
-        match saved.await {
-            Ok(()) => drop(self.client.lock().await.take()),
-            Err(e) => drop(self.failed(format!("Octavo failed: {e:#}")).await),
+        if let Err(e) = self.list().await {
+            tracing::warn!("Octavo failed: {e:#}");
+            let _ = fs_err::remove_file(&self.cache);
         }
     }
 
@@ -333,26 +357,35 @@ fn invalid_arguments(tool: &str, err: impl std::fmt::Display) -> ToolOutcome {
     ))
 }
 
+/// Lists Octavo's tools into the cache that [`run`] starts from. The daemon calls this to keep the
+/// cache warm.
+pub async fn cache_tools(settings: &Settings, octavo: Octavo) -> Result<()> {
+    Remote::new(settings, octavo).list().await.map(drop)
+}
+
 /// Serve MCP over stdio until the client disconnects.
 ///
 /// stdout carries only JSON-RPC messages; anything else (logs, errors) must
 /// go to stderr or it will corrupt the protocol stream.
 ///
-/// With `octavo`, the thread tools are Octavo's, as listed by the last session that reached it.
-/// They are refreshed in the background, so the client never waits on Octavo to start.
+/// With `octavo`, the thread tools are Octavo's, as the cache lists them. The daemon keeps the
+/// cache warm and a session refreshes it in the background, so the client does not wait on Octavo
+/// to start. Only a session that finds no cache waits, and for two seconds at most.
 pub async fn run(db: &Sqlite, settings: Arc<Settings>, octavo: Option<Octavo>) -> Result<()> {
-    let octavo = octavo.map(|octavo| {
-        let cache = settings.data_dir.join("octavo_mcp_tools.json");
-        let tools = fs_err::read(&cache).ok().and_then(|json| serde_json::from_slice(&json).ok());
-        let remote = Arc::new(Remote {
-            octavo,
-            client: Mutex::new(None),
-            tools: tools.unwrap_or_default(),
-            cache,
-        });
-        tokio::spawn(Arc::clone(&remote).refresh());
-        remote
-    });
+    let octavo = match octavo {
+        Some(octavo) => {
+            let mut remote = Remote::new(&settings, octavo);
+            if remote.tools.is_empty()
+                && let Ok(Ok(tools)) = tokio::time::timeout(COLD_WAIT, remote.list()).await
+            {
+                remote.tools = tools;
+            }
+            let remote = Arc::new(remote);
+            tokio::spawn(Arc::clone(&remote).refresh());
+            Some(remote)
+        }
+        None => None,
+    };
     let server = AtuinMcp {
         db: db.clone(),
         settings,
@@ -710,11 +743,11 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn a_call_octavo_fails_drops_the_cache_so_the_next_session_is_local() {
+    async fn a_failed_call_ages_the_cache_and_a_failed_refresh_drops_it() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("octavo_mcp_tools.json");
         fs_err::write(&cache, "[]").unwrap();
-        let remote = Remote {
+        let remote = Arc::new(Remote {
             octavo: Octavo {
                 // Nothing listens on port 1, so the connection is refused at once.
                 url: "http://127.0.0.1:1/".into(),
@@ -724,11 +757,16 @@ mod tests {
             client: Mutex::new(None),
             tools: Vec::new(),
             cache: cache.clone(),
-        };
+        });
 
         let result = remote.call(CallToolRequestParams::new("search_threads")).await;
 
         assert_eq!(result.is_error, Some(true));
+        let age = fs_err::metadata(&cache).unwrap().modified().unwrap().elapsed().unwrap();
+        assert!(age > CACHE_FRESH, "the next session lists the tools again");
+
+        remote.refresh().await;
+
         assert!(!cache.exists());
     }
 
