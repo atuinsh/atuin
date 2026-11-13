@@ -1,8 +1,13 @@
+use std::ffi::OsString;
+use std::io::IsTerminal as _;
 use std::os::fd::{AsFd as _, OwnedFd};
+use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_common::os::umask::Umask;
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
 use atuin_common::userio;
@@ -35,6 +40,13 @@ const PROTOCOL_VERSION: &str = "2";
 const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn main(options: RuntimeOptions) {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        // Don't create a pty if stdin or stdout isn't a tty; just exec the shell.
+        let error = exec_shell(options.shell);
+        eprintln!("atuin pty-proxy: failed to run the shell: {error}");
+        std::process::exit(1);
+    }
+
     // Everything but the emulator waits on I/O, so it all runs on this one thread: a multi-threaded
     // scheduler would start a worker per core in a process that sits under every interactive shell.
     // Only the I/O and timer drivers are enabled, and the blocking pool starts no thread unless a
@@ -59,6 +71,32 @@ pub fn main(options: RuntimeOptions) {
             std::process::exit(1);
         }
     }
+}
+
+/// Replace this process with the shell that the proxy would have spawned, outside any pty.
+///
+/// Returns only if the shell could not be run.
+fn exec_shell(shell: Vec<OsString>) -> std::io::Error {
+    let mut argv = shell.into_iter();
+    let mut cmd = if let Some(program) = argv.next() {
+        let mut cmd = Command::new(&program);
+        cmd.args(argv).env("SHELL", program);
+        cmd
+    } else {
+        // portable-pty runs the default shell as a login shell, which is named with a leading dash.
+        let shell = CommandBuilder::new_default_prog().get_shell();
+        let mut arg0 = OsString::from("-");
+        arg0.push(shell.rsplit('/').next().unwrap_or(&shell));
+        let mut cmd = Command::new(&shell);
+        cmd.arg0(arg0).env("SHELL", shell);
+        cmd
+    };
+
+    // The shell must not inherit Atuin's owner-only umask (#3695).
+    if let Some(mask) = Umask::original() {
+        let _ = mask.install_raw();
+    }
+    cmd.exec()
 }
 
 /// An error that occurred while setting up the PTY server.
@@ -263,8 +301,9 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
                 }
             }
         }
-        // Hand the end of our input on to the shell, so that piped input ends the session. EOF
-        // only counts at the start of a line, hence the newline.
+        // The terminal has hung up. Hand the shell an EOF so that the session ends instead of
+        // waiting for input that will never come. EOF only counts at the start of a line, hence
+        // the newline.
         if let Ok(termios) = rustix::termios::tcgetattr(&pty_writer)
             && let eof = termios.special_codes[SpecialCodeIndex::VEOF]
             && eof != 0
