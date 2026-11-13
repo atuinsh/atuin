@@ -136,6 +136,10 @@ Disabling the daemon stops it if it was running.
 
 Disabling output capture restarts an enabled daemon with `autostart` on so it picks up the change. Open a new shell afterward.
 
+### `atuin config check`
+
+Atuin ignores keys and tables in `config.toml` that it doesn't recognize. To check if your configuration contains any such items, run `atuin config check`.
+
 ### `atuin config print [key]`
 
 Print configuration values from your config file in TOML format. Without a key, prints the entire file. With a key, prints that section:
