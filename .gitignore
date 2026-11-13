@@ -33,3 +33,6 @@ test-results/
 # devenv (devenv.nix): per-checkout state, including the Atuin sandbox profile.
 /.devenv/
 /devenv.local.nix
+
+# demos/render.sh output.
+/demos/out/

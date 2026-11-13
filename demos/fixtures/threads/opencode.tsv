@@ -1,0 +1,2 @@
+86400	{"v":1,"id":"o1","role":"user","time":"TIME","cwd":"CWD","branch":"main","content":[{"type":"text","text":"bump ratatui to 0.30 and fix whatever breaks"}]}
+86350	{"v":1,"id":"o2","parent":"o1","role":"assistant","time":"TIME","cwd":"CWD","content":[{"type":"text","text":"Bumped ratatui to 0.30. Frame::size became Frame::area; updated the two call sites."}]}

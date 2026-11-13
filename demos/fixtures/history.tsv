@@ -1,0 +1,14 @@
+0	1	git switch -c feat/inline-preview
+0	0	git status
+0	94	cargo build --release
+1	41	cargo nextest run -p atuin-client
+0	2	docker compose up -d postgres
+0	1	kubectl get pods -n hub
+0	0	git log --oneline -20
+0	63	cargo clippy --all-features -- -D warnings
+0	0	rg 'fn search' crates/
+0	12	kubectl logs deploy/hub --since 10m
+2	7	make test
+0	3	terraform plan -out tf.plan
+0	2	git push -u origin feat/inline-preview
+0	1	gh pr create --fill
