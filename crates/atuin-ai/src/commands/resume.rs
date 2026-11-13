@@ -53,14 +53,15 @@ use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSes
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use clap::Args;
+use clap::builder::{PossibleValuesParser, TypedValueParser};
+use clap::{Args, ValueEnum};
 use eyre::{Result, bail};
 
 use super::session::{HarnessArg, one_line};
 use crate::resume_tui::catchup::{self, CatchUp, Held};
 use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
-use crate::resume_tui::source::{Relation, harness_label};
+use crate::resume_tui::source::{Relation, harness_arg, harness_label};
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource, startup,
 };
@@ -94,7 +95,7 @@ pub struct Cmd {
     /// written out as a new session there, tool calls carried over as its own where it has a like
     /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
     /// several machines needs `--branch`.
-    #[arg(long = "in", value_enum, value_name = "HARNESS")]
+    #[arg(long = "in", value_name = "HARNESS", value_parser = continue_in_parser())]
     continue_in: Option<HarnessArg>,
 
     /// Fork the thread QUERY names (by id, or a unique id prefix): it is written out as a new
@@ -139,6 +140,15 @@ pub struct Cmd {
     /// Report the result on stderr for the shell widget.
     #[arg(long, hide = true)]
     shell_widget: bool,
+}
+
+/// `--in` offers only the agents atuin can write a session for.
+fn continue_in_parser() -> impl TypedValueParser<Value = HarnessArg> {
+    let targets = HarnessArg::value_variants()
+        .iter()
+        .filter(|arg| harness_arg(HarnessKind::from(**arg)).is_some())
+        .filter_map(ValueEnum::to_possible_value);
+    PossibleValuesParser::new(targets).try_map(|name| HarnessArg::from_str(&name, false))
 }
 
 /// Where the result goes.
@@ -1131,6 +1141,7 @@ mod tests {
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(HarnessArg::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+        assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "amp"]).is_err());
     }
 
     /// `--in` takes the harness names the listings show, and `claude` for `claude-code`.
