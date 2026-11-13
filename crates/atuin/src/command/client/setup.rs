@@ -737,8 +737,9 @@ async fn hook_agents(agents: &[AnyHarness], tx: &Updates) {
     send(tx, Step::AgentHooks, Status::Running("Recording what your agents run".into()));
     let mut hooked = Vec::new();
     let mut failed = Vec::new();
+    let executable = atuin_common::os::process::current_exe();
     for agent in agents {
-        match agent.install_hooks().await {
+        match agent.install_hooks(&executable).await {
             Ok(_) | Err(InstallHookError::AlreadyInstalled) => hooked.push(agent.display_name()),
             Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
         }
