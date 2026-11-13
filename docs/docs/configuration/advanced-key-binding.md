@@ -7,6 +7,12 @@ The `[keymap]` section in your config replaces the older `[keys]` section. If an
 !!! warning
     Modifier keys, F1-F24 keys, and some special characters work best - or _only_ work - with a terminal that implements the kitty keyboard protocol. Notably, the default macOS Terminal app _doesn't_ include this feature. For more information and a list of terminals that are known to support this protocol, see [https://sw.kovidgoyal.net/kitty/keyboard-protocol/](https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
 
+    Atuin enables terminal keyboard enhancements by default. If enhanced
+    reporting causes input problems with your terminal or a keyboard-forwarding
+    tool, set [`keyboard_enhancement = false`](config.md#keyboard_enhancement)
+    to use legacy key reporting. Advanced bindings for ambiguous keys,
+    modifiers such as `super`, and media keys may stop working in legacy mode.
+
 ## Keymaps
 
 The Atuin TUI has multiple modes, each with its own keymap. You configure each one under a separate TOML table:
