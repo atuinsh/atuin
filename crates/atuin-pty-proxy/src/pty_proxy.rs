@@ -177,6 +177,21 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     __atuin_pty_proxy_owns_tty=-1
   fi
 
+  # Resolve the zsh binary to hand to the proxy. Prefer ZSH_ARGZERO (zsh 5.3+) without the
+  # login-shell "-", with a bare name resolved via $PATH (:c). $PATH can be empty this early in a
+  # login, so fall back to $SHELL when it is an absolute path to a zsh, then `command -v zsh`
+  # (https://github.com/atuinsh/atuin/issues/4661). Both the spawn check and the spawn use this.
+  __atuin_pty_proxy_resolve_zsh() {
+    __atuin_pty_proxy_zsh=
+    [[ -n ${ZSH_ARGZERO-} ]] && __atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}
+    [[ $__atuin_pty_proxy_zsh == */* ]] && return 0
+    if [[ ${SHELL-} == /* ]] && [[ ${SHELL:t} == "$ZSH_NAME" ]] && [[ -x $SHELL ]] && ! [[ -d $SHELL ]]; then
+      __atuin_pty_proxy_zsh=$SHELL
+    else
+      __atuin_pty_proxy_zsh=$(command -v zsh)
+    fi
+  }
+
   # Check if we're allowed to spawn a PTY proxy in this shell. If false, this is most commonly
   # because the shell was started with `-ic <command>` or `-i <file>`, and spawning a proxy would
   # fail to forward those arguments.
@@ -196,10 +211,10 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
       # and compare to ZSH_NAME. If they're different, we're executing a file, so return false.
       [[ ${${ZSH_ARGZERO:t}#-} != "$ZSH_NAME" ]] && return 1
 
-      # Finally, return true iff $ZSH_ARGZERO (minus leading "-") is an executable. This
-      # is what we use when spawning the proxy, so we would necessarily fail otherwise.
-      local zsh="${${ZSH_ARGZERO#-}:c}"
-      [[ $zsh == */* ]] && [[ -x $zsh ]] && ! [[ -d $zsh ]]
+      # Finally, return true iff the zsh we would spawn is an executable; spawning would
+      # fail otherwise.
+      __atuin_pty_proxy_resolve_zsh
+      [[ $__atuin_pty_proxy_zsh == */* ]] && [[ -x $__atuin_pty_proxy_zsh ]] && ! [[ -d $__atuin_pty_proxy_zsh ]]
     elif [[ -n ${BASH_VERSION-} ]]; then
       # If `-c` was passed, return false.
       [[ $- == *c* ]] && return 1
@@ -234,18 +249,7 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
     fi
     exec atuin pty-proxy "${__atuin_pty_proxy_args[@]}"
   elif [[ -n "${ZSH_VERSION:-}" ]]; then
-    # Prefer ZSH_ARGZERO (zsh 5.3+) -- it preserves the path zsh was
-    # invoked with -- and fall back to PATH lookup otherwise. Login shells
-    # set argv[0] to "-zsh", and ZSH_ARGZERO keeps that leading dash, so
-    # strip it (${var#-}) before passing it along. ZSH_ARGZERO may also be
-    # a bare command name ("zsh") rather than a path; the :c modifier
-    # resolves that to an absolute path via $PATH, leaves an absolute path
-    # unchanged, and leaves an unresolvable name as-is.
-    if [[ -n ${ZSH_ARGZERO-} ]]; then
-      __atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}
-    else
-      __atuin_pty_proxy_zsh=$(command -v zsh)
-    fi
+    __atuin_pty_proxy_resolve_zsh
     __atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")
     if [[ -o login ]]; then
       __atuin_pty_proxy_args+=(--shell -l)
@@ -256,7 +260,7 @@ const BASH_ZSH_INIT: &str = r#"if [[ "$-" == *i* ]] && [[ -t 0 ]] && [[ -t 1 ]];
   fi
 
   unset -v __atuin_pty_proxy_answer
-  unset -f __atuin_pty_proxy_spawning_allowed
+  unset -f __atuin_pty_proxy_spawning_allowed __atuin_pty_proxy_resolve_zsh
 fi
 "#;
 
@@ -384,11 +388,15 @@ mod tests {
     fn init_scripts_forward_shell_path() {
         let posix = init_script(Shell::Bash);
         assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$BASH")"#));
-        // zsh: capture ZSH_ARGZERO (with PATH fallback), strip the leading
-        // dash present on login shells, then resolve a bare command name to
-        // an absolute path with the :c modifier before forwarding it.
+        // zsh: the spawn check and the spawn share one resolver: ZSH_ARGZERO without the
+        // login-shell dash (:c for a bare name), then $SHELL only when it names a zsh, then
+        // command -v zsh.
         assert!(posix.contains(r"__atuin_pty_proxy_zsh=${${ZSH_ARGZERO#-}:c}"));
+        assert!(posix.contains(r#"[[ ${SHELL:t} == "$ZSH_NAME" ]]"#));
         assert!(posix.contains(r"__atuin_pty_proxy_zsh=$(command -v zsh)"));
+        // The spawn check and the zsh spawn both call the resolver, so they cannot disagree.
+        assert_eq!(posix.matches("__atuin_pty_proxy_resolve_zsh\n      [[ $__atuin_pty_proxy_zsh == */* ]]").count(), 1);
+        assert_eq!(posix.matches("__atuin_pty_proxy_resolve_zsh\n    __atuin_pty_proxy_args=(--shell \"$__atuin_pty_proxy_zsh\")").count(), 1);
         assert!(posix.contains(r#"__atuin_pty_proxy_args=(--shell "$__atuin_pty_proxy_zsh")"#));
 
         let fish = init_script(Shell::Fish);
