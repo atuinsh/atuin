@@ -1,6 +1,8 @@
+use std::fs;
 #[cfg(unix)]
 use std::io::Read as _;
 use std::io::{IsTerminal, Write, stdout};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,6 +34,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use semver::Version;
+use tempfile::NamedTempFile;
 use time::{OffsetDateTime, UtcOffset};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(windows)]
@@ -60,6 +63,7 @@ const ACCEPT_PREFIX: &str = "__atuin_accept__:";
 pub enum InputAction {
     Accept(usize),
     AcceptInspecting,
+    EditAccept(usize),
     Copy(usize),
     Delete(usize),
     DeleteInspecting,
@@ -201,6 +205,239 @@ struct StyleState {
     compactness: Compactness,
     invert: bool,
     inner_width: usize,
+}
+
+/// A resolved `$VISUAL`/`$EDITOR`/`$FCEDIT` invocation: the program to exec,
+/// plus any arguments baked into the variable itself (e.g. `EDITOR="code
+/// --wait"`).
+///
+/// `program` is usually resolved to a full, extension-aware path via
+/// [`resolve_program`] (so e.g. `EDITOR=code` finds `code.cmd` on Windows,
+/// where a bare `Command::new("code")` would not). When it can't find it —
+/// the value doesn't exist, or is something unusual `which` doesn't
+/// understand — we fall back to the literal value and let the OS take a
+/// shot at exec-time, same as before this resolution existed. Either way we
+/// don't second-guess the user's explicit choice, only try to resolve it
+/// more correctly first.
+struct EditorCommand {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum VisualEditorError {
+    #[error("no editor found; set $VISUAL, $EDITOR, or $FCEDIT")]
+    NotFound,
+    #[error("failed to parse {0:?} as a shell command")]
+    UnparseableCommand(String),
+}
+
+/// Resolves `name` against `paths` (raw `$PATH`-format list) relative to
+/// `cwd`, or `None` if not found. A thin wrapper around `which::which_in` so
+/// tests can inject a controlled `$PATH` instead of the live one — the
+/// underlying extension/PATHEXT-awareness is `which`'s to test, not ours.
+fn resolve_in_path(
+    name: &str,
+    paths: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    which::which_in(name, paths, cwd).ok()
+}
+
+/// Resolves `program` to a full path via the live `$PATH`, falling back to
+/// the literal value unchanged if it can't be found — same trust-the-user
+/// fallback as before this resolution existed (see [`EditorCommand`]).
+fn resolve_program(program: &str) -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    resolve_in_path(program, atuin_common::env::var_os("PATH").as_deref(), &cwd)
+        .unwrap_or_else(|| std::path::PathBuf::from(program))
+}
+
+/// Doubles every backslash so `shlex::split` — a POSIX shell tokenizer that
+/// treats a bare `\` as an escape character, deleting it and taking the next
+/// character literally — round-trips a literal backslash instead of eating
+/// it. Needed on Windows because `$EDITOR`/`$VISUAL`/`$FCEDIT` there commonly
+/// holds a plain path (`C:\Users\...`) with no shell-escaping intent at all;
+/// left alone, `shlex` would silently strip every path separator.
+///
+/// Compiled on Windows (its only production call site, in
+/// [`split_editor_var`]) and under `cfg(test)` (so the escaping logic itself
+/// is unit-testable from any host, without needing a Windows machine).
+#[cfg(any(windows, test))]
+fn escape_backslashes_for_shlex(val: &str) -> String {
+    val.replace('\\', "\\\\")
+}
+
+/// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into shell-style words, e.g.
+/// `"code --wait"` -> `["code", "--wait"]`. On Windows, backslashes are
+/// escaped first (see `escape_backslashes_for_shlex`) so a literal path
+/// survives; elsewhere a bare `\` is meaningfully an escape character, so
+/// the value is passed to `shlex` unmodified.
+fn split_editor_var(val: &str) -> Option<Vec<String>> {
+    #[cfg(windows)]
+    {
+        shlex::split(&escape_backslashes_for_shlex(val))
+    }
+    #[cfg(not(windows))]
+    {
+        shlex::split(val)
+    }
+}
+
+/// Splits a `$VISUAL`/`$EDITOR`/`$FCEDIT` value into a program and its
+/// arguments, e.g. `"code --wait"` -> `code`, `["--wait"]`, and resolves the
+/// program through `which` (see [`EditorCommand`]).
+fn parse_editor_var(val: String) -> std::result::Result<EditorCommand, VisualEditorError> {
+    let parts =
+        split_editor_var(&val).ok_or_else(|| VisualEditorError::UnparseableCommand(val.clone()))?;
+    let (program, args) = parts.split_first().ok_or(VisualEditorError::UnparseableCommand(val))?;
+    Ok(EditorCommand {
+        program: resolve_program(program),
+        args: args.to_vec(),
+    })
+}
+
+fn get_visual_editor() -> std::result::Result<EditorCommand, VisualEditorError> {
+    // FCEDIT is the fc-specific override; $VISUAL is for full-screen editors,
+    // $EDITOR is the fallback for any editor.
+    for var in ["FCEDIT", "VISUAL", "EDITOR"] {
+        if let Ok(val) = atuin_common::env::var(var)
+            && !val.is_empty()
+        {
+            return parse_editor_var(val);
+        }
+    }
+
+    // On Debian/Ubuntu, /usr/bin/editor is an update-alternatives symlink to
+    // the system-preferred editor, independent of $EDITOR.
+    let editor_alternative = std::path::PathBuf::from("/usr/bin/editor");
+    if editor_alternative.exists() {
+        return Ok(EditorCommand {
+            program: editor_alternative,
+            args: Vec::new(),
+        });
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let path = atuin_common::env::var_os("PATH");
+    fallback_editor(path.as_deref(), &cwd)
+}
+
+/// Editors probed, in order, when nothing is configured (see
+/// [`fallback_editor`]).
+///
+/// The order mirrors Debian's `sensible-editor` (part of `sensible-utils`),
+/// which tries nano/nano-tiny before vi specifically so an unconfigured user
+/// doesn't land in a modal editor they may not know how to exit. Anyone who
+/// actually prefers vim over nano is exactly the kind of user who's almost
+/// certainly already set `$VISUAL`/`$EDITOR`, so this ordering only affects
+/// the nothing-configured-at-all case.
+///
+/// On Windows, Notepad closes the list. It's last rather than first so the
+/// shell environment never has to be detected: under Git Bash (where
+/// Notepad would be an odd choice) Git for Windows ships vim, so an earlier
+/// entry wins; under PowerShell or cmd on a vanilla machine none of the
+/// others exist, so Notepad beats a "no editor found" error. Under WSL atuin
+/// is a Linux binary, so Notepad is never a candidate there. `which`
+/// resolves the bare name through `PATHEXT` to `notepad.exe` in System32 (or
+/// the Store app's execution alias). Like any GUI editor it works because
+/// `Command::status` waits on the process handle, not on a console -- with
+/// one known hole: Windows 11's tabbed Notepad, when a window is already
+/// open, hands the file to that instance and exits at once, so the edit
+/// comes back unchanged. That's a Notepad setting ("Open files in: a new
+/// window"), nothing a launcher can fix.
+#[cfg(not(windows))]
+const FALLBACK_EDITORS: [&str; 4] = ["nano", "nano-tiny", "vim", "vi"];
+#[cfg(windows)]
+const FALLBACK_EDITORS: [&str; 5] = ["nano", "nano-tiny", "vim", "vi", "notepad"];
+
+/// Resolves the first of [`FALLBACK_EDITORS`] found on `paths` (raw
+/// `$PATH`-format list, relative to `cwd`), or [`VisualEditorError::NotFound`]
+/// if none is. Takes the search path explicitly so tests can inject a
+/// controlled one instead of the live `$PATH`.
+fn fallback_editor(
+    paths: Option<&std::ffi::OsStr>,
+    cwd: &std::path::Path,
+) -> std::result::Result<EditorCommand, VisualEditorError> {
+    FALLBACK_EDITORS
+        .iter()
+        .find_map(|name| resolve_in_path(name, paths, cwd))
+        .map(|program| EditorCommand {
+            program,
+            args: Vec::new(),
+        })
+        .ok_or(VisualEditorError::NotFound)
+}
+
+/// Proof that the TUI's [`Terminal`] has been torn down, so the tty is free for
+/// an external editor. Only [`TtyReleased::new`] can produce one, and doing so
+/// consumes the `Terminal` — so `visual_edit_command` can't be called, even
+/// after a future reshuffle of its call site, without the tty already released.
+struct TtyReleased(());
+
+impl TtyReleased {
+    fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Self {
+        drop(terminal);
+        Self(())
+    }
+}
+
+// `_tty` is never read — the caller holding one at all is the guarantee (see `TtyReleased`).
+fn visual_edit_command(_tty: &TtyReleased, original_command: &str) -> Result<String> {
+    // Write the command to a temp file, then close the write fd before the
+    // editor opens it (same pattern as scripts.rs open_editor).
+    let temp_file = NamedTempFile::new()?;
+    fs::write(temp_file.path(), format!("{original_command}\n"))?;
+    let temp_path = temp_file.into_temp_path();
+
+    let editor = get_visual_editor()?;
+    let mut cmd = Command::new(&editor.program);
+    cmd.args(&editor.args).arg(&temp_path);
+
+    // The shell integration runs atuin inside $() command substitution with an
+    // fd-swap so atuin's stderr is a pipe back to the shell. Editors that use
+    // ncurses (nano, etc.) inherit those fds and may get confused — arrow keys
+    // break and terminal cleanup sequences end up captured in the shell output.
+    // Open /dev/tty directly so the editor always gets a clean terminal.
+    #[cfg(unix)]
+    if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")
+        && let (Ok(tty_out), Ok(tty_err)) = (tty.try_clone(), tty.try_clone())
+    {
+        cmd.stdin(tty).stdout(tty_out).stderr(tty_err);
+    }
+
+    // Same fd-swap concern as above applies to PowerShell's shell integration.
+    // CONIN$/CONOUT$ are the Windows equivalent of /dev/tty — the real
+    // console, independent of whatever atuin's own stdio have been redirected
+    // to (see `TerminalWriter::ConOut`, which opens CONOUT$ the same way).
+    #[cfg(windows)]
+    if let (Ok(con_in), Ok(con_out), Ok(con_err)) = (
+        std::fs::OpenOptions::new().read(true).write(true).open("CONIN$"),
+        std::fs::OpenOptions::new().read(true).write(true).open("CONOUT$"),
+        std::fs::OpenOptions::new().read(true).write(true).open("CONOUT$"),
+    ) {
+        cmd.stdin(con_in).stdout(con_out).stderr(con_err);
+    }
+
+    let status = cmd.status()?;
+
+    if !status.success() {
+        return Ok(original_command.to_string());
+    }
+
+    Ok(fs::read_to_string(&temp_path)?.trim_end().to_string())
+}
+
+/// Prefixes `command` with the shell-integration accept marker when the shell
+/// should auto-execute it. A blank `command` — e.g. the user cleared the
+/// buffer while editing — is left alone rather than auto-executing an empty
+/// line.
+fn with_accept_prefix(command: String, accept: bool) -> String {
+    if accept && !command.is_empty() {
+        format!("{ACCEPT_PREFIX}{command}")
+    } else {
+        command
+    }
 }
 
 impl State {
@@ -771,6 +1008,10 @@ impl State {
             Action::Delete if self.tab_index == 1 => InputAction::DeleteInspecting,
             Action::Delete => InputAction::Delete(self.results_state.selected()),
             Action::DeleteAll => InputAction::DeleteAllMatching(self.results_state.selected()),
+            Action::EditAccept => {
+                self.accept = true;
+                InputAction::EditAccept(self.results_state.selected())
+            }
             Action::ReturnOriginal => InputAction::ReturnOriginal,
             Action::ReturnQuery => InputAction::ReturnQuery,
             Action::Exit => Self::handle_key_exit(settings),
@@ -2319,12 +2560,22 @@ pub async fn history(
 
     let chain = is_command_chaining.then_some(original_query.as_str());
 
+    // `EditAccept` (below) launches an external editor, which needs the tty to
+    // itself. Requiring a `TtyReleased` token — obtainable only by consuming
+    // `terminal` — makes that ordering a compile error to violate, rather than
+    // an invariant that depends on this statement staying above the `match`.
+    let tty_released = TtyReleased::new(terminal);
+
     match result {
         InputAction::AcceptInspecting => Ok(inspecting
             .map(|entry| selection_output(entry, app.cd, accept, None, &shell))
             .unwrap_or_default()),
         InputAction::Accept(index) if index < results.len() => {
             Ok(selection_output(results.swap_remove(index), app.cd, accept, chain, &shell))
+        }
+        InputAction::EditAccept(index) if index < results.len() => {
+            let command = visual_edit_command(&tty_released, &results[index].command)?;
+            Ok(with_accept_prefix(command, accept))
         }
         InputAction::ReturnOriginal => Ok(String::new()),
         InputAction::Copy(index) => {
@@ -2343,7 +2594,7 @@ pub async fn history(
             }
             Ok(String::new())
         }
-        InputAction::ReturnQuery | InputAction::Accept(_) => {
+        InputAction::ReturnQuery | InputAction::Accept(_) | InputAction::EditAccept(_) => {
             // Either:
             // * index == RETURN_QUERY, in which case we should return the input
             // * out of bounds -> usually implies no selected entry so we return the input
@@ -3268,6 +3519,178 @@ mod tests {
 
         let result = state.execute_action(&Action::Delete, &settings);
         assert!(matches!(result, super::InputAction::Delete(7)));
+    }
+
+    #[rstest]
+    fn execute_edit_accept(
+        #[with(KeymapMode::Emacs, 100, 7)] mut state: State,
+        settings: Arc<Settings>,
+    ) {
+        use crate::command::client::search::keybindings::Action;
+
+        let result = state.execute_action(&Action::EditAccept, &settings);
+        assert!(matches!(result, super::InputAction::EditAccept(7)));
+        assert!(state.accept);
+    }
+
+    #[rstest]
+    #[case("git log", true, "__atuin_accept__:git log")]
+    #[case("git log", false, "git log")]
+    #[case("", true, "")]
+    #[case("", false, "")]
+    fn with_accept_prefix_cases(
+        #[case] command: &str,
+        #[case] accept: bool,
+        #[case] expected: &str,
+    ) {
+        let result = super::with_accept_prefix(command.to_string(), accept);
+        assert_eq!(result, expected);
+    }
+
+    // These names must never resolve to a real binary on the host running the
+    // test, so `parse_editor_var` falls back to the literal value and the
+    // assertions below stay independent of the host's actual `$PATH`.
+    #[rstest]
+    #[case("nonexistent-fake-editor-9f3c2b", "nonexistent-fake-editor-9f3c2b", &[])]
+    #[case("nonexistent-fake-editor-9f3c2b --wait", "nonexistent-fake-editor-9f3c2b", &["--wait"])]
+    #[case(
+        "nonexistent-fake-editor-9f3c2b -t -a \"\"",
+        "nonexistent-fake-editor-9f3c2b",
+        &["-t", "-a", ""]
+    )]
+    fn parse_editor_var_splits_program_and_args(
+        #[case] val: &str,
+        #[case] expected_program: &str,
+        #[case] expected_args: &[&str],
+    ) {
+        let editor = super::parse_editor_var(val.to_string()).unwrap();
+        assert_eq!(editor.program, std::path::Path::new(expected_program));
+        assert_eq!(editor.args, expected_args);
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case("   ")]
+    fn parse_editor_var_rejects_unparseable_values(#[case] val: &str) {
+        assert!(super::parse_editor_var(val.to_string()).is_err());
+    }
+
+    // Regression test for a real bug: shlex is a POSIX shell tokenizer, so a
+    // bare backslash outside quotes is an escape character that gets deleted
+    // -- feeding it a raw Windows path (as `$EDITOR` commonly holds there)
+    // silently ate every path separator. Runs on any host: this exercises
+    // the escaping helper directly against `shlex::split`, not the
+    // `cfg(windows)`-gated call site, so it doesn't need a Windows machine to
+    // catch a regression here.
+    #[rstest]
+    #[case(
+        r"C:\Users\ADMINI~1\AppData\Local\Temp\my-fake-editor --wait",
+        &[r"C:\Users\ADMINI~1\AppData\Local\Temp\my-fake-editor", "--wait"]
+    )]
+    #[case(r"C:\vim.exe", &[r"C:\vim.exe"])]
+    fn escape_backslashes_for_shlex_round_trips_through_shlex(
+        #[case] val: &str,
+        #[case] expected: &[&str],
+    ) {
+        let escaped = super::escape_backslashes_for_shlex(val);
+        let parts = shlex::split(&escaped).unwrap();
+        assert_eq!(parts, expected);
+    }
+
+    /// Creates an executable file named `name` in `dir` and returns its path.
+    /// On unix that's a mode-0755 shell script; on Windows a file is
+    /// "executable" by extension alone, so `name` must carry one that
+    /// `which` recognizes (see [`fake_editor_on_path`]) unless the test
+    /// bypasses `$PATH` lookup altogether.
+    fn fake_executable(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let program_path = dir.join(name);
+        std::fs::write(&program_path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&program_path, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        program_path
+    }
+
+    /// [`fake_executable`] named so an extension-less `$PATH` lookup for
+    /// `name` finds it on the current host. On Windows, `which` treats a
+    /// query with no extension as executable only if it's a real PE binary
+    /// (checked via `GetBinaryTypeW`) -- a plain text file needs a recognized
+    /// extension (trusted outright, no content check) to be found at all.
+    /// The query itself stays extension-less either way, matching how we
+    /// actually call this (e.g. "vim", "nano"); `which` appends PATHEXT
+    /// candidates itself.
+    fn fake_editor_on_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        #[cfg(windows)]
+        let name = &format!("{name}.cmd");
+        fake_executable(dir, name)
+    }
+
+    /// An absolute path bypasses `$PATH`/cwd in `which` entirely (verified by
+    /// reading its source), so this exercises `parse_editor_var`'s real
+    /// resolution wiring — not just the split-and-fall-back-when-missing
+    /// path above — without touching the live `$PATH`.
+    #[rstest]
+    fn parse_editor_var_resolves_existing_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_path = fake_executable(dir.path(), "my-fake-editor");
+
+        let val = format!("{} --wait", program_path.display());
+        let editor = super::parse_editor_var(val).unwrap();
+        assert_eq!(editor.program, program_path);
+        assert_eq!(editor.args, ["--wait"]);
+    }
+
+    #[rstest]
+    fn resolve_in_path_finds_executable_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_path = fake_editor_on_path(dir.path(), "my-fake-editor");
+
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = super::resolve_in_path("my-fake-editor", Some(dir.path().as_os_str()), &cwd);
+        assert_eq!(resolved, Some(program_path));
+    }
+
+    /// The promise: with nothing configured, a console editor on `$PATH` is
+    /// preferred over Notepad on every platform, and Notepad is a candidate
+    /// only on Windows -- a `notepad` on a Linux `$PATH` (WSL interop puts
+    /// System32 there) must never be picked. Both arms run on every host:
+    /// the fake `notepad` is planted regardless, and the expectation flips
+    /// on `cfg(windows)`.
+    #[rstest]
+    #[case::vim_beats_notepad(&["vim", "notepad"], Some("vim"))]
+    #[case::notepad_only(&["notepad"], if cfg!(windows) { Some("notepad") } else { None })]
+    #[case::empty_path(&[], None)]
+    fn fallback_editor_cases(#[case] on_path: &[&str], #[case] expected: Option<&str>) {
+        let dir = tempfile::tempdir().unwrap();
+        let planted: std::collections::HashMap<&str, std::path::PathBuf> =
+            on_path.iter().map(|name| (*name, fake_editor_on_path(dir.path(), name))).collect();
+
+        let cwd = std::env::current_dir().unwrap();
+        let result = super::fallback_editor(Some(dir.path().as_os_str()), &cwd);
+
+        match expected {
+            Some(name) => {
+                let editor = result.unwrap();
+                assert_eq!(editor.program, planted[name]);
+                assert!(editor.args.is_empty());
+            }
+            None => assert!(matches!(result, Err(super::VisualEditorError::NotFound))),
+        }
+    }
+
+    #[rstest]
+    fn resolve_in_path_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = super::resolve_in_path(
+            "nonexistent-fake-editor-9f3c2b",
+            Some(dir.path().as_os_str()),
+            &cwd,
+        );
+        assert_eq!(resolved, None);
     }
 
     #[rstest]
