@@ -16,6 +16,8 @@ version.workspace = true
 ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:yaml-rust2", "dep:zstd", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
+# Enables `atuin_common::config`.
+config = ["dep:config"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
 db = ["dep:sqlx"]
 # Enables `atuin_common::fs::tree_watcher`.
@@ -43,6 +45,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
 colored = { workspace = true }
+config = { workspace = true, optional = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }

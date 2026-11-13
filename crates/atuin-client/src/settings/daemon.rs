@@ -24,6 +24,7 @@ const SOCKET_NAME: &str = "atuin.sock";
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, history hooks are routed through the daemon.
+    // The field has a config builder default, so `settings::aliases` must list this alias.
     #[serde(alias = "enable")]
     pub enabled: bool,
 

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "ansi")]
 pub mod ansi;
+#[cfg(feature = "config")]
+pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
 pub mod dirs;

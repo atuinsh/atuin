@@ -26,7 +26,7 @@ proto = ["dep:prost"]
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
+atuin-common = { workspace = true, features = ["ai", "config", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 
@@ -58,6 +58,7 @@ rust-embed = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
+serde_ignored = { workspace = true }
 serde_json = { workspace = true }
 serde_regex = { workspace = true }
 serde_with = { workspace = true }

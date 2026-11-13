@@ -38,6 +38,9 @@ pub enum Cmd {
     #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
 
+    #[command(about = fl!("cmd-config-check"), long_about = fl!("cmd-config-check", "long"))]
+    Check,
+
     #[cfg(feature = "octavo")]
     #[command(about = fl!("cmd-config-types"), long_about = fl!("cmd-config-types", "long"))]
     Types,
@@ -46,12 +49,17 @@ pub enum Cmd {
 impl Cmd {
     #[instrument(level = "trace", skip_all)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
+        if !matches!(self, Self::Check) {
+            warn_about_unknown_keys();
+        }
+
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
             Self::Enable(enable) => enable.run(settings).await,
             Self::Disable(disable) => disable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
+            Self::Check => check(),
             #[cfg(feature = "octavo")]
             Self::Types => {
                 print!("{}", atuin_client::lua_config::TYPES);
@@ -59,6 +67,42 @@ impl Cmd {
             }
         }
     }
+}
+
+/// Warns about the keys of the config file that no setting reads.
+///
+/// Atuin loads its settings without these keys. Only `atuin config` and `atuin doctor` warn
+/// about them.
+pub fn warn_about_unknown_keys() {
+    let unknown = match Settings::unknown_keys() {
+        Ok(unknown) => unknown,
+        // Loading the settings succeeded already, so this only fails if the file changed since.
+        Err(e) => {
+            tracing::debug!(error = %e, "could not check the config file for unknown keys");
+            return;
+        }
+    };
+    if !unknown.is_empty() {
+        let file = Settings::get_config_path()
+            .map_or_else(|_| "config.toml".to_owned(), |path| path.display().to_string());
+        userio::log::warn!("config-unknown-keys", file = file, keys = unknown.to_string());
+    }
+}
+
+/// Fails if the config file has keys that no setting reads.
+///
+/// A config file that doesn't load fails every command earlier, while Atuin loads its settings.
+fn check() -> Result<()> {
+    let file = Settings::get_config_path()?;
+    let unknown = Settings::unknown_keys()?;
+    if unknown.is_empty() {
+        userio::log::info!("config-check-ok", file = file.display().to_string());
+        return Ok(());
+    }
+    eyre::bail!(
+        "{}",
+        fl!("config-unknown-keys", file = file.display().to_string(), keys = unknown.to_string())
+    )
 }
 
 /// Get a configuration value from your config.toml file,
@@ -157,6 +201,9 @@ pub struct SetCmd {
         help = fl!("arg-config-set-the-type")
     )]
     pub the_type: ValueType,
+
+    #[arg(long, help = fl!("arg-config-set-force"))]
+    pub force: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
@@ -197,13 +244,19 @@ impl SetCmd {
         let value = self.parse_value(existing_type.as_ref())?;
         let updated = update_config(config_str, [(key, value)])?;
 
-        Settings::validate_str(&updated).map_err(|e| {
+        let unknown = Settings::validate_str(&updated).map_err(|e| {
             eyre::eyre!(
                 "cannot update config: setting '{key}' to '{}' would make your configuration \
                  invalid\n\n{e}",
                 self.value,
             )
         })?;
+        if unknown.covers(key) && !self.force {
+            eyre::bail!(
+                "cannot update config: Atuin has no setting named '{key}'; pass --force to set it \
+                 anyway"
+            );
+        }
         Ok(updated)
     }
 
@@ -861,6 +914,7 @@ mod tests {
             key: key.to_string(),
             value: value.to_string(),
             the_type: ValueType::Auto,
+            force: false,
         }
     }
 
@@ -882,6 +936,18 @@ mod tests {
         "daemon.enabled",
         "true",
         "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+    )]
+    #[case::a_known_key_beside_an_unknown_one(
+        "sync_url = \"https://example.test\"\n",
+        "auto_sync",
+        "false",
+        "sync_url = \"https://example.test\"\nauto_sync = false\n"
+    )]
+    #[case::a_key_that_a_setting_names_freely(
+        "",
+        "keymap.emacs.ctrl-x",
+        "exit",
+        "[keymap]\n\n[keymap.emacs]\nctrl-x = \"exit\"\n"
     )]
     fn set_writes(
         #[case] input: &str,
@@ -999,6 +1065,21 @@ mod tests {
         &["style"]
     )]
     #[case::an_empty_key("", "  ", "fuzzy", &["non-empty"])]
+    #[case::an_unknown_key("", "sync_url", "https://example.test", &["sync_url", "--force"])]
+    #[case::an_unknown_key_in_a_known_table("", "keys.scroll_exists", "true", &["keys.scroll_exists"])]
+    #[case::a_key_in_an_unknown_table("", "nope.enabled", "true", &["nope.enabled"])]
+    #[case::an_unknown_key_under_a_legacy_name_beside_its_new_name(
+        "[threads]\nmouse_typo = true\n",
+        "ai.sessions.mouse_typo",
+        "true",
+        &["ai.sessions.mouse_typo"]
+    )]
+    #[case::an_unknown_key_that_the_file_has_already(
+        "sync_url = \"https://example.test\"\n",
+        "sync_url",
+        "https://other.example",
+        &["sync_url"]
+    )]
     fn set_rejects(
         #[case] input: &str,
         #[case] key: &str,
@@ -1013,5 +1094,28 @@ mod tests {
         for fragment in expected_err {
             assert!(err.contains(fragment), "error should mention `{fragment}`, got: {err}");
         }
+    }
+
+    #[rstest]
+    fn force_sets_an_unknown_key() {
+        let updated = SetCmd {
+            force: true,
+            ..set_cmd("sync_url", "https://example.test")
+        }
+        .get_updated_config("")
+        .expect("--force should accept an unknown key");
+        assert_eq!(updated, "sync_url = \"https://example.test\"\n");
+    }
+
+    #[rstest]
+    fn force_still_rejects_invalid_values() {
+        let err = SetCmd {
+            force: true,
+            ..set_cmd("auto_sync", "banana")
+        }
+        .get_updated_config("")
+        .expect_err("--force only skips the unknown-key check")
+        .to_string();
+        assert!(err.contains("auto_sync"), "{err}");
     }
 }

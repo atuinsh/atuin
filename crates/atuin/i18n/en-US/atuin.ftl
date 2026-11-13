@@ -134,10 +134,16 @@ cmd-config-set = Set a configuration value in your config.toml file
 cmd-config-enable = Enable a feature, along with everything it depends on
 cmd-config-disable = Disable a feature, leaving its dependencies enabled
 cmd-config-print = Print all configuration values from your config.toml file in TOML format
-    .long = 
+    .long =
         Print all configuration values from your config.toml file in TOML format
 
         If a key is provided, only print the value of that key and all its children
+cmd-config-check = Check your configuration for settings that Atuin does not recognize
+    .long =
+        Check your configuration for settings that Atuin does not recognize
+
+        Atuin ignores settings it doesn't recognize. This command checks if your config
+        contains any unrecognized settings, and prints them and exits with an error if so.
 cmd-config-types = Print the Luau types of atuin.lua and .atuin.lua config files, for your editor
     .long =
         Print the Luau types of atuin.lua and .atuin.lua config files, for your editor. The types
@@ -162,6 +168,7 @@ arg-config-get-verbose = Print both the config file value and the resolved value
 arg-config-set-key = The configuration key to set
 arg-config-set-value = The value to set
 arg-config-set-the-type = Store value as an explicit type
+arg-config-set-force = Set the key even if Atuin does not recognize it
 value-config-set-the-type-auto = Automatically determine the type of the value
 value-config-set-the-type-string = Store value as a string
 value-config-set-the-type-boolean = Store value as a boolean
@@ -429,6 +436,8 @@ daemon-starting = Starting daemon...
 daemon-replacing-unresponsive = Daemon isn't answering, replacing it...
 daemon-restarted = Daemon restarted
 config-enabled = Enabled.
+config-unknown-keys = { $file } contains unrecognized settings: { $keys }
+config-check-ok = { $file } has no unrecognized settings.
 config-disabled = Disabled.
 config-reload-failed = could not read the new config to restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
 config-restart-daemon-and-shell = Restart the Atuin daemon and your shell for the change to take effect.

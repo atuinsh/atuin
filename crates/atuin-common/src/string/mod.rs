@@ -49,6 +49,20 @@ pub trait StrExt {
 
     /// Check whether the string consists entirely of whitespace or is empty.
     fn is_space_or_empty(&self) -> bool;
+
+    /// Like [`str::strip_prefix`], for dotted keys such as `a.b.c`, matching whole segments.
+    ///
+    /// Returns the segments after `prefix`, which are empty when the key is `prefix` itself. For
+    /// example, `"a.b.c"` strips `"a"` to `"b.c"`. `"ab.c"` doesn't strip `"a"`, because `"ab"` is
+    /// a different segment. An empty `prefix` is the root, which every key is inside.
+    fn strip_dotted_prefix(&self, prefix: &str) -> Option<&str>;
+
+    /// Whether the dotted key is `prefix`, or a key inside `prefix`.
+    ///
+    /// See [`Self::strip_dotted_prefix`].
+    fn has_dotted_prefix(&self, prefix: &str) -> bool {
+        self.strip_dotted_prefix(prefix).is_some()
+    }
 }
 
 #[allow(clippy::use_self, reason = "`str` is more readable")]
@@ -90,6 +104,18 @@ impl StrExt for str {
 
     fn is_space_or_empty(&self) -> bool {
         self.chars().all(char::is_whitespace)
+    }
+
+    fn strip_dotted_prefix(&self, prefix: &str) -> Option<&str> {
+        if prefix.is_empty() {
+            return Some(self);
+        }
+        let rest = self.strip_prefix(prefix)?;
+        if rest.is_empty() {
+            Some(rest)
+        } else {
+            rest.strip_prefix('.')
+        }
     }
 }
 
@@ -207,6 +233,36 @@ mod tests {
     use url::Url;
 
     use super::{FormatSafeUrlExt, NonEmptyOrExt, StrExt};
+
+    #[rstest]
+    #[case::the_key_itself("a.b", "a.b", Some(""))]
+    #[case::a_parent_table("a.b.c", "a", Some("b.c"))]
+    #[case::a_nested_parent_table("a.b.c", "a.b", Some("c"))]
+    #[case::the_root("a.b", "", Some("a.b"))]
+    #[case::a_longer_segment("ab.c", "a", None)]
+    #[case::a_shorter_segment("a.c", "ab", None)]
+    #[case::a_child("a", "a.b", None)]
+    #[case::a_sibling("a.c", "a.b", None)]
+    fn strip_dotted_prefix(
+        #[case] key: &str,
+        #[case] prefix: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(key.strip_dotted_prefix(prefix), expected);
+        assert_eq!(key.has_dotted_prefix(prefix), expected.is_some());
+    }
+
+    proptest! {
+        #[test]
+        fn strip_dotted_prefix_returns_the_segments_after_the_prefix(
+            prefix in "[a-z_]{1,8}(\\.[a-z_]{1,8}){0,3}",
+            rest in "[a-z_]{1,8}(\\.[a-z_]{1,8}){0,3}",
+        ) {
+            let key = format!("{prefix}.{rest}");
+            prop_assert_eq!(key.strip_dotted_prefix(&prefix), Some(rest.as_str()));
+            prop_assert_eq!(prefix.strip_dotted_prefix(&prefix), Some(""));
+        }
+    }
 
     #[rstest]
     #[case::empty("", &[])]
