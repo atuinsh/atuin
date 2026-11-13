@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
@@ -74,10 +75,20 @@ impl Cmd {
                 let key = paseto_v4::Key::try_load_from_path(&settings.key_path)
                     .wrap_err(fl!("sync-key-load-failed"))?;
 
-                if base64 {
-                    println!("{}", key.encode().dangerously_leak_secret());
+                let mut stdout = io::stdout().lock();
+                let result = if base64 {
+                    writeln!(stdout, "{}", key.encode().dangerously_leak_secret())
                 } else {
-                    println!("{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?);
+                    writeln!(stdout, "{}", key.try_mnemonic().context(fl!("sync-key-invalid"))?)
+                };
+                if let Err(err) = result {
+                    #[cfg(unix)]
+                    if err.kind() == io::ErrorKind::BrokenPipe {
+                        signal_hook::low_level::emulate_default_handler(
+                            signal_hook::consts::SIGPIPE,
+                        )?;
+                    }
+                    return Err(err.into());
                 }
                 Ok(())
             }

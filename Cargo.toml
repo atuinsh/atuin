@@ -154,6 +154,7 @@ service-manager = { package = "atuin-service-manager", version = "0.12", default
 sha2 = "0.10"
 shellexpand = "3"
 shlex = "2"
+signal-hook = { version = "0.3.18", default-features = false }
 sql-builder = "3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
