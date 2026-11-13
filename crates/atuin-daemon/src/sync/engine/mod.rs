@@ -6,14 +6,13 @@ mod worker;
 use std::sync::Arc;
 
 use atuin_client::ai_session::AiSessionDatabase;
-use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use worker::Worker;
 #[cfg(test)]
 pub use worker::spawn_ai_session_projector;
 
 use crate::daemon::DaemonHandle;
-use crate::search::SearchIndex;
+use crate::search::SharedSearchIndex;
 use crate::session_capture::Recovery;
 
 /// Owns the background sync task.
@@ -27,7 +26,7 @@ impl SyncEngine {
     #[must_use]
     pub fn spawn(
         handle: DaemonHandle,
-        index: Arc<RwLock<SearchIndex>>,
+        index: Arc<SharedSearchIndex>,
         ai_session_db: Option<AiSessionDatabase>,
         ai_session_recovery: Recovery,
     ) -> Self {

@@ -30,7 +30,7 @@ use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::grpc::versioning::StrictVersionInterceptor;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::search::{IndexFilterMode, SharedSearchIndex};
 use atuin_daemon::server::STRICT_VERSION_LAYER;
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
@@ -43,7 +43,7 @@ use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
@@ -139,8 +139,13 @@ impl TestEnvBuilder {
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
         let search_component = SearchComponent::default();
-        let index = search_component.index();
+        let index = search_component.index().clone();
         let search_service = search_component.grpc_service(output_capture.store());
+        // Without the component, nothing would run the index's first load, and the index would
+        // ignore every add. Run that load here, before anything is seeded.
+        if !self.with_search_component {
+            index.fill(&history_db).await.unwrap();
+        }
 
         // Seed before components start so a registered loader sees the rows.
         let mut history_gen = HistoryGen::new(self.seed);
@@ -237,7 +242,7 @@ pub struct TestEnv {
     pub store: SqliteStore,
     pub history_store: HistoryStore,
     pub host_id: HostId,
-    pub index: Arc<RwLock<SearchIndex>>,
+    pub index: Arc<SharedSearchIndex>,
     pub journal: Arc<HistoryJournal>,
     pub handle: DaemonHandle,
     pub socket_path: PathBuf,
@@ -381,12 +386,17 @@ impl TestEnv {
     }
 
     pub async fn active_ids(&self) -> HashSet<HistoryId> {
-        let mut ids = HashSet::new();
+        self.active_histories().await.into_iter().map(|h| h.id).collect()
+    }
+
+    /// Every live row in the history db.
+    pub async fn active_histories(&self) -> Vec<History> {
+        let mut histories = Vec::new();
         let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false);
         while let Some(page) = pager.next().await.unwrap() {
-            ids.extend(page.into_iter().map(|h| h.id));
+            histories.extend(page);
         }
-        ids
+        histories
     }
 
     /// What the index's `command_count` must be once it is in sync with the history db.
@@ -394,14 +404,36 @@ impl TestEnv {
         corpus::distinct_indexable_commands(&self.history_db).await
     }
 
-    pub async fn index_count(&self) -> usize {
-        self.index.read().await.command_count()
+    /// Save `histories` to the history db and add them to the live index, the way the sync worker
+    /// does.
+    ///
+    /// The entries are registered with the index before they are saved. That way a racing reload
+    /// keeps them.
+    pub async fn save_and_index(&self, histories: &[History]) {
+        corpus::save_and_index(&self.index, Some(&self.history_db), histories).await;
+    }
+
+    /// Add `histories` to the live index only, not the history db.
+    pub async fn index_only(&self, histories: &[History]) {
+        corpus::save_and_index(&self.index, None, histories).await;
+    }
+
+    /// Empty the live index by rebuilding it from an empty db. After that, only a rebuild from the
+    /// history db can fill it again.
+    pub async fn clear_index(&self) {
+        let empty = Sqlite::in_memory(Duration::from_secs(5)).await.unwrap();
+        let cleared =
+            self.index.rebuild(&empty, |settings| Some(settings.latest.clone())).await.unwrap();
+        assert_eq!(cleared.command_count(), 0);
+    }
+
+    pub fn index_count(&self) -> usize {
+        self.index.read().command_count()
     }
 
     /// Ids the live index returns for `query` (global filter, generous limit).
-    pub async fn index_hits(&self, query: &str) -> Vec<HistoryId> {
-        let index = self.index.read().await;
-        index.search(query, &IndexFilterMode::Global, 200, &self.history_db).await.collect()
+    pub fn index_hits(&self, query: &str) -> Vec<HistoryId> {
+        self.index.read().search(query, &IndexFilterMode::Global, 200).unwrap().collect()
     }
 
     /// Ids the Search RPC returns for `query`, i.e. what the TUI would show.
@@ -463,7 +495,7 @@ impl TestEnv {
     pub async fn wait_for_index_count(&self, count: usize) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
-            let got = self.index_count().await;
+            let got = self.index_count();
             if got == count {
                 return;
             }

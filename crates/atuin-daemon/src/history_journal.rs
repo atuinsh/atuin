@@ -102,7 +102,7 @@ use tracing::{Instrument, Span};
 #[cfg(feature = "octavo")]
 use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
-use crate::search::SearchIndex;
+use crate::search::{FrecencyMultipliers, SearchIndexSettings, SharedSearchIndex};
 
 /// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
 /// `HistoryStore::build_all`, which this path used to go through.
@@ -230,7 +230,7 @@ pub struct HistoryJournal {
     unsaved_cmds: DashMap<HistoryId, (String, String)>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
-    search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+    search_index: Arc<SharedSearchIndex>,
 
     /// Channel used to broadcast command events to other threads. See [`CmdEvent`] and
     /// [`Self::subscribe`].
@@ -310,7 +310,7 @@ impl HistoryJournal {
         caps: Arc<CapClient>,
         history_store: HistoryStore,
         history_db: HistoryDatabase,
-        search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+        search_index: Arc<SharedSearchIndex>,
         output_capture: OutputCaptureEngine,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
@@ -381,6 +381,10 @@ impl HistoryJournal {
     ///
     /// `duration` is the measured runtime of the command; callers that don't have one can derive it
     /// from the start timestamp via [`HistoryJournal::get`].
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "false positive: the index permit is consumed by add_history right after the save"
+    )]
     pub async fn finish(
         &self,
         history_id: HistoryId,
@@ -427,6 +431,12 @@ impl HistoryJournal {
             unsaved: Some((history.command.clone(), history.cwd.clone())),
         };
 
+        // The entry is registered with any search index rebuild in progress before the row is
+        // saved. The rebuilt index then has the entry even if the rebuild's load doesn't read it.
+        // See `AddPermit`.
+        let index_permit = self.search_index.begin_add().await;
+        index_permit.register([&history]);
+
         // Not an error for the caller: a retry would push a second record. The row comes back the
         // next time history.db is rebuilt from the store.
         match self.history_db.save(&history).instrument(span.clone()).await {
@@ -436,6 +446,9 @@ impl HistoryJournal {
                  `atuin store rebuild history` to restore it: {e}"
             ),
         }
+
+        // The entry is indexed even if the save failed, because the record store has it.
+        index_permit.add_history([&history]);
 
         drop(recorded);
         drop(lock);
@@ -453,10 +466,6 @@ impl HistoryJournal {
             tracing::warn!("packing failed: {e}");
         }
 
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        self.search_index.read().await.add_history(&history);
         #[cfg(feature = "octavo")]
         self.octavo.push_history(&history, history_record_id).await;
 
@@ -625,29 +634,25 @@ impl HistoryJournal {
 
     /// Reload the search index from the history database.
     pub async fn reload_search_index(&self, search_settings: &Search) {
-        // Clone the shell filter and drop the read guard before the (full) reload, so the scan
-        // doesn't hold the search-index lock across the database load.
-        //
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        let shells = self.search_index.read().await.shells.clone();
-        let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
-        match rebuilt {
-            Ok(new_index) => *self.search_index.write().await = new_index,
-            Err(e) => {
-                // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
-                //                      index is almost certainly wrong, however, is the legacy
-                //                      behavior we had.
-                //
-                //                      Arguably, we could completely delete the index/crash the
-                //                      daemon, since at this point, Atuin is as good as useless.
-                //
-                //                      We could also just mark the index as hot garbo and have the
-                //                      next request attempt to rebuild it. Not sure why the next
-                //                      request would succeed but a retry is always good.
-                tracing::error!("failed to reload search index; keeping previous index: {e}");
-            }
+        let frecency_multipliers = FrecencyMultipliers::from(search_settings);
+        let rebuilt = self.search_index.rebuild(&self.history_db, |settings| {
+            Some(SearchIndexSettings {
+                frecency_multipliers,
+                ..settings.latest.clone()
+            })
+        });
+        if let Err(e) = rebuilt.await {
+            // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
+            //                      index is almost certainly wrong, however, is the legacy
+            //                      behavior we had.
+            //
+            //                      Arguably, we could completely delete the index/crash the
+            //                      daemon, since at this point, Atuin is as good as useless.
+            //
+            //                      We could also just mark the index as hot garbo and have the
+            //                      next request attempt to rebuild it. Not sure why the next
+            //                      request would succeed but a retry is always good.
+            tracing::error!("failed to reload search index; keeping previous index: {e}");
         }
     }
 
@@ -750,12 +755,11 @@ impl HistoryJournal {
 mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4;
-    use atuin_common::filter::OrFilter;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{CmdOrigin, HostId};
-    use tokio::sync::RwLock;
 
     use super::*;
+    use crate::search::SearchIndex;
 
     /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
     /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
@@ -766,7 +770,7 @@ mod tests {
             HistoryDatabase::new(tmp.path().join("history.db"), timeout).await.unwrap();
         let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
-        let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
+        let search_index = Arc::new(SearchIndex::default().into());
         let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
         let journal =
             HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);

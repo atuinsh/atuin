@@ -205,9 +205,9 @@ async fn check_invariants(env: &TestEnv, model: &Model, step: usize, op: &Op) {
     }
     let persisted = model.persisted();
     assert_eq!(env.active_ids().await, persisted, "{ctx}: history db");
-    assert_eq!(env.index_count().await, persisted.len(), "{ctx}: index size");
+    assert_eq!(env.index_count(), persisted.len(), "{ctx}: index size");
     for (h, state) in &model.slots {
-        let hits = env.index_hits(&h.command).await;
+        let hits = env.index_hits(&h.command);
         assert_eq!(
             hits.contains(&h.id),
             *state == State::Persisted,

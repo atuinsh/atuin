@@ -84,7 +84,7 @@ pub async fn boot(
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
     let search_service = search_component.grpc_service(output_capture.store());
-    let search_index = search_component.index();
+    let search_index = search_component.index().clone();
 
     let kv_db = KvDatabase::new(&settings.kv.db_path, settings.local_timeout)
         .await

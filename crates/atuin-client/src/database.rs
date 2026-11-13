@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::ffi::OsStr;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -10,6 +11,7 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
+use futures::{TryStreamExt as _, future};
 use itertools::Itertools;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
@@ -912,45 +914,50 @@ impl Sqlite {
         Ok(ordering::reorder_fuzzy(search_mode, &ranking_query(orig_query), res))
     }
 
-    /// Get all unique user-run commands that have only been run since `start` (no invocations
-    /// before that).
+    /// Get each distinct user-run command that was run at or after `since` and was also run before
+    /// `before`.
     ///
     /// Only considers user-run commands that match the given shell filter. Returns a vector of
     /// command strings.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn commands_only_since(
+    pub async fn commands_run_since_and_before(
         &self,
-        start: OffsetDateTime,
+        since: OffsetDateTime,
+        before: OffsetDateTime,
         shells: OrFilter<&[String]>,
     ) -> Result<Vec<String>> {
-        let Ok(start) = i64::try_from(start.unix_timestamp_nanos()) else {
+        let (Ok(since), Ok(before)) = (
+            i64::try_from(since.unix_timestamp_nanos()),
+            i64::try_from(before.unix_timestamp_nanos()),
+        ) else {
             return Ok(Vec::new());
         };
 
-        // Subquery to check if some command `h` that occurs after `start` *also* has an invocation
-        // before `start`.
+        // This subquery checks whether a command `h` that was run at or after `since` was also run
+        // before `before`.
         let mut earlier = SqlBuilder::select_from("history");
         earlier
             .field("1")
             .and_where("command = h.command")
-            .and_where_lt("timestamp", start)
+            .and_where_lt("timestamp", before)
             .and_where_is_null("deleted_at");
         apply_author_filter(&mut earlier, all_user_author_filter());
         apply_shell_filter(&mut earlier, shells);
-        let earlier = earlier.sql().expect("bug in commands_only_since query. please report");
+        let earlier =
+            earlier.sql().expect("bug in commands_run_since_and_before query. please report");
         let earlier = earlier.trim().trim_end_matches(';');
 
-        // `INDEXED BY` forces SQLite to only access the rows since `start`, which is expected to be
-        // much smaller than the whole DB.
+        // `INDEXED BY` forces SQLite to read only the rows since `since`. We expect those rows to be
+        // a small part of the whole DB.
         let mut sql = SqlBuilder::select_from("history h INDEXED BY idx_history_active_timestamp");
         sql.distinct()
             .field("command")
-            .and_where_ge("timestamp", start)
+            .and_where_ge("timestamp", since)
             .and_where_is_null("deleted_at")
-            .and_where(format!("NOT EXISTS ({earlier})"));
+            .and_where(format!("EXISTS ({earlier})"));
         apply_author_filter(&mut sql, all_user_author_filter());
         apply_shell_filter(&mut sql, shells);
-        let sql = sql.sql().expect("bug in commands_only_since query. please report");
+        let sql = sql.sql().expect("bug in commands_run_since_and_before query. please report");
 
         db::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql)).fetch_all(self.sqlite.pool()).await
     }
@@ -1099,14 +1106,54 @@ impl Sqlite {
     // deleted_at is still read to keep tombstones from older versions working.
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn delete(&self, h: History) -> Result<()> {
-        self.delete_rows([h.id]).await
+        self.delete_rows([h.id]).await?;
+        Ok(())
     }
 
+    /// Find which of `ids` have a row in the history table. A tombstone from an older version
+    /// counts as a row.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
+    pub async fn existing_ids(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<HashSet<HistoryId>> {
+        let mut ids = ids.into_iter().peekable();
+        let mut existing = HashSet::new();
+        if ids.peek().is_none() {
+            return Ok(existing);
+        }
+
+        let ids_per_select = self.sqlite.info().await.variable_number_limit().max(1);
+        while ids.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new("select id from history where id in (");
+            let mut list = builder.separated(", ");
+            for id in ids.by_ref().take(ids_per_select) {
+                list.push_bind(id);
+            }
+            builder.push(")");
+
+            builder
+                .build_query_scalar::<HistoryId>()
+                .fetch(self.sqlite.pool())
+                .try_for_each(|id| {
+                    existing.insert(id);
+                    future::ready(Ok(()))
+                })
+                .await?;
+        }
+
+        Ok(existing)
+    }
+
+    /// Delete the rows with these ids in one transaction.
+    ///
+    /// Returns how many of the deleted rows were live. A tombstone from an older version is not a
+    /// live row. Ids that have no row are ignored.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<usize> {
         let mut ids = ids.into_iter().peekable();
         if ids.peek().is_none() {
-            return Ok(());
+            return Ok(0);
         }
 
         // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
@@ -1114,6 +1161,7 @@ impl Sqlite {
         let ids_per_delete = self.sqlite.info().await.variable_number_limit().max(1);
 
         let mut tx = self.sqlite.pool().begin().await?;
+        let mut live = 0;
 
         while ids.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new("delete from history where id in (");
@@ -1121,14 +1169,18 @@ impl Sqlite {
             for id in ids.by_ref().take(ids_per_delete) {
                 list.push_bind(id);
             }
-            builder.push(")");
+            builder.push(") returning deleted_at is null");
 
-            builder.build().execute(&mut *tx).await?;
+            live += builder
+                .build_query_scalar::<bool>()
+                .fetch(&mut *tx)
+                .try_fold(0, |live, removed| future::ready(Ok(live + usize::from(removed))))
+                .await?;
         }
 
         tx.commit().await?;
 
-        Ok(())
+        Ok(live)
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
@@ -1471,15 +1523,25 @@ mod test {
         Sqlite::in_memory(test_local_timeout()).await.unwrap()
     }
 
-    /// Only commands with no counting run before `start` are returned: an agent's run, a run in
-    /// another shell, or a deleted run doesn't count, but any user run before `start` does.
+    /// A command is returned only if it has a counting run at or after `since`. It must also have a
+    /// counting run before `before`. A single run between the two bounds counts for both. Runs by
+    /// an agent, runs in another shell, and deleted runs don't count.
     #[rstest]
+    #[case::same_bound(0, &["before_and_after"])]
+    #[case::since_earlier(30, &["before_and_after", "between"])]
     #[tokio::test]
-    async fn commands_only_since_excludes_commands_run_before(#[future] empty_db: Sqlite) {
+    async fn commands_run_since_and_before_needs_a_counting_run_on_each_side(
+        #[case] since_secs_before: u64,
+        #[case] expected: &[&str],
+        #[future] empty_db: Sqlite,
+    ) {
         let db = empty_db.await;
         let start = datetime!(2024-01-01 12:00 UTC);
-        let (before, after) = (start - Duration::from_secs(60), start);
+        let since = start - Duration::from_secs(since_secs_before);
+        let (before, between, after) =
+            (start - Duration::from_secs(60), start - Duration::from_secs(10), start);
         for (command, timestamp, author_kind, shell, deleted) in [
+            ("between", between, AuthorKind::User, "zsh", false),
             ("only_after", after, AuthorKind::User, "zsh", false),
             ("before_and_after", before, AuthorKind::User, "zsh", false),
             ("before_and_after", after, AuthorKind::User, "zsh", false),
@@ -1506,14 +1568,10 @@ mod test {
         }
 
         let shells = OrFilter::from_list(vec!["zsh".to_string()]).unwrap();
-        let mut commands = db.commands_only_since(start, shells.as_slice_filter()).await.unwrap();
+        let mut commands =
+            db.commands_run_since_and_before(since, start, shells.as_slice_filter()).await.unwrap();
         commands.sort_unstable();
-        assert_eq!(commands, [
-            "agent_before",
-            "deleted_before",
-            "only_after",
-            "other_shell_before"
-        ]);
+        assert_eq!(commands, expected);
     }
 
     #[rstest]
@@ -1825,6 +1883,27 @@ mod test {
                 cwd: "/srv".to_owned(),
             },
         ]);
+    }
+
+    /// `delete_rows` removes both live rows and tombstones from older versions. It counts only the
+    /// live rows that it removed. It ignores ids that have no row.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_rows_counts_only_live_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let live = save_history_item(&db, "echo live").await;
+        let mut tombstone = save_history_item(&db, "echo tombstone").await;
+        tombstone.deleted_at = Some(OffsetDateTime::now_utc());
+        db.update(&tombstone).await.unwrap();
+        let missing = HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap());
+
+        assert_eq!(db.delete_rows([tombstone.id, missing]).await.unwrap(), 0);
+        assert_eq!(db.delete_rows([live.id, missing]).await.unwrap(), 1);
+        assert!(db.all_paged(10, true).next().await.unwrap().is_none());
+        assert_eq!(db.delete_rows([live.id]).await.unwrap(), 0, "already deleted");
     }
 
     #[rstest]

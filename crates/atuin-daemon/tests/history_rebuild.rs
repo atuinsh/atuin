@@ -11,7 +11,6 @@ use atuin_client::history::store::HistoryRecord;
 use atuin_client::history::{HistoryId, Version};
 use atuin_client::settings::Search;
 use atuin_common::encryption::paseto_v4;
-use atuin_daemon::search::SearchIndex;
 use atuin_domain::record::{Host, Record, RecordSeriesKey, RecordTag, RecordVersion};
 use common::corpus::seed_record_store;
 use common::{TestEnv, history};
@@ -34,14 +33,14 @@ async fn rebuild_rederives_rows_from_the_store(#[future(awt)] env: TestEnv) {
     let db_only = history("echo db-only");
     env.history_db.save(&db_only).await.unwrap();
     env.history_db.delete_rows([lost]).await.unwrap();
-    *env.index.write().await = SearchIndex::default();
+    env.clear_index().await;
 
     client.rebuild_history().await.unwrap();
 
     assert_eq!(env.active_ids().await, HashSet::from([lost, db_only.id]));
-    assert_eq!(env.index_hits("lost-from-db").await, vec![lost]);
-    assert_eq!(env.index_hits("db-only").await, vec![db_only.id]);
-    assert!(env.index_hits("tombstoned").await.is_empty());
+    assert_eq!(env.index_hits("lost-from-db"), vec![lost]);
+    assert_eq!(env.index_hits("db-only"), vec![db_only.id]);
+    assert!(env.index_hits("tombstoned").is_empty());
 }
 
 #[rstest]
@@ -52,12 +51,12 @@ async fn rebuild_is_idempotent(#[future(awt)] env: TestEnv) {
         env.record(&mut client, &format!("echo {i}")).await;
     }
     let before_ids = env.active_ids().await;
-    let before_index = env.index_count().await;
+    let before_index = env.index_count();
 
     for _ in 0..3 {
         client.rebuild_history().await.unwrap();
         assert_eq!(env.active_ids().await, before_ids);
-        assert_eq!(env.index_count().await, before_index);
+        assert_eq!(env.index_count(), before_index);
     }
     assert_eq!(env.record_idxs().await, (0..10).collect::<Vec<u64>>(), "rebuild writes no records");
 }
@@ -77,7 +76,7 @@ async fn rebuild_leaves_in_flight_commands_alone(#[future(awt)] env: TestEnv) {
     assert!(env.history_db.load(running).await.unwrap().is_none(), "not persisted yet");
     client.end_history(running, Some(Duration::from_secs(30)), 0).await.unwrap();
     assert_eq!(env.active_ids().await, HashSet::from([running]));
-    assert_eq!(env.index_hits("sleep 30").await, vec![running]);
+    assert_eq!(env.index_hits("sleep 30"), vec![running]);
 }
 
 /// A record the daemon cannot decrypt (written under another key) or decode is skipped, and every
@@ -118,5 +117,5 @@ async fn rebuild_skips_undecodable_records(#[future(awt)] env: TestEnv, #[case] 
 
     let expected: HashSet<HistoryId> = good.iter().map(|h| h.id).collect();
     assert_eq!(env.active_ids().await, expected);
-    assert_eq!(env.index_count().await, 3);
+    assert_eq!(env.index_count(), 3);
 }

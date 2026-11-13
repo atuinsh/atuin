@@ -283,6 +283,41 @@ async fn end_history_without_duration_derives_from_start(#[future(awt)] env: Tes
     assert!(row.duration >= 20_000_000, "derived duration too small: {}", row.duration);
 }
 
+/// An end that the client abandons mid-call still runs to completion. Tonic drops the RPC future
+/// when the client disconnects. The entry is still saved to the history db and added to the search
+/// index.
+#[rstest]
+#[tokio::test]
+async fn abandoned_end_still_saves_and_indexes(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let start_reply = client.start_history(history("echo abandoned")).await.unwrap();
+    let id: HistoryId = start_reply.id.unwrap().try_into().unwrap();
+
+    let lock = env.lock_history_db().await;
+    // Let the RPC reach the daemon and block on the locked history db. Then drop the client call.
+    // Dropping it resets the stream, which is how tonic learns that a client went away and drops
+    // the handler future.
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(200),
+        client.end_history(id, Some(Duration::from_millis(1)), 0),
+    )
+    .await;
+    assert!(abandoned.is_err(), "the end must still be waiting on the history db");
+    lock.release().await;
+
+    // The detached end finishes on its own.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while env.history_db.load(id).await.unwrap().is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "abandoned end never saved the entry");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while env.index_hits("echo abandoned") != [id] {
+        assert!(tokio::time::Instant::now() < deadline, "abandoned end never indexed the entry");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[rstest]
 #[tokio::test]
 async fn test_tail_history_streams_started_and_ended_events(#[future(awt)] env: TestEnv) {
@@ -384,20 +419,14 @@ async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: Tes
     journal.finish(id_a, 0, Duration::from_millis(1)).await.unwrap();
     let id_b = journal.start_cmd(history("keep_me"));
     journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
-    assert_eq!(env.index_count().await, 2);
+    assert_eq!(env.index_count(), 2);
 
     assert_eq!(journal.delete(&[id_a], &Search::default()).await.unwrap(), 1);
 
-    let index = env.index.read().await;
+    let index = env.index.read();
     assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");
-    assert_eq!(
-        index.search("delete_me", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
-        0
-    );
-    assert_eq!(
-        index.search("keep_me", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
-        1
-    );
+    assert_eq!(index.search("delete_me", &IndexFilterMode::Global, 10).unwrap().count(), 0);
+    assert_eq!(index.search("keep_me", &IndexFilterMode::Global, 10).unwrap().count(), 1);
 }
 
 #[rstest]
@@ -408,25 +437,19 @@ async fn journal_rebuild_reloads_index(#[future(awt)] env: TestEnv) {
     journal.finish(id_a, 0, Duration::from_millis(1)).await.unwrap();
     let id_b = journal.start_cmd(history("second_cmd"));
     journal.finish(id_b, 0, Duration::from_millis(1)).await.unwrap();
-    assert_eq!(env.index_count().await, 2);
+    assert_eq!(env.index_count(), 2);
 
     // Wipe both the history db and the index; only the record store still holds the commands.
     env.history_db.delete_rows([id_a, id_b]).await.unwrap();
     assert_eq!(env.active_rows().await, 0);
-    *env.index.write().await = atuin_daemon::search::SearchIndex::default();
-    assert_eq!(env.index_count().await, 0);
+    env.clear_index().await;
+    assert_eq!(env.index_count(), 0);
 
     journal.rebuild(&Search::default()).await.unwrap();
 
     assert_eq!(env.active_rows().await, 2);
-    let index = env.index.read().await;
+    let index = env.index.read();
     assert_eq!(index.command_count(), 2, "rebuild should repopulate the index from the store");
-    assert_eq!(
-        index.search("first_cmd", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
-        1
-    );
-    assert_eq!(
-        index.search("second_cmd", &IndexFilterMode::Global, 10, &env.history_db).await.count(),
-        1
-    );
+    assert_eq!(index.search("first_cmd", &IndexFilterMode::Global, 10).unwrap().count(), 1);
+    assert_eq!(index.search("second_cmd", &IndexFilterMode::Global, 10).unwrap().count(), 1);
 }

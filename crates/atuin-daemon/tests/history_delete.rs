@@ -15,7 +15,6 @@ use atuin_client::settings::{CaptureLimits, OutputCapture, Search};
 use atuin_common::secrets::files::SensitiveFiles;
 use atuin_daemon::grpc::history::pb::RegisterCommandOutputRequest;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
-use atuin_daemon::search::SearchIndex;
 use atuin_daemon::{CmdDeleteError, CmdFinishError, RegisterOutputError};
 use common::{TestEnv, capture, history};
 use easy_cast::Conv;
@@ -132,13 +131,13 @@ async fn delete_reports_every_id_it_processed(
 async fn empty_delete_does_nothing(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     env.record(&mut client, "echo real").await;
-    env.index.read().await.add_history(&history("index-only sentinel"));
-    assert_eq!(env.index_count().await, 2);
+    env.index_only(&[history("index-only sentinel")]).await;
+    assert_eq!(env.index_count(), 2);
 
     let reply = client.delete_history(vec![]).await.unwrap();
 
     assert_eq!(reply.deleted, 0);
-    assert_eq!(env.index_count().await, 2, "no rebuild may run for an empty batch");
+    assert_eq!(env.index_count(), 2, "no rebuild may run for an empty batch");
     assert!(env.history_records().await.iter().all(|r| matches!(r, HistoryRecord::Create(_))));
 }
 
@@ -163,7 +162,7 @@ async fn search_follows_the_surviving_invocations(#[future(awt)] env: TestEnv) {
 
     client.delete_history(vec![second, first]).await.unwrap();
     assert!(env.rpc_hits(&mut search, "cargo build").await.is_empty());
-    assert_eq!(env.index_count().await, 0);
+    assert_eq!(env.index_count(), 0);
 }
 
 /// Every delete appends exactly one tombstone per id, contiguously after the creates, and a
@@ -233,12 +232,12 @@ async fn deletion_survives_restart_and_rebuild(#[future(awt)] env: TestEnv) {
     // Reset the in-memory index and rebuild it from the same db and store -- not a real process
     // restart (no new journal, db, or store connections), but it does exercise the codepath a
     // restart's fresh `rebuild()` call would take.
-    *env.index.write().await = SearchIndex::default();
+    env.clear_index().await;
     env.journal.rebuild(&Search::default()).await.unwrap();
 
     assert_eq!(env.active_ids().await, HashSet::from([kept]));
-    assert!(env.index_hits("doomed").await.is_empty());
-    assert_eq!(env.index_hits("kept").await, vec![kept]);
+    assert!(env.index_hits("doomed").is_empty());
+    assert_eq!(env.index_hits("kept"), vec![kept]);
 }
 
 /// When the record store cannot be written, the delete fails, no row is touched, the index is
@@ -255,12 +254,12 @@ async fn delete_failure_keeps_rows_until_retry() {
     let err = env.journal.delete(&[a, b], &Search::default()).await.unwrap_err();
     assert!(matches!(err, CmdDeleteError::HistoryStoreFailed(_)), "{err}");
     assert_eq!(env.active_ids().await, HashSet::from([a, b]));
-    assert_eq!(env.index_count().await, 2);
+    assert_eq!(env.index_count(), 2);
     lock.release().await;
 
     assert_eq!(env.journal.delete(&[a, b], &Search::default()).await.unwrap(), 2);
     assert!(env.active_ids().await.is_empty());
-    assert_eq!(env.index_count().await, 0);
+    assert_eq!(env.index_count(), 0);
 }
 
 /// A command whose record can't be stored stays in flight, so the shell's retry, or a later delete,
@@ -276,14 +275,14 @@ async fn failed_store_write_keeps_the_command_in_flight(#[future(awt)] env: Test
     };
     assert!(matches!(err, CmdFinishError::HistoryStoreFailed(_)), "{err:?}");
     assert!(env.journal.get(id).is_ok(), "the command must still be in flight");
-    assert_eq!(env.index_count().await, 0, "nothing may be indexed before persistence succeeds");
+    assert_eq!(env.index_count(), 0, "nothing may be indexed before persistence succeeds");
     lock.release().await;
 
     env.journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
     assert!(env.journal.get(id).is_err());
     assert_eq!(env.active_ids().await, HashSet::from([id]));
     assert_eq!(creates(&env).await, 1, "exactly one create record after the retry");
-    assert_eq!(env.index_count().await, 1);
+    assert_eq!(env.index_count(), 1);
 }
 
 /// Once the record is stored, a failed history.db write doesn't lose the command: it's recorded,
@@ -303,7 +302,7 @@ async fn failed_history_db_write_still_records_the_command(#[future(awt)] env: T
 
     env.journal.rebuild(&Search::default()).await.unwrap();
     assert_eq!(env.active_ids().await, HashSet::from([id]));
-    assert_eq!(env.index_count().await, 1);
+    assert_eq!(env.index_count(), 1);
 }
 
 /// Output arriving after a command whose history.db write failed is still kept, until the command

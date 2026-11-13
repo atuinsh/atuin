@@ -1,21 +1,19 @@
-//! The lost-update race between rows arriving from sync -- fed straight into the live search index
-//! via `SearchIndex::add_histories` under a *read* guard, exactly as the sync worker does -- and an
-//! index reload (a delete or a rebuild) that scans the db into a fresh index and swaps it in.
+//! These tests cover the lost-update race (#4052). One side of the race is rows that arrive from
+//! sync. Each row is registered with the live search index, saved, and then added, exactly as the
+//! sync worker does. The other side is an index reload, which a delete or a rebuild triggers. The
+//! reload scans the db into a fresh index and swaps it in.
 //!
-//! `reload_search_index` reads the shell filter, drops the guard, scans the db newest-first with a
-//! keyset cursor (`order by id desc`, then `id < last_id`), and finally takes the write guard to
-//! swap the new index in. Two windows swallow a synced row:
-//!   * it is added to the *old* index, which the swap then discards; and
+//! The reload scans the db newest-first with a keyset cursor. The cursor uses `order by id desc`,
+//! then `id < last_id`. After the scan, the reload swaps the new index in. A synced row is lost
+//! unless the reload keeps it some other way, because both of these happen:
+//!   * it is added to the *old* index, which the swap then replaces; and
 //!   * its id is the largest in the db (uuid_v7 is time-ordered), so once the scan has read its
 //!     first page the keyset cursor has already moved below it and it is never visited.
 //!
 //! The row is still committed to the history db, so the durable layer is fine -- only the live
-//! index loses it.
+//! index could lose it.
 //!
-//! Tests that document this still-unfixed defect (report M2, #4052) are `#[ignore]`d with the
-//! defect named; their assertions state the *correct* behavior, so they fail under
-//! `cargo nextest run --run-ignored all` (or `cargo test -- --ignored`) rather than passing
-//! vacuously. These attack angles are distinct from `concurrency.rs`, which covers the single-batch
+//! These attack angles are distinct from `concurrency.rs`, which covers the single-batch
 //! delete-vs-add case; here the adds are continuous across the whole reload, cover the rebuild
 //! trigger too, and separate the durable db layer from the live index.
 #![cfg(unix)]
@@ -60,32 +58,26 @@ fn spawn_reload(env: &TestEnv, reload: Reload) -> tokio::task::JoinHandle<()> {
 /// machine: nothing that downloaded while a delete or a rebuild happened to be running silently
 /// vanishes from search.
 ///
-/// EXPECTED TO FAIL: every batch is added to whichever index is live under a read guard; the swap
-/// discards the old one, and the fresh index's keyset scan never revisits rows saved after its
-/// first page (their ids are the largest in the db). Both the delete and the rebuild trigger the
-/// same reload path.
+/// Every batch is added to the live index, which the swap replaces. The fresh index's keyset scan
+/// never revisits rows that are saved after its first page, because their ids are the largest in
+/// the db. The delete and the rebuild both trigger the same reload path.
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (synced adds dropped by a racing reload; see report M2, \
-            #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. \
-            Continuous add_histories under a read guard is lost by \
-            the index swap and the keyset scan. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: Reload) {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
     let reload_task = spawn_reload(&env, reload);
 
-    // Feed the index the way the sync worker does: save the batch to the db, then hand it straight
-    // to the live index under a read guard. Keep going for the whole reload.
+    // Feed the index the way the sync worker does. Register the batch with the live index, save
+    // it to the db, and then add it. Keep going for the whole reload.
     let mut history_gen = HistoryGen::new(0xF00D);
     let mut synced_unique: Vec<History> = Vec::new();
     let mut batches = 0usize;
     while !reload_task.is_finished() && synced_unique.len() < 300 {
         let batch: Vec<History> =
             std::iter::repeat_with(|| history_gen.next()).filter(index_eligible).take(8).collect();
-        env.history_db.save_bulk(&batch).await.unwrap();
-        env.index.read().await.add_histories(&batch);
+        env.save_and_index(&batch).await;
         synced_unique.extend(batch.into_iter().filter(HistoryGen::is_unique));
         batches += 1;
         tokio::task::yield_now().await;
@@ -98,7 +90,7 @@ async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: R
     // an older invocation even if this one was dropped, which would let the test pass vacuously.
     let mut missing = Vec::new();
     for h in &synced_unique {
-        if !env.index_hits(&h.command).await.contains(&h.id) {
+        if !env.index_hits(&h.command).contains(&h.id) {
             missing.push(h.command.clone());
         }
     }
@@ -109,7 +101,7 @@ async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: R
         synced_unique.len()
     );
     assert_eq!(
-        env.index_count().await,
+        env.index_count(),
         env.expected_command_count().await,
         "index size after synced adds + reload"
     );
@@ -121,14 +113,11 @@ async fn synced_batches_across_an_index_reload_stay_searchable(#[case] reload: R
 /// can't find a command that is provably present. A guard assertion on the db layer keeps the test
 /// honest (it fails loudly rather than vacuously if the row was never persisted).
 ///
-/// EXPECTED TO FAIL on the index assertion: the row is added to the old index (discarded by the
-/// swap) and, saved after the scan's first page, sits past the keyset cursor forever.
+/// The row is added to the old index, which the swap replaces. The row is saved after the scan's
+/// first page, so it sits past the keyset cursor forever.
 #[rstest]
-#[ignore = "documents an unfixed defect (synced row durable in the db but dropped from the index; \
-            see report M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with \
-            --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_synced_row_survives_in_the_db_but_the_reload_drops_it_from_the_index() {
+async fn a_synced_row_mid_reload_stays_in_the_db_and_the_index() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
     let reload_task = spawn_reload(&env, Reload::Delete);
     // Let the reload's paged scan get past its first page before the row lands, so the row's id
@@ -141,8 +130,7 @@ async fn a_synced_row_survives_in_the_db_but_the_reload_drops_it_from_the_index(
     })
     .find(|h| index_eligible(h) && HistoryGen::is_unique(h))
     .expect("corpus yields a unique index-eligible row");
-    env.history_db.save_bulk([&synced]).await.unwrap();
-    env.index.read().await.add_histories(std::slice::from_ref(&synced));
+    env.save_and_index(std::slice::from_ref(&synced)).await;
 
     reload_task.await.unwrap();
 
@@ -154,7 +142,7 @@ async fn a_synced_row_survives_in_the_db_but_the_reload_drops_it_from_the_index(
     );
     // Live index -- the user-facing invariant this test defends.
     assert!(
-        env.index_hits(&synced.command).await.contains(&synced.id),
+        env.index_hits(&synced.command).contains(&synced.id),
         "synced row is durably in the db but was dropped from the search index: {}",
         synced.command
     );

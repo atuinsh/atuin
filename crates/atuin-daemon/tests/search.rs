@@ -258,6 +258,27 @@ mod unix {
         let results = search(&mut client, query_id, "echo", FilterMode::Session, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&alpha, &gamma]), "session");
 
+        // Session preload: this session started after every seeded command. It finds all of them,
+        // even though none of them ran in the session. The first search uses the database query.
+        // The second search uses the cache.
+        let new_session = atuin_common::utils::uuid_v7().as_simple().to_string();
+        let new_ctx = || context("/work/repo", "host-a", &new_session, None);
+        for attempt in ["query", "cache"] {
+            query_id += 1;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::SessionPreload, new_ctx(), &[])
+                    .await;
+            assert_eq!(
+                sorted(results),
+                ids_of(&[&alpha, &beta, &gamma]),
+                "session preload, from the {attempt}"
+            );
+        }
+        query_id += 1;
+        let results =
+            search(&mut client, query_id, "echo", FilterMode::Session, new_ctx(), &[]).await;
+        assert!(results.is_empty(), "the new session has no commands of its own");
+
         // Unknown filter targets match nothing rather than erroring.
         query_id += 1;
         let results = search(

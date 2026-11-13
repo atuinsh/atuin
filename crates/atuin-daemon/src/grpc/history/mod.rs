@@ -137,7 +137,16 @@ impl GrpcService for Service {
                 .saturating_duration_since(self.journal.get(req.history_id)?.timestamp),
         };
 
-        let finished_cmd = self.journal.finish(req.history_id, req.exit_code, duration).await?;
+        let journal = self.journal.clone();
+        let (history_id, exit_code) = (req.history_id, req.exit_code);
+        // Spawned so a client disconnect cannot drop the call half-way. Otherwise the entry could
+        // be saved to the history db but never added to the search index.
+        let finished_cmd = tokio::spawn(
+            async move { journal.finish(history_id, exit_code, duration).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("finish did not complete: {e}")))??;
 
         Ok(Response::new(EndHistoryReply {
             record_id: Some(finished_cmd.history_record_id.into()),
@@ -189,7 +198,14 @@ impl GrpcService for Service {
         _request: Request<RebuildHistoryRequest>,
     ) -> Result<Response<RebuildHistoryReply>, Status> {
         let search_settings = self.daemon_handle.settings().await.search.clone();
-        self.journal.rebuild(&search_settings).await?;
+        let journal = self.journal.clone();
+        // The rebuild runs in its own task. That way a client disconnect can't cancel it.
+        tokio::spawn(
+            async move { journal.rebuild(&search_settings).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("rebuild did not complete: {e}")))??;
 
         Ok(Response::new(RebuildHistoryReply {}))
     }

@@ -202,9 +202,9 @@ proptest! {
             let stored = env.history_db.load(id).await.unwrap().expect("row persisted");
             prop_assert_eq!(&stored.command, &h.command);
             let eligible = common::corpus::index_eligible(&h);
-            prop_assert_eq!(env.index_count().await, usize::from(eligible));
+            prop_assert_eq!(env.index_count(), usize::from(eligible));
             let query = if command_is_dsl_safe(&h.command) { h.command.as_str() } else { "" };
-            let hits = env.index_hits(query).await;
+            let hits = env.index_hits(query);
             let expected = if eligible { vec![id] } else { vec![] };
             prop_assert_eq!(hits, expected, "command {:?}, query {:?}", h.command, query);
             Ok(())

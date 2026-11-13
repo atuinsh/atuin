@@ -50,7 +50,7 @@ async fn concurrent_shells_never_lose_records(#[case] shells: usize) {
     let ids: Vec<HistoryId> = join_all(tasks).await.into_iter().map(Result::unwrap).collect();
 
     assert_eq!(env.active_ids().await.len(), shells, "history db");
-    assert_eq!(env.index_count().await, shells, "search index");
+    assert_eq!(env.index_count(), shells, "search index");
     let creates: Vec<HistoryId> = env
         .history_records()
         .await
@@ -163,15 +163,13 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
 /// Commands that finish while the index is being reloaded (by a delete or a rebuild) are
 /// searchable once everything settles.
 ///
-/// EXPECTED TO FAIL: `HistoryJournal::reload_search_index` builds a fresh index from a paged db
-/// scan and then swaps it in; `finish` adds to the *old* index meanwhile, and ids are time-ordered
-/// so rows saved mid-scan sit past the keyset cursor and are never visited.
+/// `HistoryJournal::reload_search_index` builds a fresh index from a paged db scan. Then it swaps
+/// the new index in. Meanwhile, `finish` adds to the *old* index. Ids are time-ordered, so the
+/// keyset cursor never visits rows that are saved during the scan. The rebuild must keep those rows
+/// anyway (#4052).
 #[rstest]
 #[case::delete(Reload::Delete)]
 #[case::rebuild(Reload::Rebuild)]
-#[ignore = "documents an unfixed defect (index reload is a lost-update; see report M2, #4052: \
-            https://github.com/atuinsh/atuin/issues/4052); run with \
-            --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload: Reload) {
     let env = seeded_env().await;
@@ -202,7 +200,7 @@ async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload:
 
     let mut missing = Vec::new();
     for (id, cmd) in &finished {
-        if !env.index_hits(cmd).await.contains(id) {
+        if !env.index_hits(cmd).contains(id) {
             missing.push(cmd.clone());
         }
     }
@@ -212,7 +210,7 @@ async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload:
         missing.len(),
         finished.len()
     );
-    assert_eq!(env.index_count().await, env.expected_command_count().await);
+    assert_eq!(env.index_count(), env.expected_command_count().await);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -223,12 +221,10 @@ enum Reload {
 
 /// Two deletes running at once (two terminals pruning) both take effect in the index.
 ///
-/// EXPECTED TO FAIL: each delete rebuilds the index from its own db snapshot; whichever swap lands
-/// last may predate the other delete's `delete_rows`, resurrecting that command in search.
+/// Each delete rebuilds the index from the db. One rebuild may scan before the other delete's
+/// `delete_rows` runs. That rebuild must not install over a rebuild that scanned afterwards.
+/// Otherwise the deleted command comes back in search (#4052).
 #[rstest]
-#[ignore = "documents an unfixed defect (concurrent deletes resurrect rows; see report M2, #4052: \
-            https://github.com/atuinsh/atuin/issues/4052); run \
-            with --run-ignored. See module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_deletes_both_leave_the_index() {
     let env = seeded_env().await;
@@ -247,12 +243,12 @@ async fn concurrent_deletes_both_leave_the_index() {
             if env.history_db.load(h.id).await.unwrap().is_some() {
                 db_survivors.push(h.command.clone());
             }
-            if env.index_hits(&h.command).await.contains(&h.id) {
+            if env.index_hits(&h.command).contains(&h.id) {
                 resurrected.push(h.command.clone());
             }
         }
     }
-    let index_count = env.index_count().await;
+    let index_count = env.index_count();
     let expected_count = env.expected_command_count().await;
     assert!(db_survivors.is_empty(), "deleted commands still in the history db: {db_survivors:?}");
     assert!(resurrected.is_empty(), "deleted commands still searchable: {resurrected:?}");
@@ -319,26 +315,26 @@ async fn disjoint_concurrent_deletes_all_reach_the_store() {
 }
 
 /// Nothing the concurrent deletes removed is still searchable once they have all settled.
-///
-/// **Expected to fail intermittently due to issue #4052.** `.config/nextest.toml` will retry this
-/// test several times.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disjoint_concurrent_deletes_leave_the_index_empty() {
     let (env, _total) = env_after_disjoint_concurrent_deletes().await;
 
-    let index_count = env.index_count().await;
+    let index_count = env.index_count();
     assert_eq!(index_count, 0, "index still holds {index_count} commands after concurrent deletes");
 }
 
-/// A shell hook must not stall behind an index reload: `EndHistory` stays fast even when a writer
-/// contends for the index lock while a reload is scanning.
+/// A shell hook must not stall behind an index reload. `EndHistory` stays fast even when the index
+/// is replaced while a reload is scanning.
 ///
-/// Regression guard: an earlier `reload_search_index` held the index *read* guard across the whole
-/// paged scan, and tokio's RwLock is write-preferring, so the moment any writer queued (here the
-/// test, in production `prepare_index` on a shell-filter change) every later reader -- including
-/// `finish`'s `add_history` -- blocked until the scan ended. The reload now clones the shell filter
-/// and drops the guard before scanning, so the writer below acquires immediately and the hook's
+/// This is a regression guard. An earlier `reload_search_index` held a *read* guard on the
+/// daemon's outer index lock for the whole paged scan. Tokio's RwLock is write-preferring. So as
+/// soon as any writer queued, every later reader blocked until the scan ended. That included the
+/// `add_history` call in `finish`. In this test the writer is the test itself. In production, it
+/// was `prepare_index` after a shell-filter change.
+///
+/// The index no longer sits behind an outer lock. Its internal lock is held only for individual
+/// operations, never across the scan. So the replacement below completes immediately. The hook's
 /// latency stays within a small multiple of an uncontended finish.
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -373,11 +369,13 @@ async fn end_history_is_not_starved_by_an_index_reload() {
     tokio::time::sleep(calibration_time / 10).await;
     let index = env.index.clone();
     let writer = tokio::spawn(async move {
-        drop(index.write().await);
+        let multipliers = index.read().settings().frecency_multipliers;
+        index.rebuild_frecency(multipliers);
     });
     tokio::time::sleep(calibration_time / 10).await;
-    // On a daemon that holds the read guard across the scan this writer is still queued here and
-    // every later reader starves behind it; on the fixed daemon it has already come and gone.
+    // A daemon might hold an index lock across the scan. On that daemon, this writer is still
+    // queued here, and every later reader starves behind it. On the fixed daemon, the writer has
+    // already finished.
     // Recorded for the diagnostics only -- the verdict is the hook latency below.
     let writer_queued = !writer.is_finished();
 
@@ -414,12 +412,9 @@ async fn end_history_is_not_starved_by_an_index_reload() {
 
 /// History that arrives from sync while a delete is reloading the index is searchable afterwards.
 ///
-/// EXPECTED TO FAIL: the sync engine adds to whichever index is live under a read guard, which the
-/// reload then discards.
+/// The sync engine adds to the live index. The reload's swap then replaces that index. The rebuilt
+/// index must keep what was added in the meantime (#4052).
 #[rstest]
-#[ignore = "documents an unfixed defect (synced history dropped by a racing reload; see report \
-            M2, #4052: https://github.com/atuinsh/atuin/issues/4052); run with --run-ignored. See \
-            module docs."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn synced_history_during_a_reload_is_searchable() {
     let env = TestEnv::builder().seed_rows(RELOAD_ROWS).with_search_component().build().await;
@@ -432,16 +427,14 @@ async fn synced_history_during_a_reload_is_searchable() {
     let mut history_gen = HistoryGen::new(0xABCD);
     let synced: Vec<_> =
         (0..20).map(|_| history_gen.next()).filter(common::corpus::index_eligible).collect();
-    env.history_db.save_bulk(&synced).await.unwrap();
-    // The sync engine adds freshly-downloaded rows straight to the live index.
-    env.index.read().await.add_histories(&synced);
+    env.save_and_index(&synced).await;
 
     reload.await.unwrap();
 
     // A synced row may share its command with older rows (the "common" part of the corpus), so
     // check the strong property on the count and the exact property on the unique commands.
     assert_eq!(
-        env.index_count().await,
+        env.index_count(),
         env.expected_command_count().await,
         "index size after sync + reload"
     );
@@ -449,7 +442,7 @@ async fn synced_history_during_a_reload_is_searchable() {
     assert!(!unique.is_empty(), "corpus produced no unique synced commands");
     for h in unique {
         assert!(
-            env.index_hits(&h.command).await.contains(&h.id),
+            env.index_hits(&h.command).contains(&h.id),
             "synced command not searchable: {}",
             h.command
         );
