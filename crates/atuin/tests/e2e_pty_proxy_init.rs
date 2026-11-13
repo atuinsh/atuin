@@ -354,3 +354,105 @@ fn proxy_starts_only_when_atuin_runs_by_name(
     pty.send_line(r#"test -n "$ATUIN_PTY_PROXY_ACTIVE" && echo proxy=1 || echo proxy=0"#);
     pty.wait_for_line(expected);
 }
+
+#[rstest]
+fn zsh_restores_ghostty_after_reexec(
+    #[values("pty-proxy init", "init")] init: &str,
+    #[values(false, true)] already_loaded: bool,
+) {
+    let Some(zsh) = find_shell("zsh") else {
+        return;
+    };
+    let env = FreshEnv::new();
+    env.write_config("[pty_proxy]\nenabled = true\n");
+    env.run(&["store", "status"]);
+    let resources = env.home().join("ghostty resources");
+    let integration = resources.join("shell-integration/zsh/ghostty-integration");
+    std::fs::create_dir_all(integration.parent().unwrap()).unwrap();
+    std::fs::write(
+        &integration,
+        r"[[ -n ${_ghostty_state-} ]] && return
+_ghostty_state=1
+(( ghostty_initializations += 1 ))
+_ghostty_precmd() { (( ghostty_prompts += 1 )); }
+_ghostty_preexec() { (( ghostty_commands += 1 )); }
+precmd_functions+=(_ghostty_precmd)
+preexec_functions+=(_ghostty_preexec)
+",
+    )
+    .unwrap();
+    // Only the outer shell reads this bootstrap. Its unexported state must disappear on exec.
+    let bootstrap = env.home().join("bootstrap");
+    std::fs::create_dir_all(&bootstrap).unwrap();
+    std::fs::write(
+        bootstrap.join(".zshrc"),
+        "export ZDOTDIR=$HOME\nbuiltin source \
+         \"$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration\"\nbuiltin source \
+         \"$ZDOTDIR/.zshrc\"\n",
+    )
+    .unwrap();
+    let preload = if already_loaded {
+        "builtin source \"$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration\"\n"
+    } else {
+        ""
+    };
+    std::fs::write(
+        env.home().join(".zshrc"),
+        format!("{preload}eval \"$(atuin {init} zsh)\"\nPS1='{PROMPT} '\n"),
+    )
+    .unwrap();
+    let vars = BTreeMap::from([
+        ("GHOSTTY_RESOURCES_DIR".into(), resources.display().to_string()),
+        ("ZDOTDIR".into(), bootstrap.display().to_string()),
+    ]);
+    let pty = PtyShell::spawn(&zsh, &["-i".into()], &env, &vars);
+    pty.wait_for_prompt();
+    pty.send_line(REPORT_PROXY);
+    pty.wait_for_line("proxy=1");
+    pty.send_line(&format!("eval \"$(atuin {init} zsh)\""));
+    pty.send_line(r#"print "ghostty=$ghostty_initializations:${(M)#precmd_functions:#_ghostty_precmd}:${(M)#preexec_functions:#_ghostty_preexec}"; (( ghostty_prompts > 0 && ghostty_commands > 0 )) && print hooks-ran"#);
+    pty.wait_for_line("ghostty=1:1:1");
+    pty.wait_for_line("hooks-ran");
+}
+
+#[rstest]
+#[case(None, true)]
+#[case(Some("missing"), true)]
+#[case(Some("present"), false)]
+fn zsh_skips_ghostty_without_resources_or_proxy(
+    #[case] resources: Option<&str>,
+    #[case] proxied: bool,
+) {
+    let Some(zsh) = find_shell("zsh") else {
+        return;
+    };
+    let env = FreshEnv::new();
+    let mut vars = BTreeMap::new();
+    if let Some(resources) = resources {
+        let dir = env.home().join(resources);
+        if resources == "present" {
+            let integration = dir.join("shell-integration/zsh/ghostty-integration");
+            std::fs::create_dir_all(integration.parent().unwrap()).unwrap();
+            std::fs::write(integration, "ghostty_loaded=1\n").unwrap();
+        }
+        vars.insert("GHOSTTY_RESOURCES_DIR".into(), dir.display().to_string());
+    }
+    // A failed proxy must leave an ordinary interactive shell alone.
+    if !proxied {
+        vars.insert("ATUIN_PTY_PROXY_FAILED".into(), "1".into());
+    }
+    std::fs::write(
+        env.home().join(".zshrc"),
+        format!("eval \"$(atuin pty-proxy init zsh)\"\nPS1='{PROMPT} '\n"),
+    )
+    .unwrap();
+    let pty = PtyShell::spawn(&zsh, &["-i".into()], &env, &vars);
+    pty.wait_for_prompt();
+    assert!(!pty.screen().contains("no such file"));
+    pty.send_line(r#"print "proxy=${ATUIN_PTY_PROXY_ACTIVE:+1} ghostty=${ghostty_loaded:-0}""#);
+    pty.wait_for_line(if proxied {
+        "proxy=1 ghostty=0"
+    } else {
+        "proxy= ghostty=0"
+    });
+}
