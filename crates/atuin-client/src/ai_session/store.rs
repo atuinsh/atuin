@@ -99,9 +99,10 @@ pub enum Loaded {
     /// Not stored: its push hasn't happened yet, or failed. Only [`AiSessionStore::load`] reports
     /// it.
     Missing,
-    /// Stored, but this build can't read it yet: under another key, of a kind or version from a
-    /// later build, or holding a block of a kind from a later build ([`Content::Unknown`]). Octavo
-    /// stores the first copy of a message it's given, so it waits for a build that reads all of it.
+    /// Stored, but this build can't read it yet: under another key, or of a kind or version from a
+    /// later build. A message that holds a [`Content::Unknown`] block is held too. Octavo keeps
+    /// the first copy of a message that it's given, so the message waits for a build that reads
+    /// all of it.
     Held,
     /// Stored, and no build will read it: of another tag, retired, undecodable, or an api-request
     /// blob.
@@ -137,11 +138,14 @@ impl AiSessionRecord {
     /// The version this record is written as, all with the same body: [`Self::VERSION`], or v3
     /// for a message naming a harness v2 readers don't know (omp), or with a field they don't
     /// ([`Message::provider`]), v4 for one naming a harness v3 readers don't know (Grok), or v5
-    /// for one naming a harness v4 readers don't know (Amp, and any added since), or v6 for one
-    /// holding a block v5 readers don't know. Readers skip what they can't decode for good, and
-    /// hold a version they don't know until they're upgraded. v5 readers read a harness they
-    /// don't know as [`HarnessKind::Unknown`], and v6 readers a block they don't know as
-    /// [`Content::Unknown`], so later harnesses and blocks need no version of their own.
+    /// for one naming a harness v4 readers don't know (Amp, and any added since). Readers skip
+    /// what they can't decode for good, and hold a version they don't know until they're
+    /// upgraded. v5 readers read a harness they don't know as [`HarnessKind::Unknown`], so later
+    /// harnesses need no version of their own.
+    ///
+    /// A message that holds a block v5 readers don't know is written as v6. v6 readers read a
+    /// block that they don't know as [`Content::Unknown`]. So later blocks need no version of
+    /// their own either.
     #[must_use]
     pub fn version(&self) -> RecordVersion {
         match self {
@@ -162,7 +166,8 @@ impl AiSessionRecord {
                             | HarnessKind::Grok
                     )
                 };
-                // Every block kind there is, so a new one can't go unplaced: none v5 readers know.
+                // This match names every block kind, so a new kind has to be placed in it. v5
+                // readers know no kind added since.
                 let v5_knows = |c: &Content| match c {
                     Content::Text(_)
                     | Content::Reasoning(_)
@@ -173,7 +178,7 @@ impl AiSessionRecord {
                     | Content::Summary(_)
                     | Content::Error(_)
                     | Content::Patch(_) => true,
-                    // Kept from a newer build's record: still unknown to v5 readers.
+                    // A block kept from a newer build's record. v5 readers don't know it either.
                     Content::Unknown(_) => false,
                 };
                 if !msg.content.iter().all(v5_knows) {
@@ -1084,7 +1089,7 @@ mod tests {
         assert_eq!(got, msg);
     }
 
-    /// `sample_message` holding a block of a kind a newer build added, after its text.
+    /// `sample_message`, with a block after its text of a kind that a newer build added.
     fn with_unknown_block() -> Message {
         let mut msg = sample_message();
         msg.content.push(Content::Unknown(UnknownBlock {
@@ -1094,10 +1099,11 @@ mod tests {
         msg
     }
 
-    /// A message holding a block of a kind this build doesn't know, from a newer build's record,
-    /// is stored as v6, so v5 readers hold it rather than skip it. It reads back, and projects
-    /// into the sidecar, with the block as it was. Octavo doesn't get it: it keeps the first copy
-    /// of a message, so it waits for a build that knows the block.
+    /// A message can hold a block of a kind that this build doesn't know, from a newer build's
+    /// record. Such a message is stored as v6, so v5 readers hold it rather than skip it. It reads
+    /// back with the block as it was. It projects into the sidecar the same way. Octavo doesn't
+    /// get the message yet. Octavo keeps the first copy of a message, so the message waits for a
+    /// build that knows the block.
     #[rstest]
     #[tokio::test]
     async fn a_message_with_an_unknown_block_is_kept_whole() {

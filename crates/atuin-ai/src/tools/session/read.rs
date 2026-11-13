@@ -753,8 +753,8 @@ fn classify(block: &Content) -> Block<'_> {
         }
         Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
         // Capture keeps only that reasoning happened, which says nothing to a reader, and never
-        // stores reasoning text or raw blocks. A block of a kind this build doesn't know says
-        // nothing it can read.
+        // stores reasoning text or raw blocks. A block of a kind that this build doesn't know
+        // holds nothing that it can read.
         Content::ReasoningSummary { .. }
         | Content::Reasoning(_)
         | Content::Other(_)

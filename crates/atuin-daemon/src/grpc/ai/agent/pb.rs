@@ -134,8 +134,8 @@ impl From<DomainStopReason> for StopReason {
 }
 
 impl ContentBlock {
-    /// `value` as it goes over the wire, or `None` for a block of a kind this build doesn't know
-    /// ([`Content::Unknown`]): every reader takes one for nothing, so it isn't sent.
+    /// `value` as it goes over the wire. It is `None` for a [`Content::Unknown`] block. Every
+    /// reader takes such a block for nothing, so it isn't sent.
     #[must_use]
     pub fn of(value: Content) -> Option<Self> {
         use content_block::Block;

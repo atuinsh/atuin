@@ -28,18 +28,22 @@ pub enum Role {
 
 /// A block of a message's content.
 ///
-/// Blocks are stored under their variant's name (`{"Text": "hi"}`, in records' msgpack and in
-/// JSON alike), and a name this build doesn't know reads as [`Content::Unknown`] rather than
-/// failing the whole message (`ContentVisitor`). So a new variant needs no new record version
-/// (v6 readers are the first to read this way), but:
+/// A block is stored under its variant's name, in records' msgpack and in JSON alike. For
+/// example, a text block is `{"Text": "hi"}`. `ContentVisitor` reads a name that this build
+/// doesn't know as [`Content::Unknown`]. The rest of the message then still reads. Readers do
+/// this from v6 on, so a new variant needs no new record version. A new variant does need three
+/// things:
 ///
-/// - its name goes in `ContentVisitor`, which `every_kind_reads_back_as_itself` checks;
-/// - it needs a sidecar migration that bumps `projection_state.generation`, so messages projected
-///   while it was unknown are projected again, as a new `HarnessKind` does;
-/// - its data must be something JSON can hold (no map keyed by anything but strings), or a reader
-///   that doesn't know it fails on it as before.
+/// - Its name goes in `ContentVisitor`. The test `every_kind_reads_back_as_itself` checks this.
+/// - It needs a sidecar migration that rebuilds the projection from the record store, as
+///   `0006_reproject_for_hermes.sql` does. A replay never rewrites a row that it already has. So
+///   the migration empties the projection and its watermarks, and then bumps
+///   `projection_state.generation`. Messages stored while the variant was unknown are then read
+///   again, with their search text and block bits.
+/// - Its data must be something that JSON can hold. For example, JSON can't hold a map keyed by
+///   numbers. A reader that doesn't know the variant fails on such data, as readers did before.
 ///
-/// Never rename a variant: its name is what's stored.
+/// Never rename a variant, because its name is what's stored.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum Content {
     Text(String),
@@ -63,14 +67,15 @@ pub enum Content {
     /// The changes a tool call made to files, as its harness recorded them beside the call's
     /// result (or, for Codex, after it).
     Patch(Patch),
-    /// A block of a kind a newer atuin wrote and this build doesn't know. It is written back as
-    /// it was read, and is otherwise nothing: no text, no call, no conversation.
+    /// A block of a kind that a newer atuin wrote and that this build doesn't know. It is written
+    /// back as it was read. Otherwise it counts for nothing: it holds no text, no call and no
+    /// conversation.
     #[serde(untagged)]
     Unknown(UnknownBlock),
 }
 
-/// A [`Content::Unknown`] block: its kind's name, and its data as JSON. `None` for a kind with no
-/// data, which is stored as its name alone.
+/// The kind's name and the data of a [`Content::Unknown`] block. The data is JSON. It is `None`
+/// for a kind with no data, which is stored as its name alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownBlock {
     pub kind: String,
@@ -96,12 +101,12 @@ impl<'de> Deserialize<'de> for Content {
     }
 }
 
-/// Reads a [`Content`] block, a kind it doesn't know as [`Content::Unknown`].
+/// Reads a [`Content`] block. It reads a kind that it doesn't know as [`Content::Unknown`].
 ///
-/// Written by hand because a derived `#[serde(untagged)]` fallback, which would also do that,
-/// reads every block into a buffer before matching it, and turns an error in a block of a known
-/// kind into an unknown block, hiding the error. Here a known kind is read straight from the input,
-/// and fails as it always did.
+/// A derived `#[serde(untagged)]` fallback variant would do the same, but it has two costs. It
+/// reads every block into a buffer before it matches the block. It also turns an error in a block
+/// of a known kind into an unknown block, which hides the error. This visitor reads a known kind
+/// straight from the input, and a malformed block of that kind fails as it always did.
 struct ContentVisitor;
 
 impl<'de> Visitor<'de> for ContentVisitor {
@@ -111,7 +116,7 @@ impl<'de> Visitor<'de> for ContentVisitor {
         f.write_str("a content block")
     }
 
-    /// A kind with no data: none this build knows.
+    /// A kind with no data. This build knows no such kind.
     fn visit_str<E: de::Error>(self, kind: &str) -> Result<Content, E> {
         Ok(Content::Unknown(UnknownBlock {
             kind: kind.to_owned(),
@@ -148,8 +153,8 @@ impl<'de> Visitor<'de> for ContentVisitor {
     }
 }
 
-/// [`Content::ReasoningSummary`]'s fields, read as a derived struct variant's are: a sequence in
-/// records' positional msgpack, a map in JSON.
+/// The fields of [`Content::ReasoningSummary`], read as a derived struct variant's fields are.
+/// Records' positional msgpack holds them as a sequence. JSON holds them as a map.
 #[derive(Deserialize)]
 struct ReasoningSummaryFields {
     tokens: Option<u64>,
@@ -398,8 +403,8 @@ mod tests {
         assert_eq!(id.as_ref(), raw);
     }
 
-    /// A block of every kind this build knows. The match fails to compile until a new kind is
-    /// listed, and then needs a block of it here.
+    /// A block of every kind that this build knows. The match fails to compile until a new kind
+    /// is listed. Then the new kind needs a block here too.
     fn every_kind() -> Vec<Content> {
         use crate::harnesstools::session::{Change, FilePatch, Hunk};
 
@@ -454,7 +459,7 @@ mod tests {
         blocks
     }
 
-    /// The names [`ContentVisitor`] matches are the ones the derived `Serialize` writes.
+    /// [`ContentVisitor`] matches the names that the derived `Serialize` writes.
     #[rstest]
     fn every_kind_reads_back_as_itself() {
         let blocks = every_kind();
@@ -468,7 +473,7 @@ mod tests {
         assert_eq!(json, blocks);
     }
 
-    /// Kinds a newer atuin might add: one with fields, one with a value, one with no data.
+    /// Kinds that a newer atuin might add. One has fields, one has a value, and one has no data.
     #[derive(Serialize)]
     enum Newer {
         Undone {
@@ -478,8 +483,8 @@ mod tests {
         Ping,
     }
 
-    /// A kind this build doesn't know reads as [`Content::Unknown`], next to the kinds it does,
-    /// and is written back exactly as it was read.
+    /// A kind that this build doesn't know reads as [`Content::Unknown`], beside the kinds that it
+    /// knows. It is written back exactly as it was read.
     #[rstest]
     #[case::fields(Newer::Undone { through: "u1".to_owned() }, "Undone", Some(serde_json::json!(["u1"])), Some(serde_json::json!({"through": "u1"})))]
     #[case::value(Newer::Marker(3), "Marker", Some(serde_json::json!(3)), Some(serde_json::json!(3)))]
@@ -513,8 +518,8 @@ mod tests {
         assert_eq!(serde_json::to_string(&json).unwrap(), written.1);
     }
 
-    /// A block of a known kind that doesn't hold what that kind holds is an error, as it was
-    /// before unknown kinds were read, not an unknown block.
+    /// A block of a known kind that holds the wrong data is an error, not an unknown block. It
+    /// was an error before unknown kinds were read, too.
     #[rstest]
     #[case::wrong_data(r#"{"Text": 5}"#)]
     #[case::wrong_fields(r#"{"ToolUse": {"name": "bash"}}"#)]

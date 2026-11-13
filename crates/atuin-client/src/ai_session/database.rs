@@ -1455,8 +1455,9 @@ impl AiSessionDatabase {
                 Self::push_json_text(out, &tool.input);
             }
             Content::Other(value) => Self::push_json_text(out, value),
-            // Whatever it holds, this build can't tell text in it from anything else. A build that
-            // knows its kind indexes it once its migration projects the message again.
+            // This build can't tell text in the block from anything else, so the block isn't
+            // indexed. A build that knows its kind indexes it after a migration projects the
+            // message again.
             Content::Unknown(_) => {}
             // The files a call changed are what a search for them looks for; their lines are
             // tool output like any other.
