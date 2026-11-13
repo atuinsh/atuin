@@ -27,6 +27,8 @@ use time::OffsetDateTime;
 use tracing::{Level, error, instrument};
 use uuid::Uuid;
 
+use super::CaseMatching;
+
 /// Error trying to load history from the database into the search index.
 #[derive(Debug, thiserror::Error)]
 #[error("failed to load history from the database: {0}")]
@@ -597,18 +599,20 @@ impl SearchIndex {
     pub async fn search(
         &self,
         query: &str,
+        case_matching: CaseMatching,
         filter_mode: &IndexFilterMode,
         limit: usize,
         db: &Sqlite,
     ) -> impl Iterator<Item = HistoryId> + use<'_> {
         let filter = filter_mode.compile(self, db).await;
-        self.search_compiled(query, &filter, limit)
+        self.search_compiled(query, case_matching, &filter, limit)
     }
 
     /// [`Self::search`] with the filter already [compiled](IndexFilterMode::compile).
     fn search_compiled(
         &self,
         query: &str,
+        case_matching: CaseMatching,
         filter: &CompiledFilter<'_>,
         limit: usize,
     ) -> impl Iterator<Item = HistoryId> + use<'_> {
@@ -644,7 +648,7 @@ impl SearchIndex {
         };
 
         let config = frizbee::Config::default()
-            .casing(frizbee::CaseMatching::Smart)
+            .casing(case_matching.into())
             .sort(frizbee::SortStrategy::IndexAsc);
         let mut matcher = frizbee::Matcher::from_patterns(&patterns, &config);
 
@@ -976,14 +980,17 @@ mod tests {
         assert_eq!(index.command_count(), 3);
 
         // Search for "git" - should match 2 commands
-        assert_eq!(index.search_compiled("git", &CompiledFilter::All, 10).count(), 2);
+        assert_eq!(
+            index.search_compiled("git", CaseMatching::Smart, &CompiledFilter::All, 10).count(),
+            2
+        );
 
         // Search with directory filter
         // git status and git commit
         let directory = IndexFilterMode::Directory(
             "/home/user/project".display_rich().trailing_slash(true).to_string(),
         );
-        assert_eq!(index.search("", &directory, 10, &db).await.count(), 2);
+        assert_eq!(index.search("", CaseMatching::Smart, &directory, 10, &db).await.count(), 2);
     }
 
     fn make_session_history(
@@ -1042,7 +1049,8 @@ mod tests {
         let session = session.as_simple().to_string();
 
         let filter = IndexFilterMode::SessionPreload(session);
-        let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+        let mut results: Vec<_> =
+            index.search("", CaseMatching::Smart, &filter, 10, &db).await.collect();
         let mut expected: Vec<_> =
             expected.iter().map(|c| command(&index, c).most_recent_id).collect();
         results.sort_unstable();
@@ -1070,7 +1078,8 @@ mod tests {
             index.add_history(&history);
         };
         let search = async || {
-            let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+            let mut results: Vec<_> =
+                index.search("", CaseMatching::Smart, &filter, 10, &db).await.collect();
             results.sort_unstable();
             results
         };
@@ -1123,7 +1132,8 @@ mod tests {
         pending.finish(&index, &excluded);
 
         let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
-        let mut results: Vec<_> = index.search("", &filter, 10, &db).await.collect();
+        let mut results: Vec<_> =
+            index.search("", CaseMatching::Smart, &filter, 10, &db).await.collect();
         results.sort_unstable();
         let mut expected =
             vec![command(&index, "old").most_recent_id, command(&index, "late").most_recent_id];
@@ -1152,13 +1162,33 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results: Vec<_> = index.search_compiled("foo bar", &CompiledFilter::All, 10).collect();
+        let results: Vec<_> = index
+            .search_compiled("foo bar", CaseMatching::Smart, &CompiledFilter::All, 10)
+            .collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
             command(&index, "foo bar --baz").most_recent_id,
             "contiguous match must rank above the high-frecency scattered match"
         );
+    }
+
+    #[rstest]
+    #[case::smart_lowercase(CaseMatching::Smart, "git", 2)]
+    #[case::smart_uppercase(CaseMatching::Smart, "GIT", 1)]
+    #[case::ignore_uppercase(CaseMatching::Ignore, "GIT", 2)]
+    #[case::respect_lowercase(CaseMatching::Respect, "git", 1)]
+    fn search_follows_case_matching(
+        #[case] case_matching: CaseMatching,
+        #[case] query: &str,
+        #[case] expected: usize,
+    ) {
+        let index = SearchIndex::default();
+        index.add_history(&make_history("git status", "/tmp", datetime!(2024-01-01 10:00 UTC)));
+        index.add_history(&make_history("GIT STATUS", "/tmp", datetime!(2024-01-01 10:00 UTC)));
+
+        let results = index.search_compiled(query, case_matching, &CompiledFilter::All, 10);
+        assert_eq!(results.count(), expected);
     }
 
     /// Frecency still orders results between equally good matches, so
@@ -1177,7 +1207,8 @@ mod tests {
 
         index.rebuild_frecency(&Search::default());
 
-        let results: Vec<_> = index.search_compiled("echo", &CompiledFilter::All, 10).collect();
+        let results: Vec<_> =
+            index.search_compiled("echo", CaseMatching::Smart, &CompiledFilter::All, 10).collect();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results[0],
@@ -1199,10 +1230,12 @@ mod tests {
 
         let expected = command(&index, "echo déjà-vu").most_recent_id;
 
-        let results: Vec<_> = index.search_compiled("deja", &CompiledFilter::All, 10).collect();
+        let results: Vec<_> =
+            index.search_compiled("deja", CaseMatching::Smart, &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![expected]);
 
-        let results: Vec<_> = index.search_compiled("déjà", &CompiledFilter::All, 10).collect();
+        let results: Vec<_> =
+            index.search_compiled("déjà", CaseMatching::Smart, &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![expected]);
     }
 
@@ -1215,10 +1248,13 @@ mod tests {
         index.add_history(&plain);
 
         for query in ["¡\"", "^¡\"$", "'¡\"", "\\!\""] {
-            let results: Vec<_> = index.search_compiled(query, &CompiledFilter::All, 10).collect();
+            let results: Vec<_> = index
+                .search_compiled(query, CaseMatching::Smart, &CompiledFilter::All, 10)
+                .collect();
             assert_eq!(results, vec![literal.id], "query {query:?}");
         }
-        let results: Vec<_> = index.search_compiled("!¡\"", &CompiledFilter::All, 10).collect();
+        let results: Vec<_> =
+            index.search_compiled("!¡\"", CaseMatching::Smart, &CompiledFilter::All, 10).collect();
         assert_eq!(results, vec![plain.id]);
     }
 
@@ -1283,10 +1319,13 @@ mod tests {
         index.rebuild_frecency(&Search::default());
 
         for query in ["git", "git p", "docker compose up", "deja", ""] {
-            let first: Vec<_> = index.search_compiled(query, &CompiledFilter::All, 200).collect();
+            let first: Vec<_> = index
+                .search_compiled(query, CaseMatching::Smart, &CompiledFilter::All, 200)
+                .collect();
             for _ in 0..2 {
-                let again: Vec<_> =
-                    index.search_compiled(query, &CompiledFilter::All, 200).collect();
+                let again: Vec<_> = index
+                    .search_compiled(query, CaseMatching::Smart, &CompiledFilter::All, 200)
+                    .collect();
                 assert_eq!(first, again, "query {query:?} returned unstable results");
             }
         }
@@ -1300,7 +1339,12 @@ mod tests {
         index.add_history(&make_history("echo hello", "/tmp", datetime!(2024-01-01 10:00 UTC)));
 
         let long_query = "a".repeat(5000);
-        assert!(index.search_compiled(&long_query, &CompiledFilter::All, 10).next().is_none());
+        assert!(
+            index
+                .search_compiled(&long_query, CaseMatching::Smart, &CompiledFilter::All, 10)
+                .next()
+                .is_none()
+        );
     }
 
     #[rstest]
@@ -1352,7 +1396,8 @@ mod tests {
             index.add_history(&history);
         }
 
-        let results: Vec<_> = index.search_compiled("echo", &CompiledFilter::All, 100).collect();
+        let results: Vec<_> =
+            index.search_compiled("echo", CaseMatching::Smart, &CompiledFilter::All, 100).collect();
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 }

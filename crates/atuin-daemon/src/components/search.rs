@@ -23,9 +23,9 @@ use crate::events::DaemonEvent;
 use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
-    FilterMode, IndexFilterMode, OutputSearchLine, OutputSearchMatch, PrepareIndexRequest,
-    PrepareIndexResponse, RebuildIndexRequest, RebuildIndexResponse, SearchCommandOutputRequest,
-    SearchIndex, SearchRequest, SearchResponse,
+    CaseMatching, FilterMode, IndexFilterMode, OutputSearchLine, OutputSearchMatch,
+    PrepareIndexRequest, PrepareIndexResponse, RebuildIndexRequest, RebuildIndexResponse,
+    SearchCommandOutputRequest, SearchIndex, SearchRequest, SearchResponse,
 };
 
 const RESULTS_LIMIT: usize = 200;
@@ -312,6 +312,8 @@ impl SearchSvc for SearchGrpcService {
                 let query_id = search_req.query_id;
                 let filter_mode: FilterMode =
                     search_req.filter_mode.try_into().unwrap_or(FilterMode::Global);
+                let case_matching: CaseMatching =
+                    search_req.case_matching.try_into().unwrap_or(CaseMatching::Smart);
                 let proto_context = search_req.context;
 
                 debug!(
@@ -346,7 +348,13 @@ impl SearchSvc for SearchGrpcService {
                 // Perform the search
                 let history_ids: Vec<Vec<u8>> = async {
                     index
-                        .search(&query, &index_filter, RESULTS_LIMIT, this.handle.history_db())
+                        .search(
+                            &query,
+                            case_matching,
+                            &index_filter,
+                            RESULTS_LIMIT,
+                            this.handle.history_db(),
+                        )
                         .await
                         .map(|id| id.into_bytes().to_vec())
                         .collect()

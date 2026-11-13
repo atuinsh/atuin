@@ -69,6 +69,16 @@ pub fn truncate_query(query: &str) -> &str {
     query.truncate_chars(MAX_QUERY_LEN)
 }
 
+impl From<CaseMatching> for frizbee::CaseMatching {
+    fn from(case_matching: CaseMatching) -> Self {
+        match case_matching {
+            CaseMatching::Smart => Self::Smart,
+            CaseMatching::Ignore => Self::Ignore,
+            CaseMatching::Respect => Self::Respect,
+        }
+    }
+}
+
 // Re-export the index and related types
 pub use index::{IndexFilterMode, SearchIndex};
 

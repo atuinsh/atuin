@@ -13,7 +13,7 @@ mod agents;
 mod ai;
 
 use ai::{Machine, SyncServer};
-use atuin_client::settings::FilterMode;
+use atuin_client::settings::{CaseMatching, FilterMode};
 use atuin_common::filter::OrFilter;
 use atuin_daemon::client::{SearchClient, SearchParams};
 use common::{SESSION, marker};
@@ -35,6 +35,7 @@ async fn search(machine: &Machine, query: &str) -> usize {
             filter_mode: FilterMode::Global,
             context: None,
             shells: OrFilter::default(),
+            case_matching: CaseMatching::Smart,
         })
         .await
         .unwrap();

@@ -15,7 +15,7 @@ use std::time::Duration;
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AuthorKind, History, HistoryId};
 use atuin_common::filter::OrFilter;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::search::{CaseMatching, IndexFilterMode, SearchIndex};
 use atuin_domain::record::{RecordId, RecordTag};
 use common::{TestEnv, history, history_at};
 use futures::StreamExt;
@@ -23,7 +23,7 @@ use rstest::*;
 
 /// Ids the index returns for `query` under no filter and a generous limit -- what the TUI shows.
 async fn hits(index: &SearchIndex, db: &Sqlite, query: &str) -> Vec<HistoryId> {
-    index.search(query, &IndexFilterMode::Global, 200, db).await.collect()
+    index.search(query, CaseMatching::Smart, &IndexFilterMode::Global, 200, db).await.collect()
 }
 
 /// A history db for searches that never read it: the global filter only reads the index.
