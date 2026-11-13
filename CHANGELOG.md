@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.24.8
+
+### Bug Fixes
+
+- *(release)* Build musl artifacts with a musl C++ toolchain for Luau ([#4723](https://github.com/atuinsh/atuin/issues/4723))
+
+
+### Documentation
+
+- List the Threads page in the AI section of the nav ([#4722](https://github.com/atuinsh/atuin/issues/4722))
+
+
+### Features
+
+- Update whats-new.txt ([#4724](https://github.com/atuinsh/atuin/issues/4724))
+
+
 ## 18.24.7
 
 ### Bug Fixes
