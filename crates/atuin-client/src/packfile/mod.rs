@@ -104,9 +104,11 @@
 //! unpacks it (via `PackManifestRecordView::unpack_records`) back into the individual history
 //! records for the manifest's `"start".."end"` range, re-encrypts each one with the local key, and
 //! pushes them into the local record store.
+mod body;
 mod packer;
 pub(crate) mod record;
 
+pub use body::{PackfileBody, PackfileBodyError};
 pub use packer::{PackingError, try_pack};
 #[cfg(test)]
 pub(crate) use record::PackManifestRecordView;
