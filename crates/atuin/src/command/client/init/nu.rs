@@ -7,7 +7,9 @@ const BIND_CTRL_R: &str = r"$env.config = (
             name: atuin
             modifier: control
             keycode: char_r
-            mode: [emacs, vi_normal, vi_insert]
+            mode: ([emacs, vi_normal, vi_insert] | append (
+                if $_atuin_has_helix_mode { [helix_normal, helix_insert, helix_select] } else { [] }
+            ))
             event: { send: executehostcommand cmd: (_atuin_search_cmd) }
         }
     )
@@ -20,7 +22,9 @@ const BIND_UP_ARROW: &str = r"$env.config = (
             name: atuin_up_arrow
             modifier: none
             keycode: up
-            mode: [emacs, vi_normal, vi_insert]
+            mode: ([emacs, vi_normal, vi_insert] | append (
+                if $_atuin_has_helix_mode { [helix_normal, helix_insert] } else { [] }
+            ))
             event: {
                 until: [
                     {send: menuup}
