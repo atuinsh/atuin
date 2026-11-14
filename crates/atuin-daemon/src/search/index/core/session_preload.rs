@@ -92,8 +92,8 @@ pub struct PendingSearch {
     index: IndexIdentity,
     /// The shell filter of that index. The database query applies the same filter.
     shells: OrFilter<Vec<String>>,
-    /// The total number of entries that had been added to that index when the search began.
-    num_total: u64,
+    /// The [changes](SearchIndex::changes) of that index when the search began.
+    changes: u64,
 }
 
 impl PendingSearch {
@@ -111,7 +111,7 @@ impl PendingSearch {
             session,
             index: index.identity.clone(),
             shells: index.settings.shells.clone(),
-            num_total: index.num_total,
+            changes: index.changes,
         }
     }
 
@@ -165,13 +165,14 @@ impl LoadedSearch {
         let preload = SessionPreload::new(self.pending.session, index, rerun);
 
         // Cache the preload only if it is complete for `index`. That requires a successful query.
-        // It also requires that no entries were added to `index` since the search began. The
-        // query may have missed such entries, and the preload didn't record them. An incomplete
-        // preload is still used for the current search. Adds need `&mut SearchIndex`, so no add
-        // can run between this check and the caching.
+        // It also requires that `index` didn't change since the search began. The query may have
+        // missed entries that were added since, and the preload didn't record them. It may also
+        // have found runs that a sync removed since. An incomplete preload is still used for the
+        // current search. Adds and syncs need `&mut SearchIndex`, so neither can run between this
+        // check and the caching.
         if self.rerun.is_some()
             && self.pending.index == index.identity
-            && index.num_total == self.pending.num_total
+            && index.changes == self.pending.changes
         {
             *index.session_preload.lock() = Some(preload.clone());
         }
@@ -382,6 +383,53 @@ mod tests {
         assert!(index.search("", &filter, 10).is_err(), "the stale result isn't cached");
         assert_eq!(search_with_db(&index, "", &filter, &db).await, ids(&index, &["old"]));
         assert!(index.search("", &filter, 10).is_ok(), "that one is cached");
+    }
+
+    /// A sync drops the cached preload. A search that began before a sync doesn't cache its result
+    /// either. Its query may have found runs that the sync removed.
+    #[rstest]
+    #[tokio::test]
+    async fn session_preload_is_not_cached_across_a_sync(
+        #[future(awt)] db: Sqlite,
+        session: ShellSession,
+    ) {
+        let start = session.start;
+        let other = Uuid::new_v4();
+        let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
+
+        // "old" was run in another session just before the start, in the same second, and again
+        // a minute after it. Only the database query can tell that the first run was before the
+        // start.
+        let mut index = SearchIndex::default();
+        let early = start - time::Duration::milliseconds(250);
+        let before = make_session_history("old", other, early, AuthorKind::User);
+        let after = make_session_history(
+            "old",
+            other,
+            start + time::Duration::minutes(1),
+            AuthorKind::User,
+        );
+        for history in [&before, &after] {
+            db.save(history).await.unwrap();
+        }
+        index.add_history([&before, &after]);
+
+        // This search queries the database before the early run is deleted. It finishes after the
+        // index was synced.
+        let Err(pending) = index.search("", &filter, 10) else {
+            panic!("nothing is cached yet");
+        };
+        let loaded = pending.load(&db).await;
+        db.delete_rows([before.id]).await.unwrap();
+        index.sync_commands([remaining_runs(&[after], "old")], OffsetDateTime::now_utc());
+        assert_eq!(index.finish_search(loaded).count(), 1, "its query found the deleted run");
+
+        assert!(index.search("", &filter, 10).is_err(), "the stale result isn't cached");
+        assert!(search_with_db(&index, "", &filter, &db).await.is_empty());
+        assert!(index.search("", &filter, 10).is_ok(), "that one is cached");
+
+        index.sync_commands([remaining_runs(&[], "old")], OffsetDateTime::now_utc());
+        assert!(index.search("", &filter, 10).is_err(), "a sync drops the cache");
     }
 
     /// A pending session-preload search can finish on a different index than the one it began on.

@@ -1,15 +1,16 @@
 //! The search index. A [`SearchIndex`] holds the commands that searches match against. A
 //! [`SharedSearchIndex`] shares a [`SearchIndex`] between tasks.
 
+use atuin_client::history::History;
 use atuin_client::settings::Search;
 use atuin_common::filter::OrFilter;
 
 mod core;
 mod shared;
 
-pub use core::{IndexFilterMode, LoadedSearch, PendingSearch, SearchIndex};
+pub use core::{IndexFilterMode, LoadedSearch, PendingSearch, RemainingRuns, SearchIndex};
 
-pub use shared::{AddPermit, RebuildSettings, RebuiltIndex, SharedSearchIndex};
+pub use shared::{AddPermit, RebuildSettings, RebuiltIndex, SharedSearchIndex, SyncPermit};
 
 /// Settings for a [`SearchIndex`].
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +19,21 @@ pub struct SearchIndexSettings {
     pub frecency_multipliers: FrecencyMultipliers,
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
+}
+
+impl SearchIndexSettings {
+    /// Whether an index with these settings includes `history`.
+    ///
+    /// It leaves out:
+    ///
+    /// * entries that an agent ran
+    /// * tombstones from older versions, which have `deleted_at` set
+    /// * entries from shells that it doesn't include
+    fn includes(&self, history: &History) -> bool {
+        !history.is_agent()
+            && history.deleted_at.is_none()
+            && self.shells.contains(history.shell.as_deref().unwrap_or_default())
+    }
 }
 
 impl Default for SearchIndexSettings {
