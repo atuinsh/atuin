@@ -144,14 +144,19 @@ enum Error {
 }
 
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {
-    let (cols, rows) = terminal::size()?;
+    let terminal::WindowSize {
+        rows,
+        columns: cols,
+        width: pixel_width,
+        height: pixel_height,
+    } = terminal::window_size()?;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width,
+            pixel_height,
         })
         .map_err(|e| Error::OpenPty(e.into()))?;
 
@@ -410,12 +415,18 @@ fn spawn_resize_handler(
 
     tokio::spawn(async move {
         while signals.recv().await.is_some() {
-            if let Ok((cols, rows)) = terminal::size() {
+            if let Ok(terminal::WindowSize {
+                rows,
+                columns: cols,
+                width: pixel_width,
+                height: pixel_height,
+            }) = terminal::window_size()
+            {
                 let _ = master.resize(PtySize {
                     rows,
                     cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    pixel_width,
+                    pixel_height,
                 });
                 let _ = resize_tx.send(Msg::Resize { rows, cols }).await;
             }
