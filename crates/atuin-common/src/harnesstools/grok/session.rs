@@ -2120,8 +2120,16 @@ mod tests {
         let mut sessions = std::pin::pin!(listener.watch());
         let session = sessions.next().await.unwrap().unwrap();
         let mut messages = std::pin::pin!(session.messages());
+        let mut read = Vec::new();
+        // Read past the tool result before writing the turn-end files. That keeps the edit
+        // waiting for its snapshot until the turn's reply is read.
+        while !read.last().is_some_and(|m: &GrokMessage| m.role() == Role::Tool) {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(5), messages.next());
+            read.push(next.await.unwrap().unwrap().unwrap());
+        }
+
         let turn_end = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            tokio::time::sleep(TURN_END_POLL).await;
             let snapshot = json!({"prompt_index": 0, "file_snapshots": {
                 "live.py": {"path": "live.py", "content": "print('hello') # keep\n"},
             }});
@@ -2142,7 +2150,6 @@ mod tests {
             .unwrap();
         });
 
-        let mut read = Vec::new();
         while !read
             .last()
             .is_some_and(|m: &GrokMessage| m.stop_reason() == Some(StopReason::EndTurn))
