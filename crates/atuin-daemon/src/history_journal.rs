@@ -617,12 +617,12 @@ impl HistoryJournal {
                 .await
                 .map_err(CmdDeleteError::HistoryStoreFailed)?;
             deleted += to_delete.len();
-            // These entries are in the search index but not in the history db. Their commands
-            // are kept, so the index update below finds them.
+            // These entries are in the search index but not in the history db. Their ids and
+            // commands are kept, so the index update below finds them.
             let mut unsaved = Vec::new();
             for id in &to_delete {
-                if let Some((_id, (command, _cwd))) = self.unsaved_cmds.remove(id) {
-                    unsaved.push(command);
+                if let Some((id, (command, _cwd))) = self.unsaved_cmds.remove(id) {
+                    unsaved.push((id, command));
                 }
             }
 
@@ -662,11 +662,11 @@ impl HistoryJournal {
     }
 
     /// The commands that `ids` are runs of, plus the `unsaved` ones. Returns [`None`] when there
-    /// are too many to update the search index in place, or when they can't be read.
+    /// are too many to update the search index in place, or when they can't all be read.
     async fn touched_commands(
         &self,
         ids: &[HistoryId],
-        unsaved: Vec<String>,
+        unsaved: Vec<(HistoryId, String)>,
     ) -> Option<HashSet<String>> {
         if ids.len() > MAX_IDS_SYNCED_IN_PLACE {
             return None;
@@ -683,8 +683,27 @@ impl HistoryJournal {
             }
         };
 
-        let commands: HashSet<String> =
-            unsaved.into_iter().chain(rows.into_iter().map(|h| h.command)).collect();
+        // An id that has neither a row nor an unsaved entry may belong to a run that an earlier
+        // attempt already removed. A retry after a failed chunk below is one example. The command
+        // of that run can't be read any more, so only a reload can drop it from the index. An
+        // unknown id costs a reload too.
+        let mut missing: HashSet<HistoryId> = ids.iter().copied().collect();
+        for id in unsaved.iter().map(|(id, _)| id).chain(rows.iter().map(|h| &h.id)) {
+            missing.remove(id);
+        }
+        if !missing.is_empty() {
+            tracing::info!(
+                "{} deleted ids have no row in the history db, reloading the whole search index",
+                missing.len()
+            );
+            return None;
+        }
+
+        let commands: HashSet<String> = unsaved
+            .into_iter()
+            .map(|(_id, command)| command)
+            .chain(rows.into_iter().map(|h| h.command))
+            .collect();
         (commands.len() <= MAX_COMMANDS_SYNCED_IN_PLACE).then_some(commands)
     }
 
