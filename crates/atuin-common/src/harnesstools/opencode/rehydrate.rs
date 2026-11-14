@@ -321,26 +321,12 @@ async fn held(db: &Path, id: &str, exported: &Value) -> Held {
 
 /// `export`, written to a file of its own in the temporary directory for `opencode import` to
 /// read (readable by this user alone: it is the whole transcript), removed again when dropped.
-fn export_file(export: &Value) -> Result<crate::fs::RemoveOnDropPath, RehydrateError> {
-    let dir = std::env::temp_dir();
+fn export_file(export: &Value) -> Result<tempfile::TempPath, RehydrateError> {
     let bytes = serde_json::to_vec(export).map_err(|err| RehydrateError::Other(err.to_string()))?;
-    for n in 0u32.. {
-        let path = dir.join(format!("atuin-opencode-import-{}-{n}.json", std::process::id()));
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        match options.open(&path) {
-            Ok(mut file) => {
-                let path = crate::fs::RemoveOnDropPath(path);
-                std::io::Write::write_all(&mut file, &bytes)?;
-                return Ok(path);
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
-    unreachable!("an unbounded range always finds a free name")
+    let mut file =
+        tempfile::Builder::new().prefix("atuin-opencode-import-").suffix(".json").tempfile()?;
+    std::io::Write::write_all(&mut file, &bytes)?;
+    Ok(file.into_temp_path())
 }
 
 /// Milliseconds since the epoch, opencode's clock.
