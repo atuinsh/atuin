@@ -165,6 +165,54 @@ async fn search_follows_the_surviving_invocations(#[future(awt)] env: TestEnv) {
     assert_eq!(env.index_count(), 0);
 }
 
+/// A delete that touches a few commands rebuilds just those in the index. A sentinel that exists
+/// only in the index then survives. A delete that touches many commands reloads the index from the
+/// db, and the sentinel goes. Either way, search forgets the deleted commands and keeps the rest.
+#[rstest]
+#[case::few_commands(1, true)]
+#[case::many_commands(101, false)]
+#[tokio::test]
+async fn delete_rebuilds_only_the_commands_it_touched(
+    #[future(awt)] env: TestEnv,
+    #[case] commands: usize,
+    #[case] sentinel_survives: bool,
+) {
+    let mut client = env.history_client().await;
+    let mut doomed = Vec::new();
+    for i in 0..commands {
+        doomed.push(env.record(&mut client, &format!("echo doomed {i}")).await);
+    }
+    let kept = env.record(&mut client, "echo kept").await;
+    env.index_only(&[history("index-only sentinel")]).await;
+
+    client.delete_history(doomed).await.unwrap();
+
+    assert!(env.index_hits("doomed").is_empty());
+    assert_eq!(env.index_hits("kept"), vec![kept]);
+    assert_eq!(!env.index_hits("sentinel").is_empty(), sentinel_survives);
+}
+
+/// A delete reloads the index when some of its rows are already gone from the history db. A retry
+/// after a partial failure is one such delete. The earlier attempt removed some rows, but their
+/// commands are still in the index.
+#[rstest]
+#[tokio::test]
+async fn delete_reloads_the_index_when_rows_are_already_gone(#[future(awt)] env: TestEnv) {
+    let mut client = env.history_client().await;
+    let gone = env.record(&mut client, "echo vanished").await;
+    let doomed = env.record(&mut client, "echo doomed").await;
+    let kept = env.record(&mut client, "echo kept").await;
+    // An earlier attempt removed this row, but it failed before it updated the index.
+    env.history_db.delete_rows([gone]).await.unwrap();
+    assert_eq!(env.index_hits("vanished"), vec![gone]);
+
+    client.delete_history(vec![gone, doomed]).await.unwrap();
+
+    assert!(env.index_hits("vanished").is_empty());
+    assert!(env.index_hits("doomed").is_empty());
+    assert_eq!(env.index_hits("kept"), vec![kept]);
+}
+
 /// Every delete appends exactly one tombstone per id, contiguously after the creates, and a
 /// second machine replaying the store ends up with the same rows as this one.
 #[rstest]

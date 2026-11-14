@@ -72,7 +72,7 @@ pub fn truncate_query(query: &str) -> &str {
 // Re-export the index and related types
 pub use index::{
     AddPermit, FrecencyMultipliers, IndexFilterMode, LoadedSearch, PendingSearch, RebuildSettings,
-    RebuiltIndex, SearchIndex, SearchIndexSettings, SharedSearchIndex,
+    RebuiltIndex, RemainingRuns, SearchIndex, SearchIndexSettings, SharedSearchIndex, SyncPermit,
 };
 
 #[cfg(test)]
