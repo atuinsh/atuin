@@ -207,7 +207,11 @@ impl CodexListener {
         if !is_file {
             return None;
         }
-        Some(CodexSession::open(Self::session_id(path)?, path.to_path_buf(), pool.clone()))
+        let id = Self::session_id(path)?;
+        if is_guardian_rollout(path, &id) {
+            return None;
+        }
+        Some(CodexSession::open(id, path.to_path_buf(), pool.clone()))
     }
 }
 
@@ -231,6 +235,14 @@ impl Listener for CodexListener {
             for await file in files {
                 let (path, stat) = file.into_parts();
                 let Some(id) = Self::session_id(&path) else { continue };
+                let (guardian_path, guardian_id) = (path.to_path_buf(), id.clone());
+                let guardian = pool
+                    .run(move || is_guardian_rollout(&guardian_path, &guardian_id))
+                    .await
+                    .unwrap_or(false);
+                if guardian {
+                    continue;
+                }
                 yield Ok(CodexSession {
                     id,
                     path: path.to_path_buf(),
@@ -746,6 +758,21 @@ fn rfind(file: &mut File, end: u64, needle: &[u8], limit: u64) -> io::Result<Opt
 /// The own `session_meta` payload of the rollout of session `id` at `path`.
 pub(crate) fn own_meta_at(path: &Path, id: &str) -> Option<serde_json::Value> {
     first_own_meta(path, &SessionId::from(id.to_owned()))
+}
+
+/// Whether `meta`, the payload of a rollout's own `session_meta`, belongs to one of Codex's
+/// internal approval reviews. Codex calls the reviewer the "guardian" and sets `thread_source` to
+/// `guardian_review` on its rollouts. Older Codex versions set `source.subagent.other` to
+/// `guardian` instead. A review is a safety evaluation of an action that the user's thread was
+/// about to take. It is not a conversation to search or resume.
+fn is_guardian_review(meta: &serde_json::Value) -> bool {
+    meta["thread_source"] == "guardian_review" || meta["source"]["subagent"]["other"] == "guardian"
+}
+
+/// Whether the rollout of session `id` at `path` is an approval review, judged by its first
+/// line. A rollout whose first line can't be read yet is not one.
+fn is_guardian_rollout(path: &Path, id: &SessionId) -> bool {
+    first_own_meta(path, id).is_some_and(|meta| is_guardian_review(&meta))
 }
 
 /// The own `session_meta` payload of the rollout at `path`, which is its first line.
@@ -1852,6 +1879,98 @@ mod tests {
         let roles: Vec<Role> =
             session.messages().take(2).map_ok(|m| m.role()).try_collect().await.unwrap();
         assert_eq!(roles.last(), Some(&Role::User));
+    }
+
+    /// Codex's approval reviews are internal. Codex marks them with `thread_source:
+    /// guardian_review`, and older versions marked them with `source.subagent.other: guardian`.
+    /// Neither `existing()` nor `watch()` yields such a rollout, whether it is plain, compressed or
+    /// archived. Both still yield the user's own session and a task subagent's session.
+    #[rstest]
+    #[tokio::test]
+    async fn guardian_review_rollouts_are_not_sessions() {
+        let home = tempfile::tempdir().unwrap();
+        let live = home.path().join("sessions").joined("2026").joined("09").joined("19");
+        let archive = home.path().join("archived_sessions");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+
+        let ids = [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002",
+            "00000000-0000-4000-8000-000000000003",
+            "00000000-0000-4000-8000-000000000004",
+            "00000000-0000-4000-8000-000000000005",
+            "00000000-0000-4000-8000-000000000006",
+        ];
+        let line = |id: &str, extra: serde_json::Value| {
+            let mut payload = serde_json::json!({"id": id});
+            payload.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::json!({"type": "session_meta", "payload": payload}).to_string() + "\n"
+        };
+        let name = |id: &str| format!("rollout-2026-09-19T00-00-00-{id}.jsonl");
+        // Rollout 1 is the user's session, and rollout 2 is a task subagent's session. Rollout 3
+        // is a guardian review, and rollout 4 is one that has only the legacy marker. Rollout 5 is
+        // a review that Codex compressed, and rollout 6 is an archived review.
+        std::fs::write(live.join(name(ids[0])), line(ids[0], serde_json::json!({}))).unwrap();
+        std::fs::write(
+            live.join(name(ids[1])),
+            line(
+                ids[1],
+                serde_json::json!({
+                    "source": {"subagent": {
+                        "thread_spawn": {"parent_thread_id": ids[0], "depth": 1},
+                    }},
+                    "parent_thread_id": ids[0],
+                }),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            live.join(name(ids[2])),
+            line(
+                ids[2],
+                serde_json::json!({
+                    "source": {"subagent": {"other": "guardian"}},
+                    "thread_source": "guardian_review",
+                    "parent_thread_id": ids[0],
+                }),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            live.join(name(ids[3])),
+            line(ids[3], serde_json::json!({"source": {"subagent": {"other": "guardian"}}})),
+        )
+        .unwrap();
+        let review = line(ids[4], serde_json::json!({"thread_source": "guardian_review"}));
+        std::fs::write(
+            live.join(format!("{}.zst", name(ids[4]))),
+            zstd::encode_all(review.as_bytes(), 3).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            archive.join(name(ids[5])),
+            line(ids[5], serde_json::json!({"thread_source": "guardian_review"})),
+        )
+        .unwrap();
+
+        let sessions =
+            CodexSessions::builder().root(home.path().join("sessions")).pool(pool()).build();
+        let found: Vec<CodexSession> = sessions.existing().unwrap().try_collect().await.unwrap();
+        let mut found: Vec<String> = found.iter().map(|s| s.id().as_ref().to_owned()).collect();
+        found.sort();
+        assert_eq!(found, vec![ids[0].to_owned(), ids[1].to_owned()]);
+
+        let watched: Vec<SessionId> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sessions.listener().unwrap().watch().take(2).map_ok(|s| s.id()).try_collect(),
+        )
+        .await
+        .expect("watch() did not emit the two user sessions within 10s")
+        .unwrap();
+        let mut watched: Vec<String> = watched.iter().map(|s| s.as_ref().to_owned()).collect();
+        watched.sort();
+        assert_eq!(watched, vec![ids[0].to_owned(), ids[1].to_owned()]);
     }
 
     #[rstest]
