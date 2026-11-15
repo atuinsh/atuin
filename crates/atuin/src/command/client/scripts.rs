@@ -657,6 +657,7 @@ mod tests {
         db.save(&h).await.unwrap();
     }
 
+    #[rstest]
     #[tokio::test]
     async fn last_commands_skips_agent_commands_before_limiting() {
         let db = Sqlite::in_memory(Duration::from_secs(5)).await.unwrap();
