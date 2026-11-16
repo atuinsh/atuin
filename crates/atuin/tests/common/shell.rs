@@ -115,6 +115,17 @@ impl Setup {
         for (name, value) in files {
             vars.entry(name).or_insert(value);
         }
+        // The machine's global startup files run before this rc file.
+        // They may prepend their own directories to `PATH`.
+        // For example, a user profile may supply another atuin build or real agents.
+        // Put the test's intended `PATH` first to keep this build and the stand-ins ahead.
+        let intended = vars.get("PATH").cloned().unwrap_or_else(|| env.path_var());
+        vars.insert("ATUIN_TEST_PATH".into(), intended);
+        let preamble = match config.shell.as_str() {
+            "fish" => "set -gx PATH (string split : $ATUIN_TEST_PATH) $PATH\n",
+            _ => "export PATH=\"$ATUIN_TEST_PATH:$PATH\"\n",
+        };
+        config.script = format!("{preamble}{}", config.script);
         if !init_args.is_empty() {
             let init = format!("atuin init {}", config.shell);
             assert!(config.script.contains(&init), "{}: no `{init}`", path.display());
