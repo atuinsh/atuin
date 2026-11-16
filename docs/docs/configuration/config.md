@@ -1030,10 +1030,11 @@ support it.
     automatically. If you rely on it, keep `[tmux] enabled = false` (the
     default) so the search UI renders inline.
 
-These settings are read by `atuin init` and passed to the shell plugin through
-environment variables, so **restart your shell after changing them**. To disable
-the popup for a single session without touching your config, set
-`ATUIN_TMUX_POPUP=false` before Atuin's key bindings run.
+These settings are read by `atuin init`, so **restart your shell after changing
+them**. Each shell reads them for itself, so a new tmux pane follows your config
+even when the tmux server started before you changed it. To disable the popup
+for a single session without touching your config, set `ATUIN_TMUX_POPUP=false`
+in that shell.
 
 ### `enabled`
 
