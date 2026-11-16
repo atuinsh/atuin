@@ -25,19 +25,16 @@
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/badge/follow%20%40atuinsh-000000?style=flat-square&logo=x&logoColor=white" /></a>
 </p>
 
-Atuin captures everything you do in your terminal, from **all your agentic AI
-work**, to all your **terminal history**, enabling you to:
+Atuin gives you, and your agents, a history of everything that happened in your terminal.
 
-* Let your agents see things you've worked on today, yesterday, a month or a
-  year ago.
-* Gain context on any work you've ever done in the terminal. If it happened in
-  a terminal, Atuin lets you see it!
-* Optionally, securely, sync your shell history and AI sessions across all your
-  machines.
+**Shell history** Atuin replaces your shell history with a SQLite database that records exit codes, working directories, hosts and durations. Hit <kbd>Ctrl</kbd><kbd>r</kbd> and find any command you've ever
+run, on any machine.
 
-Atuin is secure by design, even when syncing: everything it syncs is
-end-to-end encrypted, and nobody (including you, if you forget the key) can
-decrypt it. We're very careful around secrets and avoid storing data with secrets.
+**Agent Threads** Atuin captures your Claude Code, Codex, OpenCode and other agent sessions. Start a thread on your laptop, then `atuin resume` it on a different machine, in a different harness.
+
+Your agents can, optionally, search everything that's ever happened through the built-in MCP server.
+
+Atuin can also sync both history and threads across all of your machines, end-to-end encrypted. Or it can work totally offline! 
 
 # Quick Start
 
