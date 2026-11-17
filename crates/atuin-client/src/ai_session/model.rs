@@ -15,9 +15,9 @@ use typed_builder::TypedBuilder;
 use uuid::{Builder, Uuid};
 
 /// Records name the harness (the variant's name), and a name this build doesn't know reads as
-/// [`Self::Unknown`]. A new variant needs no new record version, but does need a sidecar migration
-/// that bumps `projection_state.generation`, so rows projected as unknown before are projected
-/// again under it.
+/// [`Self::Unknown`]. A new variant needs no new record version. It does need a sidecar migration
+/// that rebuilds the projection from the record store, as `0006_reproject_for_hermes.sql` does.
+/// Rows projected while the harness was unknown are then projected again under its name.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Enumeration))]
@@ -463,8 +463,7 @@ impl MessageRole {
 ///
 /// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
 /// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
-/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
-/// does not know arrives as [`Content::Other`].
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
 pub struct ContentBlocks(pub i64);
 
@@ -480,6 +479,10 @@ impl ContentBlocks {
     pub const ERROR: i64 = 1 << 7;
     pub const OTHER: i64 = 1 << 8;
     pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// A block of a kind that this build doesn't know, which is a [`Content::Unknown`]. No
+    /// migration gave this bit to rows stored before it. None of those rows could hold such a
+    /// block, because older builds skipped the whole record.
+    pub const UNKNOWN: i64 = 1 << 10;
     /// What tool output holds: anything else makes a message more than tool output.
     pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
 
@@ -497,6 +500,7 @@ impl ContentBlocks {
                 Content::Error(_) => Self::ERROR,
                 Content::Other(_) => Self::OTHER,
                 Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
+                Content::Unknown(_) => Self::UNKNOWN,
             }
         }))
     }
@@ -598,6 +602,7 @@ pub struct MatchedSession {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::harnesstools::session::UnknownBlock;
     use atuin_domain::record::RecordVersion;
     use rstest::rstest;
 
@@ -732,10 +737,39 @@ mod tests {
         assert_eq!(read.session.harness, HarnessKind::Unknown);
     }
 
+    /// A newer build's v6 record can hold a block of a kind that this build doesn't know. The
+    /// record reads with that block as [`Content::Unknown`], beside the blocks that this build
+    /// knows. Before v6, the record failed to decode and was skipped for good.
+    #[rstest]
+    fn a_block_of_an_unknown_kind_reads_as_unknown() {
+        let mut msg = record_message();
+        msg.content.push(Content::Summary("so far".to_owned()));
+        let body = rmp_serde::to_vec(&msg).unwrap();
+        // The block's kind as msgpack writes a short string. The new name is a kind that this
+        // build doesn't know.
+        let (known, newer) = (b"\xa7Summary".as_slice(), b"\xa7Shelved".as_slice());
+        let at = body.windows(known.len()).position(|w| w == known).unwrap();
+        let renamed = [&body[..at], newer, &body[at + known.len()..]].concat();
+        let mut record = vec![0];
+        record.extend(zstd::bulk::compress(&renamed, 3).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V6).unwrap();
+
+        assert_eq!(read.content[..read.content.len() - 1], msg.content[..msg.content.len() - 1]);
+        assert_eq!(
+            read.content.last(),
+            Some(&Content::Unknown(UnknownBlock {
+                kind: "Shelved".to_owned(),
+                value: Some(serde_json::json!("so far")),
+            }))
+        );
+    }
+
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v6".to_owned());
+        let version = RecordVersion::Other("v7".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }

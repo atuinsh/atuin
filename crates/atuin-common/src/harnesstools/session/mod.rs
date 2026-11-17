@@ -15,8 +15,8 @@ pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use model::{
     Content, MessageId, ParentKind, Role, SessionEvent, SessionId, StopReason, TitleChange,
-    TitleSource, ToolCallId, ToolResult, ToolUse, UNREADABLE_SUMMARY, Usage, is_substantive,
-    is_tool_output,
+    TitleSource, ToolCallId, ToolResult, ToolUse, UNREADABLE_SUMMARY, UnknownBlock, Usage,
+    is_substantive, is_tool_output,
 };
 pub use patch::{Change, FilePatch, Hunk, Patch};
 use time::OffsetDateTime;
