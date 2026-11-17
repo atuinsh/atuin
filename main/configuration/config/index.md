@@ -1252,8 +1252,6 @@ The theme to use for showing the terminal interface.
 ```
 [theme]
 name = "default"
-debug = false
-max_depth = 10
 ```
 
 ### `name`
@@ -1264,26 +1262,6 @@ A theme name that must be present as a built-in (unset or `default` for the defa
 
 ```
 name = "my-theme"
-```
-
-### `debug`
-
-Default: `false`
-
-Output information about why a theme won't load. Independent from other log levels as it can cause data from the theme file to be printed unfiltered to the terminal.
-
-```
-debug = false
-```
-
-### `max_depth`
-
-Default: 10
-
-Number of levels of "parenthood" that will be traversed for a theme. This shouldn't need to be added in or changed in normal usage.
-
-```
-max_depth = 10
 ```
 
 ## `ui`

@@ -24,22 +24,6 @@ Where `THEMENAME` is a known theme. The following themes are available out-of-th
 
 These are present to make sure users and developers can try out theming, but in general, you will need to download themes or make your own.
 
-If you're writing your own themes, you can add the following line to get additional output:
-
-```
-debug = true
-```
-
-to the same config block. This will print out any color names that can't be parsed from the requested theme.
-
-A final optional setting is available:
-
-```
-max_depth = 10
-```
-
-which sets the maximum levels of theme parents to traverse. This shouldn't need to be explicitly added in normal use.
-
 ## Usage
 
 ### Theme structure
