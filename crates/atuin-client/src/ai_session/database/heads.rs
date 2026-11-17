@@ -495,13 +495,19 @@ impl Analysis {
     #[must_use]
     pub fn fast_forward(&self, head: &SourceId, local: &LocalTip) -> FastForward {
         let path = self.path_indices(head);
+        let marker = |i: usize| is_undo_marker(&self.rows[i]);
         // The tip, or the last row merged into its line.
         let Some(at) = path.iter().rposition(|&i| local.is_tip(self.rows[i].source_id.as_ref()))
         else {
+            // An `/undo` of the only turn left leaves a copy with no live row, and a marker at the
+            // root. That copy is caught up with it.
+            if local.tip_source_id.is_none() && !path.is_empty() && path.iter().all(|&i| marker(i))
+            {
+                return FastForward::NotBehind;
+            }
             return FastForward::Elsewhere;
         };
         let known = |i: usize| local.known_source_ids.contains(self.rows[i].source_id.as_ref());
-        let marker = |i: usize| is_undo_marker(&self.rows[i]);
         if path[at + 1..].iter().any(|&i| known(i) && !marker(i)) {
             return FastForward::Elsewhere;
         }

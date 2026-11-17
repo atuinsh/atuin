@@ -348,6 +348,54 @@ async fn a_live_read_marks_an_undo_once() {
     assert!(more.is_err(), "the same undo is marked once: {more:?}");
 }
 
+/// Two `/undo`s in a row add no row between them, so the session's newest row is the same for
+/// both. The second marker is still newer than the first, since Hermes counted one more rewind, so
+/// it is the newest head and a restore leaves both undone turns out.
+#[rstest]
+#[tokio::test]
+async fn a_later_undo_is_marked_newer() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    execute_in(&db, "UPDATE messages SET active = 1 WHERE id BETWEEN 15 AND 20").await;
+    let (wake, woken) = watch::channel(0);
+    let session = HermesSession {
+        changes: Some(woken),
+        ..HermesSession::open(SessionId::from(RESUMED.to_owned()), &db)
+    };
+    let mut messages = Box::pin(session.messages());
+    let mut next = async || {
+        tokio::time::timeout(Duration::from_secs(5), messages.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+    };
+    for _ in 0..10 {
+        next().await;
+    }
+    let undo = async |rows: &str| {
+        execute_in(
+            &db,
+            &format!(
+                "UPDATE messages SET active = 0 WHERE id BETWEEN {rows};
+                 UPDATE sessions SET rewind_count = rewind_count + 1 WHERE id = '{RESUMED}';"
+            ),
+        )
+        .await;
+        wake.send_modify(|n| *n += 1);
+    };
+
+    undo("15 AND 20").await;
+    let first = next().await;
+    undo("3 AND 6").await;
+    let second = next().await;
+
+    assert!(first.marker_id().is_some() && second.marker_id().is_some());
+    assert_ne!(second.id(), first.id());
+    assert_eq!(second.parent_id(), None);
+    assert!(second.timestamp() > first.timestamp(), "{second:?} after {first:?}");
+}
+
 /// An `/undo` adds no row and changes no title, but it moves `rewind_count`, which wakes the
 /// session's reader.
 #[rstest]

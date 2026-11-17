@@ -628,6 +628,32 @@ fn an_undo_marker_is_nothing_to_fast_forward(
     assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
 }
 
+/// An `/undo` of the only turn left leaves the copy with no live row, so no tip, and a marker at
+/// the root as the newest head. That copy is caught up. An empty copy is still elsewhere from a
+/// head that holds a turn.
+#[rstest]
+#[case::the_root_marker("undo0", Some(&[][..]))]
+#[case::the_undone_turn("a1", None)]
+fn a_copy_with_no_live_row_is_caught_up_with_a_root_marker(
+    #[case] head: &str,
+    #[case] behind: Option<&[&str]>,
+) {
+    let rows =
+        [("u1", None, 1, 0, Prompt), ("a1", Some("u1"), 1, 1, Reply), ("undo0", None, 1, 2, Undo)];
+    let analysis = analyse(HERMES, &rows);
+    assert_eq!(analysis.heads()[0].source_id.as_ref(), "undo0");
+    let local = LocalTip {
+        tip_source_id: None,
+        ..local(&["u1", "a1", "undo0"], None, &[])
+    };
+    let found = match analysis.fast_forward(&SourceId::from(head.to_owned()), &local) {
+        FastForward::Elsewhere => None,
+        FastForward::NotBehind => Some(Vec::new()),
+        FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
+    };
+    assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
+}
+
 /// Hermes resumes one branch alone, so a restore takes the newest head's branch. From an undo
 /// marker, that is the turn before the undo and the marker, which Hermes's writer writes nothing
 /// for: the undone turn stays out.

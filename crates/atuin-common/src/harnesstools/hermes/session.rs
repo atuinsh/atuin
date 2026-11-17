@@ -72,8 +72,11 @@
 //! to show the conversation went back. So the reader yields a row of its own then: an undo marker
 //! ([`Content::Undone`]), a system row that hangs from the newest live row and names the newest
 //! row the undo took back. Its id is a hash of those two rows, so the same undo read again is the
-//! same row, and a later undo makes a new one. It is stamped just after the session's newest row.
-//! A turn sent after the undo is newer than the marker, so the conversation goes on from that turn.
+//! same row, and a later undo makes a new one. It is stamped after the session's newest row, a
+//! millisecond for each rewind Hermes has counted. An `/undo` adds no row, so the newest row alone
+//! would stamp two undos in a row alike. `rewind_count` grows by one with each, in the transaction
+//! that takes the rows back, so a later undo's marker is newer than an earlier one's. A turn sent
+//! after the undo is newer than the marker, so the conversation goes on from that turn.
 //! The reader looks again on every read, and the listener wakes it when `rewind_count` moves, since
 //! an `/undo` adds no row.
 //!
@@ -771,7 +774,11 @@ impl HermesSession {
                         if let Some((parent, through)) = reading.undone()
                             && let Some(at) = last
                         {
-                            let when = session.tip_at.and_then(time_of).map(|t| t + UNDO_AFTER);
+                            let rewinds = session.rewind_count.unwrap_or(0).max(1);
+                            let when = session
+                                .tip_at
+                                .and_then(time_of)
+                                .map(|t| t + UNDO_STEP * i32::try_from(rewinds).unwrap_or(i32::MAX));
                             let marker = HermesMessage::undo_marker(parent, through, when, context);
                             if reading.marked.as_deref() != marker.marker_id() {
                                 reading.marked = marker.marker_id().map(str::to_owned);
@@ -850,9 +857,9 @@ enum Kind {
     },
 }
 
-/// How long after a session's newest row its undo marker is stamped. A whole millisecond, since the
-/// threads database keeps times to the millisecond, and the marker has to sort after the row.
-const UNDO_AFTER: time::Duration = time::Duration::milliseconds(1);
+/// How much later than the session's newest row an undo marker is stamped, for each rewind Hermes
+/// has counted. A whole millisecond, since the threads database keeps times to the millisecond.
+const UNDO_STEP: time::Duration = time::Duration::milliseconds(1);
 
 /// One conversation row of a Hermes session, or a title row the reader made.
 #[derive(Debug, Clone)]
