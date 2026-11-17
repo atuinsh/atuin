@@ -1468,8 +1468,6 @@ The theme to use for showing the terminal interface.
 ```toml
 [theme]
 name = "default"
-debug = false
-max_depth = 10
 ```
 
 ### `name`
@@ -1481,29 +1479,6 @@ else `autumn` or `marine`), or found in `~/.atuin/themes/`, with the suffix `.to
 
 ```toml
 name = "my-theme"
-```
-
-### `debug`
-
-Default: `false`
-
-Output information about why a theme won't load. Independent from other log
-levels as it can cause data from the theme file to be printed unfiltered to the
-terminal.
-
-```toml
-debug = false
-```
-
-### `max_depth`
-
-Default: 10
-
-Number of levels of "parenthood" that will be traversed for a theme. This shouldn't
-need to be added in or changed in normal usage.
-
-```toml
-max_depth = 10
 ```
 
 ## `ui`

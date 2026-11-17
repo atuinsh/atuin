@@ -583,12 +583,6 @@ pub struct Preview {
 pub struct Theme {
     /// Name of desired theme ("default" for base)
     pub name: String,
-
-    /// Whether any available additional theme debug should be shown
-    pub debug: Option<bool>,
-
-    /// How many levels of parenthood will be traversed if needed
-    pub max_depth: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -831,8 +825,6 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             name: "".to_string(),
-            debug: None::<bool>,
-            max_depth: Some(10),
         }
     }
 }
@@ -1751,7 +1743,6 @@ impl Settings {
                 "session-preload",
             ])?
             .set_default("theme.name", "default")?
-            .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
             .set_default("tmux.width", "80%")?
             .set_default("tmux.height", "60%")?
@@ -3065,7 +3056,7 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[case::example(Settings::example_config())]
     #[case::shells("search.shells = \"auto\"\n")]
     #[case::nested_and_optional(
-        "filter_mode = \"directory\"\ntheme.debug = true\n[keys]\nscroll_exits = false\n"
+        "filter_mode = \"directory\"\nai.enabled = true\n[keys]\nscroll_exits = false\n"
     )]
     #[case::legacy_keys(
         "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n"
@@ -3077,12 +3068,12 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[rstest]
     fn known_nested_and_optional_settings_are_honored() {
         let settings = load_file(
-            "filter_mode = \"directory\"\ntheme.debug = true\n[keys]\nscroll_exits = false\n",
+            "filter_mode = \"directory\"\nai.enabled = true\n[keys]\nscroll_exits = false\n",
         )
         .value;
         assert!(!settings.keys.scroll_exits);
         assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
-        assert_eq!(settings.theme.debug, Some(true));
+        assert_eq!(settings.ai.enabled, Some(true));
     }
 
     #[rstest]

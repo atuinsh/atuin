@@ -328,7 +328,7 @@ impl Cmd {
     #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings, messages: Held) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
-        let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
+        let mut theme_manager = theme::ThemeManager::default();
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
@@ -361,7 +361,7 @@ impl Cmd {
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
-        let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
+        let theme = theme_manager.load_theme(theme_name.as_str());
 
         match self {
             Self::Setup(setup) => setup.run(&settings, &db, &sqlite_store).await,

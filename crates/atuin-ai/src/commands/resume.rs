@@ -494,8 +494,8 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
              resume <id>` (`atuin threads list` lists them)"
         );
     }
-    let mut themes = ThemeManager::from_settings(&settings.theme);
-    let theme = themes.load_theme(settings.theme.name.as_str(), settings.theme.max_depth);
+    let mut themes = ThemeManager::default();
+    let theme = themes.load_theme(settings.theme.name.as_str());
     let (outcome, note) = Picker {
         settings: &settings,
         theme,

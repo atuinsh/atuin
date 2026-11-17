@@ -1,7 +1,7 @@
 //! Rendering tests: the picker drawn from the fake source into ratatui's `TestBackend`.
 
 use atuin_client::settings::{KeymapMode, Settings, Style as UiStyle};
-use atuin_client::theme::ThemeManagerOptions;
+use atuin_client::theme::ThemeManager;
 use atuin_client::tui::cursor::Cursor;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -51,12 +51,8 @@ async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
 }
 
 fn render(state: &mut State, settings: &Settings, width: u16, height: u16) -> Buffer {
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| state.draw(f, settings, theme)).unwrap();
     terminal.backend().buffer().clone()
@@ -2058,12 +2054,8 @@ fn a_continuation_in_the_tree_says_where_it_went_on() {
     let mut child = fake::row(HarnessKind::Codex, "0199aaaa", "fix the flaky test");
     child.parent = Some(root.handle.clone());
     child.relation = Relation::Fork;
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let lines = super::panel::tree_lines(
         &root.handle,
         &[child],
@@ -2359,12 +2351,8 @@ async fn the_wheel_scrolls_the_pane_under_it(#[case] origin: u16) {
 
     let s = settings();
     let mut state = loaded(&s, "", 0).await;
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let mut backend = TestBackend::new(100, 42);
     backend.set_cursor_position((0, origin)).unwrap();
     let viewport = if origin == 0 {

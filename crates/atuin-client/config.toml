@@ -311,10 +311,6 @@ enter_accept = true
 ## should be the stem, i.e. `theme = "NAME"` for your chosen NAME.
 # name = "autumn"
 
-## Whether the theme manager should output normal or extra information to help fix themes.
-## Boolean, true or false. If unset, left up to the theme manager.
-# debug = true
-
 [search]
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.

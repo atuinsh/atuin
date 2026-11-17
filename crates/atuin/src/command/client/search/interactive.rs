@@ -2465,7 +2465,7 @@ mod tests {
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
-    use atuin_client::theme::ThemeManagerOptions;
+    use atuin_client::theme::ThemeManager;
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
     use atuin_common::time::UtcOffsetSpec;
@@ -2543,12 +2543,8 @@ mod tests {
 
     #[rstest]
     fn a_message_for_the_user_shows_until_the_next_key(mut state: State, settings: Arc<Settings>) {
-        let mut themes = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("default", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
         state.messages.push(Message {
             severity: Severity::Warn,
             text: "invalid key in keymap config".to_owned(),
@@ -2581,12 +2577,8 @@ mod tests {
     ) {
         let mut settings = Settings::utc();
         settings.timezone = UtcOffsetSpec(offset);
-        let mut themes = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("default", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
         state.now = Box::new(move || now);
 
         assert_eq!(state.build_title(&settings, theme).to_string().ends_with('🎃'), pumpkin);
