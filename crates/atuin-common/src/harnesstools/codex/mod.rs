@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
@@ -45,16 +45,17 @@ impl Harness for Codex {
     }
 
     /// Install the hooks on the current active user's machine, trusted (see `hook_trust`).
-    async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
+    async fn install_hooks(&self, executable: &Path) -> Result<PathBuf, InstallHookError> {
         // Codex reads Claude-Code-style hooks from $CODEX_HOME/hooks.json.
         let home = home();
         let config_path = home.join("hooks.json");
         let config = hook_trust::config(&home).await?;
-        let installed = match json_hooks::install(&config_path, "^Bash$", self.name()).await {
-            Ok(()) => true,
-            Err(InstallHookError::AlreadyInstalled) => false,
-            Err(err) => return Err(err),
-        };
+        let installed =
+            match json_hooks::install(&config_path, "^Bash$", self.name(), executable).await {
+                Ok(()) => true,
+                Err(InstallHookError::AlreadyInstalled) => false,
+                Err(err) => return Err(err),
+            };
         // Hooks installed before atuin trusted them are trusted on installing them again.
         let trusted = hook_trust::trust(&home, self.name(), config).await?;
         if !installed && !trusted {
