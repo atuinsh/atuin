@@ -134,8 +134,8 @@ impl From<DomainStopReason> for StopReason {
 }
 
 impl ContentBlock {
-    /// `value` as it goes over the wire. It is `None` for a [`Content::Unknown`] block. Every
-    /// reader takes such a block for nothing, so it isn't sent.
+    /// `value` as it goes over the wire. It is `None` for a [`Content::Unknown`] block, and for a
+    /// [`Content::Undone`] marker. Every reader takes either for nothing, so neither is sent.
     #[must_use]
     pub fn of(value: Content) -> Option<Self> {
         use content_block::Block;
@@ -164,7 +164,9 @@ impl ContentBlock {
             Content::Patch(patch) => {
                 Block::Patch(serde_json::to_string(&patch).expect("a patch is always serializable"))
             }
-            Content::Unknown(_) => return None,
+            // The heads of a session are worked out from the threads database, not from these
+            // messages, so an undo marker isn't needed here.
+            Content::Unknown(_) | Content::Undone { .. } => return None,
         };
 
         Some(Self { block: Some(block) })

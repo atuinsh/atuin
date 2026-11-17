@@ -179,7 +179,7 @@ impl AiSessionRecord {
                     | Content::Error(_)
                     | Content::Patch(_) => true,
                     // A block kept from a newer build's record. v5 readers don't know it either.
-                    Content::Unknown(_) => false,
+                    Content::Unknown(_) | Content::Undone { .. } => false,
                 };
                 if !msg.content.iter().all(v5_knows) {
                     RecordVersion::V6
@@ -1093,7 +1093,7 @@ mod tests {
     fn with_unknown_block() -> Message {
         let mut msg = sample_message();
         msg.content.push(Content::Unknown(UnknownBlock {
-            kind: "Undone".to_owned(),
+            kind: "Shelved".to_owned(),
             value: Some(serde_json::json!(["u1"])),
         }));
         msg

@@ -179,6 +179,9 @@ pub struct SessionRow {
     pub tip: Option<i64>,
     /// When the newest row was written.
     pub tip_at: Option<f64>,
+    /// How many times Hermes took back rows of the session: `/undo`, `/retry` and edits. `None`
+    /// in a store from before Hermes counted them.
+    pub rewind_count: Option<i64>,
 }
 
 impl SessionRow {
@@ -412,7 +415,7 @@ impl Store {
             "SELECT s.id AS id, {}, {}, {}, {}, {}, {}, {parent_end}, {delegated_by}, \
              s.started_at AS started_at, {}, {}, (SELECT max(m.id) FROM messages m WHERE \
              m.session_id = s.id) AS tip, (SELECT max(m.timestamp) FROM messages m WHERE \
-             m.session_id = s.id) AS tip_at{extra} FROM sessions s",
+             m.session_id = s.id) AS tip_at, {}{extra} FROM sessions s",
             pick("title"),
             pick("title_source"),
             pick("cwd"),
@@ -421,6 +424,7 @@ impl Store {
             pick("parent_session_id"),
             pick("ended_at"),
             pick("last_activity_at"),
+            pick("rewind_count"),
         )
     }
 
@@ -440,6 +444,7 @@ impl Store {
             last_activity_at: row.try_get("last_activity_at")?,
             tip: row.try_get("tip")?,
             tip_at: row.try_get("tip_at")?,
+            rewind_count: row.try_get("rewind_count")?,
         })
     }
 
@@ -775,6 +780,7 @@ mod tests {
             last_activity_at: None,
             tip: None,
             tip_at: None,
+            rewind_count: None,
         }
     }
 

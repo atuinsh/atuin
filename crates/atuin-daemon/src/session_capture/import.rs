@@ -803,8 +803,26 @@ mod tests {
             .harness(HarnessKind::Hermes, sessions)
             .collect()
             .await;
-        // Rows 1-28: the subagent's are 23-26.
-        assert_eq!(sum_new(&progress), 28);
+        // Rows 1-28, the subagent's 23-26, and the marker of the `/undo` that ends the session
+        // resumed for a second turn.
+        assert_eq!(sum_new(&progress), 29);
+
+        // The marker reaches the threads database, and its branch is the resumed session's newest.
+        let resumed = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from(
+                "local-8baebc867cd817b810a10420638858ba79ef3e78ad6ada513ccf9d79bd31d565".to_owned(),
+            ),
+        };
+        let analysis = sink.sidecar.analyse(&resumed).await.unwrap();
+        let newest = &analysis.heads()[0];
+        let marker = analysis.path_to(&newest.source_id).pop().unwrap();
+        assert!(
+            matches!(marker.content.as_slice(), [
+                atuin_common::harnesstools::session::Content::Undone { .. }
+            ]),
+            "{marker:?}"
+        );
 
         let handle = HarnessSession {
             harness: HarnessKind::Hermes,

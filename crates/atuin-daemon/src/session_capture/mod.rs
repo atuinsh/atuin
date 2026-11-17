@@ -744,7 +744,8 @@ fn bulky(msg: &Message) -> bool {
             Content::Reasoning(_)
             | Content::ReasoningSummary { .. }
             | Content::Other(_)
-            | Content::Unknown(_) => {}
+            | Content::Unknown(_)
+            | Content::Undone { .. } => {}
         }
         if left == 0 {
             return true;
@@ -791,7 +792,8 @@ fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
             redact(text);
             true
         }
-        Content::ReasoningSummary { .. } => true,
+        // An undo marker holds only the id of a row, which is what a branch of the session needs.
+        Content::ReasoningSummary { .. } | Content::Undone { .. } => true,
         Content::Text(_) | Content::Other(_) | Content::Unknown(_) => false,
     });
     // Both titles a row carries: the session's, and the one its own line set.
@@ -3424,6 +3426,22 @@ mod tests {
             Content::Summary("earlier: AWS_SECRET_ACCESS_KEY=****".to_owned()),
             Content::Error("overloaded".to_owned()),
         ]);
+    }
+
+    /// An undo marker survives sanitize on the system row that holds it, whatever tools capture
+    /// keeps, since a session's branches depend on it.
+    #[rstest]
+    fn an_undo_marker_survives_sanitize(
+        #[values(ToolCapture::Names, ToolCapture::Payloads)] tools: ToolCapture,
+    ) {
+        let mut msg = sample_message();
+        msg.role = Role::System;
+        let marker = Content::Undone {
+            through: atuin_common::harnesstools::session::MessageId::from("u1".to_owned()),
+        };
+        msg.content = vec![marker.clone()];
+        sanitize(&mut msg, tools, &CapturePolicy::default());
+        assert_eq!(msg.content, vec![marker]);
     }
 
     #[rstest]

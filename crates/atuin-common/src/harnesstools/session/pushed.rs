@@ -430,6 +430,7 @@ pub(crate) mod tests {
             },
             Content::Other(value) => return Block::Other(value),
             Content::Unknown(_) => unreachable!("a harness's reader makes no unknown block"),
+            Content::Undone { .. } => unreachable!("only Hermes's reader marks an undo"),
         })
     }
 

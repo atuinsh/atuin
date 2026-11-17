@@ -297,7 +297,10 @@ fn searchable(m: &Message) -> String {
                     }
                 }
             }
-            Content::ReasoningSummary { .. } | Content::Other(_) | Content::Unknown(_) => {}
+            Content::ReasoningSummary { .. }
+            | Content::Other(_)
+            | Content::Unknown(_)
+            | Content::Undone { .. } => {}
         }
     }
     out
@@ -618,7 +621,8 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
                 Content::Reasoning(_)
                 | Content::ReasoningSummary { .. }
                 | Content::Other(_)
-                | Content::Unknown(_),
+                | Content::Unknown(_)
+                | Content::Undone { .. },
             ) => {}
         }
     }
@@ -754,11 +758,12 @@ fn classify(block: &Content) -> Block<'_> {
         Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
         // Capture keeps only that reasoning happened, which says nothing to a reader, and never
         // stores reasoning text or raw blocks. A block of a kind that this build doesn't know
-        // holds nothing that it can read.
+        // holds nothing that it can read, and an undo marker holds only a row's id.
         Content::ReasoningSummary { .. }
         | Content::Reasoning(_)
         | Content::Other(_)
-        | Content::Unknown(_) => Block::Empty,
+        | Content::Unknown(_)
+        | Content::Undone { .. } => Block::Empty,
     }
 }
 

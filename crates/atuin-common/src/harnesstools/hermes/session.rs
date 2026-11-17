@@ -68,6 +68,24 @@
 //! is as live as its newest copy (a compaction clone under the same `message_uid`): an `/undo`
 //! of a turn a compaction carried on drops only the copies, and leaves the originals compacted.
 //!
+//! An `/undo` with no turn after it leaves the newest rows no longer live, and nothing beside them
+//! to show the conversation went back. So the reader yields a row of its own then: an undo marker
+//! ([`Content::Undone`]), a system row that hangs from the newest live row and names the newest
+//! row the undo took back. Its id is a hash of those two rows, so the same undo read again is the
+//! same row, and a later undo makes a new one. It is stamped after the session's newest row, a
+//! millisecond for each rewind Hermes has counted. An `/undo` adds no row, so the newest row alone
+//! would stamp two undos in a row alike. `rewind_count` grows by one with each, in the transaction
+//! that takes the rows back, so a later undo's marker is newer than an earlier one's. A turn sent
+//! after the undo is newer than the marker, so the conversation goes on from that turn.
+//! The reader looks again on every read, and the listener wakes it when `rewind_count` moves, since
+//! an `/undo` adds no row.
+//!
+//! `/retry` and an edit also take a turn back, and then send a new one. A read that lands between
+//! the two marks the rewind as it would an `/undo`. That marker records a real rewind, and the new
+//! turn beside it is newer, so the conversation goes on from the new turn. Whether a retry leaves a
+//! marker depends on when the read landed. So a marker counts only while no newer turn hangs beside
+//! it, and nothing reads a turn's lack of one as a sign that it wasn't taken back.
+//!
 //! In-place edits of a row's content (`transcript_revision`) are not followed: what was
 //! captured stands.
 //!
@@ -240,13 +258,15 @@ struct Known {
     seen: Mark,
 }
 
-/// What of a session's row says its reader has something new to read: a row or a title. A
-/// rewind adds no row, and the reader checks which rows it undid when the next one lands.
+/// What of a session's row says its reader has something new to read: a row, a title, or a
+/// rewind. A rewind adds no row. An `/undo` with no turn after it can still end the conversation
+/// before rows the reader yielded, so the reader has to look again.
 #[derive(Debug, PartialEq, Eq)]
 struct Mark {
     tip: Option<i64>,
     title: Option<String>,
     title_source: Option<String>,
+    rewind_count: Option<i64>,
 }
 
 impl Mark {
@@ -255,6 +275,7 @@ impl Mark {
             tip: row.tip,
             title: row.title.clone(),
             title_source: row.title_source.clone(),
+            rewind_count: row.rewind_count,
         }
     }
 }
@@ -496,6 +517,8 @@ struct Reading {
     /// The title last yielded, and how many title rows were.
     title: Option<TitleChange>,
     titled: u32,
+    /// The id of the undo marker last yielded, so a wake that changes nothing yields it only once.
+    marked: Option<String>,
 }
 
 impl Reading {
@@ -518,6 +541,15 @@ impl Reading {
     /// The key of the row a row that is `live` (or not) hangs from (see the module docs).
     fn parent(&self, live: bool) -> Option<String> {
         self.yielded.iter().rev().find(|(_, was, _)| !live || *was).map(|(_, _, key)| key.clone())
+    }
+
+    /// The undo that ends the session as read, if the newest rows it yielded are no longer live:
+    /// the key of the newest row still live, which the marker hangs from, and the key of the newest
+    /// row that the undo took back. The first is `None` when no row is live.
+    fn undone(&self) -> Option<(Option<String>, String)> {
+        let live = self.yielded.iter().rposition(|(_, live, _)| *live);
+        let (_, _, through) = self.yielded[live.map_or(0, |at| at + 1)..].last()?;
+        Some((live.map(|at| self.yielded[at].2.clone()), through.clone()))
     }
 
     /// Mark the rows in `rewound` no longer live, and the rest live.
@@ -639,7 +671,8 @@ impl HermesSession {
             }
             let session = store.session(self.id.as_ref()).await?;
             let rows = store.messages_after(self.id.as_ref(), after, PAGE).await?;
-            let rewound = if recheck && !rows.is_empty() {
+            // Even with no new rows: an `/undo` with no turn after it adds none.
+            let rewound = if recheck {
                 Some(store.rewound_upto(self.id.as_ref(), after).await?)
             } else {
                 None
@@ -738,6 +771,20 @@ impl HermesSession {
                         reading.title = title;
                     }
                     if !full {
+                        if let Some((parent, through)) = reading.undone()
+                            && let Some(at) = last
+                        {
+                            let rewinds = session.rewind_count.unwrap_or(0).max(1);
+                            let when = session
+                                .tip_at
+                                .and_then(time_of)
+                                .map(|t| t + UNDO_STEP * i32::try_from(rewinds).unwrap_or(i32::MAX));
+                            let marker = HermesMessage::undo_marker(parent, through, when, context);
+                            if reading.marked.as_deref() != marker.marker_id() {
+                                reading.marked = marker.marker_id().map(str::to_owned);
+                                yield Ok((at, marker));
+                            }
+                        }
                         break;
                     }
                 }
@@ -801,7 +848,18 @@ enum Kind {
         change: TitleChange,
         at: Option<OffsetDateTime>,
     },
+    /// An undo marker (see the module docs), with its id, the key of the newest row the undo took
+    /// back, and its time.
+    Undone {
+        id: String,
+        through: String,
+        at: Option<OffsetDateTime>,
+    },
 }
+
+/// How much later than the session's newest row an undo marker is stamped, for each rewind Hermes
+/// has counted. A whole millisecond, since the threads database keeps times to the millisecond.
+const UNDO_STEP: time::Duration = time::Duration::milliseconds(1);
 
 /// One conversation row of a Hermes session, or a title row the reader made.
 #[derive(Debug, Clone)]
@@ -842,15 +900,42 @@ impl HermesMessage {
         }
     }
 
+    /// The marker of an undo that took the session back to row `parent`, past row `through`, both
+    /// as keys ([`row_key`]). The same undo read again is the same row.
+    fn undo_marker(
+        parent: Option<String>,
+        through: String,
+        at: Option<OffsetDateTime>,
+        context: Arc<Context>,
+    ) -> Self {
+        let mut keyed = parent.as_deref().unwrap_or_default().as_bytes().to_vec();
+        keyed.push(0);
+        keyed.extend_from_slice(through.as_bytes());
+        let id = format!("undone-{:016x}", xxh3_64(&keyed));
+        Self {
+            kind: Kind::Undone { id, through, at },
+            parent,
+            context,
+        }
+    }
+
+    /// The id of an undo marker; `None` for any other row.
+    fn marker_id(&self) -> Option<&str> {
+        match &self.kind {
+            Kind::Undone { id, .. } => Some(id),
+            Kind::Row(_) | Kind::Title { .. } => None,
+        }
+    }
+
     fn row_ref(&self) -> Option<&MessageRow> {
         match &self.kind {
             Kind::Row(row) => Some(row),
-            Kind::Title { .. } => None,
+            Kind::Title { .. } | Kind::Undone { .. } => None,
         }
     }
 
     /// Whether the row is in the conversation Hermes resumes, as it was read; `None` for a
-    /// title row.
+    /// title row or an undo marker.
     pub(crate) fn live(&self) -> Option<bool> {
         self.row_ref().map(|row| row.live)
     }
@@ -951,7 +1036,7 @@ impl Message for HermesMessage {
     fn id(&self) -> Option<MessageId> {
         Some(MessageId::from(match &self.kind {
             Kind::Row(row) => row_key(row.id, row.message_uid.as_deref()),
-            Kind::Title { id, .. } => id.clone(),
+            Kind::Title { id, .. } | Kind::Undone { id, .. } => id.clone(),
         }))
     }
 
@@ -965,19 +1050,26 @@ impl Message for HermesMessage {
                 other => Role::Other(other.to_owned()),
             },
             Kind::Title { .. } => Role::Other(TITLE_ROW.to_owned()),
+            Kind::Undone { .. } => Role::System,
         }
     }
 
     fn timestamp(&self) -> Option<OffsetDateTime> {
         match &self.kind {
             Kind::Row(row) => time_of(row.timestamp),
-            Kind::Title { at, .. } => *at,
+            Kind::Title { at, .. } | Kind::Undone { at, .. } => *at,
         }
     }
 
     fn content(&self) -> Vec<Content> {
-        let Kind::Row(row) = &self.kind else {
-            return Vec::new();
+        let row = match &self.kind {
+            Kind::Row(row) => row,
+            Kind::Title { .. } => return Vec::new(),
+            Kind::Undone { through, .. } => {
+                return vec![Content::Undone {
+                    through: MessageId::from(through.clone()),
+                }];
+            }
         };
         let content = row.content.as_deref().unwrap_or_default();
         match row.role.as_str() {
@@ -1059,7 +1151,7 @@ impl Message for HermesMessage {
     fn title(&self) -> Option<TitleChange> {
         match &self.kind {
             Kind::Title { change, .. } => Some(change.clone()),
-            Kind::Row(_) => None,
+            Kind::Row(_) | Kind::Undone { .. } => None,
         }
     }
 }
