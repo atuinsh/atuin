@@ -71,6 +71,7 @@ pub enum Field {
     ToolCallId,
     ToolResultCallId,
     PatchCallId,
+    UndoneThrough,
 }
 
 impl Field {
@@ -102,6 +103,7 @@ impl fmt::Display for Field {
             Self::ToolCallId => "tool_call.id",
             Self::ToolResultCallId => "tool_result.call_id",
             Self::PatchCallId => "patch.call_id",
+            Self::UndoneThrough => "undone.through",
         })
     }
 }
@@ -411,6 +413,9 @@ impl ContentBlock {
                 call_id: Field::PatchCallId.key(call)?.into(),
                 files: files.into_iter().map(content_block::FilePatch::from).collect(),
             }),
+            Content::Undone { through } => Block::Undone(content_block::Undone {
+                through: Field::UndoneThrough.nonempty_key(through)?.into(),
+            }),
         };
 
         Ok(Some(Self { block: Some(block) }))
@@ -503,7 +508,7 @@ mod tests {
     use std::path::PathBuf;
 
     use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
-    use atuin_common::harnesstools::session::{ToolCallId, Usage};
+    use atuin_common::harnesstools::session::{MessageId, ToolCallId, Usage};
     use atuin_domain::record::HostId as DomainHostId;
     use prost_types::{FileDescriptorProto, FileDescriptorSet, Timestamp};
     use rstest::{fixture, rstest};
@@ -849,6 +854,10 @@ mod tests {
             }],
         })),
     )]
+    #[case::undone(
+        Content::Undone { through: MessageId::from("u1".to_owned()) },
+        Some(Block::Undone(content_block::Undone { through: "u1".to_owned() })),
+    )]
     #[case::other_dropped(Content::Other(json!({"type": "image"})), None)]
     fn maps_each_content_block(#[case] content: Content, #[case] block: Option<Block>) {
         let line = converted(Message {
@@ -904,6 +913,13 @@ mod tests {
         ThreadMessageConversionError::Key {
             id: RecordId(v7(1)),
             source: KeyError::Empty { field: Field::SourceId },
+        },
+    )]
+    #[case::empty_undone_through(
+        |m: &mut Message| m.content = vec![Content::Undone { through: MessageId::from(String::new()) }],
+        ThreadMessageConversionError::Key {
+            id: RecordId(v7(1)),
+            source: KeyError::Empty { field: Field::UndoneThrough },
         },
     )]
     #[case::long_tool_call_id(

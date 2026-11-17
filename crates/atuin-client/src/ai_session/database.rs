@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -1459,6 +1459,8 @@ impl AiSessionDatabase {
             // indexed. A build that knows its kind indexes it after a migration projects the
             // message again.
             Content::Unknown(_) => {}
+            // It marks an undo, and holds no text that a search would look for.
+            Content::Undone { .. } => {}
             // The files a call changed are what a search for them looks for; their lines are
             // tool output like any other.
             Content::Patch(patch) => {
@@ -2735,7 +2737,7 @@ mod tests {
     /// until it is named, and then fails the test until it has a sample and a bit.
     #[rstest]
     fn every_kind_of_block_has_its_own_bit() {
-        const KINDS: [&str; 11] = [
+        const KINDS: [&str; 12] = [
             "text",
             "reasoning",
             "tool use",
@@ -2747,6 +2749,7 @@ mod tests {
             "reasoning summary",
             "tool error",
             "unknown",
+            "undone",
         ];
         let kind = |c: &Content| match c {
             Content::Text(_) => "text",
@@ -2760,6 +2763,7 @@ mod tests {
             Content::Other(_) => "other",
             Content::ReasoningSummary { .. } => "reasoning summary",
             Content::Unknown(_) => "unknown",
+            Content::Undone { .. } => "undone",
         };
         let result = |error| {
             Content::ToolResult(ToolResult {
@@ -2790,6 +2794,9 @@ mod tests {
                 kind: "Newer".to_owned(),
                 value: None,
             }),
+            Content::Undone {
+                through: atuin_common::harnesstools::session::MessageId::from("u".to_owned()),
+            },
         ];
 
         let mut kinds: Vec<_> = samples.iter().map(kind).collect();
@@ -2905,17 +2912,28 @@ mod tests {
         );
     }
 
-    /// Migration 5 empties what earlier builds projected, rows they read as an unknown harness
-    /// among it, and clears the watermarks, so the next reprojection names Kiro's rows.
+    /// The sidecar's migrations, in order.
+    const MIGRATIONS: [&str; 7] = [
+        include_str!("migrations/0001_init.sql"),
+        include_str!("migrations/0002_message_blocks.sql"),
+        include_str!("migrations/0003_message_provider.sql"),
+        include_str!("migrations/0004_drop_api_request_blobs.sql"),
+        include_str!("migrations/0005_reproject_for_kiro.sql"),
+        include_str!("migrations/0006_reproject_for_hermes.sql"),
+        include_str!("migrations/0007_reproject_for_undone.sql"),
+    ];
+
+    /// Each of these migrations empties what earlier builds projected, and clears the watermarks.
+    /// The next reprojection then reads each record again. Migration 5 does it for Kiro's rows and
+    /// migration 6 for Hermes's, which earlier builds read as an unknown harness. Migration 7 does it
+    /// for undo markers, which earlier builds read as blocks of an unknown kind.
     #[rstest]
-    fn the_kiro_migration_empties_the_projection_for_a_rebuild() {
+    #[case::kiro(5)]
+    #[case::hermes(6)]
+    #[case::undone(7)]
+    fn a_reprojecting_migration_empties_the_projection_for_a_rebuild(#[case] version: usize) {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        for migration in [
-            include_str!("migrations/0001_init.sql"),
-            include_str!("migrations/0002_message_blocks.sql"),
-            include_str!("migrations/0003_message_provider.sql"),
-            include_str!("migrations/0004_drop_api_request_blobs.sql"),
-        ] {
+        for migration in &MIGRATIONS[..version - 1] {
             conn.execute_batch(migration).unwrap();
         }
         conn.execute_batch(
@@ -2929,40 +2947,7 @@ mod tests {
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         let generation = count("SELECT generation FROM projection_state");
 
-        conn.execute_batch(include_str!("migrations/0005_reproject_for_kiro.sql")).unwrap();
-
-        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
-        assert_eq!(count("SELECT count(*) FROM messages"), 0);
-        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
-        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
-    }
-
-    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
-    /// harness before they knew Hermes.
-    #[rstest]
-    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        for migration in [
-            include_str!("migrations/0001_init.sql"),
-            include_str!("migrations/0002_message_blocks.sql"),
-            include_str!("migrations/0003_message_provider.sql"),
-            include_str!("migrations/0004_drop_api_request_blobs.sql"),
-            include_str!("migrations/0005_reproject_for_kiro.sql"),
-        ] {
-            conn.execute_batch(migration).unwrap();
-        }
-        conn.execute_batch(
-            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
-                 VALUES (1, 0, 'local-1', x'00', 0, 0);
-             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
-                 VALUES (x'01', 0, 1, '1', 0, 1, '[]');
-             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
-        )
-        .unwrap();
-        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-        let generation = count("SELECT generation FROM projection_state");
-
-        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
+        conn.execute_batch(MIGRATIONS[version - 1]).unwrap();
 
         assert_eq!(count("SELECT count(*) FROM sessions"), 0);
         assert_eq!(count("SELECT count(*) FROM messages"), 0);

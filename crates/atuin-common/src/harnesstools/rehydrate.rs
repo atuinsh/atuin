@@ -556,9 +556,10 @@ pub(crate) mod testing {
                     ..result.clone()
                 })),
                 Content::Reasoning(_) => Some(Content::ReasoningSummary { tokens: None }),
-                Content::Summary(_) | Content::Error(_) | Content::ReasoningSummary { .. } => {
-                    Some(c.clone())
-                }
+                Content::Summary(_)
+                | Content::Error(_)
+                | Content::ReasoningSummary { .. }
+                | Content::Undone { .. } => Some(c.clone()),
                 Content::Text(_) | Content::Other(_) | Content::Patch(_) | Content::Unknown(_) => {
                     None
                 }

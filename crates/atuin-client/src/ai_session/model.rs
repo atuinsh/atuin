@@ -483,6 +483,9 @@ impl ContentBlocks {
     /// migration gave this bit to rows stored before it. None of those rows could hold such a
     /// block, because older builds skipped the whole record.
     pub const UNKNOWN: i64 = 1 << 10;
+    /// An undo marker ([`Content::Undone`]). Migration 7 rebuilds the projection, so rows
+    /// stored before it get the bit too.
+    pub const UNDONE: i64 = 1 << 11;
     /// What tool output holds: anything else makes a message more than tool output.
     pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
 
@@ -501,6 +504,7 @@ impl ContentBlocks {
                 Content::Other(_) => Self::OTHER,
                 Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
                 Content::Unknown(_) => Self::UNKNOWN,
+                Content::Undone { .. } => Self::UNDONE,
             }
         }))
     }
@@ -764,6 +768,22 @@ mod tests {
                 value: Some(serde_json::json!("so far")),
             }))
         );
+    }
+
+    /// A message holding an undo marker is written as v6, since v5 readers don't know the block.
+    /// It reads back as it was.
+    #[rstest]
+    fn an_undo_marker_is_written_as_v6() {
+        let mut msg = record_message();
+        msg.content = vec![Content::Undone {
+            through: atuin_common::harnesstools::session::MessageId::from("u1".to_owned()),
+        }];
+        let record = AiSessionRecord::Message(msg.clone());
+
+        assert_eq!(record.version(), RecordVersion::V6);
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record.serialize(), &RecordVersion::V6).unwrap();
+        assert_eq!(read, msg);
     }
 
     #[rstest]

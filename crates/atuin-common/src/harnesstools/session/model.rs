@@ -70,6 +70,12 @@ pub enum Content {
     /// The changes a tool call made to files, as its harness recorded them beside the call's
     /// result (or, for Codex, after it).
     Patch(Patch),
+    /// A turn that the person took back, as Hermes Agent's `/undo` does. The row that holds it
+    /// hangs from the row before the turn. `through` is the last row that the undo took back.
+    /// The turn's rows stay, on a branch that the conversation no longer follows.
+    Undone {
+        through: MessageId,
+    },
     /// A block of a kind that a newer atuin wrote and that this build doesn't know. It is written
     /// back as it was read. Otherwise it counts for nothing: it holds no text, no call and no
     /// conversation.
@@ -144,6 +150,10 @@ impl<'de> Visitor<'de> for ContentVisitor {
             Ok(ContentKind::Summary) => Content::Summary(map.next_value()?),
             Ok(ContentKind::Error) => Content::Error(map.next_value()?),
             Ok(ContentKind::Patch) => Content::Patch(map.next_value()?),
+            Ok(ContentKind::Undone) => {
+                let UndoneFields { through } = map.next_value()?;
+                Content::Undone { through }
+            }
             // An unknown block is stored under its own kind's name, never as `Unknown`. So a
             // block named `Unknown` is of a kind that a newer build added.
             Ok(ContentKind::Unknown) | Err(_) => Content::Unknown(UnknownBlock {
@@ -163,6 +173,12 @@ impl<'de> Visitor<'de> for ContentVisitor {
 #[derive(Deserialize)]
 struct ReasoningSummaryFields {
     tokens: Option<u64>,
+}
+
+/// The fields of [`Content::Undone`], read as [`ReasoningSummaryFields`] are.
+#[derive(Deserialize)]
+struct UndoneFields {
+    through: MessageId,
 }
 
 /// The [`Content::Summary`] of a compaction whose summary can't be read (Codex's, compacted by
@@ -449,6 +465,9 @@ mod tests {
                         }],
                     }],
                 }),
+                ContentKind::Undone => Content::Undone {
+                    through: MessageId::from("u1".to_owned()),
+                },
                 ContentKind::Unknown => return None,
             })
         };
@@ -476,8 +495,8 @@ mod tests {
     /// The last has the name of `Content::Unknown` itself.
     #[derive(Serialize)]
     enum Newer {
-        Undone {
-            through: String,
+        Shelved {
+            until: String,
         },
         Marker(u32),
         Ping,
@@ -487,7 +506,7 @@ mod tests {
     /// A kind that this build doesn't know reads as [`Content::Unknown`], beside the kinds that it
     /// knows. It is written back exactly as it was read.
     #[rstest]
-    #[case::fields(Newer::Undone { through: "u1".to_owned() }, "Undone", Some(serde_json::json!(["u1"])), Some(serde_json::json!({"through": "u1"})))]
+    #[case::fields(Newer::Shelved { until: "u1".to_owned() }, "Shelved", Some(serde_json::json!(["u1"])), Some(serde_json::json!({"until": "u1"})))]
     #[case::value(Newer::Marker(3), "Marker", Some(serde_json::json!(3)), Some(serde_json::json!(3)))]
     #[case::no_data(Newer::Ping, "Ping", None, None)]
     #[case::named_unknown(Newer::Unknown(4), "Unknown", Some(serde_json::json!(4)), Some(serde_json::json!(4)))]
@@ -518,6 +537,27 @@ mod tests {
         assert_eq!(json, vec![hi, unknown(json_value)]);
         assert_eq!(rmp_serde::to_vec(&msgpack).unwrap(), written.0);
         assert_eq!(serde_json::to_string(&json).unwrap(), written.1);
+    }
+
+    /// A build from before undo markers keeps one as an unknown block, and writes it back as it
+    /// read it. This build reads that block as the undo marker it is.
+    #[rstest]
+    #[case::msgpack(Some(serde_json::json!(["u1"])))]
+    #[case::json(Some(serde_json::json!({"through": "u1"})))]
+    fn an_undone_block_kept_as_unknown_reads_as_undone(#[case] value: Option<serde_json::Value>) {
+        let kept = Content::Unknown(UnknownBlock {
+            kind: "Undone".to_owned(),
+            value,
+        });
+        let undone = Content::Undone {
+            through: MessageId::from("u1".to_owned()),
+        };
+
+        let msgpack: Content = rmp_serde::from_slice(&rmp_serde::to_vec(&kept).unwrap()).unwrap();
+        let json: Content = serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
+
+        assert_eq!(msgpack, undone);
+        assert_eq!(json, undone);
     }
 
     /// A block of a known kind that holds the wrong data is an error, not an unknown block. It
