@@ -754,12 +754,11 @@ mod tests {
 #[cfg(all(test, unix))]
 mod rebuild_tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use rstest::rstest;
     use tokio::net::UnixListener;
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::Server;
 
@@ -813,19 +812,24 @@ mod rebuild_tests {
     #[tokio::test]
     async fn waits_out_a_rebuild_over_the_wire() {
         let (mut client, state, _dir) = serve(StoreState::Recovering).await;
-        let notices = Arc::new(AtomicUsize::new(0));
-        let counter = notices.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         let wait = tokio::spawn(async move {
             client
                 .wait_for_sessions(|progress| {
                     // The test's store replays nothing: the daemon reports that it has none to.
                     assert_eq!(progress, (0, 0));
-                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = tx.send(());
                 })
                 .await
         });
 
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        // Probed at once, then after 250ms: each probe that finds it rebuilding reports.
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("each wait reports its progress")
+                .expect("each wait reports its progress");
+        }
         assert!(!wait.is_finished(), "returned while the daemon was rebuilding");
 
         state.send_replace(StoreState::Ready);
@@ -834,8 +838,6 @@ mod rebuild_tests {
             .expect("returns once the rebuild ends")
             .unwrap()
             .unwrap();
-        // Probed at once, then after 250ms: each probe that finds it rebuilding reports.
-        assert!(notices.load(Ordering::SeqCst) >= 2, "each wait reports its progress");
     }
 
     #[rstest]
