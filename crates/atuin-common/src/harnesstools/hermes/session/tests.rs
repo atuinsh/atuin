@@ -163,20 +163,44 @@ async fn a_shell_command_maps_to_a_call_and_its_result() {
     assert_eq!(text(&first[3].content()), ["Output:\n\nhello from probe\nprobe-branch"]);
     assert_eq!(first[3].stop_reason(), Some(StopReason::EndTurn));
 
-    for message in &messages {
+    // Rows only: the undo marker that ends this session is a row of the reader's own.
+    for message in messages.iter().filter(|m| m.live().is_some()) {
         assert_eq!(message.cwd().as_deref(), Some(Path::new("/tmp/hermes-play/work")));
     }
 }
 
-/// The turn `/undo` dropped stays, as a branch hanging from the turn before it.
+/// The marker of the undo that ends `messages`, if they end with one: its parent and the row it
+/// names as the newest undone, as row ids (see [`row_ids`]).
+fn undo_marker(
+    rows: &HashMap<String, String>,
+    messages: &[HermesMessage],
+) -> Option<(Option<String>, String)> {
+    let marker = messages.last()?;
+    let content = marker.content();
+    let [Content::Undone { through }] = content.as_slice() else {
+        return None;
+    };
+    assert_eq!(marker.role(), Role::System);
+    assert!(marker.id().unwrap().as_ref().starts_with("undone-"));
+    let id = |key: &str| rows.get(key).cloned().unwrap_or_else(|| key.to_owned());
+    Some((marker.parent_id().map(|p| id(p.as_ref())), id(through.as_ref())))
+}
+
+/// The turn `/undo` dropped stays, as a branch hanging from the turn before it. Nothing comes after
+/// it, so an undo marker hangs from that turn too, naming the undone turn's last row. Hermes keeps
+/// the rows it undid, so a read from the start finds the undo as a live read does.
 #[rstest]
 #[tokio::test]
 async fn an_undone_turn_is_a_dead_branch() {
     let dir = tempfile::tempdir().unwrap();
     let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
-    let messages = read(&db, RESUMED).await;
+    let mut messages = read(&db, RESUMED).await;
+    let rows = row_ids(&db).await;
+    assert_eq!(undo_marker(&rows, &messages), Some((Some("6".to_owned()), "20".to_owned())));
+    assert!(messages[messages.len() - 1].timestamp() > messages[messages.len() - 2].timestamp());
+    messages.pop();
     let link = |id: &str, parent: Option<&str>| (id.to_owned(), parent.map(str::to_owned));
-    assert_eq!(by_row_id(&row_ids(&db).await, parents(&messages)), [
+    assert_eq!(by_row_id(&rows, parents(&messages)), [
         link("3", None),
         link("4", Some("3")),
         link("5", Some("4")),
@@ -258,6 +282,85 @@ async fn a_turn_after_an_undo_hangs_from_before_it() {
     assert_eq!(again.id().unwrap().as_ref(), "u-41");
     assert_eq!(rows[again.parent_id().unwrap().as_ref()], "6");
     writer.close().await.unwrap();
+}
+
+/// The same undo read again is the same marker. Another undo after it makes a new one: here the
+/// first turn is undone too, so nothing is live and the marker hangs from no row.
+#[rstest]
+#[tokio::test]
+async fn each_undo_has_a_marker_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    let first = read(&db, RESUMED).await.pop().unwrap();
+    let again = read(&db, RESUMED).await.pop().unwrap();
+    assert_eq!(again.id(), first.id());
+
+    execute_in(&db, &format!("UPDATE messages SET active = 0 WHERE session_id = '{RESUMED}'"))
+        .await;
+    let messages = read(&db, RESUMED).await;
+    let rows = row_ids(&db).await;
+    assert_eq!(undo_marker(&rows, &messages), Some((None, "20".to_owned())));
+    assert_ne!(messages.last().unwrap().id(), first.id());
+}
+
+/// A live read yields a marker when an `/undo` with no turn after it lands, once, however often
+/// it's woken after.
+#[rstest]
+#[tokio::test]
+async fn a_live_read_marks_an_undo_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = store_in(dir.path(), &[SCHEMA, PROBE]).await;
+    execute_in(&db, "UPDATE messages SET active = 1 WHERE id BETWEEN 15 AND 20").await;
+    let (wake, woken) = watch::channel(0);
+    let session = HermesSession {
+        changes: Some(woken),
+        ..HermesSession::open(SessionId::from(RESUMED.to_owned()), &db)
+    };
+    let mut messages = Box::pin(session.messages());
+    let mut read = Vec::new();
+    for _ in 0..10 {
+        read.push(
+            tokio::time::timeout(Duration::from_secs(5), messages.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    execute_in(
+        &db,
+        &format!(
+            "UPDATE messages SET active = 0 WHERE id BETWEEN 15 AND 20;
+             UPDATE sessions SET rewind_count = rewind_count + 1 WHERE id = '{RESUMED}';"
+        ),
+    )
+    .await;
+    wake.send_modify(|n| *n += 1);
+    let marker =
+        tokio::time::timeout(Duration::from_secs(5), messages.next()).await.unwrap().unwrap();
+    read.push(marker.unwrap());
+    let rows = row_ids(&db).await;
+    assert_eq!(undo_marker(&rows, &read), Some((Some("6".to_owned()), "20".to_owned())));
+
+    wake.send_modify(|n| *n += 1);
+    let more = tokio::time::timeout(Duration::from_millis(500), messages.next()).await;
+    assert!(more.is_err(), "the same undo is marked once: {more:?}");
+}
+
+/// An `/undo` adds no row and changes no title, but it moves `rewind_count`, which wakes the
+/// session's reader.
+#[rstest]
+fn a_rewind_wakes_the_reader() {
+    let row = SessionRow {
+        rewind_count: Some(1),
+        ..session_row()
+    };
+    let rewound = SessionRow {
+        rewind_count: Some(2),
+        ..row.clone()
+    };
+    assert_ne!(Mark::of(&row), Mark::of(&rewound));
 }
 
 /// A session after an in-place compaction, in the shape `/compress` left in the rig with Hermes
@@ -669,9 +772,19 @@ fn a_title_ranks_by_who_wrote_it(
     #[case] want: Option<TitleSource>,
 ) {
     let row = SessionRow {
-        id: "s".to_owned(),
         title: title.map(str::to_owned),
         title_source: source.map(str::to_owned),
+        ..session_row()
+    };
+    assert_eq!(title_of(&row).map(|t| t.source), want);
+}
+
+/// A session's row with nothing set but its id.
+fn session_row() -> SessionRow {
+    SessionRow {
+        id: "s".to_owned(),
+        title: None,
+        title_source: None,
         cwd: None,
         model: None,
         model_config: None,
@@ -683,8 +796,8 @@ fn a_title_ranks_by_who_wrote_it(
         last_activity_at: None,
         tip: None,
         tip_at: None,
-    };
-    assert_eq!(title_of(&row).map(|t| t.source), want);
+        rewind_count: None,
+    }
 }
 
 /// A `profiles` directory that can't be read makes the scan say it is partial, rather than pass

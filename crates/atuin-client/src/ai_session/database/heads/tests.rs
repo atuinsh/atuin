@@ -27,8 +27,10 @@ enum Kind {
     Custom,
     /// The files a call changed (a Codex patch's row).
     Patched,
+    /// An undo marker (Hermes's reader writes one for an `/undo` with no turn after it).
+    Undo,
 }
-use Kind::{Custom, Header, Patched, Prompt, Reply, Title, Tool};
+use Kind::{Custom, Header, Patched, Prompt, Reply, Title, Tool, Undo};
 
 /// A row: its source id, parent, host, timestamp (ms) and kind.
 type Row<'a> = (&'a str, Option<&'a str>, u8, i64, Kind);
@@ -56,6 +58,9 @@ fn message(harness: HarnessKind, (id, parent, on, at, kind): Row<'_>) -> Message
             call: format!("{id}-call").into(),
             files: Vec::new(),
         })]),
+        Undo => (Role::System, vec![Content::Undone {
+            through: format!("{id}-through").into(),
+        }]),
     };
     Message::builder()
         .id(RecordId(atuin_common::utils::uuid_v7()))
@@ -86,6 +91,7 @@ fn path(analysis: &Analysis, to: &str) -> Vec<String> {
 const CC: HarnessKind = HarnessKind::ClaudeCode;
 const CODEX: HarnessKind = HarnessKind::Codex;
 const OPENCODE: HarnessKind = HarnessKind::Opencode;
+const HERMES: HarnessKind = HarnessKind::Hermes;
 
 /// A base every Claude Code case grows from: a prompt, a reply and a tool call, on host 1.
 const BASE: &[Row<'static>] =
@@ -564,6 +570,74 @@ fn a_copy_fast_forwards_only_along_the_heads_line(
         FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
     };
     assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
+}
+
+/// A Hermes session with two turns, the second taken back by `/undo`: its marker hangs from the
+/// first turn's reply.
+const MARKED: &[Row<'static>] = &[
+    ("u1", None, 1, 0, Prompt),
+    ("a1", Some("u1"), 1, 1, Reply),
+    ("u2", Some("a1"), 1, 2, Prompt),
+    ("a2", Some("u2"), 1, 3, Reply),
+    ("undo", Some("a1"), 1, 4, Undo),
+];
+
+/// An undo marker beside the turn it undid is the newest head, holding the first turn's two
+/// messages, until a turn newer than it goes on from the same row. A second undo of a turn makes
+/// a marker beside the first one, and the two are one side. Undoing the first turn leaves a marker
+/// at the root, and an undo is never a divergence, whichever host it came from.
+#[rstest]
+#[case::after_the_undone_turn(&[], &[("undo", 2), ("a2", 4)])]
+#[case::then_a_turn(&[("u3", Some("a1"), 1, 5, Prompt), ("a3", Some("u3"), 1, 6, Reply)], &[("a3", 4), ("a2", 4)])]
+#[case::then_a_turn_undone_too(
+    &[("u3", Some("a1"), 1, 5, Prompt), ("a3", Some("u3"), 1, 6, Reply), ("undo2", Some("a1"), 1, 7, Undo)],
+    &[("undo2", 2), ("a3", 4), ("a2", 4)]
+)]
+#[case::from_another_host(&[("undo9", Some("a1"), 2, 5, Undo)], &[("undo9", 2), ("a2", 4)])]
+#[case::of_the_first_turn(&[("undo0", None, 1, 5, Undo)], &[("undo0", 0), ("undo", 2), ("a2", 4)])]
+fn an_undo_marker_is_a_head_until_a_newer_turn(
+    #[case] more: &[Row<'static>],
+    #[case] heads: &[(&str, u64)],
+) {
+    let rows: Vec<Row<'_>> = MARKED.iter().chain(more).copied().collect();
+    let analysis = analyse(HERMES, &rows);
+    let want: Vec<(String, u64)> = heads.iter().map(|&(id, n)| (id.to_owned(), n)).collect();
+    assert_eq!(tips(&analysis), want);
+    assert!(!analysis.diverged());
+    assert_eq!(path(&analysis, heads[0].0).last().map(String::as_str), Some(heads[0].0));
+}
+
+/// The copy that ran `/undo` ends where its marker hangs from, whether its reader has yielded the
+/// marker yet or not: it is caught up, with nothing to append. A copy still on the undone turn is
+/// not on the marker's line.
+#[rstest]
+#[case::holding_the_marker(local(&["u1", "a1", "u2", "a2", "undo"], Some("a1"), &[]), Some(&[][..]))]
+#[case::before_its_reader_yields_it(local(&["u1", "a1", "u2", "a2"], Some("a1"), &[]), Some(&[][..]))]
+#[case::behind_the_turn_before(local(&["u1"], None, &[]), Some(&["a1"][..]))]
+#[case::on_the_undone_turn(local(&["u1", "a1", "u2", "a2"], None, &[]), None)]
+fn an_undo_marker_is_nothing_to_fast_forward(
+    #[case] local: LocalTip,
+    #[case] behind: Option<&[&str]>,
+) {
+    let analysis = analyse(HERMES, MARKED);
+    let found = match analysis.fast_forward(&SourceId::from("undo".to_owned()), &local) {
+        FastForward::Elsewhere => None,
+        FastForward::NotBehind => Some(Vec::new()),
+        FastForward::Behind(rows) => Some(rows.into_iter().map(|r| r.source_id).collect()),
+    };
+    assert_eq!(found, behind.map(|rows| rows.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>()));
+}
+
+/// Hermes resumes one branch alone, so a restore takes the newest head's branch. From an undo
+/// marker, that is the turn before the undo and the marker, which Hermes's writer writes nothing
+/// for: the undone turn stays out.
+#[rstest]
+fn a_markers_branch_leaves_the_undone_turn() {
+    let analysis = analyse(HERMES, MARKED);
+    let newest = analysis.heads()[0].source_id.clone();
+    let ids: Vec<String> =
+        analysis.branch_rows(&newest).iter().map(|m| m.source_id.to_string()).collect();
+    assert_eq!(ids, ["u1", "a1", "undo"]);
 }
 
 /// A Codex session's rows with a patch beside the line, hanging from its call.

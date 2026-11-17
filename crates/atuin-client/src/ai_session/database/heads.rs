@@ -48,6 +48,14 @@
 //! made it substantive); heads of one host alone (a rewind, an interrupt) are not a divergence, and
 //! neither is one host carrying on a line another left.
 //!
+//! An undo marker ([`Content::Undone`], which Hermes Agent's reader writes for an `/undo` with no
+//! turn after it) is no conversation, but it says the conversation went back to the row it hangs
+//! from. So at a fork, the markers among the rows below a row are a side of their own, worth no
+//! messages, as long as no turn beside them is newer. The newest of them is that side's tip, and
+//! is newer than the undone turn beside it, so it is the session's newest head. A turn sent after
+//! the undo is newer than the marker, and the marker then stays on the branch it was on. A marker
+//! is never a divergence: the host that undid a turn is the host that ran it.
+//!
 //! Nothing here is stored: [`AiSessionDatabase::analyse`] reads the session's rows each time.
 
 use std::cmp::Reverse;
@@ -145,6 +153,7 @@ impl Analysis {
         rows.sort_by_cached_key(key);
         let substantive: Vec<bool> =
             rows.iter().map(|m| is_substantive(&m.role, &m.content)).collect();
+        let marker: Vec<bool> = rows.iter().map(is_undo_marker).collect();
 
         let mut model = Model::of(harness);
         let mut in_tree = vec![true; rows.len()];
@@ -174,11 +183,11 @@ impl Analysis {
             heads: Vec::new(),
             diverged: false,
         };
-        analysis.find_heads(&substantive);
+        analysis.find_heads(&substantive, &marker);
         analysis
     }
 
-    fn find_heads(&mut self, substantive: &[bool]) {
+    fn find_heads(&mut self, substantive: &[bool], marker: &[bool]) {
         let n = self.rows.len();
         let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut roots = Vec::new();
@@ -208,17 +217,23 @@ impl Analysis {
             (a, b) => a.or(b),
         };
         let mut first: Vec<Option<usize>> = vec![None; n];
+        // The newest substantive row of each subtree, if any: what an undo marker beside it has to
+        // be newer than to stand.
+        let mut last: Vec<Option<usize>> = vec![None; n];
         for &i in preorder.iter().rev() {
             if substantive[i] {
                 first[i] = earliest(first[i], Some(i));
+                last[i] = last[i].max(Some(i));
             }
             if let Some(p) = self.parent[i] {
                 first[p] = earliest(first[p], first[i]);
+                last[p] = last[p].max(last[i]);
             }
         }
 
         // Hand out branches going down: a fork that counts closes the branch reaching it and
-        // opens one per substantive side; everything else stays on the branch it is on.
+        // opens one per substantive side, and one for the markers that stand beside them;
+        // everything else stays on the branch it is on.
         let mut branch = vec![0_usize; n];
         let mut split = vec![false];
         let mut branch_parent = vec![None];
@@ -229,7 +244,14 @@ impl Analysis {
                 branch[k] = on;
             }
             let sides: Vec<usize> = kids.iter().copied().filter(|&k| first[k].is_some()).collect();
-            if sides.len() < 2 {
+            // Rows are in time order, so a marker stands when it comes after every turn beside it.
+            let newest_turn = sides.iter().filter_map(|&k| last[k]).max();
+            let standing: Vec<usize> = kids
+                .iter()
+                .copied()
+                .filter(|&k| marker[k] && newest_turn.is_none_or(|turn| k > turn))
+                .collect();
+            if sides.len() + usize::from(!standing.is_empty()) < 2 {
                 return;
             }
             split[on] = true;
@@ -238,6 +260,13 @@ impl Analysis {
             diverged |= hosts.len() > 1;
             for &k in &sides {
                 branch[k] = split.len();
+                split.push(false);
+                branch_parent.push(Some(on));
+            }
+            if !standing.is_empty() {
+                for &k in &standing {
+                    branch[k] = split.len();
+                }
                 split.push(false);
                 branch_parent.push(Some(on));
             }
@@ -459,6 +488,10 @@ pub enum FastForward {
 impl Analysis {
     /// Whether the copy of the session `local` read can be fast-forwarded to `head`: its tip is
     /// on [the head's path](Self::path_to), and the copy holds nothing of the path after it.
+    ///
+    /// An undo marker past the tip is neither. A copy whose conversation an undo took back ends
+    /// where the marker hangs from. It holds the marker as a row its reader made, but has no line
+    /// of it to write or to have written.
     #[must_use]
     pub fn fast_forward(&self, head: &SourceId, local: &LocalTip) -> FastForward {
         let path = self.path_indices(head);
@@ -468,12 +501,17 @@ impl Analysis {
             return FastForward::Elsewhere;
         };
         let known = |i: usize| local.known_source_ids.contains(self.rows[i].source_id.as_ref());
-        if path[at + 1..].iter().any(|&i| known(i)) {
+        let marker = |i: usize| is_undo_marker(&self.rows[i]);
+        if path[at + 1..].iter().any(|&i| known(i) && !marker(i)) {
             return FastForward::Elsewhere;
         }
         // From the tip on, with the patches beside those rows that the copy doesn't hold yet.
-        let rows: Vec<usize> =
-            self.with_beside(&path[at..], |i| !known(i)).into_iter().skip(1).collect();
+        let rows: Vec<usize> = self
+            .with_beside(&path[at..], |i| !known(i))
+            .into_iter()
+            .skip(1)
+            .filter(|&i| !marker(i))
+            .collect();
         if rows.is_empty() {
             FastForward::NotBehind
         } else {
@@ -492,6 +530,11 @@ impl Analysis {
         local.known_source_ids.iter().all(|id| synced.contains(id.as_str()))
             && local.tip_source_id.as_deref().is_none_or(|tip| synced.contains(tip))
     }
+}
+
+/// Whether `row` marks an undo (see the module docs).
+fn is_undo_marker(row: &Message) -> bool {
+    row.content.iter().any(|c| matches!(c, Content::Undone { .. }))
 }
 
 /// Parent pointers resolved to rows (see [`Model::Tree`]).
