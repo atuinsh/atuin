@@ -80,6 +80,16 @@ impl CommandData {
         true
     }
 
+    /// Move the keys of this data from the interner `from` to the interner `to`. The keys must have
+    /// been interned in `from`.
+    pub fn reintern(&mut self, from: &Rodeo, to: &mut Rodeo) {
+        let mut move_keys = |keys: &HashSet<Spur>| -> HashSet<Spur> {
+            keys.iter().map(|key| to.get_or_intern(from.resolve(key))).collect()
+        };
+        self.directories = move_keys(&self.directories);
+        self.hosts = move_keys(&self.hosts);
+    }
+
     /// Compute frecency score based on count and recency.
     ///
     /// Uses a decay function where more recent commands score higher.
@@ -151,6 +161,23 @@ impl CommandData {
     /// O(1) lookup; the caller parses the session string once per search.
     pub fn has_invocation_in_session(&self, session: &Uuid) -> bool {
         self.sessions.contains(session)
+    }
+}
+
+#[cfg(test)]
+impl CommandData {
+    /// The directories, hosts and sessions of this command's runs, with the keys resolved in
+    /// `interner`. The data of two indexes then compare equal when they agree.
+    pub(in crate::search::index) fn places(
+        &self,
+        interner: &Rodeo,
+    ) -> (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>, Vec<Uuid>) {
+        let resolve = |keys: &HashSet<Spur>| {
+            keys.iter().map(|key| interner.resolve(key).to_owned()).collect()
+        };
+        let mut sessions: Vec<_> = self.sessions.iter().copied().collect();
+        sessions.sort_unstable();
+        (resolve(&self.directories), resolve(&self.hosts), sessions)
     }
 }
 

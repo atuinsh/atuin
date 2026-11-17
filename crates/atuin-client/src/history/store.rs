@@ -19,7 +19,7 @@ use tracing::instrument;
 use tracing_futures::Instrument;
 
 use super::{History, HistoryId, Version};
-use crate::database::{Sqlite, query_context};
+use crate::database::{DeletedLiveRows, Sqlite, query_context};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
@@ -234,10 +234,10 @@ pub struct DeleteChunk<'a> {
 impl DeleteChunk<'_> {
     /// Delete the entries from the history database in one transaction.
     ///
-    /// Returns whether any live entry was deleted. A missing row is not a live entry, and neither
+    /// Returns the live entries that were deleted. A missing row is not a live entry, and neither
     /// is a tombstone from an older version.
-    pub async fn commit(&self) -> Result<bool> {
-        Ok(self.database.delete_rows(self.ids.iter().copied()).await? > 0)
+    pub async fn commit(&self) -> Result<DeletedLiveRows> {
+        Ok(self.database.delete_rows(self.ids.iter().copied()).await?)
     }
 }
 
@@ -914,9 +914,9 @@ mod tests {
 
         create.commit().await.unwrap();
         assert_eq!(db.list([], &context(), None, false, true, None).await.unwrap().len(), 1);
-        assert!(delete.commit().await.unwrap(), "it deleted a live row");
+        assert_eq!(delete.commit().await.unwrap().len(), 1, "it deleted a live row");
         assert!(db.list([], &context(), None, false, true, None).await.unwrap().is_empty());
-        assert!(!delete.commit().await.unwrap(), "the row is already gone");
+        assert!(delete.commit().await.unwrap().is_empty(), "the row is already gone");
     }
 
     #[rstest]

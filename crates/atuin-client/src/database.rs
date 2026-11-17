@@ -11,6 +11,7 @@ use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
+use futures::stream::BoxStream;
 use futures::{TryStreamExt as _, future};
 use itertools::Itertools;
 use sql_builder::bind::Bind;
@@ -293,6 +294,73 @@ impl SearchMode {
 
 pub const HISTORY_COLUMNS: &str = "id, timestamp, duration, exit, command, cwd, session, \
                                    hostname, deleted_at, author, intent, shell, author_kind";
+
+/// The live entries that a delete removed.
+///
+/// Only [`Sqlite::delete_rows`] records a deleted row. Other code can only add an entry that was
+/// never saved, with [`Self::add_unsaved`].
+#[derive(Debug, Default)]
+pub struct DeletedLiveRows {
+    ids: HashSet<HistoryId>,
+    commands: HashSet<String>,
+}
+
+impl DeletedLiveRows {
+    /// How many distinct live entries were deleted.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether no live entry was deleted.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// Whether the entry `id` was deleted.
+    #[must_use]
+    pub fn contains(&self, id: HistoryId) -> bool {
+        self.ids.contains(&id)
+    }
+
+    /// The distinct commands of the deleted entries.
+    #[must_use]
+    pub const fn commands(&self) -> &HashSet<String> {
+        &self.commands
+    }
+
+    /// Take the distinct commands of the deleted entries.
+    #[must_use]
+    pub fn into_commands(self) -> HashSet<String> {
+        self.commands
+    }
+
+    /// Record that the entry `id` of `command` was deleted, when that entry's save to the database
+    /// failed. If the entry has a row after all, it still counts once.
+    pub fn add_unsaved(&mut self, id: HistoryId, command: String) {
+        self.add(id, command);
+    }
+
+    /// Merge the result of another chunk of a delete into this one.
+    pub fn extend(&mut self, other: Self) {
+        self.ids.extend(other.ids);
+        self.commands.extend(other.commands);
+    }
+
+    fn add(&mut self, id: HistoryId, command: String) {
+        self.ids.insert(id);
+        self.commands.insert(command);
+    }
+}
+
+/// A row that [`Sqlite::delete_rows`] removed.
+#[derive(sqlx::FromRow)]
+struct RemovedRow {
+    id: HistoryId,
+    command: String,
+    live: bool,
+}
 
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
@@ -1022,6 +1090,22 @@ impl Sqlite {
             .await
     }
 
+    /// Stream every live entry of this exact command, in no particular order.
+    ///
+    /// The entries come straight from the command's index as they are read, so a command that was
+    /// run a million times is never held in memory at once.
+    #[must_use = "the stream reads nothing until polled"]
+    pub fn history_of_command<'a>(&'a self, command: &'a str) -> BoxStream<'a, Result<History>> {
+        // An `order by` would make SQLite sort all of the command's rows before it returns the
+        // first one.
+        let query = format!(
+            "select {HISTORY_COLUMNS} from history where command = ?1 and deleted_at is null"
+        );
+        db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .bind(command)
+            .fetch(self.sqlite.pool())
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub async fn all_with_count(&self) -> Result<Vec<(History, i32)>> {
         debug!("listing history");
@@ -1147,13 +1231,17 @@ impl Sqlite {
 
     /// Delete the rows with these ids in one transaction.
     ///
-    /// Returns how many of the deleted rows were live. A tombstone from an older version is not a
-    /// live row. Ids that have no row are ignored.
+    /// Returns the live rows that were deleted. A tombstone from an older version is not a live
+    /// row. Ids that have no row are ignored.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<usize> {
+    pub async fn delete_rows(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<DeletedLiveRows> {
         let mut ids = ids.into_iter().peekable();
+        let mut deleted = DeletedLiveRows::default();
         if ids.peek().is_none() {
-            return Ok(0);
+            return Ok(deleted);
         }
 
         // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
@@ -1161,7 +1249,6 @@ impl Sqlite {
         let ids_per_delete = self.sqlite.info().await.variable_number_limit().max(1);
 
         let mut tx = self.sqlite.pool().begin().await?;
-        let mut live = 0;
 
         while ids.peek().is_some() {
             let mut builder = sqlx::QueryBuilder::new("delete from history where id in (");
@@ -1169,18 +1256,23 @@ impl Sqlite {
             for id in ids.by_ref().take(ids_per_delete) {
                 list.push_bind(id);
             }
-            builder.push(") returning deleted_at is null");
+            builder.push(") returning id, command, deleted_at is null as live");
 
-            live += builder
-                .build_query_scalar::<bool>()
+            builder
+                .build_query_as::<RemovedRow>()
                 .fetch(&mut *tx)
-                .try_fold(0, |live, removed| future::ready(Ok(live + usize::from(removed))))
+                .try_for_each(|row| {
+                    if row.live {
+                        deleted.add(row.id, row.command);
+                    }
+                    future::ready(Ok(()))
+                })
                 .await?;
         }
 
         tx.commit().await?;
 
-        Ok(live)
+        Ok(deleted)
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
@@ -1500,6 +1592,7 @@ mod test {
     use std::time::{Duration, Instant};
 
     use atuin_common::path::PathBufExt as _;
+    use futures::TryStreamExt;
     use rstest::{fixture, rstest};
     use time::format_description::well_known::Rfc3339;
     use time::macros::datetime;
@@ -1885,8 +1978,8 @@ mod test {
         ]);
     }
 
-    /// `delete_rows` removes both live rows and tombstones from older versions. It counts only the
-    /// live rows that it removed. It ignores ids that have no row.
+    /// `delete_rows` removes both live rows and tombstones from older versions. It reports only the
+    /// live rows that it removed, and their commands. It ignores ids that have no row.
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn delete_rows_counts_only_live_rows(
@@ -1900,10 +1993,12 @@ mod test {
         db.update(&tombstone).await.unwrap();
         let missing = HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap());
 
-        assert_eq!(db.delete_rows([tombstone.id, missing]).await.unwrap(), 0);
-        assert_eq!(db.delete_rows([live.id, missing]).await.unwrap(), 1);
+        assert!(db.delete_rows([tombstone.id, missing]).await.unwrap().is_empty());
+        let deleted = db.delete_rows([live.id, missing]).await.unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted.commands(), &HashSet::from(["echo live".to_owned()]));
         assert!(db.all_paged(10, true).next().await.unwrap().is_none());
-        assert_eq!(db.delete_rows([live.id]).await.unwrap(), 0, "already deleted");
+        assert!(db.delete_rows([live.id]).await.unwrap().is_empty(), "already deleted");
     }
 
     #[rstest]
@@ -2496,6 +2591,32 @@ mod test {
         // Should return None immediately
         let page = paged.next().await.unwrap();
         assert!(page.is_none());
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_history_of_command(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        for cmd in ["cargo build", "cargo test", "cargo build", "cargo build"] {
+            new_history_item(&db, cmd).await.unwrap();
+        }
+
+        let runs: Vec<_> = db.history_of_command("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|h| h.command == "cargo build"));
+
+        let prefix: Vec<_> = db.history_of_command("cargo").try_collect().await.unwrap();
+        assert!(prefix.is_empty(), "exact match only");
+
+        // Tombstones that older versions wrote aren't runs.
+        let mut legacy = runs[0].clone();
+        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        db.update(&legacy).await.unwrap();
+        let runs: Vec<_> = db.history_of_command("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 2);
     }
 
     #[rstest]

@@ -8,11 +8,13 @@
 mod common;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atuin_client::history::HistoryId;
 use atuin_client::history::store::HistoryRecord;
 use atuin_client::settings::{CaptureLimits, OutputCapture, Search};
+use atuin_daemon::HistoryJournal;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
 use common::corpus::HistoryGen;
 use common::{TestEnv, capture, history};
@@ -160,29 +162,22 @@ async fn delete_racing_finish_leaves_no_row_anywhere() {
     assert!(leaked_replay.is_empty(), "rows resurrected on replay: {leaked_replay:?}");
 }
 
-/// Commands that finish while the index is being reloaded (by a delete or a rebuild) are
-/// searchable once everything settles.
+/// Commands that finish while the index is being rebuilt are searchable once everything settles.
 ///
 /// `HistoryJournal::reload_search_index` builds a fresh index from a paged db scan. Then it swaps
 /// the new index in. Meanwhile, `finish` adds to the *old* index. Ids are time-ordered, so the
 /// keyset cursor never visits rows that are saved during the scan. The rebuild must keep those rows
 /// anyway (#4052).
+///
+/// A delete of a few entries updates the index in place. That is too quick for finishes to
+/// overlap it reliably. See [`finishes_racing_deletes_of_their_command_count_each_run_once`].
 #[rstest]
-#[case::delete(Reload::Delete)]
-#[case::rebuild(Reload::Rebuild)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload: Reload) {
+async fn commands_finished_during_an_index_reload_are_searchable() {
     let env = seeded_env().await;
-    let victim = env.seeded.ids[0];
     let journal = env.journal.clone();
-    let reload_task = tokio::spawn(async move {
-        match reload {
-            Reload::Delete => {
-                journal.delete(&[victim], &Search::default()).await.unwrap();
-            }
-            Reload::Rebuild => journal.rebuild(&Search::default()).await.unwrap(),
-        }
-    });
+    let reload_task =
+        tokio::spawn(async move { journal.rebuild(&Search::default()).await.unwrap() });
 
     let mut finished = Vec::new();
     while !reload_task.is_finished() && finished.len() < 200 {
@@ -213,10 +208,53 @@ async fn commands_finished_during_an_index_reload_are_searchable(#[case] reload:
     assert_eq!(env.index_count(), env.expected_command_count().await);
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Reload {
-    Delete,
-    Rebuild,
+/// Shells that finish a command while other runs of that command are deleted leave the index
+/// counting each live run once.
+///
+/// Each delete updates the command in place from the db. A run that a finish saves before the
+/// update reads the db is in the updated data. Its finish must not add it a second time. A run
+/// that is saved after the read must still be added.
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn finishes_racing_deletes_of_their_command_count_each_run_once() {
+    const COMMAND: &str = "echo raced";
+    const RACES: usize = 32;
+    let env = TestEnv::builder().build().await;
+    let finish = |journal: Arc<HistoryJournal>, command: &'static str| async move {
+        let id = journal.start_cmd(history(command));
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+        id
+    };
+    let mut doomed = Vec::with_capacity(RACES);
+    for _ in 0..RACES {
+        doomed.push(finish(env.journal.clone(), COMMAND).await);
+    }
+    // These runs keep the command in the index through every update.
+    for _ in 0..2 {
+        finish(env.journal.clone(), COMMAND).await;
+    }
+    finish(env.journal.clone(), "echo bystander").await;
+
+    let mut finishes = Vec::with_capacity(RACES);
+    let mut deletes = Vec::with_capacity(RACES);
+    for id in doomed {
+        finishes.push(tokio::spawn(finish(env.journal.clone(), COMMAND)));
+        let journal = env.journal.clone();
+        deletes.push(tokio::spawn(async move {
+            journal.delete(&[id], &Search::default()).await.unwrap()
+        }));
+    }
+    for finished in join_all(finishes).await {
+        finished.unwrap();
+    }
+    for deleted in join_all(deletes).await {
+        assert_eq!(deleted.unwrap(), 1);
+    }
+
+    let live = env.active_histories().await.iter().filter(|h| h.command == COMMAND).count();
+    assert_eq!(live, RACES + 2, "live runs in the history db");
+    assert_eq!(env.index.read().invocations(COMMAND), u32::try_from(live).unwrap());
+    assert_eq!(env.index_count(), env.expected_command_count().await);
 }
 
 /// Two deletes running at once (two terminals pruning) both take effect in the index.

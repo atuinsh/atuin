@@ -14,13 +14,33 @@ use parking_lot::{
 use time::OffsetDateTime;
 use tracing::instrument;
 
-use crate::search::index::core::{IndexIdentity, LoadFromDbError, SearchIndex};
+use crate::search::index::core::{IndexIdentity, LoadFromDbError, RemainingRuns, SearchIndex};
 use crate::search::index::{FrecencyMultipliers, SearchIndexSettings};
 
 mod rebuild;
 
 use rebuild::{PendingRebuild, Rebuild, RebuildStart};
 pub use rebuild::{RebuildSettings, RebuiltIndex};
+
+/// The most live rows that [`SharedSearchIndex::sync_deleted`] reads to update commands in place.
+/// When the commands have more, the index is rebuilt instead.
+///
+/// Adds wait while a sync reads its rows, so this bounds that wait. On a developer machine,
+/// reading this many rows takes about 100 ms.
+const MAX_SYNCED_ROWS: usize = 20_000;
+
+/// The most commands that [`SharedSearchIndex::sync_deleted`] updates in place. When there are
+/// more, the index is rebuilt instead.
+///
+/// A sync runs one query per command while adds wait, even for a command that has no runs left.
+/// So this bounds that wait too. On a developer machine, this many queries take about 100 ms.
+const MAX_SYNCED_COMMANDS: usize = 500;
+
+/// Why [`SharedSearchIndex::sync_deleted`] rebuilds the index instead of updating it in place.
+enum SyncFallback {
+    TooManyRows,
+    ReadFailed(sqlx::Error),
+}
 
 /// The state behind [`SharedSearchIndex`]'s lock.
 #[derive(Debug, derive_more::AsRef, derive_more::AsMut)]
@@ -327,6 +347,115 @@ impl SharedSearchIndex {
         }
     }
 
+    /// Update `commands` in the installed index after some of their runs were deleted from `db`.
+    ///
+    /// Each command is rebuilt from the runs that it has left in `db`, and a command with none left
+    /// is removed. `settings` is the callback that a [rebuild](Self::rebuild) would get. The whole
+    /// index is rebuilt with it instead in these cases:
+    ///
+    /// * `settings` asks for settings that differ from the installed index's.
+    /// * A rebuild is pending, or the fill hasn't finished. Their loads may have read the deleted
+    ///   runs.
+    /// * There are more than `MAX_SYNCED_COMMANDS` commands, or they have more than
+    ///   `MAX_SYNCED_ROWS` live rows. Adds wait while a sync reads them.
+    /// * The commands' runs can't be read.
+    pub async fn sync_deleted(
+        &self,
+        db: &Sqlite,
+        commands: HashSet<String>,
+        settings: impl Fn(RebuildSettings<'_>) -> Option<SearchIndexSettings>,
+    ) {
+        // This is checked before the sync takes the lock, so adds never wait for such a delete.
+        if commands.len() > MAX_SYNCED_COMMANDS {
+            tracing::info!(
+                "A delete touched {} commands, more than {MAX_SYNCED_COMMANDS}; rebuilding the \
+                 search index instead of updating it in place",
+                commands.len()
+            );
+        } else if let Some(permit) = self.begin_sync(&settings).await {
+            // The permit is dropped at the end of this block, before the rebuild waits for the
+            // lock that the permit holds.
+            match Self::read_runs(&permit, db, commands).await {
+                Ok(runs) => {
+                    permit.sync(runs);
+                    return;
+                }
+                Err(SyncFallback::TooManyRows) => tracing::info!(
+                    "The deleted commands have more than {MAX_SYNCED_ROWS} live rows; rebuilding \
+                     the search index instead"
+                ),
+                Err(SyncFallback::ReadFailed(e)) => tracing::warn!(
+                    "Could not read what is left of the deleted commands; rebuilding the search \
+                     index instead: {e}"
+                ),
+            }
+        }
+        if let Err(e) = self.rebuild(db, settings).await {
+            tracing::error!("Failed to rebuild the search index after a delete: {e}");
+        }
+    }
+
+    /// Fold the runs that each of `commands` has left in `db`. The rows are folded one at a time,
+    /// so no command's rows are ever all in memory at once.
+    async fn read_runs(
+        permit: &SyncPermit<'_>,
+        db: &Sqlite,
+        commands: HashSet<String>,
+    ) -> Result<Vec<RemainingRuns>, SyncFallback> {
+        let mut rows_read = 0;
+        let mut synced = Vec::with_capacity(commands.len());
+        for command in commands {
+            let mut rows = db.history_of_command(&command);
+            let mut runs = RemainingRuns::new(command.clone());
+            while let Some(row) = rows.try_next().await.map_err(SyncFallback::ReadFailed)? {
+                rows_read += 1;
+                if rows_read > MAX_SYNCED_ROWS {
+                    return Err(SyncFallback::TooManyRows);
+                }
+                permit.add_run(&mut runs, &row);
+            }
+            synced.push(runs);
+        }
+        Ok(synced)
+    }
+
+    /// Get permission to update commands in the installed index in place. Use it after some of
+    /// their runs were deleted from the database. See [`SyncPermit`].
+    ///
+    /// `settings` is the callback that a [rebuild](Self::rebuild) would get. The sync must leave
+    /// the index as that rebuild would. This returns [`None`] when it can't:
+    ///
+    /// * `settings` asks for settings that differ from the installed index's.
+    /// * A rebuild is pending. Its load may have read the deleted runs. Its install would then
+    ///   bring them back.
+    /// * The fill hasn't finished. Its load may read the deleted runs too.
+    ///
+    /// Rebuild the index instead in those cases.
+    ///
+    /// Waits for adds in progress to finish. New adds, rebuilds and the fill then wait until the
+    /// permit is dropped.
+    async fn begin_sync(
+        &self,
+        settings: impl Fn(RebuildSettings<'_>) -> Option<SearchIndexSettings>,
+    ) -> Option<SyncPermit<'_>> {
+        let add = self.add_lock.write().await;
+        let state = self.state.read();
+        if !state.pending.is_empty() || !matches!(state.fill, FillState::Filled) {
+            return None;
+        }
+        let installed = state.index.settings();
+        if state.call_settings(settings).is_some_and(|settings| settings != *installed) {
+            return None;
+        }
+        let settings = installed.clone();
+        drop(state);
+        Some(SyncPermit {
+            index: self,
+            settings,
+            _add: add,
+        })
+    }
+
     /// Recompute the global frecency of every command.
     ///
     /// Searches can still run while the new frecency is computed. A rebuild that runs at the same
@@ -435,6 +564,42 @@ impl AddPermit<'_> {
             return;
         }
         SearchIndex::add_history_shared(&self.index.state, histories, OffsetDateTime::now_utc());
+    }
+}
+
+/// Permission to update commands in a [`SharedSearchIndex`] in place. It is used after some of
+/// their runs were deleted from the database. See [`SharedSearchIndex::begin_sync`].
+///
+/// A caller does this while it holds the permit:
+///
+/// 1. For each command, fold the runs that it has left in the database into a [`RemainingRuns`]
+///    with [`Self::add_run`].
+/// 2. [Sync](Self::sync) the commands.
+///
+/// No entry is added while the permit is held. So a run that is written meanwhile is neither lost
+/// nor counted twice. Hold the permit only across the database reads and the sync. Don't get an
+/// [`AddPermit`] while you hold one, and don't rebuild the index either. Both would wait for this
+/// permit.
+#[must_use = "a permit changes nothing until it syncs"]
+pub struct SyncPermit<'a> {
+    index: &'a SharedSearchIndex,
+
+    /// The installed index's settings when the permit was taken. Only an install can change their
+    /// shell filter. No install can happen while the permit is held.
+    settings: SearchIndexSettings,
+    _add: tokio::sync::RwLockWriteGuard<'a, ()>,
+}
+
+impl SyncPermit<'_> {
+    /// Fold `history`, one of the runs that a command has left in the database, into `runs`.
+    pub fn add_run(&self, runs: &mut RemainingRuns, history: &History) {
+        runs.add(history, &self.settings);
+    }
+
+    /// Make the installed index agree with the database about each command in `commands`. A
+    /// command that has no runs left is removed. Frecency is computed as of now.
+    pub fn sync(self, commands: impl IntoIterator<Item = RemainingRuns>) {
+        self.index.state.write().index.sync_commands(commands, OffsetDateTime::now_utc());
     }
 }
 
@@ -705,5 +870,126 @@ mod tests {
         )
         .await;
         assert!(has(&shared, "echo after"));
+    }
+
+    /// A sync of commands with more than `MAX_SYNCED_ROWS` live rows rebuilds the index instead,
+    /// so that adds don't wait for the reads. Commands at the limit are synced in place.
+    #[rstest]
+    #[case::at_the_limit(MAX_SYNCED_ROWS, true)]
+    #[case::over_the_limit(MAX_SYNCED_ROWS + 1, false)]
+    #[tokio::test]
+    async fn sync_deleted_rebuilds_past_the_row_limit(
+        #[future(awt)] db: Sqlite,
+        #[case] rows: usize,
+        #[case] synced_in_place: bool,
+    ) {
+        let now = OffsetDateTime::now_utc();
+        // An imported entry's id comes from its timestamp, so each run needs its own.
+        let hot: Vec<History> = (0..rows)
+            .map(|i| {
+                let ago = time::Duration::seconds(i64::try_from(i).unwrap() + 1);
+                make_history("echo hot", "/tmp", now - ago)
+            })
+            .collect();
+        db.save_bulk(&hot).await.unwrap();
+        let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        shared.fill(&db).await.unwrap();
+        // Only the index has this entry. A rebuild from the db drops it.
+        add_through_permit(&shared, None, &make_history("echo sentinel", "/tmp", now)).await;
+
+        let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+        shared.sync_deleted(&db, HashSet::from(["echo hot".to_owned()]), latest).await;
+
+        assert_eq!(count(&shared.read(), "echo hot"), u32::try_from(rows).unwrap());
+        assert_eq!(has(&shared, "echo sentinel"), synced_in_place);
+    }
+
+    /// A sync of more than `MAX_SYNCED_COMMANDS` commands rebuilds the index instead, even when
+    /// the commands have no runs left. Each command costs a query while adds wait. Commands at the
+    /// limit are synced in place.
+    #[rstest]
+    #[case::at_the_limit(MAX_SYNCED_COMMANDS, true)]
+    #[case::over_the_limit(MAX_SYNCED_COMMANDS + 1, false)]
+    #[tokio::test]
+    async fn sync_deleted_rebuilds_past_the_command_limit(
+        #[future(awt)] db: Sqlite,
+        #[case] commands: usize,
+        #[case] synced_in_place: bool,
+    ) {
+        let now = OffsetDateTime::now_utc();
+        let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        shared.fill(&db).await.unwrap();
+        // Only the index has this entry. A rebuild from the db drops it.
+        add_through_permit(&shared, None, &make_history("echo sentinel", "/tmp", now)).await;
+
+        let deleted = (0..commands).map(|i| format!("echo gone {i}")).collect();
+        let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+        shared.sync_deleted(&db, deleted, latest).await;
+
+        assert_eq!(has(&shared, "echo sentinel"), synced_in_place);
+    }
+
+    /// A sync starts only when it would leave the index as a rebuild would. It doesn't start while
+    /// a rebuild is pending or before the fill finished. It doesn't start either when the rebuild
+    /// would change the settings.
+    #[rstest]
+    #[tokio::test]
+    async fn begin_sync_only_when_it_matches_a_rebuild(#[future(awt)] db: Sqlite) {
+        let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+        let shared = SharedSearchIndex::from(SearchIndex::default());
+        assert!(shared.begin_sync(latest).await.is_some());
+        assert!(shared.begin_sync(|_| None).await.is_some(), "no rebuild is needed");
+
+        let zero = |settings: RebuildSettings<'_>| {
+            Some(SearchIndexSettings {
+                frecency_multipliers: zero_frecency(),
+                ..settings.latest.clone()
+            })
+        };
+        assert!(shared.begin_sync(zero).await.is_none(), "a rebuild would change the multipliers");
+
+        let rebuild = shared.start().await;
+        assert!(shared.begin_sync(latest).await.is_none(), "a rebuild is pending");
+        let new_index = rebuild.load(&db).await.unwrap();
+        drop(rebuild.install(new_index).await);
+        assert!(shared.begin_sync(latest).await.is_some(), "the rebuild installed");
+
+        let unfilled = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        assert!(unfilled.begin_sync(latest).await.is_none(), "the fill hasn't run");
+        unfilled.fill(&db).await.unwrap();
+        assert!(unfilled.begin_sync(latest).await.is_some(), "the fill finished");
+    }
+
+    /// A sync waits for the adds in progress, and new adds wait for the sync. So no run is added
+    /// between the sync's reads of the database and its update of the index.
+    #[rstest]
+    #[tokio::test]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "false positive: clippy wants drop(sync) after it already got moved"
+    )]
+    async fn syncs_and_adds_take_turns(#[future(awt)] db: Sqlite) {
+        let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+        let wait = std::time::Duration::from_millis(50);
+        let shared = SharedSearchIndex::from(SearchIndex::default());
+        let now = OffsetDateTime::now_utc();
+        add_through_permit(&shared, Some(&db), &make_history("echo kept", "/tmp", now)).await;
+
+        let add = shared.begin_add().await;
+        assert!(tokio::time::timeout(wait, shared.begin_sync(latest)).await.is_err());
+        drop(add);
+
+        let rows: Vec<History> = db.history_of_command("echo kept").try_collect().await.unwrap();
+        let sync = shared.begin_sync(latest).await.unwrap();
+        assert!(tokio::time::timeout(wait, shared.begin_add()).await.is_err());
+        let mut runs = RemainingRuns::new("echo kept".to_owned());
+        for row in &rows {
+            sync.add_run(&mut runs, row);
+        }
+        sync.sync([runs]);
+        assert_eq!(count(&shared.read(), "echo kept"), 1);
+
+        add_through_permit(&shared, Some(&db), &make_history("echo kept", "/tmp", now)).await;
+        assert_eq!(count(&shared.read(), "echo kept"), 2);
     }
 }

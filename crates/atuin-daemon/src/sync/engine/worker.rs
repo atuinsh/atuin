@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
-use atuin_client::database::Sqlite;
+use atuin_client::database::{DeletedLiveRows, Sqlite};
 use atuin_client::history::store::{BuildChunk, HistoryStore};
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
@@ -19,7 +19,7 @@ use tokio::time;
 
 use super::rebuild::ReplayedStores;
 use crate::daemon::DaemonHandle;
-use crate::search::SharedSearchIndex;
+use crate::search::{RebuildSettings, SharedSearchIndex};
 use crate::session_capture::Recovery;
 
 /// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
@@ -271,31 +271,18 @@ impl Worker {
 
     /// Build freshly-downloaded records into `history_db` and index the resulting rows.
     ///
-    /// The index holds exactly the live rows, and it can't remove an entry. So if a downloaded
-    /// delete removed a live row, the index is rebuilt afterwards. See [`build_downloaded_records`].
+    /// If a downloaded delete removed a live row, the commands of the deleted rows are updated in
+    /// the index afterwards. See [`build_downloaded_records`].
     async fn index_downloaded_records(&self, ids: &[RecordId]) {
         let db = self.handle.history_db();
-        let built = build_downloaded_records(&self.history_store, db, &self.index, ids).await;
-        if built == IndexAfterBuild::NeedsRebuild {
-            // Every permit from this build is dropped by now. So the rebuild can't wait on one of
+        let deleted = build_downloaded_records(&self.history_store, db, &self.index, ids).await;
+        if !deleted.is_empty() {
+            // Every permit from this build is dropped by now. So the update can't wait on one of
             // them.
-            let rebuilt = self.index.rebuild(db, |settings| Some(settings.latest.clone())).await;
-            if let Err(e) = rebuilt {
-                tracing::error!("failed to rebuild search index after synced deletes: {e}");
-            }
+            let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+            self.index.sync_deleted(db, deleted.into_commands(), latest).await;
         }
     }
-}
-
-/// What [`build_downloaded_records`] left the search index needing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-enum IndexAfterBuild {
-    /// The index matches the live rows.
-    Current,
-    /// A downloaded delete removed a live row. The index still has that row, so it needs a
-    /// rebuild.
-    NeedsRebuild,
 }
 
 /// Build the downloaded records `ids` into `db`, and add the new rows to `index`.
@@ -307,16 +294,16 @@ enum IndexAfterBuild {
 /// the index already has it. The row may also be a tombstone from an older version, and then the
 /// entry must stay out of the index.
 ///
-/// The index needs a rebuild if a downloaded delete removed a live row. That includes a row that
-/// was created earlier in this same build. A delete of a missing row or a tombstone removes no
-/// live row.
+/// Returns the live rows that downloaded deletes removed. Their commands need updating in the
+/// index. That includes a row that was created earlier in this same build. A delete of a missing
+/// row or a tombstone removes no live row.
 async fn build_downloaded_records(
     history_store: &HistoryStore,
     db: &Sqlite,
     index: &SharedSearchIndex,
     ids: &[RecordId],
-) -> IndexAfterBuild {
-    let mut built = IndexAfterBuild::Current;
+) -> DeletedLiveRows {
+    let mut deleted = DeletedLiveRows::default();
     let mut chunks = pin!(history_store.incremental_build(db, ids));
     while let Some(chunk) = chunks.next().await {
         match chunk {
@@ -337,15 +324,14 @@ async fn build_downloaded_records(
                 }
             }
             BuildChunk::Delete(chunk) => match chunk.commit().await {
-                Ok(true) => built = IndexAfterBuild::NeedsRebuild,
-                Ok(false) => {}
+                Ok(chunk_deleted) => deleted.extend(chunk_deleted),
                 Err(e) => {
                     tracing::error!("failed to apply downloaded history deletes: {e}");
                 }
             },
         }
     }
-    built
+    deleted
 }
 
 #[cfg(test)]
@@ -366,7 +352,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use time::OffsetDateTime;
 
-    use super::{IndexAfterBuild, build_downloaded_records, spawn_ai_session_projector};
+    use super::{build_downloaded_records, spawn_ai_session_projector};
     use crate::search::{SearchIndex, SearchIndexSettings, SharedSearchIndex};
     use crate::session_capture::{AiHarnessSessionCapture, StoreState};
 
@@ -409,13 +395,13 @@ mod tests {
         let index = SharedSearchIndex::from(SearchIndex::default());
 
         let (create, _) = history_store.push(history.clone()).await.unwrap();
-        let built = build_downloaded_records(&history_store, &db, &index, &[create]).await;
-        assert_eq!(built, IndexAfterBuild::Current);
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[create]).await;
+        assert!(deleted.is_empty());
         assert_eq!(index.read().invocations("echo deleted"), 0);
 
         let (delete, _) = history_store.delete(history.id).await.unwrap();
-        let built = build_downloaded_records(&history_store, &db, &index, &[delete]).await;
-        assert_eq!(built, IndexAfterBuild::Current, "only the tombstone was removed");
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[delete]).await;
+        assert!(deleted.is_empty(), "only the tombstone was removed");
         assert_eq!(index.read().invocations("echo deleted"), 0);
     }
 
@@ -434,9 +420,32 @@ mod tests {
         assert_eq!(index.read().invocations("echo existing"), 1);
 
         let (create, _) = history_store.push(history).await.unwrap();
-        let built = build_downloaded_records(&history_store, &db, &index, &[create]).await;
-        assert_eq!(built, IndexAfterBuild::Current);
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[create]).await;
+        assert!(deleted.is_empty());
         assert_eq!(index.read().invocations("echo existing"), 1);
+    }
+
+    /// A downloaded delete of a live row reports the row's command, so that only that command is
+    /// updated in the index.
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_delete_of_a_live_row_reports_its_command(
+        #[future(awt)] db: Sqlite,
+        #[future(awt)] history_store: HistoryStore,
+    ) {
+        let history = history("echo doomed");
+        db.save(&history).await.unwrap();
+        let index = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        index.fill(&db).await.unwrap();
+
+        let (delete, _) = history_store.delete(history.id).await.unwrap();
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[delete]).await;
+
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(
+            deleted.commands(),
+            &std::collections::HashSet::from(["echo doomed".to_owned()])
+        );
     }
 
     #[rstest]

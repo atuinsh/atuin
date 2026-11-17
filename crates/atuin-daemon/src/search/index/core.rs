@@ -17,6 +17,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId, ShellSession};
 use atuin_common::string::StrExt;
 use easy_cast::Conv;
+use fixedbitset::FixedBitSet;
 use futures::{Stream, TryStreamExt, stream};
 use lasso::Rodeo;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
@@ -102,8 +103,10 @@ pub struct SearchIndex {
     /// String interner for deduplicating cwd, hostname, and directory paths.
     interner: Rodeo,
 
-    /// The total number of entries added, including invocations of the same command.
-    num_total: u64,
+    /// Counts the changes to the index's commands: one for every entry added and one for every
+    /// [sync](Self::sync_commands). A [`PendingSearch`] compares it to tell whether the index
+    /// changed since the search began.
+    changes: u64,
 
     /// Cache for the most recent session used with the "session-preload" filter.
     ///
@@ -228,7 +231,7 @@ impl SearchIndex {
         let Some(command_index) = self.add_command(history, now) else {
             return false;
         };
-        self.num_total += 1;
+        self.changes += 1;
         if let Some(preload) = self.session_preload.get_mut() {
             preload.record(command_index, history);
         }
@@ -239,10 +242,7 @@ impl SearchIndex {
     ///
     /// Returns the index of the entry's command in [`Self::data`], if the entry was indexed.
     fn add_command(&mut self, history: &History, now: i64) -> Option<u32> {
-        if history.is_agent()
-            || history.deleted_at.is_some()
-            || !self.settings.shells.contains(history.shell.as_deref().unwrap_or_default())
-        {
+        if !self.settings.includes(history) {
             return None;
         }
 
@@ -258,6 +258,16 @@ impl SearchIndex {
             return Some(index);
         }
 
+        // Skip invalid commands
+        let data = CommandData::new(history, &mut self.interner)?;
+        self.push_command(Arc::from(command), data, now)
+    }
+
+    /// Add `command`, which the index doesn't have yet, with `data`. Its frecency is computed as of
+    /// `now` in Unix seconds.
+    ///
+    /// Returns the index of the command in [`Self::data`], if it was added.
+    fn push_command(&mut self, command: Arc<str>, data: CommandData, now: i64) -> Option<u32> {
         let Ok(index) = u32::try_from(self.data.len()) else {
             // TODO: It's very unlikely that we'll have more than 2^32 history entries, but if that
             // ends up being a realistic possibility, we should handle this case better than simply
@@ -265,10 +275,6 @@ impl SearchIndex {
             return None;
         };
 
-        // Skip invalid commands
-        let data = CommandData::new(history, &mut self.interner)?;
-
-        let command: Arc<str> = Arc::from(command);
         let normalized = match command.normalize_diacritics() {
             Cow::Borrowed(_) => command.clone(),
             Cow::Owned(normalized) => normalized.into(),
@@ -281,10 +287,97 @@ impl SearchIndex {
         Some(index)
     }
 
+    /// Make the index agree with the database about each command in `commands`. Each command comes
+    /// with the runs that it has left there. Frecency is computed as of `now`.
+    ///
+    /// This lets a delete update the index without reloading all of history. [`CommandData`] keeps
+    /// only aggregates, so one run can't be subtracted from it. But a command can be rebuilt from
+    /// the runs that it has left. A command that has no runs left is removed. The commands after
+    /// it move down to fill the gap.
+    #[instrument(skip_all, level = tracing::Level::DEBUG, name = "index_sync_commands")]
+    pub(super) fn sync_commands<C>(&mut self, commands: C, now: OffsetDateTime)
+    where
+        C: IntoIterator<Item = RemainingRuns>,
+    {
+        let now = now.unix_timestamp();
+        let multipliers = self.settings.frecency_multipliers;
+        let mut removed = FixedBitSet::with_capacity(self.data.len());
+
+        for runs in commands {
+            let RemainingRuns {
+                command,
+                data,
+                interner,
+            } = runs;
+            let data = data.map(|mut data| {
+                data.reintern(&interner, &mut self.interner);
+                data
+            });
+            // A command can come more than once. The last of its entries wins. An earlier entry may
+            // have added the command, so `removed` can need to grow.
+            match (self.indices.get(command.as_str()).copied(), data) {
+                (Some(index), Some(data)) => {
+                    let index = usize::conv(index);
+                    self.frecency[index] = data.compute_frecency(now, multipliers);
+                    self.data[index] = data;
+                    if index < removed.len() {
+                        removed.set(index, false);
+                    }
+                }
+                (Some(index), None) => removed.grow_and_insert(usize::conv(index)),
+                // Runs that the index didn't have. A reload would add them.
+                (None, Some(data)) => {
+                    self.push_command(command.into(), data, now);
+                }
+                (None, None) => {}
+            }
+        }
+
+        if !removed.is_clear() {
+            self.remove_commands(&removed);
+        }
+        // The cached preload knows commands by their index. A removal moves those indices. The
+        // runs of these commands changed too.
+        *self.session_preload.get_mut() = None;
+        self.changes += 1;
+    }
+
+    /// Remove the commands at the indices in `removed`. The commands after each one move down to
+    /// fill the gap.
+    fn remove_commands(&mut self, removed: &FixedBitSet) {
+        // The new index of each command, by its old index.
+        let mut kept = 0;
+        let new_indices: Vec<u32> = (0..self.data.len())
+            .map(|index| {
+                let new_index = kept;
+                if !removed.contains(index) {
+                    kept += 1;
+                }
+                new_index
+            })
+            .collect();
+
+        retain_unremoved(&mut self.haystack, removed);
+        retain_unremoved(&mut self.data, removed);
+        retain_unremoved(&mut self.frecency, removed);
+        self.indices.retain(|_, index| {
+            let old_index = usize::conv(*index);
+            *index = new_indices[old_index];
+            !removed.contains(old_index)
+        });
+    }
+
     /// Get the number of unique commands in the index.
     #[must_use]
     pub fn command_count(&self) -> usize {
         self.data.len()
+    }
+
+    /// The number of times that `command` was run, according to the index. It is 0 if the index
+    /// doesn't have `command`.
+    #[must_use]
+    pub fn invocations(&self, command: &str) -> u32 {
+        self.indices.get(command).map_or(0, |&index| self.data[usize::conv(index)].count)
     }
 
     /// Get the cached session preload, but only if it is for `session`.
@@ -464,6 +557,57 @@ impl SearchIndex {
     }
 }
 
+/// The runs that a command has left in the database, folded into what an index would hold for
+/// them. [`SyncPermit::sync`](super::shared::SyncPermit::sync) puts them in an index.
+///
+/// [`SyncPermit::add_run`](super::shared::SyncPermit::add_run) folds the runs one at a time. So this
+/// holds none of the runs, however many the command has.
+#[derive(Debug)]
+pub struct RemainingRuns {
+    command: String,
+    /// The data that an index would hold for the command. It is [`None`] while no run was folded.
+    data: Option<CommandData>,
+    /// Interns the keys of [`Self::data`] until it is put in an index. The index's own interner
+    /// can't be borrowed mutably while searches use it.
+    interner: Rodeo,
+}
+
+impl RemainingRuns {
+    /// No runs of `command` yet.
+    #[must_use]
+    pub fn new(command: String) -> Self {
+        Self {
+            command,
+            data: None,
+            interner: Rodeo::new(),
+        }
+    }
+
+    /// Fold `history`, a run of the command, into these runs. It is folded the way that an index
+    /// with `settings` would add it.
+    pub(super) fn add(&mut self, history: &History, settings: &SearchIndexSettings) {
+        if !settings.includes(history) {
+            return;
+        }
+        match &mut self.data {
+            Some(data) => {
+                data.add_invocation(history, &mut self.interner);
+            }
+            None => self.data = CommandData::new(history, &mut self.interner),
+        }
+    }
+}
+
+/// Remove the elements of `vec` at the indices in `removed`.
+fn retain_unremoved<T>(vec: &mut Vec<T>, removed: &FixedBitSet) {
+    let mut index = 0;
+    vec.retain(|_| {
+        let keep = !removed.contains(index);
+        index += 1;
+        keep
+    });
+}
+
 /// Represents how closely a command matches a search query.
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Score {
@@ -495,10 +639,14 @@ impl PartialOrd for Score {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use atuin_client::history::AuthorKind;
     use atuin_common::filter::OrFilter;
     use atuin_common::path::DisplayRichExt;
     use rstest::{fixture, rstest};
     use time::macros::datetime;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -580,16 +728,6 @@ pub(super) mod tests {
             H: IntoIterator<Item: Borrow<History>>,
         {
             self.add_history_at(histories, OffsetDateTime::now_utc());
-        }
-
-        /// The number of invocations of `command` in this index. It is 0 if the index doesn't
-        /// have `command`. Tests outside the index module use this.
-        pub(crate) fn invocations(&self, command: &str) -> u32 {
-            if contains(self, command) {
-                count(self, command)
-            } else {
-                0
-            }
         }
     }
 
@@ -921,5 +1059,193 @@ pub(super) mod tests {
 
         let results: Vec<_> = index.search_compiled("echo", &CompiledFilter::All, 100).collect();
         assert_eq!(results.len(), expected_count, "{results:?}");
+    }
+
+    /// An index loaded with `histories` the way a load from the database would: newest id first.
+    fn index_of(histories: &[History]) -> SearchIndex {
+        let mut histories = histories.to_vec();
+        histories.sort_by_key(|h| std::cmp::Reverse(h.id));
+        let mut index = SearchIndex::default();
+        index.add_history(&histories);
+        index
+    }
+
+    /// The runs of `command` in `histories`, folded oldest id first. That is the reverse of a load
+    /// from the database, so that tests comparing the two check that folding doesn't depend on
+    /// the order of the runs.
+    pub(in crate::search::index) fn remaining_runs(
+        histories: &[History],
+        command: &str,
+    ) -> RemainingRuns {
+        let mut rows: Vec<_> = histories.iter().filter(|h| h.command == command).collect();
+        rows.sort_by_key(|h| h.id);
+        let mut runs = RemainingRuns::new(command.to_owned());
+        for row in rows {
+            runs.add(row, &SearchIndexSettings::default());
+        }
+        runs
+    }
+
+    /// Per command: use count, most recent timestamp and id, directories, hosts, sessions and
+    /// frecency.
+    type CommandSnapshot =
+        (u32, i64, HistoryId, BTreeSet<String>, BTreeSet<String>, Vec<Uuid>, u32);
+
+    /// What `index` holds for each command, with interned keys resolved. Two indexes then compare
+    /// equal when they agree, whatever order they hold their commands in. Also checks that the
+    /// index's vectors stay aligned with its map of commands.
+    fn snapshot(index: &SearchIndex) -> BTreeMap<String, CommandSnapshot> {
+        let len = index.data.len();
+        assert_eq!(index.haystack.len(), len, "a haystack entry per command");
+        assert_eq!(index.frecency.len(), len, "a frecency per command");
+        assert_eq!(index.indices.len(), len, "an index per command");
+        index
+            .indices
+            .iter()
+            .map(|(command, &i)| {
+                let i = usize::conv(i);
+                assert_eq!(&*index.haystack[i], &*command.normalize_diacritics(), "misaligned");
+                let data = &index.data[i];
+                let (directories, hosts, sessions) = data.places(&index.interner);
+                let snapshot = (
+                    data.count,
+                    data.most_recent_timestamp,
+                    data.most_recent_id,
+                    directories,
+                    hosts,
+                    sessions,
+                    index.frecency[i],
+                );
+                (command.to_string(), snapshot)
+            })
+            .collect()
+    }
+
+    /// Syncing the commands that a delete touched leaves the index as a reload of the remaining
+    /// rows would.
+    #[rstest]
+    fn sync_commands_matches_a_reload() {
+        let at = |minutes| datetime!(2024-01-01 10:00 UTC) + time::Duration::minutes(minutes);
+        let all = [
+            make_history("git status", "/a", at(0)),
+            make_history("cargo build", "/a", at(1)),
+            make_history("git status", "/b", at(2)),
+            make_history("ls -la", "/b", at(3)),
+            make_history("cargo build", "/a", at(4)),
+            make_history("echo déjà", "/c", at(5)),
+            make_history("git status", "/c", at(6)),
+        ];
+        // Delete the newest `git status`, which is its only run in /c. Also delete the only
+        // `ls -la` and one of the two `cargo build`.
+        let deleted = [all[6].id, all[3].id, all[1].id];
+        let remaining: Vec<_> = all.iter().filter(|h| !deleted.contains(&h.id)).cloned().collect();
+
+        let mut index = index_of(&all);
+        let synced = ["git status", "ls -la", "cargo build"];
+        index.sync_commands(
+            synced.map(|command| remaining_runs(&remaining, command)),
+            OffsetDateTime::now_utc(),
+        );
+
+        let reloaded = index_of(&remaining);
+        assert_eq!(snapshot(&index), snapshot(&reloaded));
+        let c = IndexFilterMode::Directory("/c".display_rich().trailing_slash(true).to_string());
+        for query in ["git", "cargo", "ls", "deja", ""] {
+            for filter in [&IndexFilterMode::Global, &c] {
+                let hits = |index: &SearchIndex| -> BTreeSet<HistoryId> {
+                    index.search(query, filter, 10).unwrap().collect()
+                };
+                assert_eq!(hits(&index), hits(&reloaded), "query {query:?}, {filter:?}");
+            }
+        }
+    }
+
+    /// A command that has no runs left is removed. The commands after it stay findable with any
+    /// filter, and running it again brings it back once.
+    #[rstest]
+    fn sync_commands_removes_a_command_without_runs() {
+        let mut index = SearchIndex::default();
+        let gone = make_history("echo gone", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let kept = make_history("echo kept", "/tmp", datetime!(2024-01-01 10:01 UTC));
+        index.add_history([&gone, &kept]);
+
+        index.sync_commands([remaining_runs(&[], "echo gone")], OffsetDateTime::now_utc());
+
+        assert_eq!(index.command_count(), 1);
+        let global: Vec<_> = index.search("echo", &IndexFilterMode::Global, 10).unwrap().collect();
+        assert_eq!(global, vec![kept.id]);
+        // A directory filter reads each command's data by its index. The removal moved that index.
+        let tmp =
+            IndexFilterMode::Directory("/tmp".display_rich().trailing_slash(true).to_string());
+        assert_eq!(index.search("", &tmp, 10).unwrap().collect::<Vec<_>>(), vec![kept.id]);
+
+        let again = make_history("echo gone", "/tmp", datetime!(2024-01-01 10:02 UTC));
+        index.add_history([&again]);
+        let hits: BTreeSet<_> =
+            index.search("echo", &IndexFilterMode::Global, 10).unwrap().collect();
+        assert_eq!(hits, BTreeSet::from([kept.id, again.id]));
+        assert_eq!(snapshot(&index).len(), 2);
+    }
+
+    /// Runs that the index leaves out don't keep a command in it. Here the run that is left is an
+    /// agent's.
+    #[rstest]
+    fn sync_commands_ignores_runs_the_index_leaves_out() {
+        let mut index = SearchIndex::default();
+        let human = make_history("make deploy", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let mut agent = make_history("make deploy", "/tmp", datetime!(2024-01-01 10:01 UTC));
+        agent.author_kind = Some(AuthorKind::Agent);
+        index.add_history([&human, &agent]);
+        assert_eq!(count(&index, "make deploy"), 1);
+
+        index.sync_commands([remaining_runs(&[agent], "make deploy")], OffsetDateTime::now_utc());
+
+        assert_eq!(index.command_count(), 0);
+        assert!(snapshot(&index).is_empty());
+    }
+
+    /// A command that comes more than once is synced to its last entry. That holds when an earlier
+    /// entry added the command, and when an earlier entry removed it.
+    #[rstest]
+    #[case::added_then_removed(true, false)]
+    #[case::removed_then_added(false, true)]
+    fn sync_commands_takes_the_last_entry_of_a_command(
+        #[case] first_has_runs: bool,
+        #[case] kept: bool,
+    ) {
+        let run = make_history("echo twice", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let entry = |has_runs: bool| {
+            let runs: &[History] = if has_runs {
+                std::slice::from_ref(&run)
+            } else {
+                &[]
+            };
+            remaining_runs(runs, "echo twice")
+        };
+        for indexed in [false, true] {
+            let mut index = SearchIndex::default();
+            if indexed {
+                index.add_history([&run]);
+            }
+
+            let entries = [entry(first_has_runs), entry(!first_has_runs)];
+            index.sync_commands(entries, OffsetDateTime::now_utc());
+
+            assert_eq!(contains(&index, "echo twice"), kept, "indexed before: {indexed}");
+        }
+    }
+
+    /// A command with runs that the index didn't have is added, as a reload would add it.
+    #[rstest]
+    fn sync_commands_adds_runs_the_index_missed() {
+        let mut index = SearchIndex::default();
+        let missed = make_history("echo missed", "/tmp", datetime!(2024-01-01 10:00 UTC));
+
+        let runs = remaining_runs(std::slice::from_ref(&missed), "echo missed");
+        index.sync_commands([runs], OffsetDateTime::now_utc());
+
+        let hits: Vec<_> = index.search("missed", &IndexFilterMode::Global, 10).unwrap().collect();
+        assert_eq!(hits, vec![missed.id]);
+        assert_eq!(snapshot(&index), snapshot(&index_of(&[missed])));
     }
 }
