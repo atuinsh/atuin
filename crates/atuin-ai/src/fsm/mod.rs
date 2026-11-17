@@ -34,6 +34,8 @@ use crate::tui::state::ConversationEvent;
 pub const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
 pub const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
 pub const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
+pub const RESULT_STREAM_FAILED: &str =
+    "Error: the response stream failed before this tool call finished";
 
 /// The discrete states of the agent FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -526,17 +528,30 @@ impl AgentFsm {
                 },
                 Event::StreamError(e),
             ) => {
-                // Abort any executing tools on stream error
-                let abort_effects: Vec<_> = self
-                    .ctx
-                    .tools
-                    .executing_ids()
-                    .into_iter()
-                    .map(|tool_id| Effect::AbortTool { tool_id })
-                    .collect();
+                // Resolve every unfinished tool with an error result. A Retry
+                // rebuilds the request from the event log, and the request
+                // needs a tool_result for each tool_use in it.
+                let mut effects = Vec::new();
+                for id in self.ctx.tools.pending_ids() {
+                    if let Some(tracked) = self.ctx.tools.get_mut(&id) {
+                        if tracked.state == ToolState::Executing {
+                            effects.push(Effect::AbortTool {
+                                tool_id: id.clone(),
+                            });
+                        }
+                        tracked.state = ToolState::Completed;
+                    }
+                    self.ctx.events.push(ConversationEvent::ToolResult {
+                        tool_use_id: id,
+                        content: RESULT_STREAM_FAILED.to_string(),
+                        is_error: true,
+                        remote: false,
+                        content_length: None,
+                    });
+                }
                 self.ctx.tool_timeout_ids.clear();
                 self.state = AgentState::Error(e);
-                abort_effects
+                effects
             }
 
             // ================================================================
