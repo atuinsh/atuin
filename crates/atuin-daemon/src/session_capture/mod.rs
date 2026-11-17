@@ -814,8 +814,8 @@ pub(crate) enum StoreState {
     Unavailable,
 }
 
-/// The sync worker's handle on recovery: resolves once startup recovery is over, whether it
-/// succeeded or not, and projects downloaded records beside capture.
+/// The handle on recovery for projecting synced records: resolves once startup recovery is over,
+/// whether it succeeded or not, and projects downloaded records beside capture.
 #[derive(Debug, Clone)]
 pub struct Recovery {
     state: watch::Receiver<StoreState>,
@@ -830,6 +830,39 @@ impl Recovery {
     pub async fn finished(&self) {
         // A closed channel means the coordinator is gone: recovery is over either way.
         let _ = self.state.clone().wait_for(|state| *state != StoreState::Recovering).await;
+    }
+
+    /// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded
+    /// some) reprojects everything past the watermarks, so records a failed or interrupted
+    /// earlier one left out are retried too. Signals that queued up meanwhile are taken together.
+    ///
+    /// Nothing is projected until startup recovery is over, and each reprojection takes
+    /// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
+    /// rebuilds' replays: two at once would race each other's watermarks. A rebuild's wipe landing
+    /// meanwhile fails its watermark moves (compare-and-set on the sidecar's generation), and it
+    /// starts over. This host's own series is included, under capture's lock
+    /// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
+    /// (a reinstall that kept the host id), and capture dedups against the sidecar.
+    ///
+    /// This never sets the store's state, and never deletes a row of this host (see
+    /// [`Self::project_synced`]): a series rewritten under its watermark whose forgetting would
+    /// is handed to the recovery coordinator, which holds capture off while it forgets and replays
+    /// it. The task ends once the sender is dropped.
+    #[must_use]
+    pub fn spawn_projector(
+        self,
+        store: AiSessionStore,
+        db: AiSessionDatabase,
+    ) -> mpsc::UnboundedSender<()> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        tokio::spawn(async move {
+            self.finished().await;
+            while rx.recv().await.is_some() {
+                while rx.try_recv().is_ok() {}
+                self.project_synced(&store, &db).await;
+            }
+        });
+        tx
     }
 
     /// Project what a sync downloaded into `sidecar`, beside capture
@@ -1335,6 +1368,32 @@ mod tests {
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_ai_sessions_are_projected_after_recovery() {
+        let store = mem_store().await;
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = sample_message();
+        store.push(&msg).await.unwrap();
+        let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
+
+        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let projector = capture.recovery().spawn_projector(store, db.clone());
+        // Accepted at once, so a sync never waits on recovery.
+        projector.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!projected().await, "nothing is projected while recovery replays");
+
+        state.send_replace(StoreState::Ready);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !projected().await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued records are projected once recovery ends");
     }
 
     fn sample_handle() -> HarnessSession {
@@ -3049,8 +3108,7 @@ mod tests {
         let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
 
         rewrite_series(&store, &key, host).await;
-        let projector =
-            crate::sync::spawn_ai_session_projector(records, sidecar.clone(), capture.recovery());
+        let projector = capture.recovery().spawn_projector(records, sidecar.clone());
         projector.send(()).unwrap();
         let reached = tokio::time::timeout(Duration::from_secs(10), hooks.reached.acquire());
         reached.await.expect("the sync worker never had it forgotten").unwrap().forget();

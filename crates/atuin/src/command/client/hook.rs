@@ -105,9 +105,7 @@ async fn install(agent_name: &str) -> Result<()> {
         Err(err) => return Err(err.into()),
     }
 
-    if cfg!(feature = "ai") {
-        userio::log::info!("hook-mcp-hint", name = harness.name());
-    }
+    userio::log::info!("hook-mcp-hint", name = harness.name());
 
     Ok(())
 }

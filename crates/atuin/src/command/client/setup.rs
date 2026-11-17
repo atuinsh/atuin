@@ -18,9 +18,12 @@ use atuin_common::dirs::home_dir;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::executable::is_executable_with_path_search;
-use atuin_common::harnesstools::mcp::InstallMcp as _;
-use atuin_common::harnesstools::session::any::{ObservableExt as _, SessionsExt as _};
-use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError};
+#[cfg(feature = "ai")]
+use atuin_common::harnesstools::{
+    AnyHarness, Harness, InstallHookError,
+    mcp::InstallMcp as _,
+    session::any::{ObservableExt as _, SessionsExt as _},
+};
 use atuin_common::path::PathBufExt as _;
 use atuin_common::sync::BlockingPool;
 use atuin_common::time::DurationExt as _;
@@ -169,6 +172,18 @@ const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
 
 /// Atuin for Teams needs the hub client, which `octavo` builds in.
 const TEAMS: bool = cfg!(feature = "octavo");
+
+/// An agent, of which a build without AI finds none.
+#[cfg(not(feature = "ai"))]
+#[derive(Clone, Copy, Debug)]
+enum AnyHarness {}
+
+#[cfg(not(feature = "ai"))]
+impl AnyHarness {
+    const fn display_name(self) -> &'static str {
+        match self {}
+    }
+}
 
 /// `--sync`: `cloud`, `off`, or a server's address.
 fn parse_sync(value: &str) -> Result<Sync, String> {
@@ -358,9 +373,11 @@ async fn apply(
         if plan.shell {
             hook_shells(found, tx);
         }
+        #[cfg(feature = "ai")]
         if plan.agent_history {
             hook_agents(&agents, tx).await;
         }
+        #[cfg(feature = "ai")]
         if plan.mcp {
             connect_agents(&agents, tx).await;
         }
@@ -733,6 +750,7 @@ fn hook_shells(found: &Found, tx: &Updates) {
     send(tx, Step::Shells, status);
 }
 
+#[cfg(feature = "ai")]
 async fn hook_agents(agents: &[AnyHarness], tx: &Updates) {
     send(tx, Step::AgentHooks, Status::Running("Recording what your agents run".into()));
     let mut hooked = Vec::new();
@@ -747,6 +765,7 @@ async fn hook_agents(agents: &[AnyHarness], tx: &Updates) {
     send(tx, Step::AgentHooks, partial(done, &failed, "hook into"));
 }
 
+#[cfg(feature = "ai")]
 async fn connect_agents(agents: &[AnyHarness], tx: &Updates) {
     let now = SystemTime::now();
     let pool = BlockingPool::new(NonZeroUsize::MIN);
@@ -788,9 +807,11 @@ async fn connect_agents(agents: &[AnyHarness], tx: &Updates) {
 ///
 /// If the agent hasn't been used for longer, the user probably tried it and then uninstalled it.
 /// Reporting it on every run would only nag.
+#[cfg(feature = "ai")]
 const STILL_USED: Duration = Duration::from_hours(14 * 24);
 
 /// What setup does about connecting an agent to Atuin's MCP server.
+#[cfg(feature = "ai")]
 #[derive(Debug, PartialEq, Eq)]
 enum McpAction {
     /// Setup connects the agent.
@@ -805,6 +826,7 @@ enum McpAction {
     Skip,
 }
 
+#[cfg(feature = "ai")]
 impl McpAction {
     async fn for_agent(agent: AnyHarness, now: SystemTime, pool: &BlockingPool) -> Self {
         let Some(command) = agent.mcp_program() else {
@@ -1094,6 +1116,7 @@ async fn shell_history() -> Option<(&'static str, usize)> {
 
 /// The agents on this machine, with the threads each has here: those that have kept any, and
 /// those on `PATH`.
+#[cfg(feature = "ai")]
 async fn detect_agents() -> Vec<(AnyHarness, u64)> {
     use futures_util::StreamExt;
 
@@ -1114,6 +1137,11 @@ async fn detect_agents() -> Vec<(AnyHarness, u64)> {
     agents
 }
 
+#[cfg(not(feature = "ai"))]
+async fn detect_agents() -> Vec<(AnyHarness, u64)> {
+    Vec::new()
+}
+
 #[cfg(feature = "sync")]
 async fn signed_in(settings: &Settings) -> bool {
     use atuin_client::settings::SyncAuth;
@@ -1127,6 +1155,7 @@ async fn signed_in(_: &Settings) -> bool {
 }
 
 /// The threads Atuin has on this machine, read beside a daemon that may be writing them.
+#[cfg(feature = "ai")]
 async fn threads_here(settings: &Settings) -> usize {
     use atuin_client::ai_session::{AiSessionDatabase, SessionFilter, sidecar_path};
 
@@ -1134,6 +1163,11 @@ async fn threads_here(settings: &Settings) -> usize {
         Ok(db) => db.list_sessions(&SessionFilter::default()).await.map_or(0, |s| s.len()),
         Err(_) => 0,
     }
+}
+
+#[cfg(not(feature = "ai"))]
+async fn threads_here(_: &Settings) -> usize {
+    0
 }
 
 /// The threads setup just imported, newest first, for the summary.

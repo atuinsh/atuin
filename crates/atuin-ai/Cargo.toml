@@ -18,9 +18,9 @@ clipboard = ["dep:arboard"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash", "dep:tree-sitter-fish"]
 
 [dependencies]
-atuin-client = { workspace = true }
+atuin-client = { workspace = true, features = ["ai"] }
 atuin-common = { workspace = true, features = ["ai", "ansi", "sqlite", "unicode"] }
-atuin-daemon = { workspace = true }
+atuin-daemon = { workspace = true, features = ["ai"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 

@@ -10,6 +10,7 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ai")]
 use crate::ai_session::HarnessKind;
 
 /// Which threads the picker shows, cycled with ctrl-r in this order (see [`Self::CYCLE`]).
@@ -82,6 +83,7 @@ pub struct AiSessionResume {
 
 impl AiSessionResume {
     /// The configured template for `harness`, if any.
+    #[cfg(feature = "ai")]
     #[must_use]
     pub fn template(&self, harness: HarnessKind) -> Option<&str> {
         match harness {
@@ -188,11 +190,14 @@ mod tests {
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);
         assert_eq!(parsed.mouse, Some(false));
-        assert_eq!(
-            parsed.resume.template(HarnessKind::ClaudeCode),
-            Some("claude --resume {id} --permission-mode plan")
-        );
-        assert_eq!(parsed.resume.template(HarnessKind::Codex), None);
-        assert_eq!(parsed.resume.template(HarnessKind::Pi), Some("pi --session {id}"));
+        #[cfg(feature = "ai")]
+        {
+            assert_eq!(
+                parsed.resume.template(HarnessKind::ClaudeCode),
+                Some("claude --resume {id} --permission-mode plan")
+            );
+            assert_eq!(parsed.resume.template(HarnessKind::Codex), None);
+            assert_eq!(parsed.resume.template(HarnessKind::Pi), Some("pi --session {id}"));
+        }
     }
 }

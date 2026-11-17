@@ -193,6 +193,7 @@ pub async fn rebuild_history(settings: &Settings) -> Result<()> {
 /// Have the daemon rebuild its AI sessions from the record store (see
 /// `AiClient::rebuild_sessions`), first starting or replacing it as the other AI session commands
 /// do, and show here what it tells the user meanwhile.
+#[cfg(feature = "ai")]
 pub async fn rebuild_ai_sessions(settings: &Settings) -> Result<()> {
     let service = ActiveService::ready(settings).await?;
     let mut client = atuin_daemon::AiClient::from_settings(settings).await?;
@@ -224,6 +225,7 @@ const PROJECT_SYNCED_WAIT: Duration = Duration::from_secs(10);
 /// finish on its own. Never starts or replaces one, though launchd starts its agent for the
 /// connection: a daemon started later, or replacing one too old to be asked, projects them as it
 /// starts.
+#[cfg(feature = "ai")]
 pub async fn project_synced_ai_sessions(settings: &Settings) -> Result<()> {
     let Some(service) = running_daemon_of_our_build(settings).await else {
         return Ok(());

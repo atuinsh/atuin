@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+#[cfg(feature = "ai")]
 use atuin_common::harnesstools::Harness as _;
 use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};

@@ -17,7 +17,8 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
-octavo = ["dep:mlua"]
+ai = ["atuin-common/ai"]
+octavo = ["ai", "dep:mlua"]
 # Derive the protobuf enum traits on domain enums the daemon and atuin-octavo extern-path into
 # their codegen.
 proto = ["dep:prost"]
@@ -26,7 +27,7 @@ proto = ["dep:prost"]
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["ai", "config", "os", "sqlite"] }
+atuin-common = { workspace = true, features = ["config", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 

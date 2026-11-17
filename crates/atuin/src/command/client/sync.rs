@@ -162,6 +162,7 @@ pub(super) async fn build(
         if let Err(e) = daemon::rebuild_search_index(settings).await {
             userio::log::warn!("sync-rebuild-search-index-failed", error = e.to_string());
         }
+        #[cfg(feature = "ai")]
         if let Err(e) = daemon::project_synced_ai_sessions(settings).await {
             userio::log::warn!("sync-build-threads-failed", error = e.to_string());
         }

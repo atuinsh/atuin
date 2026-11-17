@@ -59,11 +59,12 @@ default = [
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
-ai = ["atuin-ai"]
+ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 # Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
 # `atuin setup --teams` does.
 octavo = [
+    "ai",
     "sync",
     "daemon",
     "atuin-client/octavo",
@@ -95,7 +96,7 @@ atuin-ai = { workspace = true, optional = true }
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
 atuin-client = { path = "../atuin-client", version = "18.24.8", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
+atuin-common = { workspace = true, features = ["db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }

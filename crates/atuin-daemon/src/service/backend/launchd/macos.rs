@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
+#[cfg(feature = "ai")]
 use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::os::macos::launchd;
 use atuin_common::os::macos::login_items::LoginItem;
@@ -690,8 +691,14 @@ impl AgentPlist {
     }
 
     /// Whether `name` says where a harness keeps its sessions or config.
+    #[cfg(feature = "ai")]
     fn is_harness_home(name: &str) -> bool {
         AnyHarness::all().iter().any(|harness| harness.home_vars().contains(&name))
+    }
+
+    #[cfg(not(feature = "ai"))]
+    const fn is_harness_home(_name: &str) -> bool {
+        false
     }
 
     fn to_xml(&self) -> Result<String, LaunchdError> {
@@ -803,9 +810,9 @@ mod tests {
     #[case::tmpdir_set_separately("TMPDIR", false)]
     #[case::path("PATH", true)]
     #[case::proxy("https_proxy", true)]
-    #[case::harness_config("CLAUDE_CONFIG_DIR", true)]
-    #[case::harness_home("HERMES_HOME", true)]
-    #[case::another_harness_home("KIRO_HOME", true)]
+    #[case::harness_config("CLAUDE_CONFIG_DIR", cfg!(feature = "ai"))]
+    #[case::harness_home("HERMES_HOME", cfg!(feature = "ai"))]
+    #[case::another_harness_home("KIRO_HOME", cfg!(feature = "ai"))]
     #[case::unread("EDITOR", false)]
     #[case::login_session("SSH_AUTH_SOCK", false)]
     #[case::launchd_label("XPC_SERVICE_NAME", false)]
@@ -820,7 +827,7 @@ mod tests {
     }
 
     /// The variables a harness's home names come along with it, as Hermes expands them; those
-    /// another variable names don't.
+    /// another variable names don't. Without AI, no variable is a harness's home.
     #[rstest]
     fn agent_inherits_the_variables_a_harness_home_names() {
         let environment = [
@@ -832,7 +839,12 @@ mod tests {
         .map(|(name, value)| (name.to_owned(), value.to_owned()));
         let inherited = AgentPlist::inherited(environment.to_vec(), &BTreeSet::new());
         let names: Vec<_> = inherited.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(names, ["HERMES_HOME", "AGENT_ROOT"]);
+        let expected: &[&str] = if cfg!(feature = "ai") {
+            &["HERMES_HOME", "AGENT_ROOT"]
+        } else {
+            &[]
+        };
+        assert_eq!(names, expected);
     }
 
     /// launchd holds no socket for the agent, and so creates no directory for one as root: the

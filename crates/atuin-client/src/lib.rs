@@ -10,6 +10,7 @@ pub mod auth;
 #[cfg(feature = "hub")]
 pub mod hub;
 
+#[cfg(feature = "ai")]
 pub mod ai_session;
 pub mod database;
 pub mod distro;

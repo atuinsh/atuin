@@ -62,6 +62,7 @@ pub enum Cmd {
 /// the replay only has to cover it again with the new key. Best effort: the maintenance itself
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
+    #[cfg(feature = "ai")]
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
         userio::log::warn!("store-threads-invalidate-failed", error = err.to_string());
     }
@@ -76,6 +77,7 @@ pub async fn invalidate_ai_sessions(settings: &Settings) {
 /// dedup gate cannot be trusted. Deleting the file from here could leave a running daemon serving
 /// an empty index, and capture pushing duplicate records. So when the daemon is disabled, or
 /// cannot be reached or asked, this fails and nothing is touched.
+#[cfg(feature = "ai")]
 #[cfg_attr(
     not(feature = "daemon"),
     expect(clippy::unused_async, reason = "only the daemon rebuilds")
@@ -103,6 +105,7 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
 /// [`reset_ai_sessions`] for commands that have already deleted records: a failure says the
 /// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
 /// builds it from the records as they are now.
+#[cfg(feature = "ai")]
 pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
     if !atuin_client::ai_session::sidecar_path(settings).exists() {
         return Ok(());
@@ -111,6 +114,11 @@ pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
         "the records changed, but the threads index was not rebuilt and still lists what they \
          held: run `atuin store rebuild threads` once the daemon is enabled and running",
     )
+}
+
+#[cfg(not(feature = "ai"))]
+pub async fn reset_ai_sessions_after(_: &Settings) -> Result<()> {
+    Ok(())
 }
 
 impl Cmd {

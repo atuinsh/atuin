@@ -35,6 +35,7 @@ mod doctor;
 mod dotfiles;
 mod halloween;
 mod history;
+#[cfg(feature = "ai")]
 mod hook;
 mod import;
 mod info;
@@ -129,6 +130,7 @@ pub enum Cmd {
     #[couture(category = "data")]
     Scripts(scripts::Cmd),
 
+    #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-hook"))]
     #[couture(category = "advanced")]
     Hook(hook::Cmd),
@@ -333,6 +335,7 @@ impl Cmd {
         // runs
         match self {
             Self::History(history) => return history.run(&Arc::new(settings)).await,
+            #[cfg(feature = "ai")]
             Self::Hook(hook) => return hook.run(&Arc::new(settings)).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
@@ -406,7 +409,6 @@ impl Cmd {
             Self::TrickOrTreat(cmd) => cmd.run(&db, &settings).await,
 
             Self::History(_)
-            | Self::Hook(_)
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
@@ -425,7 +427,7 @@ impl Cmd {
             Self::Workspace(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
-            Self::Threads(_) | Self::Resume(_) => unreachable!(),
+            Self::Hook(_) | Self::Threads(_) | Self::Resume(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
