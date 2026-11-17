@@ -72,6 +72,10 @@ message ContentBlock {
     string failure = 8 [(buf.validate.field).string.not_contains = "\x00"];
     // The changes a tool call made to files.
     Patch patch = 9;
+    // Marks a turn that the person took back, as Hermes Agent's `/undo` does. The turn went on
+    // from this message's parent. Its rows stay in the thread, on a branch that the conversation
+    // no longer follows.
+    Undone undone = 10;
   }
 
   // Numbered as atuin's daemon numbers its blocks; Octavo stores neither reasoning text nor
@@ -111,6 +115,16 @@ message ContentBlock {
   message ReasoningSummary {
     // The tokens the call spent reasoning, for display only: `ThreadMessage.usage` counts them.
     optional uint64 tokens = 1;
+  }
+
+  // A turn that the person took back.
+  message Undone {
+    // The `source_id` of the last line that the undo took back.
+    string through = 1 [(buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 512
+      not_contains: "\x00"
+    }];
   }
 
   // What a tool call changed, file by file in the order its harness listed them.
