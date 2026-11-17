@@ -10,6 +10,7 @@ use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 use super::{Message, RequestId, Severity, SinkStack, USER, request};
+use crate::string::EscapeNonPrintablePosixExt as _;
 
 /// Leaves [`USER`] events to the [`UserLayer`], for the filter of any other layer: a message shows
 /// on the sink alone, not twice nor in logs and traces, which it would leak a login URL into.
@@ -111,19 +112,22 @@ impl Visit for Request {
     fn record_debug(&mut self, _: &Field, _: &dyn fmt::Debug) {}
 }
 
-/// An event's `message` field.
+/// An event's `message` field, with every control character but a line feed escaped.
+///
+/// A message can quote text that the user did not write, such as a field of a theme file or a
+/// file name, and that text must not reach the terminal as an escape sequence.
 struct Text(Option<String>);
 
 impl Visit for Text {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" {
-            self.0 = Some(value.to_owned());
+            self.0 = Some(value.escape_non_printable_lines().into_owned());
         }
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            self.0 = Some(format!("{value:?}"));
+            self.0 = Some(format!("{value:?}").escape_non_printable_lines().into_owned());
         }
     }
 }
@@ -191,5 +195,22 @@ mod tests {
 
         let shown: Vec<_> = shown.take().into_iter().map(|m| (m.text, m.request)).collect();
         assert_eq!(shown, [("outside".to_owned(), None), ("inside".to_owned(), Some(request))]);
+    }
+
+    /// A value quoted in a message cannot send an escape sequence to the terminal, and a
+    /// multi-line message keeps its lines.
+    #[rstest]
+    fn a_message_shows_with_control_characters_escaped() {
+        static STACK: SinkStack = SinkStack::new();
+        let shown = Held::default();
+        let _shown = STACK.push(shown.clone());
+        let subscriber = tracing_subscriber::registry().with(UserLayer::new(&STACK));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: USER, "could not load theme {}\nsecond line", "\x1b]0;title\x07");
+        });
+
+        let shown: Vec<_> = shown.take().into_iter().map(|m| m.text).collect();
+        assert_eq!(shown, ["could not load theme ^[]0;title^G\nsecond line"]);
     }
 }
