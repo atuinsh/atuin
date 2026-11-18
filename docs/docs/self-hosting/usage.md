@@ -9,6 +9,30 @@
 
 ## Client setup
 
-In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.atuin/config.toml`. See the [config](../configuration/config.md#sync_address) page for more details on how to set the `sync_address`.
+To use a self hosted server with Atuin, point Atuin at your server:
+
+```shell
+atuin setup --only --sync https://your.server
+```
+
+Setup sets `sync_address` in the config file at `~/.atuin/config.toml`. If this
+machine is logged in to another server, setup logs it out. See the
+[config](../configuration/config.md#sync_address) page for more details on
+`sync_address`.
 
 Alternatively you can set the environment variable `ATUIN_SYNC_ADDRESS` to the correct host, for example `ATUIN_SYNC_ADDRESS=https://api.atuin.sh`.
+
+Then create an account on your server, or log in to the account you already
+have there:
+
+```shell
+# Create a new account
+atuin register -u <USERNAME> -e <EMAIL>
+
+# Log in to an existing account
+atuin login -u <USERNAME>
+```
+
+Both commands ask for your password. `atuin login` also asks for your encryption
+key, which `atuin key` prints on a machine that's already logged in. See
+[`atuin account`](../reference/account.md) for every flag.

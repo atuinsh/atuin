@@ -145,6 +145,14 @@ impl Harness for Hermes {
         hooks::install(&install_home(), &atuin, &env).await
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        hooks::has(install_home().path()).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        hooks::uninstall(&install_home()).await
+    }
+
     /// Yes: Hermes's import takes every row it's given as live, so a turn `/undo` dropped would
     /// come back beside the one that replaced it.
     fn writes_one_branch(&self) -> bool {

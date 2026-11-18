@@ -32,6 +32,14 @@ pub async fn install(
     hermes.run(&["config", "set", "mcp_servers.atuin", &server]).await
 }
 
+/// Take the `atuin` server out with `hermes config unset`, which writes `config.yaml` with the
+/// same writer as `hermes config set`, keeping the rest of it and its comments
+/// (`unset_config_value` in `hermes_cli/config.py`, main as of v0.23.2). Not `hermes mcp remove`:
+/// it asks first, and saves the config another way.
+pub async fn uninstall(hermes: &impl HermesCli) -> Result<(), HermesCliError> {
+    hermes.run(&["config", "unset", "mcp_servers.atuin"]).await
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -39,6 +47,14 @@ mod tests {
 
     use super::super::cli::fake::FakeHermes;
     use super::*;
+
+    #[rstest]
+    #[tokio::test]
+    async fn unsets_the_server_through_hermes() {
+        let hermes = FakeHermes::default();
+        uninstall(&hermes).await.unwrap();
+        assert_eq!(hermes.ran(), ["config unset mcp_servers.atuin"]);
+    }
 
     #[rstest]
     #[case::plain("/opt/atuin/bin/atuin")]

@@ -6,6 +6,7 @@ use std::process::Stdio;
 
 use enum_dispatch::enum_dispatch;
 use serde_json::{Value, json};
+use toml_edit::{DocumentMut, Item};
 
 use super::Harness;
 use super::amp::{self, Amp};
@@ -51,8 +52,27 @@ pub enum InstallMcpError {
     #[error("`{0}` failed")]
     Failed(String),
 
+    #[error("`{command}` failed: {said}")]
+    FailedSaying {
+        command: String,
+        said: String,
+    },
+
     #[error("the atuin executable path is not valid UTF-8: {}", .0.display())]
     NonUtf8Executable(PathBuf),
+
+    #[error("could not parse {} as TOML", .0.display())]
+    Toml(PathBuf, #[source] toml_edit::TomlError),
+
+    #[error("could not parse {} as YAML", .0.display())]
+    Yaml(PathBuf, #[source] yaml_rust2::ScanError),
+
+    #[error("couldn't take `{key}` out of {} ({cause}): remove it yourself", .path.display())]
+    RemoveByHand {
+        path: PathBuf,
+        key: &'static str,
+        cause: HermesCliError,
+    },
 }
 
 impl From<HermesCliError> for InstallMcpError {
@@ -92,6 +112,15 @@ pub trait InstallMcp: Harness {
     /// rerun picks up a binary that has moved.
     #[allow(async_fn_in_trait)]
     async fn install_mcp(&self) -> Result<(), InstallMcpError>;
+
+    /// Whether an `atuin` server is registered in [`Self::mcp_config_path`].
+    #[allow(async_fn_in_trait)]
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError>;
+
+    /// Unregister the `atuin` server, leaving the rest of the config as it is. `false` when there
+    /// was none.
+    #[allow(async_fn_in_trait)]
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError>;
 }
 
 impl InstallMcp for Amp {
@@ -104,6 +133,18 @@ impl InstallMcp for Amp {
         // `amp mcp add` refuses a name that's taken.
         remove(self.program(), &["mcp", "remove", "atuin"]).await;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "amp.mcpServers").await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        if !self.has_mcp().await? {
+            return Ok(false);
+        }
+        run(self.program(), &["mcp", "remove", "atuin"]).await?;
+        Ok(true)
     }
 }
 
@@ -121,6 +162,18 @@ impl InstallMcp for Ccode {
         remove(self.program(), &["mcp", "remove", "--scope", "user", "atuin"]).await;
         run(self.program(), &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
     }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "mcpServers").await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        if !self.has_mcp().await? {
+            return Ok(false);
+        }
+        run(self.program(), &["mcp", "remove", "--scope", "user", "atuin"]).await?;
+        Ok(true)
+    }
 }
 
 impl InstallMcp for Codex {
@@ -131,6 +184,14 @@ impl InstallMcp for Codex {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let atuin = &executable()?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        toml_has_server(&self.mcp_config_path()).await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_toml_server(&self.mcp_config_path()).await
     }
 }
 
@@ -145,6 +206,14 @@ impl InstallMcp for Copilot {
         let atuin = &executable()?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "mcpServers").await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_from_config(&self.mcp_config_path(), "mcpServers").await
+    }
 }
 
 impl InstallMcp for Grok {
@@ -155,6 +224,14 @@ impl InstallMcp for Grok {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let atuin = &executable()?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
+    }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        toml_has_server(&self.mcp_config_path()).await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_toml_server(&self.mcp_config_path()).await
     }
 }
 
@@ -170,6 +247,27 @@ impl InstallMcp for Hermes {
         let hermes = HermesCommand::new(&hermes::install_home());
         let env = hermes::atuin_env(crate::env::vars_utf8());
         Ok(hermes::mcp::install(&hermes, &executable()?, &env).await?)
+    }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        yaml_has_server(&self.mcp_config_path()).await
+    }
+
+    /// Through `hermes config unset` (see [`hermes::mcp::uninstall`]), as atuin can't write
+    /// `config.yaml` itself without losing its comments. A Hermes that can't, as one not on
+    /// `PATH`, or one from before `config unset`, leaves it to the user.
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        if !self.has_mcp().await? {
+            return Ok(false);
+        }
+        let hermes = HermesCommand::new(&hermes::install_home());
+        let unset = hermes::mcp::uninstall(&hermes).await;
+        unset.map_err(|cause| InstallMcpError::RemoveByHand {
+            path: self.mcp_config_path(),
+            key: "mcp_servers.atuin",
+            cause,
+        })?;
+        Ok(true)
     }
 }
 
@@ -187,6 +285,14 @@ impl InstallMcp for Kiro {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         install_kiro(&self.mcp_config_path(), &executable()?).await
     }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "mcpServers").await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_from_config(&self.mcp_config_path(), "mcpServers").await
+    }
 }
 
 impl InstallMcp for Opencode {
@@ -203,6 +309,14 @@ impl InstallMcp for Opencode {
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         install_opencode(&self.mcp_config_path(), &executable()?).await
+    }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "mcp").await
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_from_config(&self.mcp_config_path(), "mcp").await
     }
 }
 
@@ -230,6 +344,111 @@ impl InstallMcp for Pi {
             }
         }
     }
+
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        json_has_server(&self.mcp_config_path(), "mcpServers").await
+    }
+
+    /// From the file, which `pi mcp add` writes too.
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        remove_from_config(&self.mcp_config_path(), "mcpServers").await
+    }
+}
+
+/// The config file at `path`, as it is and its path with its links resolved, so that a write goes
+/// where it is. `None` when there's no file.
+async fn read_config(path: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, InstallMcpError> {
+    // A config linked from a dotfiles repo is saved there, keeping the link.
+    let path =
+        AbsPathBuf::canonicalize_async(path).await.map_or_else(|_| path.to_owned(), PathBuf::from);
+    match tokio::fs::read(&path).await {
+        Ok(read) => Ok(Some((path, read))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Write `text` over the config at `path` that read `read`, unless it's changed since.
+fn rewrite_config(path: &Path, read: &[u8], text: &str) -> Result<(), InstallMcpError> {
+    match crate::fs::replace(path, text.as_bytes(), |now| now == read) {
+        Err(err) if !err.replaced() => Err(err.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the JSON config at `path` has an `atuin` server in its `key` object.
+async fn json_has_server(path: &Path, key: &str) -> Result<bool, InstallMcpError> {
+    let Some((path, read)) = read_config(path).await? else {
+        return Ok(false);
+    };
+    let root: Value =
+        serde_json::from_slice(&read).map_err(|err| InstallMcpError::Json(path, err))?;
+    Ok(root.get(key).and_then(|servers| servers.get("atuin")).is_some())
+}
+
+/// Take the `atuin` server out of the `key` object of the JSON config at `path`, as
+/// [`add_to_config`] puts it there. `false` when there was none.
+async fn remove_from_config(path: &Path, key: &str) -> Result<bool, InstallMcpError> {
+    let Some((path, read)) = read_config(path).await? else {
+        return Ok(false);
+    };
+    let mut root: Value =
+        serde_json::from_slice(&read).map_err(|err| InstallMcpError::Json(path.clone(), err))?;
+    let servers = root.get_mut(key).and_then(Value::as_object_mut);
+    if servers.and_then(|servers| servers.remove("atuin")).is_none() {
+        return Ok(false);
+    }
+    let text = serde_json::to_string_pretty(&root)
+        .map_err(|err| InstallMcpError::Json(path.clone(), err))?
+        + "\n";
+    rewrite_config(&path, &read, &text)?;
+    crate::userio::log::info!("mcp-server-removed", path = path.display().to_string());
+    Ok(true)
+}
+
+/// The TOML config at `path` as `mcp add` writes Codex's and Grok's, `None` when there's none.
+async fn read_toml(
+    path: &Path,
+) -> Result<Option<(PathBuf, Vec<u8>, DocumentMut)>, InstallMcpError> {
+    let Some((path, read)) = read_config(path).await? else {
+        return Ok(None);
+    };
+    let doc = String::from_utf8_lossy(&read).parse::<DocumentMut>();
+    let doc = doc.map_err(|err| InstallMcpError::Toml(path.clone(), err))?;
+    Ok(Some((path, read, doc)))
+}
+
+/// Whether the TOML config at `path` has an `atuin` server in `mcp_servers`.
+async fn toml_has_server(path: &Path) -> Result<bool, InstallMcpError> {
+    let Some((_, _, doc)) = read_toml(path).await? else {
+        return Ok(false);
+    };
+    Ok(doc.get("mcp_servers").and_then(|servers| servers.get("atuin")).is_some())
+}
+
+/// Take the `atuin` server out of `mcp_servers` in the TOML config at `path`, keeping the rest
+/// of the file as it is. `false` when there was none.
+async fn remove_toml_server(path: &Path) -> Result<bool, InstallMcpError> {
+    let Some((path, read, mut doc)) = read_toml(path).await? else {
+        return Ok(false);
+    };
+    let servers = doc.get_mut("mcp_servers").and_then(Item::as_table_like_mut);
+    if servers.and_then(|servers| servers.remove("atuin")).is_none() {
+        return Ok(false);
+    }
+    rewrite_config(&path, &read, &doc.to_string())?;
+    crate::userio::log::info!("mcp-server-removed", path = path.display().to_string());
+    Ok(true)
+}
+
+/// Whether the YAML config at `path` has an `atuin` server in `mcp_servers`, as Hermes's does.
+async fn yaml_has_server(path: &Path) -> Result<bool, InstallMcpError> {
+    let Some((path, read)) = read_config(path).await? else {
+        return Ok(false);
+    };
+    let docs = yaml_rust2::YamlLoader::load_from_str(&String::from_utf8_lossy(&read))
+        .map_err(|err| InstallMcpError::Yaml(path, err))?;
+    Ok(docs.first().is_some_and(|doc| !doc["mcp_servers"]["atuin"].is_badvalue()))
 }
 
 /// Run `program` with `args` to remove a server, whether or not there is one to remove.
@@ -275,17 +494,25 @@ pub(crate) fn launch_path(exe: PathBuf) -> PathBuf {
     }
 }
 
-/// Runs `program` with `args` and lets it report what it did. The program runs from the path that
-/// [`resolve_in_path`] finds, so that what runs is what the `PATH` check found. For example, on
-/// Windows, `claude` runs as `claude.cmd`.
+/// Runs `program` with `args`, keeping what it prints off the terminal: a screen may be on it. The
+/// program runs from the path that [`resolve_in_path`] finds, so that what runs is what the `PATH`
+/// check found. For example, on Windows, `claude` runs as `claude.cmd`.
 async fn run(program: &'static str, args: &[&str]) -> Result<(), InstallMcpError> {
     let found = resolve_in_path(Path::new(program)).ok_or(InstallMcpError::NotFound(program))?;
-    let status =
-        tokio::process::Command::new(&*found).args(args).stdin(Stdio::null()).status().await?;
-    if !status.success() {
-        return Err(InstallMcpError::Failed(format!("{program} {}", args.join(" "))));
+    let output =
+        tokio::process::Command::new(&*found).args(args).stdin(Stdio::null()).output().await?;
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(())
+    let command = format!("{program} {}", args.join(" "));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(said) => InstallMcpError::FailedSaying {
+            command,
+            said: said.to_owned(),
+        },
+        None => InstallMcpError::Failed(command),
+    })
 }
 
 /// Add the server to the opencode config at `path`, keeping the rest of it.
@@ -379,6 +606,102 @@ mod tests {
     } else {
         ".hermes/config.yaml"
     };
+
+    /// A server atuin writes itself is found once registered, and not once unregistered.
+    #[rstest]
+    #[case("kiro")]
+    #[case("opencode")]
+    #[case("omp")]
+    #[tokio::test]
+    async fn a_server_atuin_writes_comes_out_as_it_went_in(
+        agent_home: (tempfile::TempDir, MockEnv),
+        #[case] name: &str,
+    ) {
+        let (_dir, _env) = agent_home;
+        let harness = AnyHarness::from_name(name).unwrap();
+
+        assert!(!harness.has_mcp().await.unwrap());
+        harness.install_mcp().await.unwrap();
+        assert!(harness.has_mcp().await.unwrap());
+        assert!(harness.uninstall_mcp().await.unwrap());
+        assert!(!harness.has_mcp().await.unwrap());
+        assert!(!harness.uninstall_mcp().await.unwrap());
+    }
+
+    /// Unregistered from its file, atuin's server leaves the others there.
+    #[rstest]
+    #[case("copilot", ".copilot/mcp-config.json", "mcpServers")]
+    #[case("pi", ".pi/agent/mcp.json", "mcpServers")]
+    #[case("kiro", ".kiro/settings/mcp.json", "mcpServers")]
+    #[case("opencode", ".config/opencode/opencode.json", "mcp")]
+    #[tokio::test]
+    async fn unregistering_keeps_the_other_servers(
+        agent_home: (tempfile::TempDir, MockEnv),
+        #[case] name: &str,
+        #[case] relative: &str,
+        #[case] key: &str,
+    ) {
+        let (dir, _env) = agent_home;
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let other = json!({"command": "other"});
+        let config = json!({key: {"atuin": {"command": "atuin", "args": ["mcp"]}, "other": other}});
+        std::fs::write(&path, config.to_string()).unwrap();
+        let harness = AnyHarness::from_name(name).unwrap();
+
+        assert!(harness.has_mcp().await.unwrap());
+        assert!(harness.uninstall_mcp().await.unwrap());
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(left, json!({key: {"other": other}}));
+    }
+
+    /// Codex's and Grok's TOML keeps its comments and other servers.
+    #[rstest]
+    #[case("codex", ".codex/config.toml")]
+    #[case("grok", ".grok/config.toml")]
+    #[tokio::test]
+    async fn unregistering_keeps_the_rest_of_a_toml_config(
+        agent_home: (tempfile::TempDir, MockEnv),
+        #[case] name: &str,
+        #[case] relative: &str,
+    ) {
+        let (dir, _env) = agent_home;
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let config = "# mine\nmodel = \"o3\"\n\n[mcp_servers.atuin]\ncommand = \"atuin\"\nargs = \
+                      [\"mcp\"]\n\n[mcp_servers.other]\ncommand = \"other\"\n";
+        std::fs::write(&path, config).unwrap();
+        let harness = AnyHarness::from_name(name).unwrap();
+
+        assert!(harness.has_mcp().await.unwrap());
+        assert!(harness.uninstall_mcp().await.unwrap());
+        let left = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(left, "# mine\nmodel = \"o3\"\n\n[mcp_servers.other]\ncommand = \"other\"\n");
+        assert!(!harness.has_mcp().await.unwrap());
+    }
+
+    /// Without `hermes` to take its server out, Hermes's is left to the user, as atuin can't write
+    /// its config back with its comments.
+    #[rstest]
+    #[tokio::test]
+    async fn hermes_without_its_cli_is_unregistered_by_hand(
+        agent_home: (tempfile::TempDir, MockEnv),
+    ) {
+        let (dir, _env) = agent_home;
+        let path = dir.path().join(HERMES_CONFIG);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "# mine\nmcp_servers:\n  atuin:\n    command: atuin\n").unwrap();
+        let hermes = AnyHarness::from_name("hermes").unwrap();
+
+        assert!(hermes.has_mcp().await.unwrap());
+        let err = hermes.uninstall_mcp().await.unwrap_err();
+        let by_hand = matches!(err, InstallMcpError::RemoveByHand {
+            key: "mcp_servers.atuin",
+            cause: HermesCliError::NotFound,
+            ..
+        });
+        assert!(by_hand, "{err}");
+    }
 
     #[rstest]
     #[case("amp", ".config/amp/settings.json")]

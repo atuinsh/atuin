@@ -31,7 +31,7 @@ pub struct Cmd {
     bind_ai_resume: bool,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
@@ -47,6 +47,20 @@ pub enum Shell {
     Xonsh,
     #[value(help = fl!("value-init-shell-powershell"))]
     PowerShell,
+}
+
+impl Shell {
+    /// The name `atuin init` takes it by.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+            Self::Nu => "nu",
+            Self::Xonsh => "xonsh",
+            Self::PowerShell => "powershell",
+        }
+    }
 }
 
 #[allow(clippy::struct_excessive_bools)]

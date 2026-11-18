@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use serde_json::json;
+
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -17,7 +19,7 @@ pub(crate) fn home() -> PathBuf {
     var_nonempty("GROK_HOME").map_or_else(|| home_dir().joined(".grok"), PathBuf::from)
 }
 
-/// Whether `atuin hook install grok` has registered hooks in `$GROK_HOME/hooks/atuin.json`.
+/// Whether `atuin setup --agent-history` has registered hooks in `$GROK_HOME/hooks/atuin.json`.
 #[must_use]
 pub fn has_installed_hooks() -> bool {
     json_hooks::has_installed(&home().joined("hooks").joined("atuin.json"), "grok")
@@ -59,6 +61,16 @@ impl Harness for Grok {
         let config_path = home().joined("hooks").joined("atuin.json");
         json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
+    }
+
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&home().joined("hooks").joined("atuin.json"), self.name()).await
+    }
+
+    /// The file goes with atuin's hooks, unless something else was put in it.
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        let config_path = home().joined("hooks").joined("atuin.json");
+        json_hooks::uninstall_own(&config_path, self.name(), &json!({})).await
     }
 
     /// `grok --resume <id>`. Grok Build finds the session across directories, and works in the

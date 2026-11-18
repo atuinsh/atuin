@@ -7,8 +7,8 @@
 //! parser that drops tool calls. So atuin's plugin carries a command of its own, `hermes atuin
 //! import <file>`, which the plugin's docs describe. This writer builds the session row in the
 //! shape `hermes sessions export` writes, and runs that command under the home's profile, with
-//! `-p` and with `HERMES_HOME` set to the home. The command exists only where `atuin hook install
-//! hermes` put the plugin. Elsewhere Hermes says the command is unknown, and the user is told to
+//! `-p` and with `HERMES_HOME` set to the home. The command exists only where `atuin setup
+//! --agent-history` put the plugin. Elsewhere Hermes says the command is unknown, and the user is told to
 //! install it. Import never touches a session the store holds: an id it holds fails
 //! `revision_conflict`, and an id it deleted is never taken back.
 //!
@@ -242,7 +242,7 @@ impl Refusal {
         RehydrateError::Other(match self {
             Self::Taken => return RehydrateError::AlreadyExists(db.to_owned()),
             Self::NoCommand => "this Hermes profile has no `hermes atuin` command, which atuin \
-                                writes sessions with: run `atuin hook install hermes`"
+                                writes sessions with: run `atuin setup --only --agent-history`"
                 .to_owned(),
             Self::Storage => format!(
                 "Hermes's store at {} refused the session (storage_unavailable)",

@@ -123,6 +123,16 @@ impl Harness for Pi {
         Ok(extension_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&self.flavour.agent_dir().joined("extensions").joined("atuin.ts"))
+            .await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&self.flavour.agent_dir().joined("extensions").joined("atuin.ts"))
+            .await
+    }
+
     /// `pi --session <file>` when the session's file is known: pi opens a file in place from
     /// anywhere, and works in the directory its header names. Otherwise `pi --session <id>`,
     /// which pi resolves in the current directory's sessions first; one it only finds in another

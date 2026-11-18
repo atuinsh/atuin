@@ -10,5 +10,5 @@ rig_up() {
   local home=$1/laptop
   setup_claude_with_mcp "$home" "$2"
   env -i HOME="$home" PATH="$home/bin:/usr/bin:/bin" \
-    atuin mcp install claude-code >/dev/null 2>&1
+    atuin setup --only --mcp >/dev/null 2>&1
 }

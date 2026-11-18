@@ -335,7 +335,7 @@ enter_accept = true
 ## still read when not set here.
 
 ## Capture threads into the encrypted record store, and sync them like your history.
-## `atuin config enable threads` turns this on, with the daemon it needs.
+## `atuin setup --only --threads --daemon` turns this on, with the daemon it needs.
 # capture = false
 
 ## Also capture what each tool call was given and returned (commands and their output,

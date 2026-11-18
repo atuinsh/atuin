@@ -147,8 +147,14 @@ pub async fn boot(
     // Before capture, which tells it of each row it captures.
     #[cfg(feature = "octavo")]
     let octavo = Arc::new(
-        octavo::Octavo::open(&settings, handle.clone(), output_capture.store(), records.clone())
-            .await,
+        octavo::Octavo::open(
+            &settings,
+            handle.clone(),
+            output_capture.store(),
+            records.clone(),
+            ai_session_db.clone(),
+        )
+        .await,
     );
     #[cfg(feature = "ai")]
     let ai_session_capture = Arc::new(match &ai_session_db {

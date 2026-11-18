@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use atuin_client::settings::{Settings, ThreadUploads};
 use atuin_common::path::AbsPathBuf;
 use atuin_daemon::service::pidfile::Pidfile;
 use atuin_octavo::hub::UserId;
@@ -22,15 +23,28 @@ pub(super) struct Upload {
     queue: UploadQueue,
     user: UserId,
     pidfile: AbsPathBuf,
+    sends: Sends,
 }
 
 impl Upload {
-    pub(super) const fn new(queue: UploadQueue, user: UserId, pidfile: AbsPathBuf) -> Self {
+    /// `user`'s upload in `queue`, sent by the daemon `pidfile` names as `settings` say.
+    pub(super) fn new(
+        queue: UploadQueue,
+        user: UserId,
+        pidfile: AbsPathBuf,
+        settings: &Settings,
+    ) -> Self {
         Self {
             queue,
             user,
             pidfile,
+            sends: Sends::of(settings),
         }
+    }
+
+    /// What follows this upload as it goes.
+    pub(super) const fn tracker(&self) -> Tracker {
+        Tracker::new(self.sends)
     }
 
     pub(super) async fn backlog(&self) -> Result<Backlog, QueueError> {
@@ -40,6 +54,23 @@ impl Upload {
     /// Whether a daemon runs to upload it.
     pub(super) fn daemon_running(&self) -> bool {
         Pidfile::new(&self.pidfile).is_live()
+    }
+}
+
+/// Which of the queue's uploads the daemon sends, as `teams.upload_history` and
+/// `teams.upload_threads` say. What it doesn't send stays queued, so it isn't counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Sends {
+    commands: bool,
+    threads: bool,
+}
+
+impl Sends {
+    fn of(settings: &Settings) -> Self {
+        Self {
+            commands: settings.teams.upload_history,
+            threads: settings.teams.upload_threads != ThreadUploads::Off,
+        }
     }
 }
 
@@ -128,22 +159,33 @@ struct Left {
 }
 
 impl Left {
-    fn of(backlog: &Backlog) -> Self {
+    /// What `backlog` has left of what the daemon `sends`.
+    fn of(backlog: &Backlog, sends: Sends) -> Self {
         let walk: Option<u64> = backlog
             .backfills
             .iter()
             .map(|backfill| Some(backfill.until_idx?.saturating_sub(backfill.next_idx)))
             .sum();
+        let threads = walk.map(|walk| walk.saturating_add(backlog.thread_messages));
         Self {
-            commands: backlog.history,
-            threads: walk.map(|walk| walk.saturating_add(backlog.thread_messages)),
+            commands: if sends.commands {
+                backlog.history
+            } else {
+                0
+            },
+            threads: if sends.threads {
+                threads
+            } else {
+                Some(0)
+            },
         }
     }
 }
 
 /// Turns reads of the upload queue into [`Progress`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct Tracker {
+    sends: Sends,
     commands: Gauge,
     threads: Option<Gauge>,
     /// What the last read left, and when that last changed.
@@ -151,6 +193,15 @@ pub(super) struct Tracker {
 }
 
 impl Tracker {
+    const fn new(sends: Sends) -> Self {
+        Self {
+            sends,
+            commands: Gauge { done: 0, total: 0 },
+            threads: None,
+            last: None,
+        }
+    }
+
     /// How far the upload has got, as `backlog`, read at `now`, shows.
     pub(super) fn update(
         &mut self,
@@ -158,7 +209,7 @@ impl Tracker {
         daemon_running: bool,
         now: Instant,
     ) -> Progress {
-        let left = Left::of(backlog);
+        let left = Left::of(backlog, self.sends);
         self.commands = self.commands.left(left.commands);
         if let Some(threads) = left.threads {
             self.threads = Some(self.threads.unwrap_or_default().left(threads));
@@ -197,6 +248,11 @@ mod tests {
 
     use super::*;
 
+    const EVERYTHING: Sends = Sends {
+        commands: true,
+        threads: true,
+    };
+
     fn backlog(history: u64, backfills: &[(u64, Option<u64>)], thread_messages: u64) -> Backlog {
         Backlog {
             history,
@@ -219,9 +275,19 @@ mod tests {
         Gauge { done, total }
     }
 
+    /// What the daemon leaves queued, as history with `teams.upload_history` off, is no part of
+    /// the upload, so it ends once the rest has gone.
+    #[rstest]
+    #[case::commands(Sends { commands: false, threads: true }, backlog(100, &[(40, Some(40))], 0))]
+    #[case::threads(Sends { commands: true, threads: false }, backlog(0, &[(0, Some(40))], 7))]
+    fn what_stays_queued_is_not_waited_for(#[case] sends: Sends, #[case] backlog: Backlog) {
+        let progress = Tracker::new(sends).update(&backlog, true, Instant::now());
+        assert_eq!(progress.state, State::Done);
+    }
+
     #[rstest]
     fn counts_go_up_as_the_backlog_drains() {
-        let (mut tracker, now) = (Tracker::default(), Instant::now());
+        let (mut tracker, now) = (Tracker::new(EVERYTHING), Instant::now());
         let first = tracker.update(&backlog(100, &[(0, Some(40))], 2), true, now);
         assert_eq!((first.commands, first.threads), (gauge(0, 100), Some(gauge(0, 42))));
 
@@ -232,7 +298,7 @@ mod tests {
 
     #[rstest]
     fn threads_count_once_every_backfill_is_fixed() {
-        let (mut tracker, now) = (Tracker::default(), Instant::now());
+        let (mut tracker, now) = (Tracker::new(EVERYTHING), Instant::now());
         let counting = tracker.update(&backlog(0, &[(0, Some(10)), (0, None)], 0), true, now);
         assert_eq!((counting.threads, counting.state), (None, State::Uploading));
 
@@ -242,7 +308,7 @@ mod tests {
 
     #[rstest]
     fn more_queued_grows_the_total_without_taking_back_what_went_up() {
-        let (mut tracker, now) = (Tracker::default(), Instant::now());
+        let (mut tracker, now) = (Tracker::new(EVERYTHING), Instant::now());
         tracker.update(&backlog(10, &[], 0), true, now);
         tracker.update(&backlog(4, &[], 0), true, now);
         let grown = tracker.update(&backlog(9, &[], 0), true, now);
@@ -258,7 +324,7 @@ mod tests {
         #[case] daemon_running: bool,
         #[case] state: State,
     ) {
-        let progress = Tracker::default().update(&backlog, daemon_running, Instant::now());
+        let progress = Tracker::new(EVERYTHING).update(&backlog, daemon_running, Instant::now());
         assert_eq!(progress.state, state);
     }
 
@@ -266,7 +332,7 @@ mod tests {
     #[case::retrying(true)]
     #[case::no_daemon(false)]
     fn a_backlog_that_sits_still_stalls(#[case] daemon_running: bool) {
-        let (mut tracker, start) = (Tracker::default(), Instant::now());
+        let (mut tracker, start) = (Tracker::new(EVERYTHING), Instant::now());
         let stuck = backlog(5, &[], 0);
         tracker.update(&stuck, daemon_running, start);
         let before = tracker.update(&stuck, daemon_running, start + STALL_AFTER / 2);

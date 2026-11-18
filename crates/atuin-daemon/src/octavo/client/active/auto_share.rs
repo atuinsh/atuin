@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionDatabase, DbError, HarnessSession};
 use atuin_client::lua_config::OrgSlug;
+use atuin_client::settings::ThreadUploads;
 use atuin_common::harnesstools::session::ParentKind;
 use atuin_octavo::hub::UserId;
 use atuin_octavo::pb;
@@ -102,7 +103,9 @@ impl Sharer {
 
     /// Queues the shares `thread`'s config files ask for.
     async fn look_at(&mut self, thread: LiveThread) {
-        if !self.uploader.handle.settings().await.teams.enabled {
+        // A share needs the thread's messages up first.
+        let uploads = self.uploader.handle.settings().await.teams.clone();
+        if !uploads.enabled || uploads.upload_threads == ThreadUploads::Off {
             return;
         }
         let candidate = match thread.read().await {
@@ -113,7 +116,12 @@ impl Sharer {
                 return;
             }
         };
-        let proposal = match candidate.look_up(&self.uploader.configs).await {
+        if uploads.upload_threads == ThreadUploads::Workspaces
+            && !candidate.started_in_workspace(self.uploader.workspaces.configs()).await
+        {
+            return;
+        }
+        let proposal = match candidate.look_up(self.uploader.workspaces.configs()).await {
             Ok(proposal) => proposal,
             Err(LookupError::Config(err)) => {
                 if self.warned_of.insert(err.path().to_owned()) {
@@ -178,6 +186,18 @@ struct Candidate {
 }
 
 impl Candidate {
+    /// Whether the first of its directories is in a workspace. One whose config can't be read
+    /// isn't, as the thread's messages stay here then too.
+    async fn started_in_workspace(&self, configs: &Configs) -> bool {
+        let Some(start) = self.dirs.first() else {
+            return false;
+        };
+        configs.in_workspace(start.clone()).await.unwrap_or_else(|err| {
+            tracing::debug!(?err, "not sharing a thread whose workspace can't be told");
+            false
+        })
+    }
+
     /// The organizations its directories' configs all share it with.
     async fn look_up(self, configs: &Configs) -> Result<Proposal, LookupError> {
         let orgs = configs.orgs_of_thread(self.dirs).await?;

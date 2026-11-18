@@ -1,13 +1,15 @@
-//! Turning thread capture on: `atuin config enable threads`, and the offer `atuin resume`
-//! makes each time it runs while capture is off.
+//! The offer `atuin resume` makes, each time it runs while thread capture is off, to turn it on.
 
-use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+#[cfg(unix)]
+use std::io::BufReader;
+use std::io::{BufRead, Write};
 
 use atuin_client::settings::Settings;
 use colored::Colorize;
 use eyre::Result;
+use toml_edit::Value;
 
-use super::config::{EnableCmd, Feature};
+use super::config::update_config_file;
 use super::daemon;
 use crate::i18n::fl;
 
@@ -24,21 +26,6 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Stdin and stdout, for `atuin config enable`.
-    pub fn stdio() -> Self {
-        // Asked only where it can be seen and answered.
-        let live = io::stdout().is_terminal();
-        let input =
-            (live && io::stdin().is_terminal()).then(|| Box::new(BufReader::new(io::stdin())) as _);
-        Self {
-            input,
-            output: Box::new(io::stdout()),
-            live,
-            #[cfg(unix)]
-            _cooked: None,
-        }
-    }
-
     /// The controlling terminal, for `atuin resume`: the shell widget reads its stderr for the
     /// command, so nothing else may go there. `None` without one.
     #[cfg(unix)]
@@ -137,13 +124,14 @@ pub async fn offer(settings: &Settings, term: &mut Terminal) -> Option<Settings>
 /// Turn threads on, with the daemon they need, and offer to import the threads from before.
 /// Returns the settings as they now are.
 pub async fn enable(settings: &Settings, term: &mut Terminal) -> Result<Settings> {
-    let config_file = Settings::get_config_path()?;
-    let config_str = tokio::fs::read_to_string(&config_file).await?;
-    let updated = EnableCmd {
-        feature: Feature::Threads,
+    let mut changes = vec![("threads.capture", Value::from(true))];
+    // A daemon on already may be managed externally (systemd, launchd), so only one this turns on
+    // is left to start itself.
+    if !settings.daemon.enabled {
+        changes.push(("daemon.enabled", Value::from(true)));
+        changes.push(("daemon.autostart", Value::from(true)));
     }
-    .get_updated_config(&config_str, settings.daemon.enabled)?;
-    tokio::fs::write(&config_file, &updated).await?;
+    update_config_file(changes).await?;
 
     let settings = Settings::new()?;
 
@@ -186,7 +174,7 @@ mod tests {
     ) {
         let mut term = Terminal {
             input: Some(Box::new(typed.as_bytes())),
-            output: Box::new(io::sink()),
+            output: Box::new(std::io::sink()),
             live: false,
             #[cfg(unix)]
             _cooked: None,

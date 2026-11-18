@@ -598,14 +598,54 @@ pub struct PtyProxy {
 
 /// `[teams]`: Atuin for Teams, which `atuin setup --teams` turns on.
 #[cfg(feature = "octavo")]
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Teams {
     pub enabled: bool,
-    /// Whether captured command output goes to Atuin for Teams too, while `enabled` and output
-    /// capture are both on.
+    /// Whether the commands Atuin records go to Atuin for Teams, while `enabled`.
+    pub upload_history: bool,
+    /// Which agent threads go to Atuin for Teams, while `enabled`.
+    pub upload_threads: ThreadUploads,
+    /// Whether captured command output goes to Atuin for Teams too, while `enabled`,
+    /// `upload_history` and output capture are all on.
     pub upload_output: bool,
     #[serde(rename = "__debug__", default, skip_serializing)]
     pub debug: TeamsDebug,
+}
+
+#[cfg(feature = "octavo")]
+impl Default for Teams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            upload_history: true,
+            upload_threads: ThreadUploads::All,
+            upload_output: false,
+            debug: TeamsDebug::default(),
+        }
+    }
+}
+
+/// Which agent threads Atuin for Teams uploads while it's on, as `teams.upload_threads` says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadUploads {
+    #[default]
+    All,
+    /// Those started in a workspace: at or under a project's config file, `.atuin.lua` say.
+    Workspaces,
+    Off,
+}
+
+impl ThreadUploads {
+    /// Its value in the config.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Workspaces => "workspaces",
+            Self::Off => "off",
+        }
+    }
 }
 
 /// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
@@ -1940,6 +1980,8 @@ impl Settings {
         #[cfg(feature = "octavo")]
         let defaults = defaults
             .set_default("teams.enabled", false)?
+            .set_default("teams.upload_history", true)?
+            .set_default("teams.upload_threads", "all")?
             .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
@@ -2169,6 +2211,8 @@ mod tests {
     use rstest::{fixture, rstest};
     use url::Url;
 
+    #[cfg(feature = "octavo")]
+    use super::ThreadUploads;
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
         AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
@@ -2762,6 +2806,26 @@ mod tests {
     #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
     fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
         assert_eq!(parse_settings(toml).teams.enabled, enabled);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::unset("", true, ThreadUploads::All)]
+    #[case::legacy("[octavo]\nenabled = true\n", true, ThreadUploads::All)]
+    #[case::history_off("[teams]\nupload_history = false\n", false, ThreadUploads::All)]
+    #[case::workspaces(
+        "[teams]\nupload_threads = \"workspaces\"\n",
+        true,
+        ThreadUploads::Workspaces
+    )]
+    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", true, ThreadUploads::Off)]
+    fn teams_uploads_history_and_threads_until_switched_off(
+        #[case] toml: &str,
+        #[case] history: bool,
+        #[case] threads: ThreadUploads,
+    ) {
+        let teams = parse_settings(toml).teams;
+        assert_eq!((teams.upload_history, teams.upload_threads), (history, threads));
     }
 
     #[rstest]

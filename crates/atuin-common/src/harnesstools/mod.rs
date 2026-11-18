@@ -89,6 +89,16 @@ pub trait Harness: std::fmt::Debug {
     #[allow(async_fn_in_trait)]
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError>;
 
+    /// Whether this harness runs atuin's hooks here, as any atuin's [`Self::install_hooks`]
+    /// wrote them.
+    #[allow(async_fn_in_trait)]
+    async fn has_hooks(&self) -> Result<bool, InstallHookError>;
+
+    /// Take out what [`Self::install_hooks`] wrote, leaving the rest of the harness's config as
+    /// it is. `false` when there was nothing to take out.
+    #[allow(async_fn_in_trait)]
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError>;
+
     /// How this harness itself reopens `target`: its own resume command, and whether that has to
     /// run from the session's directory. `Err` for a session the harness cannot reopen.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError>;
@@ -121,6 +131,20 @@ pub trait Harness: std::fmt::Debug {
     /// ([`RehydrateError::AlreadyExists`]).
     #[allow(async_fn_in_trait)]
     async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError>;
+}
+
+/// Whether atuin's own file is at `path`.
+async fn own_file_exists(path: &Path) -> Result<bool, InstallHookError> {
+    Ok(tokio::fs::try_exists(path).await?)
+}
+
+/// Remove atuin's own file at `path`, `false` when there was none.
+async fn remove_own_file(path: &Path) -> Result<bool, InstallHookError> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[enum_dispatch(Harness, SessionSync, ObservableExt, InstallMcp)]
@@ -221,6 +245,32 @@ mod tests {
     use super::*;
     use crate::env::MockEnv;
     use crate::harnesstools::session::any::SessionsExt as _;
+
+    /// Each agent's hooks are found once installed, and not once taken out. Hermes's need its CLI
+    /// and opencode's its version, so their own tests have them.
+    #[rstest]
+    #[case("amp")]
+    #[case("claude-code")]
+    #[case("codex")]
+    #[case("copilot")]
+    #[case("grok")]
+    #[case("kiro")]
+    #[case("pi")]
+    #[case("omp")]
+    #[tokio::test]
+    async fn hooks_come_out_as_they_went_in(#[case] name: &str) {
+        let home = tempfile::tempdir().unwrap();
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        let harness = AnyHarness::from_name(name).unwrap();
+
+        assert!(!harness.has_hooks().await.unwrap());
+        harness.install_hooks().await.unwrap();
+        assert!(harness.has_hooks().await.unwrap());
+        assert!(harness.uninstall_hooks().await.unwrap());
+        assert!(!harness.has_hooks().await.unwrap());
+        assert!(!harness.uninstall_hooks().await.unwrap());
+    }
 
     /// Each harness declares exactly the variables atuin reads to find its sessions and config:
     /// a launchd agent inherits only the declared ones, so one left out would be read unset.

@@ -1,59 +1,65 @@
-//! What `atuin setup` draws, inline below whatever ran it: the choices, then what it's doing.
+//! What `atuin setup` draws, on the alternate screen: the choices, then what it's doing.
 
 use std::io::{self, Write};
-use std::time::Duration;
-#[cfg(feature = "octavo")]
-use std::time::Instant;
+use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use atuin_client::record::sqlite_store::SqliteStore;
-#[cfg(feature = "ai")]
-use atuin_common::harnesstools::Harness as _;
+use atuin_client::settings::ThreadUploads;
+use atuin_common::env::var_nonempty;
 use crossterm::cursor::MoveTo;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::style::{Attribute, Print, SetAttribute};
 use eyre::Result;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
-use ratatui::{DefaultTerminal, Frame, TerminalOptions, Viewport};
+use ratatui::{DefaultTerminal, Frame};
 use tokio::sync::mpsc;
 
-#[cfg(feature = "octavo")]
-use super::upload::{Gauge, Progress, State, Tracker, Upload};
-use super::{
-    Answer, Found, Offer, Plan, Status, Step, Sync, THREADS, Teams, Update, count, is_address,
-    names,
+use super::agents::{AnyHarness, Harness};
+use super::example::{Key, example};
+use super::form::{Form as _, Needs};
+use super::plan::{
+    AgentHistory, Agents, AtuinForTeams, CtrlR, HOOKABLE, OutputCapture, Plan, ShellHistory,
+    Shells, Threads, UpArrow,
 };
+use super::scroll::Scroll;
+#[cfg(feature = "octavo")]
+use super::upload::{Gauge, Progress, State, Upload};
+use super::{Answer, Found, Offer, Scope, Status, Step, Sync, Update, count, is_address, names};
 
-const HEIGHT: u16 = 22;
-const ACCENT: Color = Color::Green;
+pub(super) const ACCENT: Color = Color::Green;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SYNC: bool = cfg!(feature = "sync");
+
+/// Whether setup takes the mouse while they choose, so that the scrollbar's handle drags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Mouse {
+    Capture,
+    /// Leave the mouse to the terminal, as `no_mouse` in the config asks.
+    Leave,
+}
 
 /// Ask, starting from `plan`, then set up. `ask_import` is false when they've said not to import.
 pub(super) async fn run(
     found: Found,
     plan: &Plan,
     ask_import: bool,
+    mouse: Mouse,
     store: &SqliteStore,
 ) -> Result<()> {
-    let rows = crossterm::terminal::size().map_or(HEIGHT, |(_, rows)| rows);
-    let mut terminal = ratatui::try_init_with_options(TerminalOptions {
-        viewport: Viewport::Inline(HEIGHT.min(rows)),
-    })?;
-
-    let result = Box::pin(drive(&mut terminal, &found, plan, ask_import, store)).await;
-
-    // Leave the cursor where the screen began, for the summary.
-    let top = terminal.get_frame().area().y;
-    let _ = terminal.clear();
-    let _ = terminal.set_cursor_position((0, top));
+    let mut terminal = ratatui::try_init()?;
+    let result = Box::pin(drive(&mut terminal, &found, plan, ask_import, mouse, store)).await;
+    // Back on the screen they ran it from, for the summary.
     ratatui::restore();
 
     match result? {
-        Some((plan, steps)) => super::print_summary(&plan, &found, &steps).await,
+        Some((plan, steps)) => super::print_summary(&plan, &found, Scope::All, &steps).await,
         None => println!("Setup cancelled, nothing changed. Run `atuin setup` any time."),
     }
     Ok(())
@@ -65,24 +71,16 @@ async fn drive(
     found: &Found,
     plan: &Plan,
     ask_import: bool,
+    mouse: Mouse,
     store: &SqliteStore,
 ) -> Result<Option<(Plan, Vec<(Step, Status)>)>> {
-    let mut choose = Choose::new(found, plan);
-    let plan = loop {
-        terminal.draw(|frame| choose.draw(frame, found))?;
-        if let Some(key) = next_key().await?
-            && let Some(chosen) = choose.handle(key, found)
-        {
-            match chosen {
-                Chosen::Plan(plan) => break plan,
-                Chosen::Quit => return Ok(None),
-            }
-        }
+    let Some(plan) = choose(terminal, found, plan, mouse).await? else {
+        return Ok(None);
     };
 
     let (tx, mut updates) = mpsc::unbounded_channel();
     let (answer, answers) = mpsc::unbounded_channel();
-    let mut work = Box::pin(super::apply(&plan, found, store, &tx, answers));
+    let mut work = Box::pin(super::apply(&plan, found, Scope::All, store, &tx, answers));
 
     let mut running = Running::default();
     let mut tick = 0;
@@ -143,7 +141,7 @@ async fn drive(
                 &tx,
             );
             if !take.is_empty() {
-                let import = super::import(&take, &tx, plan.waits_for_imports());
+                let import = super::import(&take, &tx, plan.waits_for_imports(), plan.daemon.0);
                 let imported = drawn(terminal, &mut running, &mut updates, &mut tick, import);
                 if imported.await?.is_none() {
                     return Ok(Some(outcome(&plan, running, &mut updates)));
@@ -153,7 +151,7 @@ async fn drive(
     }
 
     #[cfg(feature = "octavo")]
-    if let Some(Teams::On { backfill }) = plan.teams {
+    if let Some(super::Teams::On { backfill }) = plan.teams() {
         let on = super::turn_on_teams(store, backfill, &tx);
         match drawn(terminal, &mut running, &mut updates, &mut tick, on).await? {
             Some(Some(upload)) => {
@@ -164,6 +162,43 @@ async fn drive(
         }
     }
     Ok(Some(outcome(&plan, running, &mut updates)))
+}
+
+/// What they choose to set up, starting from `plan`, or `None` if they quit.
+async fn choose(
+    terminal: &mut DefaultTerminal,
+    found: &Found,
+    plan: &Plan,
+    mouse: Mouse,
+) -> Result<Option<Plan>> {
+    // Colour, unless `NO_COLOR` says not to.
+    let colour = var_nonempty("NO_COLOR").is_none();
+    let colorfgbg = var_nonempty("COLORFGBG").and_then(|value| value.into_string().ok());
+    let shade = colour.then(|| row_shade(colorfgbg.as_deref()));
+    let mut choose = Choose::new(found, plan).coloured(colour).shaded(shade);
+    let shown_at = Instant::now();
+    // Only while they choose, because the screens after it show a sign-in link to select.
+    let _mouse = match mouse {
+        Mouse::Capture => Some(MouseCaptured::new()?),
+        Mouse::Leave => None,
+    };
+    loop {
+        choose.shown_for = shown_at.elapsed();
+        terminal.draw(|frame| choose.draw(frame, found))?;
+        let chosen = match next_input().await? {
+            Some(Input::Key(key)) => choose.handle(key),
+            Some(Input::Mouse(event)) => {
+                choose.mouse(event, found, terminal.size()?);
+                None
+            }
+            None => None,
+        };
+        match chosen {
+            Some(Chosen::Plan(plan)) => return Ok(Some(plan)),
+            Some(Chosen::Quit) => return Ok(None),
+            None => {}
+        }
+    }
 }
 
 /// The plan, and each step as the screen last heard of it.
@@ -223,7 +258,7 @@ async fn watch(
     }
     let uploading = Status::Running("Uploading to Atuin for Teams".into());
     running.update(Update::Step(Step::Upload, uploading));
-    let mut tracker = Tracker::default();
+    let mut tracker = upload.tracker();
     let mut read_at: Option<Instant> = None;
     let summary = loop {
         if read_at.is_none_or(|at| at.elapsed() >= READ_EVERY) {
@@ -266,15 +301,48 @@ fn leaves(key: KeyEvent) -> bool {
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
 }
 
-/// The next key pressed, `None` once a moment passes without one, so spinners keep turning.
-async fn next_key() -> Result<Option<KeyEvent>> {
+/// The mouse, which the terminal sends to setup instead of using itself while this lives.
+struct MouseCaptured;
+
+impl MouseCaptured {
+    fn new() -> io::Result<Self> {
+        crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for MouseCaptured {
+    fn drop(&mut self) {
+        let _ = crossterm::execute!(io::stdout(), DisableMouseCapture);
+    }
+}
+
+/// What they did: pressed a key, or used the mouse.
+enum Input {
+    Key(KeyEvent),
+    Mouse(MouseEvent),
+}
+
+/// What they do next, `None` once a moment passes without anything, so spinners keep turning.
+async fn next_input() -> Result<Option<Input>> {
     if !tokio::task::spawn_blocking(|| event::poll(Duration::from_millis(80))).await?? {
         return Ok(None);
     }
     match event::read()? {
-        Event::Key(key) if key.kind == KeyEventKind::Press => Ok(Some(key)),
+        Event::Key(key) if key.kind == KeyEventKind::Press => Ok(Some(Input::Key(key))),
+        // The mouse moving with no button held changes nothing.
+        Event::Mouse(mouse) if mouse.kind != MouseEventKind::Moved => Ok(Some(Input::Mouse(mouse))),
         _ => Ok(None),
     }
+}
+
+/// The next key pressed, `None` once a moment passes without one, so spinners keep turning.
+async fn next_key() -> Result<Option<KeyEvent>> {
+    let input = next_input().await?;
+    Ok(input.and_then(|input| match input {
+        Input::Key(key) => Some(key),
+        Input::Mouse(_) => None,
+    }))
 }
 
 /// Record `status` for `step`, keeping the steps in the order they're shown.
@@ -288,129 +356,438 @@ pub(super) fn set(steps: &mut Vec<(Step, Status)>, step: Step, status: Status) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
     Shell,
+    /// The shells shell history hooks into: a list that opens under it.
+    Shells,
+    /// One of [`HOOKABLE`], in the open list of shells.
+    ShellPick(usize),
+    Output,
     Threads,
     AgentHistory,
+    /// The agents setup hooks into and connects: a list that opens under agent shell history.
+    Agents,
+    /// One of [`Choose::agents`], in the open list of agents.
+    AgentPick(usize),
     CtrlR,
     UpArrow,
-    Mcp,
-    Sync,
+    /// A place to sync to, on the sync page.
+    SyncTo(SyncTo),
+    /// The address of their own server, under [`SyncTo::SelfHosted`] once it's picked.
     Server,
-    Teams,
-    /// Whether Atuin for Teams takes what Atuin already has too.
-    Backfill,
+    /// How Atuin Cloud shares threads, with `--teams`, under it once it's picked.
+    Sharing(Sharing),
     /// The button that goes on to set it all up.
     Go,
 }
 
 impl Row {
+    /// Every row but the entries of a list, in the order the screen shows them.
+    const ORDER: [Self; 16] = [
+        Self::Shell,
+        Self::Shells,
+        Self::Output,
+        Self::Agents,
+        Self::AgentHistory,
+        Self::Threads,
+        Self::CtrlR,
+        Self::UpArrow,
+        Self::SyncTo(SyncTo::Cloud),
+        Self::Sharing(Sharing::Always),
+        Self::Sharing(Sharing::Workspaces),
+        Self::Sharing(Sharing::Off),
+        Self::SyncTo(SyncTo::SelfHosted),
+        Self::Server,
+        Self::SyncTo(SyncTo::Off),
+        Self::Go,
+    ];
+
+    /// The page the row is on, `None` for the button that's on each.
+    const fn page(self) -> Option<Page> {
+        match self {
+            Self::CtrlR | Self::UpArrow => Some(Page::Keys),
+            Self::SyncTo(_) | Self::Server | Self::Sharing(_) => Some(Page::Sync),
+            Self::Go => None,
+            Self::Shell
+            | Self::Shells
+            | Self::ShellPick(_)
+            | Self::Output
+            | Self::Threads
+            | Self::AgentHistory
+            | Self::Agents
+            | Self::AgentPick(_) => Some(Page::Features),
+        }
+    }
+
+    /// The key the row binds, if it binds one.
+    const fn key(self) -> Option<Key> {
+        match self {
+            Self::CtrlR => Some(Key::CtrlR),
+            Self::UpArrow => Some(Key::UpArrow),
+            Self::Shell
+            | Self::Shells
+            | Self::ShellPick(_)
+            | Self::Output
+            | Self::Threads
+            | Self::AgentHistory
+            | Self::Agents
+            | Self::AgentPick(_)
+            | Self::SyncTo(_)
+            | Self::Server
+            | Self::Sharing(_)
+            | Self::Go => None,
+        }
+    }
+
+    /// The list the row is or is in, if any.
+    const fn list(self) -> Option<List> {
+        match self {
+            Self::Shells | Self::ShellPick(_) => Some(List::Shells),
+            Self::Agents | Self::AgentPick(_) => Some(List::Agents),
+            Self::Shell
+            | Self::Output
+            | Self::Threads
+            | Self::AgentHistory
+            | Self::CtrlR
+            | Self::UpArrow
+            | Self::SyncTo(_)
+            | Self::Server
+            | Self::Sharing(_)
+            | Self::Go => None,
+        }
+    }
+
+    /// Whether the screen shows the row for `plan`, `None` when it doesn't, and if it does, what
+    /// the row needs while the rest of the screen rules it out.
+    fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
+        match self {
+            Self::Shell => plan.ask::<ShellHistory>(),
+            Self::Shells | Self::ShellPick(_) => plan.ask::<Shells>(),
+            Self::Agents | Self::AgentPick(_) => plan.ask::<Agents>(),
+            Self::Output => plan.ask::<OutputCapture>(),
+            Self::Threads => plan.ask::<Threads>(),
+            Self::AgentHistory => plan.ask::<AgentHistory>(),
+            Self::CtrlR => plan.ask::<CtrlR>(),
+            Self::UpArrow => plan.ask::<UpArrow>(),
+            Self::SyncTo(_) => SyncTo::state(plan),
+            Self::Server => plan.ask::<Sync>().filter(|_| matches!(plan.sync, Sync::Server(_))),
+            Self::Sharing(sharing) => sharing.state(plan),
+            Self::Go => Some(Ok(())),
+        }
+    }
+
+    /// The row's name.
+    const fn label(self) -> &'static str {
+        match self {
+            // The agents' too, under Agent integration.
+            Self::Shell | Self::AgentHistory => "Shell history",
+            Self::Shells => "Shells",
+            Self::ShellPick(_) => "Shell",
+            Self::Agents => "Connected agents",
+            Self::AgentPick(_) => "Agent",
+            Self::Output => "Command output",
+            Self::Threads => "Threads",
+            Self::CtrlR => "Ctrl-R",
+            Self::UpArrow => "Up arrow",
+            Self::SyncTo(to) => to.label(),
+            Self::Server => "Address",
+            Self::Sharing(sharing) => sharing.label(),
+            Self::Go => "Continue",
+        }
+    }
+
+    /// Whether the row goes with a place to sync, under it once it's picked.
+    const fn is_under_sync_to(self) -> bool {
+        matches!(self, Self::Server | Self::Sharing(_))
+    }
+
     /// The question the row comes under.
     const fn heading(self) -> Option<&'static str> {
         match self {
-            Self::Shell | Self::Threads | Self::AgentHistory => Some("What should Atuin capture?"),
-            Self::CtrlR | Self::UpArrow | Self::Mcp => Some("How do you want to search it?"),
-            Self::Sync | Self::Server | Self::Teams | Self::Backfill => {
-                Some("Where should it sync?")
+            Self::Shell | Self::Shells | Self::ShellPick(_) | Self::Output => {
+                Some("What should Atuin capture?")
             }
+            Self::Agents | Self::AgentPick(_) | Self::AgentHistory | Self::Threads => {
+                Some("Agent integration")
+            }
+            Self::CtrlR | Self::UpArrow => Some("Which keys should search your history?"),
+            Self::SyncTo(_) | Self::Server | Self::Sharing(_) => Some("Where should Atuin sync?"),
             Self::Go => None,
         }
     }
 }
 
-const SYNC_CHOICES: [&str; 3] = ["Atuin Cloud", "Your own server", "Off"];
+/// A place the sync page offers to sync to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncTo {
+    Cloud,
+    SelfHosted,
+    Off,
+}
+
+impl SyncTo {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Cloud => "Atuin Cloud",
+            Self::SelfHosted => "Self-hosted Atuin",
+            Self::Off => "Disabled",
+        }
+    }
+
+    /// What syncing there means, if it needs saying.
+    const fn about(self) -> Option<&'static str> {
+        match self {
+            Self::Cloud => Some("Your data is synced E2E encrypted."),
+            Self::SelfHosted => Some("E2E sync through a self-hosted Atuin server you run."),
+            Self::Off => None,
+        }
+    }
+
+    fn state(plan: &Plan) -> Option<Result<(), Needs>> {
+        plan.ask::<Sync>()
+    }
+
+    /// Whether it's where `sync` syncs to.
+    fn is_where(self, sync: &Sync) -> bool {
+        match self {
+            Self::Cloud => *sync == Sync::Cloud,
+            Self::SelfHosted => matches!(sync, Sync::Server(_)),
+            Self::Off => *sync == Sync::Off,
+        }
+    }
+}
+
+/// How Atuin Cloud shares threads with `--teams`: through Atuin for Teams, every thread or those
+/// started in a workspace, or not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sharing {
+    Always,
+    Workspaces,
+    Off,
+}
+
+impl Sharing {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Always => "Always enabled",
+            Self::Workspaces => "Workspace-only",
+            Self::Off => "Disabled",
+        }
+    }
+
+    const fn about(self) -> &'static str {
+        match self {
+            Self::Always => {
+                "Atuin stores your data in the cloud under our standard data policy. All threads \
+                 are uploaded."
+            }
+            Self::Workspaces => {
+                "Atuin uploads the threads started in a directory with an .atuin.lua, under the \
+                 standard data policy."
+            }
+            Self::Off => "Atuin uses only end-to-end encryption to upload your data.",
+        }
+    }
+
+    /// Whether the sync page offers it, as [`Row::state`] says: with `--teams`, once Atuin Cloud
+    /// is picked.
+    fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
+        let teams = plan.ask::<AtuinForTeams>()?;
+        let shares = match self {
+            Self::Always | Self::Workspaces => teams,
+            Self::Off => Ok(()),
+        };
+        (plan.sync == Sync::Cloud).then_some(shares)
+    }
+
+    fn is_picked(self, plan: &Plan) -> bool {
+        let threads = plan.upload_threads.0;
+        match self {
+            Self::Always => plan.atuin_for_teams.0 && threads == ThreadUploads::All,
+            Self::Workspaces => plan.atuin_for_teams.0 && threads == ThreadUploads::Workspaces,
+            Self::Off => !plan.atuin_for_teams.0,
+        }
+    }
+}
+
+/// A list of the first screen, which opens under its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum List {
+    Shells,
+    Agents,
+}
+
+impl List {
+    /// The row it opens under.
+    const fn row(self) -> Row {
+        match self {
+            Self::Shells => Row::Shells,
+            Self::Agents => Row::Agents,
+        }
+    }
+}
+
+/// A page of the first screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    /// What Atuin captures, and who searches it.
+    Features,
+    /// The keys that open Atuin's search, each with an example of it.
+    Keys,
+    /// Where it syncs to, last, since sign-in follows it.
+    Sync,
+}
+
+impl Page {
+    const ORDER: [Self; 3] = [Self::Features, Self::Keys, Self::Sync];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Features => "Features",
+            Self::Keys => "Keybindings",
+            Self::Sync => "Sync",
+        }
+    }
+}
 
 enum Chosen {
     Plan(Plan),
     Quit,
 }
 
-/// The first screen: what to set up.
-#[expect(clippy::struct_excessive_bools, reason = "a choice each, on or off")]
+/// The first screen: what to set up, over its pages.
 struct Choose {
-    shell: bool,
-    threads: bool,
-    agent_history: bool,
-    ctrl_r: bool,
-    up_arrow: bool,
-    mcp: bool,
-    /// Into [`SYNC_CHOICES`].
-    sync: usize,
+    plan: Plan,
+    /// The address typed for their own server, which the plan takes once they continue.
     server: String,
-    /// Atuin for Teams, when setup asks about it.
-    teams: Option<bool>,
-    backfill: bool,
     row: Row,
     error: Option<&'static str>,
+    /// Whether the screen may colour a row the rest rules out, which it strikes through otherwise.
+    colour: bool,
+    /// The list that's open, if any.
+    open: Option<List>,
+    /// The agents the list of agents offers: those here, and any the flags named.
+    agents: Vec<AnyHarness>,
+    page: Page,
+    /// How long the screen has been up, which the examples play by.
+    shown_for: Duration,
+    /// When, by [`Self::shown_for`], each key's example began, so that one turned on plays from
+    /// its start.
+    ctrl_r_from: Duration,
+    up_arrow_from: Duration,
+    /// The first line shown, while they've scrolled with the mouse. A key press brings the row
+    /// they're on back into sight.
+    scrolled: Option<usize>,
+    /// Where they hold the scrollbar's handle, in rows from its top, while they drag it.
+    held: Option<usize>,
+    /// The background of the row they're on, `None` without colour.
+    shade: Option<Color>,
+    /// Whether Atuin is set up here already, so that turning it all off still does something:
+    /// takes it out.
+    set_up_here: bool,
 }
 
 impl Choose {
     fn new(found: &Found, plan: &Plan) -> Self {
-        let (sync, server) = match &plan.sync {
-            Sync::Cloud => (0, found.server.clone()),
-            Sync::Server(address) => (1, Some(address.clone())),
-            Sync::Off => (2, found.server.clone()),
+        let server = match &plan.sync {
+            Sync::Server(address) => Some(address.clone()),
+            Sync::Cloud | Sync::Off => found.server.clone(),
         };
+        // With those Atuin is in, which can be taken out of one that isn't here now.
+        let mut agents = found.agents();
+        let connected = found.connected();
+        for &agent in plan.agents.0.iter().chain(&connected) {
+            if !agents.iter().any(|here| here.name() == agent.name()) {
+                agents.push(agent);
+            }
+        }
+        let mut plan = plan.clone();
+        // The sync page offers Atuin for Teams only with Atuin Cloud, where it can be on.
+        let teams = matches!(plan.ask::<AtuinForTeams>(), Some(Ok(())));
+        plan.atuin_for_teams.0 &= teams && plan.sync == Sync::Cloud;
         Self {
-            shell: plan.shell,
-            threads: plan.threads,
-            agent_history: plan.agent_history,
-            ctrl_r: plan.ctrl_r,
-            up_arrow: plan.up_arrow,
-            mcp: plan.mcp,
-            sync,
+            plan,
             server: server.unwrap_or_default(),
-            teams: plan.teams.map(|teams| teams != Teams::Off),
-            backfill: plan.teams == Some(Teams::On { backfill: true }),
             row: Row::Shell,
             error: None,
+            colour: true,
+            open: None,
+            agents,
+            page: Page::Features,
+            shown_for: Duration::ZERO,
+            ctrl_r_from: Duration::ZERO,
+            up_arrow_from: Duration::ZERO,
+            scrolled: None,
+            held: None,
+            shade: None,
+            set_up_here: found.hooked
+                || !found.inits.is_empty()
+                || !found.connections.is_empty()
+                || found.capture
+                || found.output
+                || found.syncing().is_some(),
         }
     }
 
-    fn rows(&self, found: &Found) -> Vec<Row> {
-        let agents = THREADS && !found.agents.is_empty();
-        let mut rows = vec![Row::Shell];
-        if agents {
-            rows.extend([Row::AgentHistory, Row::Threads]);
-        }
-        // The keys search shell history.
-        if self.shell {
-            rows.extend([Row::CtrlR, Row::UpArrow]);
-        }
-        if agents {
-            rows.push(Row::Mcp);
-        }
-        if SYNC {
-            rows.push(Row::Sync);
-            if self.sync == 1 {
-                rows.push(Row::Server);
+    #[must_use]
+    fn coloured(self, colour: bool) -> Self {
+        Self { colour, ..self }
+    }
+
+    #[must_use]
+    fn shaded(self, shade: Option<Color>) -> Self {
+        Self { shade, ..self }
+    }
+
+    /// The rows the page shows, each with what it needs while the rest rules it out.
+    fn rows(&self) -> Vec<(Row, Option<Needs>)> {
+        let mut rows = Vec::new();
+        for row in Row::ORDER {
+            if row.page().is_some_and(|page| page != self.page) {
+                continue;
             }
-            // Atuin for Teams uploads as the account sync signs in to, so it needs sync.
-            if self.teams.is_some() && self.sync != 2 {
-                rows.push(Row::Teams);
-                if self.teams == Some(true) {
-                    rows.push(Row::Backfill);
-                }
-            }
+            let Some(state) = row.state(&self.plan) else {
+                continue;
+            };
+            let open = state.is_ok() && row.list().is_some() && row.list() == self.open;
+            rows.push((row, state.err()));
+            let picks = match row {
+                Row::Shells if open => (0..HOOKABLE.len()).map(Row::ShellPick).collect(),
+                Row::Agents if open => (0..self.agents.len()).map(Row::AgentPick).collect(),
+                _ => Vec::new(),
+            };
+            rows.extend(picks.into_iter().map(|pick| (pick, None)));
         }
-        rows.push(Row::Go);
         rows
     }
 
     /// What they chose, once they have.
-    fn handle(&mut self, key: KeyEvent, found: &Found) -> Option<Chosen> {
+    fn handle(&mut self, key: KeyEvent) -> Option<Chosen> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Chosen::Quit);
         }
         self.error = None;
-        let rows = self.rows(found);
+        self.scrolled = None;
+        // The cursor passes over a row the rest rules out: there's nothing to change on it.
+        let rows: Vec<_> = self
+            .rows()
+            .into_iter()
+            .filter(|(_, needs)| needs.is_none())
+            .map(|(row, _)| row)
+            .collect();
         let at = rows.iter().position(|&row| row == self.row).unwrap_or(0);
 
         match key.code {
-            KeyCode::Enter if self.row == Row::Go => return self.plan().map(Chosen::Plan),
+            KeyCode::Enter if self.row == Row::Go => return self.next(),
             KeyCode::Enter if self.row == Row::Server => self.row = Row::Go,
             KeyCode::Backspace if self.row == Row::Server => {
                 self.server.pop();
             }
             KeyCode::Char(c) if self.row == Row::Server => self.server.push(c),
+            KeyCode::Esc | KeyCode::Backspace if self.page != Page::Features => {
+                let pages = self.pages();
+                let before = pages.iter().rev().skip_while(|&&page| page != self.page).nth(1);
+                self.page = before.copied().unwrap_or(Page::Features);
+                self.row = Row::Go;
+            }
             KeyCode::Esc | KeyCode::Char('q') => return Some(Chosen::Quit),
             KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
                 self.row = rows[at.saturating_sub(1)];
@@ -418,75 +795,327 @@ impl Choose {
             KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
                 self.row = rows[(at + 1).min(rows.len() - 1)];
             }
-            KeyCode::Enter | KeyCode::Char(' ' | 'l') | KeyCode::Right => self.change(1),
-            KeyCode::Left | KeyCode::Char('h') => self.change(SYNC_CHOICES.len() - 1),
+            KeyCode::Right | KeyCode::Char('l')
+                if matches!(self.row, Row::Shells | Row::Agents) =>
+            {
+                self.open = self.row.list();
+            }
+            KeyCode::Left | KeyCode::Char('h') if self.row.list().is_some() => {
+                if let Some(list) = self.row.list() {
+                    self.open = None;
+                    self.row = list.row();
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ' | 'l' | 'h') | KeyCode::Right | KeyCode::Left => {
+                self.change();
+            }
             _ => {}
         }
         None
     }
 
-    /// Toggle the row, or move its choice on by `by`.
-    fn change(&mut self, by: usize) {
+    /// Drag the scrollbar's handle, or scroll with the wheel, on a terminal `size` big.
+    fn mouse(&mut self, event: MouseEvent, found: &Found, size: Size) {
+        /// As far as a notch of the wheel scrolls in most terminals.
+        const WHEEL_LINES: usize = 3;
+
+        if event.kind == MouseEventKind::Up(MouseButton::Left) {
+            self.held = None;
+            return;
+        }
+        let (lines, focus) = self.lines(found);
+        let keep = focus.map_or(0, |focus| focus.end);
+        let Some(scroll) = self.scroll(lines.len(), keep, size.height) else {
+            return;
+        };
+        let row = usize::from(event.row);
+        let on_bar = event.column == size.width.saturating_sub(1) && row < scroll.height();
+        let scroll = match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if on_bar => {
+                let handle = scroll.handle();
+                // By where they took it, or by its middle when they clicked the bar beside it.
+                let held = if handle.contains(&row) {
+                    row - handle.start
+                } else {
+                    handle.len() / 2
+                };
+                self.held = Some(held);
+                scroll.handle_at(row.saturating_sub(held))
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(held) = self.held else {
+                    return;
+                };
+                scroll.handle_at(row.saturating_sub(held))
+            }
+            MouseEventKind::ScrollDown => scroll.down(WHEEL_LINES),
+            MouseEventKind::ScrollUp => scroll.up(WHEEL_LINES),
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => return,
+        };
+        self.scrolled = Some(scroll.top());
+    }
+
+    /// Toggle the row, or pick it.
+    fn change(&mut self) {
+        let plan = &mut self.plan;
         match self.row {
-            Row::Shell => self.shell = !self.shell,
-            Row::Threads => self.threads = !self.threads,
-            Row::AgentHistory => self.agent_history = !self.agent_history,
-            Row::CtrlR => self.ctrl_r = !self.ctrl_r,
-            Row::UpArrow => self.up_arrow = !self.up_arrow,
-            Row::Mcp => self.mcp = !self.mcp,
-            Row::Sync => self.sync = (self.sync + by) % SYNC_CHOICES.len(),
-            Row::Teams => self.teams = self.teams.map(|on| !on),
-            Row::Backfill => self.backfill = !self.backfill,
+            Row::Shell => plan.shell.0 = !plan.shell.0,
+            // All of it, unless it's all already: then none of it.
+            Row::Shells => {
+                let all = plan.shells.0.len() == HOOKABLE.len();
+                plan.shells.0 = if all {
+                    Vec::new()
+                } else {
+                    HOOKABLE.to_vec()
+                };
+            }
+            Row::Agents => {
+                let all = plan.agents.0.len() == self.agents.len();
+                plan.agents.0 = if all {
+                    Vec::new()
+                } else {
+                    self.agents.clone()
+                };
+            }
+            Row::ShellPick(pick) => {
+                plan.shells.0 = picked(&HOOKABLE, &plan.shells.0, pick, |a, b| a == b);
+            }
+            Row::AgentPick(pick) => {
+                let same = |a: &AnyHarness, b: &AnyHarness| a.name() == b.name();
+                plan.agents.0 = picked(&self.agents, &plan.agents.0, pick, same);
+            }
+            Row::Output => plan.output.0 = !plan.output.0,
+            Row::Threads => plan.threads.0 = !plan.threads.0,
+            Row::AgentHistory => plan.agent_history.0 = !plan.agent_history.0,
+            Row::CtrlR => plan.ctrl_r.0 = !plan.ctrl_r.0,
+            Row::UpArrow => plan.up_arrow.0 = !plan.up_arrow.0,
+            Row::SyncTo(to) => self.pick(to),
+            Row::Sharing(sharing) => self.share(sharing),
             Row::Server | Row::Go => {}
+        }
+        if let Some(key) = self.row.key() {
+            self.replay(key, Duration::ZERO);
         }
     }
 
-    fn plan(&mut self) -> Option<Plan> {
-        let sync = match self.sync {
-            0 => Sync::Cloud,
-            1 => {
-                let address = self.server.trim();
-                if !is_address(address) {
-                    self.error = Some("Enter your server's address, starting http:// or https://");
-                    self.row = Row::Server;
-                    return None;
-                }
-                Sync::Server(address.to_string())
-            }
-            _ => Sync::Off,
+    /// Sync to `to`, which with their own server goes on to its address.
+    fn pick(&mut self, to: SyncTo) {
+        let moved = !to.is_where(&self.plan.sync);
+        self.plan.sync = match to {
+            SyncTo::Cloud => Sync::Cloud,
+            SyncTo::SelfHosted => Sync::Server(self.server.clone()),
+            SyncTo::Off => Sync::Off,
         };
-        if !self.shell && !self.threads && !self.agent_history && !self.mcp && sync == Sync::Off {
-            self.error = Some("Choose something to set up, or press esc to leave");
+        // Atuin for Teams comes only with Atuin Cloud, which `--teams` shares from as it can.
+        if moved {
+            let teams = matches!(self.plan.ask::<AtuinForTeams>(), Some(Ok(())));
+            self.plan.atuin_for_teams.0 = to == SyncTo::Cloud && teams;
+        }
+        if to == SyncTo::SelfHosted {
+            self.row = Row::Server;
+        }
+    }
+
+    /// Share threads from Atuin Cloud as `sharing` says.
+    const fn share(&mut self, sharing: Sharing) {
+        match sharing {
+            Sharing::Always => {
+                self.plan.atuin_for_teams.0 = true;
+                self.plan.upload_threads.0 = ThreadUploads::All;
+            }
+            Sharing::Workspaces => {
+                self.plan.atuin_for_teams.0 = true;
+                self.plan.upload_threads.0 = ThreadUploads::Workspaces;
+            }
+            Sharing::Off => self.plan.atuin_for_teams.0 = false,
+        }
+    }
+
+    /// Go on from the page they're on: to the next page with something to ask, or with the plan.
+    fn next(&mut self) -> Option<Chosen> {
+        let pages = self.pages();
+        let after = pages.iter().skip_while(|&&page| page != self.page).nth(1).copied();
+        let plan = self.plan(after.is_none())?;
+        let Some(page) = after else {
+            return Some(Chosen::Plan(plan));
+        };
+        self.page = page;
+        let first = self.rows().into_iter().find(|(_, needs)| needs.is_none());
+        self.row = first.map_or(Row::Go, |(row, _)| row);
+        // Out of step, so that the two examples don't move at once.
+        self.replay(Key::CtrlR, Duration::ZERO);
+        self.replay(Key::UpArrow, UP_ARROW_LAGS);
+        None
+    }
+
+    /// The pages with something to ask, in order. The keys page asks while shell history is on.
+    fn pages(&self) -> Vec<Page> {
+        let asks = |page| {
+            let on_page = Row::ORDER.into_iter().filter(|row| row.page() == Some(page));
+            on_page.into_iter().any(|row| matches!(row.state(&self.plan), Some(Ok(()))))
+        };
+        Page::ORDER.into_iter().filter(|&page| asks(page)).collect()
+    }
+
+    /// Play the example of `key` from its start, `after` a while.
+    const fn replay(&mut self, key: Key, after: Duration) {
+        let from = self.shown_for.saturating_add(after);
+        match key {
+            Key::CtrlR => self.ctrl_r_from = from,
+            Key::UpArrow => self.up_arrow_from = from,
+        }
+    }
+
+    /// The example of `key` as it's playing, if the key is on.
+    fn example(&self, key: Key) -> Option<Vec<Line<'static>>> {
+        let from = match key {
+            Key::CtrlR => self.ctrl_r_from,
+            Key::UpArrow => self.up_arrow_from,
+        };
+        let at = self.shown_for.saturating_sub(from);
+        key.is_on(&self.plan).then(|| example(key, at, UNDER_LABEL))
+    }
+
+    /// The pages, the one they're on bold, when there's more than one.
+    fn crumbs(&self) -> Vec<Span<'static>> {
+        let pages = self.pages();
+        if pages.len() < 2 {
+            return Vec::new();
+        }
+        let mut spans = vec![Span::raw("   ")];
+        for (i, page) in pages.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(dim(" › "));
+            }
+            spans.push(if page == self.page {
+                Span::raw(page.name()).bold()
+            } else {
+                dim(page.name())
+            });
+        }
+        spans
+    }
+
+    /// The plan, if setup can set it up, or `None` with an error on the row to change. Sync, and
+    /// whether there's anything to set up at all, wait until they're `done`, on the last page.
+    fn plan(&mut self, done: bool) -> Option<Plan> {
+        if done && matches!(self.plan.sync, Sync::Server(_)) {
+            let address = self.server.trim();
+            if !is_address(address) {
+                self.error = Some("Enter your server's address, starting http:// or https://");
+                self.focus(Row::Server);
+                return None;
+            }
+            self.plan.sync = Sync::Server(address.to_string());
+        }
+        let plan = self.plan.effective();
+        if plan.shell.0 && plan.shells.0.is_empty() {
+            self.error = Some("Choose a shell to hook into, or turn shell history off");
+            self.focus(Row::Shells);
             return None;
         }
-        let teams = self.teams.map(|on| {
-            if on && sync != Sync::Off {
-                Teams::On {
-                    backfill: self.backfill,
-                }
-            } else {
-                Teams::Off
-            }
-        });
-        Some(Plan {
-            shell: self.shell,
-            threads: self.threads,
-            agent_history: self.agent_history,
-            ctrl_r: self.ctrl_r,
-            up_arrow: self.up_arrow,
-            mcp: self.mcp,
-            sync,
-            teams,
-        })
+        let chosen =
+            [plan.shell.0, plan.output.0, plan.threads.0, plan.agent_history.0, plan.mcp.0];
+        if done && !self.set_up_here && !chosen.contains(&true) && plan.sync == Sync::Off {
+            self.error = Some("Choose something to set up, or press ctrl-c to leave");
+            return None;
+        }
+        Some(plan)
+    }
+
+    /// Put the cursor on `row`, on its page.
+    fn focus(&mut self, row: Row) {
+        self.page = row.page().unwrap_or(self.page);
+        self.row = row;
     }
 
     fn draw(&self, frame: &mut Frame<'_>, found: &Found) {
-        let mut lines = title();
-        lines.extend(found_lines(found));
+        let (mut lines, focus) = self.lines(found);
+        let focused = focus.as_ref().map(|focus| focus.start);
+        let area = frame.area();
+        let footer = self.footer();
+        if fits(lines.len(), area.height) {
+            lines.extend([Line::default(), footer]);
+            frame.render_widget(Paragraph::new(lines), area);
+            self.shade(frame, area, focused);
+            return;
+        }
+
+        // The page needs all of the terminal, so it scrolls above the footer, which stays at the
+        // bottom.
+        let [body, bottom] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        frame.render_widget(Paragraph::new(footer), bottom);
+        let keep = focus.map_or(0, |focus| focus.end);
+        let Some(scroll) = self.scroll(lines.len(), keep, area.height) else {
+            frame.render_widget(Paragraph::new(lines), body);
+            self.shade(frame, body, focused);
+            return;
+        };
+        let [page, bar] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(1)]).areas(body);
+        let top = u16::try_from(scroll.top()).unwrap_or(u16::MAX);
+        frame.render_widget(Paragraph::new(lines).scroll((top, 0)), page);
+        frame.render_widget(Paragraph::new(scroll.bar(self.held.is_some())), bar);
+        self.shade(frame, page, focused.and_then(|line| line.checked_sub(scroll.top())));
+    }
+
+    /// Shade the row they're on, `line` lines down `area`, all the way across it but where it has
+    /// a background of its own, as the button does.
+    fn shade(&self, frame: &mut Frame<'_>, area: Rect, line: Option<usize>) {
+        let (Some(shade), Some(line)) = (self.shade, line) else {
+            return;
+        };
+        let Ok(line) = u16::try_from(line) else {
+            return;
+        };
+        if line < area.height {
+            let row = Rect {
+                y: area.y + line,
+                height: 1,
+                ..area
+            };
+            let buf = frame.buffer_mut();
+            for at in row.positions() {
+                if let Some(cell) = buf.cell_mut(at)
+                    && cell.bg == Color::Reset
+                {
+                    cell.set_bg(shade);
+                }
+            }
+        }
+    }
+
+    /// How far down a page `lines` long is scrolled on a terminal `height` tall, if it doesn't
+    /// fit above the footer: where they've scrolled it to, or just far enough to show its first
+    /// `keep` lines.
+    fn scroll(&self, lines: usize, keep: usize, height: u16) -> Option<Scroll> {
+        if fits(lines, height) {
+            return None;
+        }
+        // All but the footer's row.
+        let height = usize::from(height).saturating_sub(1);
+        let top = self.scrolled.unwrap_or_else(|| keep.saturating_sub(height));
+        Scroll::new(lines, height, top)
+    }
+
+    /// The page's lines, and those of the row they're on: its own, then any example or
+    /// description under it.
+    fn lines(&self, found: &Found) -> (Vec<Line<'static>>, Option<Range<usize>>) {
+        let mut lines = title(self.crumbs());
+        if self.page == Page::Features {
+            lines.extend(found_lines(found));
+        }
 
         let mut heading = None;
-        let mut focus = 0;
-        for (i, row) in self.rows(found).into_iter().enumerate() {
+        let mut previous: Option<Row> = None;
+        let mut focus = None;
+        for (i, (row, needs)) in self.rows().into_iter().enumerate() {
             if row.heading() != heading && row != Row::Server {
                 heading = row.heading();
                 if i > 0 {
@@ -496,96 +1125,176 @@ impl Choose {
                     lines.push(Line::from(format!("  {heading}").bold()));
                 }
             }
+            // What comes with a place to sync stands apart from what it means.
+            if row.is_under_sync_to() && matches!(previous, Some(Row::SyncTo(_))) {
+                lines.push(Line::default());
+            }
+            if matches!(row, Row::Sharing(_)) && !matches!(previous, Some(Row::Sharing(_))) {
+                let indent = Span::raw(" ".repeat(UNDER_LABEL));
+                lines.push(Line::from(vec![indent, Span::raw("Sharable threads").bold()]));
+            }
             let at = row == self.row;
+            let line = |needs| ruled_out(row, needs, self.colour);
+            let ruled_out = needs.is_some();
+            let start = lines.len();
+            lines.push(needs.map_or_else(|| self.line(row, at, found), line));
+            if let Row::SyncTo(to) = row
+                && let Some(about) = to.about()
+            {
+                lines.extend(paragraph(about, UNDER_LABEL, Style::new().dim()));
+            }
+            if let Row::Sharing(sharing) = row {
+                let indent = UNDER_LABEL + NESTED.len();
+                lines.extend(paragraph(sharing.about(), indent, Style::new().dim()));
+            }
+            // What sharing means, once they've seen the ways to.
+            if row == Row::Sharing(Sharing::Off) {
+                let note = if self.plan.effective().atuin_for_teams.0 {
+                    "Standard data protection is not end-to-end encrypted. Your data is securely \
+                     stored on Atuin's servers, under our data policy."
+                } else {
+                    "E2E-only encryption disables thread sharing, requires you to manage your own \
+                     key, and prevents you from using Atuin's web interface."
+                };
+                lines.push(Line::default());
+                lines.extend(paragraph(note, UNDER_LABEL, Style::new().yellow()));
+                lines.push(Line::default());
+            }
+            if !ruled_out && let Some(example) = row.key().and_then(|key| self.example(key)) {
+                lines.extend(example);
+            }
             if at {
-                focus = lines.len();
+                focus = Some(start..lines.len());
             }
-            lines.push(match row {
-                Row::Shell => choice(at, self.shell, "Shell history", "all your commands"),
-                Row::Threads => choice(
-                    at,
-                    self.threads,
-                    "Agent threads",
-                    "full agent sessions, resumable cross harness",
-                ),
-                Row::AgentHistory => choice(
-                    at,
-                    self.agent_history,
-                    "Agent shell history",
-                    "all your agents' commands",
-                ),
-                Row::CtrlR => choice(at, self.ctrl_r, "Ctrl-R", "search shell history"),
-                Row::UpArrow => choice(at, self.up_arrow, "Up arrow", "also search shell history"),
-                Row::Mcp => {
-                    choice(at, self.mcp, "Agent search", "search history and threads over MCP")
-                }
-                Row::Sync => {
-                    let about = match self.sync {
-                        0 if found.syncing() == Some(Sync::Cloud) => "signed in",
-                        0 => "encrypted, on all your machines",
-                        1 => "",
-                        _ => "keep everything on this machine",
-                    };
-                    let value = Span::raw(format!("‹ {} ›", SYNC_CHOICES[self.sync]));
-                    let value = if at {
-                        value.fg(ACCENT).bold()
-                    } else {
-                        value
-                    };
-                    let spans = vec![value, dim(format!("  {about}"))];
-                    toggle(at, None, self.sync != 2, "Sync", spans)
-                }
-                Row::Teams => choice(
-                    at,
-                    self.teams == Some(true),
-                    "Atuin for Teams",
-                    "share with your team, not end-to-end encrypted",
-                ),
-                Row::Backfill => choice(
-                    at,
-                    self.backfill,
-                    "Upload what's here",
-                    "the history and threads Atuin already has",
-                ),
-                Row::Go => button(at, "Continue"),
-                Row::Server => {
-                    let mut spans = vec![Span::raw(" ".repeat(8)), pad("Address", at)];
-                    if self.server.is_empty() && !at {
-                        spans.push(dim("https://"));
-                    } else {
-                        spans.push(Span::raw(self.server.clone()));
-                    }
-                    if at {
-                        spans.push(Span::raw(" ").reversed());
-                    }
-                    Line::from(spans)
-                }
-            });
+            previous = Some(row);
         }
+        (lines, focus)
+    }
 
-        lines.push(Line::default());
-        lines.push(match self.error {
-            Some(error) => Line::from(Span::raw(format!("  {error}")).yellow()),
-            None if self.row == Row::Go => {
-                hints(&[("enter", "continue"), ("↑↓", "move"), ("esc", "quit")])
-            }
-            None if self.row == Row::Server => hints(&[("enter", "next"), ("esc", "quit")]),
-            None if self.row == Row::Sync => {
-                hints(&[("enter", "change"), ("↑↓", "move"), ("esc", "quit")])
-            }
-            None => hints(&[("enter", "toggle"), ("↑↓", "move"), ("esc", "quit")]),
-        });
-
-        // A short terminal can't show it all: scroll to keep the row they're on, and the two lines
-        // after it (on Continue, the hint), in sight. An error, on the last line, always shows.
-        let shown = if self.error.is_some() {
-            lines.len()
+    /// The line under the page: what's wrong, or the keys they can press.
+    fn footer(&self) -> Line<'static> {
+        let esc = if self.page == Page::Features {
+            ("esc", "quit")
         } else {
-            (focus + 3).min(lines.len())
+            ("esc", "back")
         };
-        let scroll = shown.saturating_sub(usize::from(frame.area().height));
-        let scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
-        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), frame.area());
+        match (self.error, self.row) {
+            (Some(error), _) => Line::from(Span::raw(format!("  {error}")).yellow()),
+            (None, Row::Go) => hints(&[("enter", "continue"), ("↑↓", "move"), esc]),
+            (None, Row::Server) => hints(&[("enter", "next"), esc]),
+            (None, Row::SyncTo(_) | Row::Sharing(_)) => {
+                hints(&[("enter", "pick"), ("↑↓", "move"), esc])
+            }
+            (None, Row::ShellPick(_) | Row::AgentPick(_)) => {
+                hints(&[("enter", "toggle"), ("←", "close"), ("↑↓", "move")])
+            }
+            (None, Row::Shells | Row::Agents) if self.open == self.row.list() => {
+                hints(&[("enter", "toggle all"), ("←", "close"), ("↑↓", "move")])
+            }
+            (None, Row::Shells | Row::Agents) => {
+                hints(&[("enter", "toggle all"), ("→", "open"), ("↑↓", "move")])
+            }
+            (
+                None,
+                Row::Shell
+                | Row::Output
+                | Row::Threads
+                | Row::AgentHistory
+                | Row::CtrlR
+                | Row::UpArrow,
+            ) => hints(&[("enter", "toggle"), ("↑↓", "move"), esc]),
+        }
+    }
+
+    /// The row of a list, `at` when it's the one they're on: what's picked of it, and whether it's
+    /// open.
+    fn list(&self, at: bool, row: Row, picked: &[&str]) -> Line<'static> {
+        let offered = match row {
+            Row::Agents => self.agents.len(),
+            _ => HOOKABLE.len(),
+        };
+        let check = match picked.len() {
+            0 => Check::Off,
+            n if n >= offered => Check::On,
+            _ => Check::Partly,
+        };
+        let fold = if self.open == row.list() {
+            Fold::Open
+        } else {
+            Fold::Closed
+        };
+        let summary = if picked.is_empty() {
+            "none".to_owned()
+        } else {
+            names(picked)
+        };
+        let about = vec![dim(summary)];
+        toggle(at, Some(fold), Some(check), !picked.is_empty(), row.label(), about)
+    }
+
+    /// The line `row` is drawn as, `at` when it's the one they're on.
+    fn line(&self, row: Row, at: bool, found: &Found) -> Line<'static> {
+        match row {
+            Row::Shell => choice(at, self.plan.shell.0, row.label(), "all your commands"),
+            Row::Shells => {
+                let picked: Vec<_> = self.plan.shells.0.iter().map(|shell| shell.name()).collect();
+                self.list(at, row, &picked)
+            }
+            Row::ShellPick(pick) => {
+                let shell = HOOKABLE[pick];
+                entry(at, self.plan.shells.0.contains(&shell), shell.name())
+            }
+            Row::Agents => {
+                let picked: Vec<_> = self.plan.agents.0.iter().map(Harness::display_name).collect();
+                self.list(at, row, &picked)
+            }
+            Row::AgentPick(pick) => {
+                let agent = self.agents[pick];
+                let on = self.plan.agents.0.iter().any(|picked| picked.name() == agent.name());
+                entry(at, on, agent.display_name())
+            }
+            Row::Output => choice(at, self.plan.output.0, row.label(), "what your commands print"),
+            Row::Threads => choice(
+                at,
+                self.plan.threads.0,
+                row.label(),
+                "capture full agent sessions, resumable across harnesses",
+            ),
+            Row::AgentHistory => {
+                choice(at, self.plan.agent_history.0, row.label(), "capture your agents' commands")
+            }
+            Row::CtrlR => {
+                key_choice(at, self.plan.ctrl_r.0, row.label(), "opens Atuin's history search")
+            }
+            Row::UpArrow => key_choice(
+                at,
+                self.plan.up_arrow.0,
+                row.label(),
+                "opens the search on your last command",
+            ),
+            Row::SyncTo(to) => {
+                let signed_in = found.syncing().is_some_and(|syncing| to.is_where(&syncing));
+                let picked = to.is_where(&self.plan.sync);
+                option(at, "", picked, to.label(), signed_in.then_some("signed in"))
+            }
+            Row::Sharing(sharing) => {
+                option(at, NESTED, sharing.is_picked(&self.plan), sharing.label(), None)
+            }
+            Row::Go => button(at, row.label()),
+            Row::Server => {
+                let mut spans = lead(at, None).to_vec();
+                spans.extend([Span::raw("    "), pad(row.label(), at)]);
+                if self.server.is_empty() && !at {
+                    spans.push(dim("https://"));
+                } else {
+                    spans.push(Span::raw(self.server.clone()));
+                }
+                if at {
+                    spans.push(Span::raw(" ").reversed());
+                }
+                Line::from(spans)
+            }
+        }
     }
 }
 
@@ -703,7 +1412,7 @@ impl Running {
 
     /// Draws all but the sign-in link, and says where that goes.
     fn draw(&self, frame: &mut Frame<'_>, tick: usize) -> Option<Link> {
-        let mut lines = title();
+        let mut lines = title(Vec::new());
         let mut hint = None;
         let mut url_at = None;
 
@@ -840,12 +1549,11 @@ fn height(lines: &[Line<'static>], area: Rect) -> u16 {
     (area.top()..area.bottom()).rfind(|&y| !blank(y)).map_or(0, |y| y + 1 - area.top())
 }
 
-fn title() -> Vec<Line<'static>> {
-    vec![
-        Line::default(),
-        Line::from(vec![Span::raw("  "), "atuin".fg(ACCENT).bold(), " setup".bold()]),
-        Line::default(),
-    ]
+/// "atuin setup", then `after` on the same line.
+fn title(after: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    let mut title = vec![Span::raw("  "), "atuin".fg(ACCENT).bold(), " setup".bold()];
+    title.extend(after);
+    vec![Line::default(), Line::from(title), Line::default()]
 }
 
 /// "Found 48,210 commands in your zsh history / and 353 threads from Claude Code and Codex."
@@ -951,7 +1659,7 @@ impl Import {
     }
 
     fn draw(&self, frame: &mut Frame<'_>, offer: &Offer, found: &Found) {
-        let mut lines = title();
+        let mut lines = title(Vec::new());
         lines.push(Line::from("  Import what's already here?".bold()));
         if let Some((shell, commands)) = offer.history {
             let about = format!("{} commands from {shell}", count(commands));
@@ -983,23 +1691,172 @@ impl Import {
 
 /// A row of the first screen: a toggle, its name and what it means.
 fn choice(at: bool, on: bool, label: &'static str, about: impl Into<String>) -> Line<'static> {
-    toggle(at, Some(on), on, label, vec![dim(about)])
+    let check = if on {
+        Check::On
+    } else {
+        Check::Off
+    };
+    toggle(at, None, Some(check), on, label, vec![dim(about)])
 }
 
-/// A row: a checkbox, if `checked` is one, its name and what it means, dim when not `on`.
+/// A place to sync to: a radio button, its name, and what it says about it.
+fn option(
+    at: bool,
+    indent: &'static str,
+    picked: bool,
+    label: &'static str,
+    aside: Option<&'static str>,
+) -> Line<'static> {
+    let radio = if picked {
+        "(*) ".fg(ACCENT).bold()
+    } else {
+        "( ) ".dim()
+    };
+    let mut spans = lead(at, None).to_vec();
+    spans.extend([Span::raw(indent), radio, pad(label, at)]);
+    spans.extend(aside.map(dim));
+    Line::from(spans)
+}
+
+/// A row of the keys page: a toggle, the key, and what it does, or that the shell keeps it.
+fn key_choice(at: bool, on: bool, label: &'static str, does: &'static str) -> Line<'static> {
+    let check = if on {
+        Check::On
+    } else {
+        Check::Off
+    };
+    let about = if on {
+        does
+    } else {
+        "left to your shell"
+    };
+    toggle(at, None, Some(check), on, label, vec![Span::raw(about).italic().dim()])
+}
+
+/// A row the rest of the first screen rules out, with what it needs: grey, or without colour,
+/// struck through. It's off while ruled out, whatever was chosen for it.
+fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
+    let (name, aside) = if colour {
+        (Style::new().fg(Color::DarkGray), Style::new().fg(Color::Yellow))
+    } else {
+        (Style::new().add_modifier(Modifier::CROSSED_OUT), Style::new())
+    };
+    let mark = |text: &'static str| {
+        if colour {
+            Span::styled(text, name)
+        } else {
+            text.dim()
+        }
+    };
+    // A list's row keeps its arrow: it can open once it isn't ruled out.
+    let arrow = if row.list().is_some() {
+        "▸ "
+    } else {
+        "  "
+    };
+    let box_ = if matches!(row, Row::SyncTo(_) | Row::Sharing(_)) {
+        "( ) "
+    } else {
+        "[ ] "
+    };
+    let indent = if row.is_under_sync_to() {
+        NESTED
+    } else {
+        ""
+    };
+    let label = row.label();
+    // Apart from the name, so that the padding isn't struck through.
+    let pad = " ".repeat(LABEL_WIDTH.saturating_sub(indent.len() + label.len()));
+    Line::from(vec![
+        Span::raw("  "),
+        cursor(false),
+        mark(arrow),
+        Span::raw(indent),
+        mark(box_),
+        Span::styled(label, name),
+        Span::raw(pad),
+        Span::styled(format!("needs {}", needs.what), aside),
+    ])
+}
+
+/// An entry of an open list, under its row's name: a checkbox and its name.
+fn entry(at: bool, on: bool, name: &'static str) -> Line<'static> {
+    let box_ = if on {
+        "[✓] ".fg(ACCENT).bold()
+    } else {
+        "[ ] ".dim()
+    };
+    let name = if at {
+        Span::raw(name).bold()
+    } else {
+        Span::raw(name)
+    };
+    let mut spans = lead(at, None).to_vec();
+    spans.extend([Span::raw(NESTED), box_, name]);
+    let line = Line::from(spans);
+    if on {
+        line
+    } else {
+        line.style(Style::default().add_modifier(Modifier::DIM))
+    }
+}
+
+/// What's `picked` of `offered` once its entry `pick` is toggled, in the order offered.
+fn picked<T: Copy>(
+    offered: &[T],
+    picked: &[T],
+    pick: usize,
+    same: impl Fn(&T, &T) -> bool,
+) -> Vec<T> {
+    let was = |item: &T| picked.iter().any(|picked| same(picked, item));
+    let toggled = offered.iter().enumerate().filter(|&(i, item)| (i == pick) != was(item));
+    toggled.map(|(_, &item)| item).collect()
+}
+
+/// What a checkbox shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Check {
+    On,
+    /// Some of a list, not all of it.
+    Partly,
+    Off,
+}
+
+/// Whether a list is open, as the arrow left of its row's checkbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fold {
+    Open,
+    Closed,
+}
+
+/// What's left of a row's checkbox: the cursor, if `at` it, and room for a list's arrow.
+fn lead(at: bool, fold: Option<Fold>) -> [Span<'static>; 3] {
+    let arrow = match fold {
+        Some(Fold::Open) => "▾ ",
+        Some(Fold::Closed) => "▸ ",
+        None => "  ",
+    };
+    [Span::raw("  "), cursor(at), Span::raw(arrow)]
+}
+
+/// A row: a list's arrow, if `fold` is one, a checkbox, if `checked` is one, its name and what it
+/// means, dim when not `on`.
 fn toggle(
     at: bool,
-    checked: Option<bool>,
+    fold: Option<Fold>,
+    checked: Option<Check>,
     on: bool,
     label: &'static str,
     about: Vec<Span<'static>>,
 ) -> Line<'static> {
     let box_ = match checked {
-        Some(true) => "[✓] ".fg(ACCENT).bold(),
-        Some(false) => "[ ] ".dim(),
+        Some(Check::On) => "[✓] ".fg(ACCENT).bold(),
+        Some(Check::Partly) => "[-] ".fg(ACCENT).bold(),
+        Some(Check::Off) => "[ ] ".dim(),
         None => Span::raw("    "),
     };
-    let mut spans = vec![Span::raw("  "), cursor(at), box_, pad(label, at)];
+    let mut spans = lead(at, fold).to_vec();
+    spans.extend([box_, pad(label, at)]);
     spans.extend(about);
     let line = Line::from(spans);
     if on {
@@ -1025,11 +1882,81 @@ fn button(at: bool, label: &'static str) -> Line<'static> {
     } else {
         text.fg(ACCENT)
     };
-    Line::from(vec![Span::raw("  "), cursor(at), text])
+    let mut spans = lead(at, None).to_vec();
+    spans.push(text);
+    Line::from(spans)
 }
 
+/// How wide a row's name is padded to, so that what it means lines up.
+const LABEL_WIDTH: usize = 21;
+
+/// Whether a page `lines` long fits a terminal `height` tall, with a line's gap and the footer under
+/// it.
+fn fits(lines: usize, height: u16) -> bool {
+    lines + 2 <= usize::from(height)
+}
+
+/// Greys of the 256-colour palette a step off black, and off white, to shade the row they're on.
+const SHADE_ON_DARK: Color = Color::Indexed(236);
+const SHADE_ON_LIGHT: Color = Color::Indexed(254);
+
+/// The shade under the row they're on, for a terminal whose background `colorfgbg` gives, as
+/// `COLORFGBG` does in the terminals that set it. Most don't, so a dark one is taken.
+fn row_shade(colorfgbg: Option<&str>) -> Color {
+    // "fg;bg", or "fg;default;bg", in the 16 ANSI colours, of which 7 and 15 are white.
+    let background = colorfgbg.and_then(|value| value.rsplit(';').next());
+    if matches!(background, Some("7" | "15")) {
+        SHADE_ON_LIGHT
+    } else {
+        SHADE_ON_DARK
+    }
+}
+
+/// How far the up arrow's example plays behind ctrl-r's, which it stays as they play as long.
+const UP_ARROW_LAGS: Duration = Duration::from_secs(2);
+
+/// Where text that runs on wraps, so that it reads in an 80-column terminal at the deepest indent.
+const WRAP_COLUMNS: usize = 62;
+
+/// `text`, wrapped, each line `indent` columns in and in `style`.
+fn paragraph(text: &str, indent: usize, style: Style) -> Vec<Line<'static>> {
+    let indent = " ".repeat(indent);
+    let lines = wrap(text, WRAP_COLUMNS).into_iter();
+    lines
+        .map(|line| Line::from(vec![Span::raw(indent.clone()), Span::styled(line, style)]))
+        .collect()
+}
+
+/// `text` in lines at most `columns` wide, broken between words. A word longer than that has a
+/// line to itself.
+fn wrap(text: &str, columns: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr as _;
+
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.width() + 1 + word.width() > columns {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// How much further in an entry under a row starts than the row.
+const NESTED: &str = "    ";
+
+/// The column a row's name starts at, past the cursor, a list's arrow and the checkbox.
+const UNDER_LABEL: usize = 10;
+
 fn pad(label: &'static str, at: bool) -> Span<'static> {
-    let label = Span::raw(format!("{label:<21}"));
+    let label = Span::raw(format!("{label:<LABEL_WIDTH$}"));
     if at {
         label.bold()
     } else {
@@ -1062,6 +1989,11 @@ mod tests {
     use clap::Parser as _;
     use rstest::{fixture, rstest};
 
+    use super::super::super::init::Shell;
+    #[cfg(feature = "octavo")]
+    use super::super::Teams;
+    use super::super::plan::{Asks, Backfill, Mcp, UploadThreads};
+    use super::super::{SYNC, THREADS};
     use super::*;
 
     #[fixture]
@@ -1072,21 +2004,82 @@ mod tests {
             threads_here: 0,
             agents: vec![(AnyHarness::ClaudeCode(Ccode), 300), (AnyHarness::Codex(Codex), 53)],
             hooked: false,
+            inits: Vec::new(),
+            shells: vec![Shell::Zsh, Shell::Bash],
             ctrl_r: true,
             up_arrow: true,
             capture: false,
+            output: false,
+            saves_output: false,
+            daemon: false,
+            daemon_running: false,
+            daemon_off: false,
             signed_in: false,
             server: None,
+            upload_threads: ThreadUploads::All,
+            connections: Vec::new(),
+            teams: false,
         }
     }
 
     /// The plan `atuin setup` with no flags starts the screen from.
     fn preset(found: &Found) -> Plan {
-        super::super::Cmd::parse_from(["setup"]).plan(found, false)
+        super::super::Cmd::parse_from(["setup"]).plan(found, false).unwrap()
     }
 
-    fn press(choose: &mut Choose, found: &Found, keys: &[KeyCode]) -> Option<Chosen> {
-        keys.iter().find_map(|&code| choose.handle(KeyEvent::from(code), found))
+    fn press(choose: &mut Choose, keys: &[KeyCode]) -> Option<Chosen> {
+        keys.iter().find_map(|&code| choose.handle(KeyEvent::from(code)))
+    }
+
+    /// Continue from each page, as they've left it, to the plan.
+    fn finish(choose: &mut Choose) -> Plan {
+        for _ in Page::ORDER {
+            choose.row = Row::Go;
+            if let Some(Chosen::Plan(plan)) = press(choose, &[KeyCode::Enter]) {
+                return plan;
+            }
+        }
+        panic!("expected a plan, got {:?}", choose.error);
+    }
+
+    /// `page`, as Continue gets to it from `plan`.
+    fn on_page(found: &Found, plan: &Plan, page: Page) -> Choose {
+        let mut choose = Choose::new(found, plan);
+        while choose.page != page {
+            choose.row = Row::Go;
+            assert!(press(&mut choose, &[KeyCode::Enter]).is_none(), "{page:?} isn't asked");
+        }
+        choose
+    }
+
+    /// The keys page, as `atuin setup` with no flags gets to it.
+    fn on_the_keys(found: &Found) -> Choose {
+        on_page(found, &preset(found), Page::Keys)
+    }
+
+    /// The plan `atuin setup --teams` starts the screen from.
+    #[cfg(feature = "octavo")]
+    fn teams(found: &Found) -> Plan {
+        super::super::Cmd::parse_from(["setup", "--teams"]).plan(found, false).unwrap()
+    }
+
+    /// The text of each row of the screen.
+    fn shown(choose: &Choose, found: &Found) -> Vec<String> {
+        shown_on(choose, found, 40)
+    }
+
+    /// A screen 80 columns wide and `height` rows tall.
+    fn screen(choose: &Choose, found: &Found, height: u16) -> Buffer {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height)).unwrap();
+        terminal.draw(|frame| choose.draw(frame, found)).unwrap().buffer.clone()
+    }
+
+    /// The text of each row of a screen `height` rows tall.
+    fn shown_on(choose: &Choose, found: &Found, height: u16) -> Vec<String> {
+        let shown = screen(choose, found, height);
+        let rows = shown.content().chunks(80);
+        rows.map(|cells| cells.iter().map(ratatui::buffer::Cell::symbol).collect()).collect()
     }
 
     fn text(lines: &[Line<'_>]) -> Vec<String> {
@@ -1121,33 +2114,44 @@ mod tests {
     #[rstest]
     fn the_button_takes_everything_found(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
-        choose.row = Row::Go;
-        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
-            panic!("expected a plan");
-        };
-        assert_eq!(plan, Plan {
-            shell: true,
-            threads: THREADS,
-            agent_history: THREADS,
-            ctrl_r: true,
-            up_arrow: true,
-            mcp: THREADS,
+        assert_eq!(finish(&mut choose), Plan {
+            asks: Asks {
+                agents: true,
+                teams: false,
+                searchable: false,
+                unhooks: false,
+            },
+            shell: ShellHistory(true),
+            shells: Shells(vec![Shell::Zsh, Shell::Bash]),
+            output: OutputCapture(false),
+            threads: Threads(THREADS),
+            agent_history: AgentHistory(THREADS),
+            agents: Agents(found.agents()),
+            ctrl_r: CtrlR(true),
+            up_arrow: UpArrow(true),
+            mcp: Mcp(THREADS),
+            daemon: super::super::plan::Daemon(true),
             sync: if SYNC {
                 Sync::Cloud
             } else {
                 Sync::Off
             },
-            teams: None,
+            atuin_for_teams: AtuinForTeams(false),
+            upload_threads: UploadThreads(ThreadUploads::All),
+            backfill: Backfill(false),
         });
     }
 
     #[rstest]
-    fn continue_stays_in_sight_in_a_short_terminal(found: Found) {
+    #[case::features(Page::Features)]
+    #[case::keys(Page::Keys)]
+    #[cfg_attr(feature = "sync", case::sync(Page::Sync))]
+    fn continue_stays_in_sight_in_a_short_terminal(found: Found, #[case] page: Page) {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 12)).unwrap();
-        let mut choose = Choose::new(&found, &preset(&found));
+        let mut choose = on_page(&found, &preset(&found), page);
         while choose.row != Row::Go {
-            press(&mut choose, &found, &[KeyCode::Down]);
+            press(&mut choose, &[KeyCode::Down]);
         }
         let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
         let text: String = shown.content().iter().map(ratatui::buffer::Cell::symbol).collect();
@@ -1155,127 +2159,553 @@ mod tests {
     }
 
     #[rstest]
-    fn no_agents_no_agent_rows(mut found: Found) {
-        found.agents.clear();
-        let choose = Choose::new(&found, &preset(&found));
-        let rows = choose.rows(&found);
-        assert!(![Row::Threads, Row::AgentHistory, Row::Mcp].iter().any(|row| rows.contains(row)));
-        assert!(!choose.threads && !choose.agent_history && !choose.mcp);
+    #[case::fits(40, false)]
+    #[case::too_short(12, true)]
+    fn a_page_taller_than_the_terminal_has_a_scrollbar(
+        found: Found,
+        #[case] height: u16,
+        #[case] expected: bool,
+    ) {
+        let shown = shown_on(&on_the_keys(&found), &found, height);
+        let side: String = shown.iter().filter_map(|row| row.chars().last()).collect();
+        assert_eq!(side.contains('█'), expected, "{side}");
     }
 
     #[rstest]
-    fn search_keys_come_with_shell_history(found: Found) {
+    #[case::dragging_the_handle(&[
+        (MouseEventKind::Down(MouseButton::Left), 0),
+        (MouseEventKind::Drag(MouseButton::Left), 11),
+        (MouseEventKind::Up(MouseButton::Left), 11),
+    ])]
+    #[case::clicking_the_bar_under_it(&[
+        (MouseEventKind::Down(MouseButton::Left), 10),
+        (MouseEventKind::Up(MouseButton::Left), 10),
+    ])]
+    #[case::the_wheel(&[(MouseEventKind::ScrollDown, 5); 10])]
+    fn the_scrollbar_scrolls_until_a_key_is_pressed(
+        found: Found,
+        #[case] used: &[(MouseEventKind, u16)],
+    ) {
+        const SIZE: Size = Size::new(80, 12);
+        let mut choose = on_the_keys(&found);
+        for &(kind, row) in used {
+            let event = MouseEvent {
+                kind,
+                column: 79,
+                row,
+                modifiers: KeyModifiers::NONE,
+            };
+            choose.mouse(event, &found, SIZE);
+        }
+        let shows = |choose: &Choose, text| {
+            shown_on(choose, &found, SIZE.height).iter().any(|row| row.contains(text))
+        };
+        assert!(shows(&choose, "Continue") && !shows(&choose, "Ctrl-R"));
+        // On the first row already, so Up only brings it back.
+        press(&mut choose, &[KeyCode::Up]);
+        assert!(shows(&choose, "Ctrl-R"));
+    }
+
+    #[rstest]
+    #[case::at_the_top(0)]
+    #[case::at_the_bottom(usize::MAX)]
+    fn the_footer_stays_at_the_bottom_as_the_page_scrolls(found: Found, #[case] top: usize) {
+        let mut choose = on_the_keys(&found);
+        choose.scrolled = Some(top);
+        let shown = shown_on(&choose, &found, 12);
+        assert!(shown.last().is_some_and(|row| row.contains("enter toggle")), "{shown:#?}");
+    }
+
+    #[rstest]
+    fn the_footer_follows_a_page_that_fits(found: Found) {
+        let shown = shown_on(&on_the_keys(&found), &found, 40);
+        let continues = shown.iter().position(|row| row.contains("Continue")).expect("shown");
+        assert!(shown[continues + 2].contains("enter toggle"), "{shown:#?}");
+    }
+
+    #[rstest]
+    #[case::fits(40)]
+    #[case::scrolled(12)]
+    fn the_row_they_are_on_is_shaded(found: Found, #[case] height: u16) {
+        let choose = on_the_keys(&found).shaded(Some(SHADE_ON_DARK));
+        let shown = screen(&choose, &found, height);
+        let rows = shown_on(&choose, &found, height);
+        let y = rows.iter().position(|row| row.contains("Ctrl-R")).expect("the row is shown");
+        let bg = |x: u16, y: usize| shown[(x, u16::try_from(y).unwrap())].bg;
+        assert_eq!([bg(0, y), bg(70, y), bg(0, y + 1)], [
+            SHADE_ON_DARK,
+            SHADE_ON_DARK,
+            Color::Reset
+        ]);
+    }
+
+    #[rstest]
+    fn the_shade_leaves_the_button_its_own(found: Found) {
+        let mut choose = on_the_keys(&found).shaded(Some(SHADE_ON_DARK));
+        choose.row = Row::Go;
+        let shown = screen(&choose, &found, 40);
+        let rows = shown_on(&choose, &found, 40);
+        let y = rows.iter().position(|row| row.contains("Continue")).expect("the button is shown");
+        let x = rows[y].chars().position(|c| c == 'C').expect("the button's label");
+        let cell = |x: usize| &shown[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())];
+        assert_eq!((cell(x).fg, cell(x).bg, cell(0).bg), (Color::Black, ACCENT, SHADE_ON_DARK));
+    }
+
+    #[rstest]
+    #[case::unset(None, SHADE_ON_DARK)]
+    #[case::dark("15;0", SHADE_ON_DARK)]
+    #[case::light("0;15", SHADE_ON_LIGHT)]
+    #[case::light_with_default("0;default;7", SHADE_ON_LIGHT)]
+    #[case::unreadable("light", SHADE_ON_DARK)]
+    fn the_shade_suits_the_terminal(
+        #[case] colorfgbg: impl Into<Option<&'static str>>,
+        #[case] expected: Color,
+    ) {
+        assert_eq!(row_shade(colorfgbg.into()), expected);
+    }
+
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[rstest]
+    fn the_agents_have_a_section_of_their_own(found: Found) {
+        let shown = shown(&Choose::new(&found, &preset(&found)), &found);
+        // Output capture needs the pty proxy, which runs only on unix.
+        let output = cfg!(all(feature = "pty-proxy", unix));
+        let order = [
+            "What should Atuin capture?",
+            "Command output",
+            "Agent integration",
+            "Connected agents",
+            "capture your agents' commands",
+            "capture full agent sessions",
+        ];
+        let order = order.into_iter().filter(|&text| output || text != "Command output");
+        let at: Vec<_> =
+            order.map(|text| shown.iter().position(|row| row.contains(text))).collect();
+        assert!(at.is_sorted() && !at.contains(&None), "{shown:#?}");
+    }
+
+    #[rstest]
+    fn no_agents_no_agent_rows(mut found: Found) {
+        found.agents.clear();
+        let choose = Choose::new(&found, &preset(&found));
+        let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
+        assert!(![Row::Threads, Row::AgentHistory].iter().any(|row| rows.contains(row)));
+        let plan = &choose.plan;
+        assert!(!plan.threads.0 && !plan.agent_history.0 && !plan.mcp.0);
+    }
+
+    /// What `choose` shows of each of `rows`, and what each needs while it's ruled out.
+    fn states(choose: &Choose, rows: &[Row]) -> Vec<(Row, Option<&'static str>)> {
+        let shown = choose.rows().into_iter().filter(|(row, _)| rows.contains(row));
+        shown.map(|(row, needs)| (row, needs.map(|needs| needs.what))).collect()
+    }
+
+    #[rstest]
+    fn a_list_opens_under_its_row_and_takes_what_is_picked(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
-        assert!(choose.rows(&found).contains(&Row::UpArrow));
-        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
-        assert!(!choose.shell);
-        assert!(!choose.rows(&found).contains(&Row::CtrlR));
-        assert!(!choose.rows(&found).contains(&Row::UpArrow));
+        choose.row = Row::Shells;
+        press(&mut choose, &[KeyCode::Right]);
+        let picks = [Row::ShellPick(0), Row::ShellPick(1), Row::ShellPick(2)];
+        assert_eq!(states(&choose, &picks), picks.map(|pick| (pick, None)));
+
+        press(&mut choose, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+        assert_eq!(choose.plan.shells.0, [Shell::Zsh, Shell::Bash, Shell::Fish]);
+        press(&mut choose, &[KeyCode::Up, KeyCode::Up, KeyCode::Char(' ')]);
+        assert_eq!(choose.plan.shells.0, [Shell::Bash, Shell::Fish]);
+
+        press(&mut choose, &[KeyCode::Left]);
+        assert_eq!((choose.row, choose.open), (Row::Shells, None));
+        assert_eq!(states(&choose, &picks), []);
+    }
+
+    /// The text of the line the screen draws for `row`.
+    fn drawn(choose: &Choose, found: &Found, row: Row) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 40)).unwrap();
+        let shown = terminal.draw(|frame| choose.draw(frame, found)).unwrap().buffer.clone();
+        let label = row.label();
+        shown
+            .content()
+            .chunks(80)
+            .map(|cells| cells.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            .find(|line| line.contains(label))
+            .expect("the row is drawn")
+    }
+
+    #[rstest]
+    #[case::all(&[Shell::Zsh, Shell::Bash, Shell::Fish, Shell::PowerShell], None, "▸ [✓] Shells")]
+    #[case::some(&[Shell::Bash], None, "▸ [-] Shells")]
+    #[case::none(&[], None, "▸ [ ] Shells")]
+    #[case::open(&[Shell::Bash], Some(List::Shells), "▾ [-] Shells")]
+    fn a_list_checks_all_some_or_none(
+        found: Found,
+        #[case] shells: &[Shell],
+        #[case] open: Option<List>,
+        #[case] expected: &str,
+    ) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.plan.shells = Shells(shells.to_vec());
+        choose.open = open;
+        let line = drawn(&choose, &found, Row::Shells);
+        assert!(line.contains(expected), "{line}");
+    }
+
+    #[rstest]
+    fn toggling_a_list_takes_all_of_it_then_none(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Shells;
+        press(&mut choose, &[KeyCode::Char(' ')]);
+        assert_eq!(choose.plan.shells.0, HOOKABLE);
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.plan.shells.0, []);
+        assert_eq!(choose.open, None);
+    }
+
+    #[rstest]
+    fn a_list_waits_on_its_row(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.plan.shell = ShellHistory(false);
+        choose.open = Some(List::Shells);
+        let rows = [Row::Shells, Row::ShellPick(0)];
+        assert_eq!(states(&choose, &rows), [(Row::Shells, Some("shell history"))]);
+    }
+
+    #[rstest]
+    fn an_empty_list_is_not_a_plan(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.plan.shells = Shells(Vec::new());
+        choose.row = Row::Go;
+        assert!(press(&mut choose, &[KeyCode::Enter]).is_none());
+        assert_eq!(choose.row, Row::Shells);
+        assert!(choose.error.is_some());
+    }
+
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[rstest]
+    fn a_connected_agent_gets_its_hooks_and_atuins_mcp_server(found: Found) {
+        let plan = finish(&mut Choose::new(&found, &preset(&found)));
+        assert_eq!((plan.agent_history, plan.mcp), (AgentHistory(true), Mcp(true)));
+    }
+
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[rstest]
+    fn with_no_agent_connected_there_is_nothing_to_hook_or_connect(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.plan.agents = Agents(Vec::new());
+        let rows = [Row::AgentHistory, Row::Threads];
+        assert_eq!(states(&choose, &rows), [
+            (Row::AgentHistory, Some("a connected agent")),
+            (Row::Threads, None),
+        ]);
+        let plan = finish(&mut choose);
+        assert_eq!((plan.agent_history, plan.mcp), (AgentHistory(false), Mcp(false)));
+    }
+
+    #[rstest]
+    fn continue_goes_on_to_the_keys_and_esc_comes_back(found: Found) {
+        let mut choose = on_the_keys(&found);
+        let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
+        assert_eq!((choose.page, choose.row), (Page::Keys, Row::CtrlR));
+        assert_eq!(rows, [Row::CtrlR, Row::UpArrow, Row::Go]);
+        assert!(shown(&choose, &found)[1].contains("Features › Keybindings"));
+
+        press(&mut choose, &[KeyCode::Esc]);
+        assert_eq!((choose.page, choose.row), (Page::Features, Row::Go));
+        assert!(!choose.rows().iter().any(|&(row, _)| row.key().is_some()));
+    }
+
+    #[rstest]
+    fn the_keys_wait_on_shell_history(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert!(!choose.plan.shell.0);
+        assert!(!shown(&choose, &found)[1].contains("Keybindings"));
+        assert!(!choose.pages().contains(&Page::Keys));
+        // Something to set up without shell history.
+        choose.plan.sync = Sync::Cloud;
+        let plan = finish(&mut choose);
+        assert!(!plan.ctrl_r.0 && !plan.up_arrow.0);
+    }
+
+    #[rstest]
+    fn an_example_plays_under_each_key_that_is_on(found: Found) {
+        let mut choose = on_the_keys(&found);
+        let examples = |choose: &Choose| {
+            let shown = shown(choose, &found);
+            let under = |label| {
+                let at =
+                    shown.iter().position(|row| row.contains(label)).expect("the key is shown");
+                shown[at + 1].contains("Example")
+            };
+            (under("Ctrl-R"), under("Up arrow"))
+        };
+        assert_eq!(examples(&choose), (true, true));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(examples(&choose), (false, true));
+        assert!(drawn(&choose, &found, Row::CtrlR).contains("left to your shell"));
+    }
+
+    /// Whether the example of `key` shows Atuin's search.
+    fn searching(choose: &Choose, key: Key) -> bool {
+        let example = choose.example(key).expect("the key is on");
+        text(&example).iter().any(|line| line.contains("[ GLOBAL ]"))
+    }
+
+    #[rstest]
+    fn the_up_arrow_plays_behind_ctrl_r(found: Found) {
+        let mut choose = on_the_keys(&found);
+        // Ctrl-R's has opened Atuin's search by now, while the up arrow's waits in the shell.
+        choose.shown_for = Duration::from_millis(1500);
+        assert_eq!(
+            (searching(&choose, Key::CtrlR), searching(&choose, Key::UpArrow)),
+            (true, false)
+        );
+    }
+
+    #[rstest]
+    fn a_key_turned_on_plays_its_example_from_the_start(found: Found) {
+        let mut choose = on_the_keys(&found);
+        // Both examples have opened Atuin's search by now.
+        choose.shown_for = Duration::from_secs(2) + UP_ARROW_LAGS;
+        press(&mut choose, &[KeyCode::Enter, KeyCode::Enter]);
+        assert_eq!(
+            (searching(&choose, Key::CtrlR), searching(&choose, Key::UpArrow)),
+            (false, true)
+        );
+    }
+
+    #[rstest]
+    #[case::coloured(true)]
+    #[case::without_colour(false)]
+    fn a_ruled_out_row_says_what_it_needs(found: Found, #[case] colour: bool) {
+        let mut choose = Choose::new(&found, &preset(&found)).coloured(colour);
+        choose.plan.shell = ShellHistory(false);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+        let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
+        let rows: Vec<String> = shown
+            .content()
+            .chunks(80)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
+            .collect();
+        let y = rows.iter().position(|row| row.contains("Shells")).expect("Shells is shown");
+        assert!(rows[y].contains("needs shell history"), "{}", rows[y]);
+        let at = rows[y].find("Shells").expect("Shells is on its row");
+        let x = rows[y][..at].chars().count();
+        let cell = &shown[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())];
+        if colour {
+            assert_eq!(cell.fg, Color::DarkGray);
+        } else {
+            assert!(cell.modifier.contains(Modifier::CROSSED_OUT), "{cell:?}");
+        }
     }
 
     #[rstest]
     fn up_arrow_can_be_left_to_the_shell(found: Found) {
-        let mut choose = Choose::new(&found, &preset(&found));
-        while choose.row != Row::UpArrow {
-            press(&mut choose, &found, &[KeyCode::Down]);
-        }
-        press(&mut choose, &found, &[KeyCode::Enter]);
-        choose.row = Row::Go;
-        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
-            panic!("expected a plan");
-        };
-        assert!(plan.ctrl_r && !plan.up_arrow);
+        let mut choose = on_the_keys(&found);
+        press(&mut choose, &[KeyCode::Down, KeyCode::Enter]);
+        let plan = finish(&mut choose);
+        assert!(plan.ctrl_r.0 && !plan.up_arrow.0);
     }
 
     #[cfg(feature = "sync")]
     #[rstest]
     fn own_server_needs_an_address(found: Found) {
-        let mut choose = Choose::new(&found, &preset(&found));
-        choose.row = Row::Sync;
-        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
+        let mut choose = on_page(&found, &preset(&found), Page::Sync);
+        choose.row = Row::SyncTo(SyncTo::SelfHosted);
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.row, Row::Server);
         choose.row = Row::Go;
-        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
+        assert!(press(&mut choose, &[KeyCode::Enter]).is_none());
         assert_eq!(choose.row, Row::Server);
         assert!(choose.error.is_some());
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, HEIGHT)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         let shown = terminal.draw(|frame| choose.draw(frame, &found)).unwrap().buffer.clone();
         let text: String = shown.content().iter().map(ratatui::buffer::Cell::symbol).collect();
         assert!(text.contains("Enter your server's address"));
 
         let typed: Vec<_> = "https://atuin.example.com".chars().map(KeyCode::Char).collect();
-        press(&mut choose, &found, &typed);
-        let Some(Chosen::Plan(plan)) =
-            press(&mut choose, &found, &[KeyCode::Enter, KeyCode::Enter])
-        else {
-            panic!("expected a plan");
-        };
+        press(&mut choose, &typed);
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.row, Row::Go);
+        let plan = finish(&mut choose);
         assert_eq!(plan.sync, Sync::Server("https://atuin.example.com".into()));
     }
 
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::left_on(&[], Some(Teams::On { backfill: false }))]
-    #[case::with_backfill(&[Row::Backfill], Some(Teams::On { backfill: true }))]
-    #[case::turned_off(&[Row::Teams], Some(Teams::Off))]
-    #[case::turned_off_with_sync(&[Row::Backfill, Row::Sync, Row::Sync], Some(Teams::Off))]
-    fn teams_is_chosen_beside_sync(
+    #[case::always(&[], Some(Teams::On { backfill: false }), ThreadUploads::All)]
+    #[case::workspace_only(
+        &[Row::Sharing(Sharing::Workspaces)],
+        Some(Teams::On { backfill: false }),
+        ThreadUploads::Workspaces,
+    )]
+    #[case::disabled(&[Row::Sharing(Sharing::Off)], Some(Teams::Off), ThreadUploads::All)]
+    #[case::self_hosted(&[Row::SyncTo(SyncTo::SelfHosted)], Some(Teams::Off), ThreadUploads::All)]
+    #[case::back_to_atuin_cloud(
+        &[Row::SyncTo(SyncTo::Off), Row::SyncTo(SyncTo::Cloud)],
+        Some(Teams::On { backfill: false }),
+        ThreadUploads::All,
+    )]
+    #[case::atuin_cloud_picked_again(
+        &[Row::Sharing(Sharing::Off), Row::SyncTo(SyncTo::Cloud)],
+        Some(Teams::Off),
+        ThreadUploads::All,
+    )]
+    fn atuin_cloud_shares_threads_as_picked(
         found: Found,
-        #[case] toggled: &[Row],
+        #[case] picked: &[Row],
         #[case] expected: Option<Teams>,
+        #[case] threads: ThreadUploads,
     ) {
-        let plan = Plan {
-            teams: Some(Teams::On { backfill: false }),
-            ..preset(&found)
-        };
-        let mut choose = Choose::new(&found, &plan);
-        for &row in toggled {
+        let mut choose = on_page(&found, &teams(&found), Page::Sync);
+        choose.server = "https://atuin.example.com".into();
+        for &row in picked {
             choose.row = row;
-            press(&mut choose, &found, &[KeyCode::Enter]);
+            press(&mut choose, &[KeyCode::Enter]);
         }
-        choose.row = Row::Go;
-        let Some(Chosen::Plan(plan)) = press(&mut choose, &found, &[KeyCode::Enter]) else {
-            panic!("expected a plan");
-        };
-        assert_eq!(plan.teams, expected);
+        let plan = finish(&mut choose);
+        assert_eq!((plan.teams(), plan.upload_threads.0), (expected, threads));
     }
 
     #[cfg(feature = "sync")]
     #[rstest]
-    #[case::not_asked(None, false, &[])]
-    #[case::on(Some(Teams::On { backfill: false }), false, &[Row::Teams, Row::Backfill])]
-    #[case::off(Some(Teams::Off), false, &[Row::Teams])]
-    #[case::sync_off(Some(Teams::On { backfill: false }), true, &[])]
-    fn teams_rows_follow_the_flag_and_sync(
+    #[case::without_teams(false, &[
+        Row::SyncTo(SyncTo::Cloud),
+        Row::SyncTo(SyncTo::SelfHosted),
+        Row::SyncTo(SyncTo::Off),
+        Row::Go,
+    ])]
+    #[cfg_attr(feature = "octavo", case::with_teams(true, &[
+        Row::SyncTo(SyncTo::Cloud),
+        Row::Sharing(Sharing::Always),
+        Row::Sharing(Sharing::Workspaces),
+        Row::Sharing(Sharing::Off),
+        Row::SyncTo(SyncTo::SelfHosted),
+        Row::SyncTo(SyncTo::Off),
+        Row::Go,
+    ]))]
+    fn the_sync_page_offers_sharing_with_the_flag(
         found: Found,
-        #[case] teams: Option<Teams>,
-        #[case] sync_off: bool,
+        #[case] teams: bool,
         #[case] expected: &[Row],
     ) {
-        let mut choose = Choose::new(&found, &Plan {
-            teams,
-            ..preset(&found)
+        let flags: &[&str] = if teams {
+            &["setup", "--teams"]
+        } else {
+            &["setup"]
+        };
+        let plan = super::super::Cmd::parse_from(flags).plan(&found, false).unwrap();
+        let choose = on_page(&found, &plan, Page::Sync);
+        let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
+        assert_eq!(rows, expected);
+    }
+
+    #[cfg(feature = "sync")]
+    #[rstest]
+    #[case::without_teams(false)]
+    #[cfg_attr(feature = "octavo", case::with_teams(true))]
+    fn each_choice_on_the_sync_page_says_what_it_means(found: Found, #[case] teams: bool) {
+        let flags: &[&str] = if teams {
+            &["setup", "--teams"]
+        } else {
+            &["setup"]
+        };
+        let plan = super::super::Cmd::parse_from(flags).plan(&found, false).unwrap();
+        let choose = on_page(&found, &plan, Page::Sync);
+        let shown = shown(&choose, &found);
+        let explained = choose.rows().into_iter().filter_map(|(row, _)| match row {
+            Row::SyncTo(to) => Some((to.label(), to.about()?)),
+            Row::Sharing(sharing) => Some((sharing.label(), sharing.about())),
+            _ => None,
         });
-        if sync_off {
-            choose.sync = 2;
+        let unexplained: Vec<_> = explained
+            .filter(|(label, about)| {
+                let first = wrap(about, WRAP_COLUMNS).into_iter().next().unwrap_or_default();
+                let at = shown.iter().position(|row| row.contains(&format!(") {label}")));
+                at.is_none_or(|at| !shown[at + 1].contains(&first))
+            })
+            .collect();
+        assert_eq!(unexplained, [], "{shown:#?}");
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::always(&[], "Standard data protection is not end-to-end encrypted.")]
+    #[case::workspace_only(&[Row::Sharing(Sharing::Workspaces)], "Standard data protection")]
+    #[case::disabled(&[Row::Sharing(Sharing::Off)], "E2E-only encryption disables thread")]
+    fn the_note_says_what_sharing_means(
+        found: Found,
+        #[case] picked: &[Row],
+        #[case] expected: &str,
+    ) {
+        let mut choose = on_page(&found, &teams(&found), Page::Sync);
+        for &row in picked {
+            choose.row = row;
+            press(&mut choose, &[KeyCode::Enter]);
         }
-        let rows = choose.rows(&found);
-        let shown: Vec<_> =
-            rows.into_iter().filter(|row| matches!(row, Row::Teams | Row::Backfill)).collect();
-        assert_eq!(shown, expected);
+        let shown = shown(&choose, &found).join("\n");
+        assert!(shown.contains(expected), "{shown}");
     }
 
     #[rstest]
-    fn nothing_chosen_is_not_a_plan(found: Found) {
+    #[case::fits("a few words", 20, &["a few words"])]
+    #[case::between_words("one two three", 7, &["one two", "three"])]
+    #[case::a_long_word_alone("a extraordinarily b", 5, &["a", "extraordinarily", "b"])]
+    #[case::nothing("", 5, &[])]
+    fn wrap_breaks_between_words(
+        #[case] text: &str,
+        #[case] columns: usize,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(wrap(text, columns), expected);
+    }
+
+    #[cfg(feature = "sync")]
+    #[rstest]
+    fn esc_goes_back_a_page_at_a_time(found: Found) {
+        let mut choose = on_page(&found, &preset(&found), Page::Sync);
+        press(&mut choose, &[KeyCode::Esc]);
+        assert_eq!((choose.page, choose.row), (Page::Keys, Row::Go));
+        press(&mut choose, &[KeyCode::Esc]);
+        assert_eq!((choose.page, choose.row), (Page::Features, Row::Go));
+        assert!(matches!(press(&mut choose, &[KeyCode::Esc]), Some(Chosen::Quit)));
+    }
+
+    #[cfg(feature = "sync")]
+    #[rstest]
+    fn the_crumbs_name_every_page(found: Found) {
+        let choose = on_the_keys(&found);
+        assert!(shown(&choose, &found)[1].contains("Features › Keybindings › Sync"));
+    }
+
+    #[rstest]
+    /// With nothing to set up, there's nothing to do, unless Atuin is set up here already: then
+    /// turning it all off takes it out.
+    #[rstest]
+    #[case::nothing_here(&[], false)]
+    #[case::set_up_here(&[Shell::Zsh], true)]
+    fn nothing_chosen_is_a_plan_only_to_take_atuin_out(
+        mut found: Found,
+        #[case] inits: &[Shell],
+        #[case] is_plan: bool,
+    ) {
+        found.inits = inits.to_vec();
         let mut choose = Choose::new(&found, &preset(&found));
-        choose.shell = false;
-        choose.threads = false;
-        choose.agent_history = false;
-        choose.mcp = false;
-        choose.sync = 2;
+        choose.plan.shell = ShellHistory(false);
+        choose.plan.threads = Threads(false);
+        choose.plan.agent_history = AgentHistory(false);
+        choose.plan.mcp = Mcp(false);
+        choose.plan.sync = Sync::Off;
+        // Sync may yet give it something to set up, so only the last page says so.
+        choose.page = *choose.pages().last().expect("a page");
         choose.row = Row::Go;
-        assert!(press(&mut choose, &found, &[KeyCode::Enter]).is_none());
-        assert!(choose.error.is_some());
+        let chosen = press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(
+            (matches!(chosen, Some(Chosen::Plan(_))), choose.error.is_none()),
+            (is_plan, is_plan)
+        );
     }
 
     #[rstest]

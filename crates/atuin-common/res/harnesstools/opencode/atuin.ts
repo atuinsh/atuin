@@ -5,7 +5,7 @@
  * `opencode`.
  *
  * Install with:
- *   atuin hook install opencode
+ *   atuin setup --only --agent-history
  *
  * Then restart opencode.
  */

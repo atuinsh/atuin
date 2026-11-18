@@ -43,6 +43,8 @@ modes by pressing **ctrl-s** inside the TUI.
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](../reference/daemon.md) in-memory index, with tunable scoring     |
 
 To change the default, set [`search_mode`](../configuration/config.md#search_mode).
+`atuin setup --only --daemon` turns on the daemon and sets `search_mode` to
+`daemon-fuzzy`. If the daemon is on already, set `search_mode` yourself.
 
 ## Context switch
 

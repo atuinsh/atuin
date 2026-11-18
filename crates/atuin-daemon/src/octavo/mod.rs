@@ -60,13 +60,14 @@ pub struct Octavo {
 }
 
 impl Octavo {
-    /// Opens the client for `settings`, reading queued outputs from `outputs` and queued thread
-    /// messages from `records`.
+    /// Opens the client for `settings`, reading queued outputs from `outputs`, queued thread
+    /// messages from `records`, and where threads started from `sidecar`, if there is one.
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
         records: AiSessionStore,
+        sidecar: Option<AiSessionDatabase>,
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
@@ -74,7 +75,8 @@ impl Octavo {
             return Self::nop();
         }
 
-        match client::ActiveOctavoClient::open(settings, handle, outputs, records).await {
+        let client = client::ActiveOctavoClient::open(settings, handle, outputs, records, sidecar);
+        match client.await {
             Ok(client) => Self {
                 client: client.into(),
             },

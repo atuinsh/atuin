@@ -1,7 +1,7 @@
 """Atuin's plugin for Hermes Agent: records the shell commands Hermes runs in Atuin's history,
 and imports the sessions atuin writes into Hermes's store.
 
-`atuin hook install hermes` writes this file to `$HERMES_HOME/plugins/atuin/` and runs
+`atuin setup --agent-history` writes this file to `$HERMES_HOME/plugins/atuin/` and runs
 `hermes plugins enable atuin`.
 
 Each `terminal` call's `pre_tool_call` and `post_tool_call` go to `atuin hook hermes` as JSON

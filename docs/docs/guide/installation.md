@@ -16,16 +16,19 @@ then the manual steps below offer much more flexibility.
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-The install script will walk you through importing your shell history and setting
-up a sync account. To skip these interactive prompts (for example, in CI or
-Dockerfiles), pass `--non-interactive`:
+After installing, the script runs `atuin setup`. Setup hooks Atuin into your
+shells, imports your shell history, and offers to set up a sync account. To skip
+these interactive prompts (for example, in CI or Dockerfiles), pass
+`--non-interactive`:
 
 ```shell
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-interactive
 ```
 
 The script also automatically detects non-interactive environments (piped input,
-no TTY) and skips the prompts in those cases.
+no TTY) and skips the prompts in those cases. Without prompts, the script runs
+`atuin setup --yes --no-import`, which sets Atuin up without asking and doesn't
+import your history.
 
 Anything else you pass goes to `atuin setup`, which starts from those choices. For
 example, to leave the up arrow to your shell and keep everything on this machine:
@@ -34,22 +37,29 @@ example, to leave the up arrow to your shell and keep everything on this machine
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --no-up-arrow --sync off
 ```
 
-Run `atuin setup --help` for every option.
+Run `atuin setup --help` for every option. You can run `atuin setup` again at any
+time to change what it set up.
 
-[**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](sync.md)
+If you skipped sync during setup, sign in to Atuin Cloud later with
+`atuin setup --sync cloud`. See [Setting up sync](sync.md) for the details,
+including how to use your own server.
+
+[**Basic usage** - Move on to the next step, or read on to manually install Atuin instead.](basic-usage.md)
 
 ### On Windows
 
-The recommended approach on Windows is to use WinGet to install Atuin. Then, if you use PowerShell,
-add the initialization command to your PowerShell profile, and restart your shell.
+The recommended approach on Windows is to use WinGet to install Atuin. Then, in a new shell, run
+`atuin setup`, and restart your shell once setup finishes.
 
 ```shell
 winget install -e Atuinsh.Atuin
-if (-not (Test-Path -Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFILE
 ```
 
-Note that the `$PROFILE` path may depend on your PowerShell version.
+```shell
+atuin setup
+```
+
+Setup adds Atuin to the profiles of both PowerShell 7 and Windows PowerShell.
 
 !!! tip "Installing for every user"
 
@@ -62,7 +72,9 @@ Note that the `$PROFILE` path may depend on your PowerShell version.
 
 You may also want to try the `default-powershell` [theme](theming.md), which uses the default PowerShell syntax colors.
 
-[**Set up sync** - Move on to the next step.](sync.md)
+If you skipped sync during setup, sign in to Atuin Cloud later with `atuin setup --sync cloud`.
+
+[**Basic usage** - Move on to the next step.](basic-usage.md)
 
 ## Manual installation
 
@@ -169,22 +181,41 @@ If you don't wish to use the installer, the manual installation steps are as fol
 
 !!! warning "Please be advised"
 
-    If you choose to manually install Atuin rather than using the recommended installation script,
-    merely installing the binary isn't sufficient, you should also set up the shell plugin.
+    After installing the binary by hand, run `atuin setup` to hook Atuin into your shells:
+
+    ```shell
+    atuin setup
+    ```
+
+    Setup also imports your shell history and offers to set up sync. For Nushell, xonsh, and zsh
+    plugin managers, see [Installing the shell plugin](#installing-the-shell-plugin).
 
 ---
 
 ### Installing the shell plugin
 
 Once the binary is installed, the shell plugin requires installing.
-If you use the install script, this should all be done for you!
+For zsh, bash, fish, and PowerShell, `atuin setup` installs it for you.
+The install script runs `atuin setup`, so if you used the install script, this is already done.
 After installing, remember to restart your shell.
+
+To hook only some shells and change nothing else, pass `--only` and name the shells with
+`--shells`. For example, this command hooks zsh and fish:
+
+```shell
+atuin setup --only --shell-history --shells zsh,fish
+```
 
 === "zsh"
 
+    Run setup, which adds `eval "$(atuin init zsh)"` to `$ZDOTDIR/.zshrc`, or to `~/.zshrc` when
+    `ZDOTDIR` isn't set:
+
     ```shell
-    echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
+    atuin setup --only --shell-history --shells zsh
     ```
+
+    If you use a plugin manager, load Atuin with it instead.
 
     === "zinit"
 
@@ -211,10 +242,11 @@ After installing, remember to restart your shell.
 
         Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh) >= 0.4.
 
-        With ble.sh (>= 0.4) installed and loaded in `~/.bashrc`, just add atuin to your `~/.bashrc`
+        With ble.sh (>= 0.4) installed and loaded in `~/.bashrc`, run setup, which adds
+        `eval "$(atuin init bash)"` to the end of your `~/.bashrc`:
 
         ```shell
-        echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+        atuin setup --only --shell-history --shells bash
         ```
 
     === "bash-preexec"
@@ -239,8 +271,15 @@ After installing, remember to restart your shell.
             in the Atuin's history correctly.
 
         As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other
-        preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable
-        this behavior, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init`, e.g.:
+        preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To use the
+        built-in copy, run setup, which adds `eval "$(atuin init bash)"` to your `~/.bashrc`:
+
+        ```shell
+        atuin setup --only --shell-history --shells bash
+        ```
+
+        To disable the built-in copy, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init` in your
+        `~/.bashrc`, e.g.:
 
         ```shell
         eval "$(ATUIN_NO_BUILTIN_PREEXEC=1 atuin init bash)"
@@ -253,21 +292,20 @@ After installing, remember to restart your shell.
         echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
         ```
 
-        Then set up Atuin:
+        Then run setup, which adds Atuin to the end of your `~/.bashrc`, after bash-preexec:
 
         ```shell
-        echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+        atuin setup --only --shell-history --shells bash
         ```
 
 === "fish"
 
-    Add
+    Run setup, which adds an `is-interactive` block that runs `atuin init fish | source` to your
+    `~/.config/fish/config.fish` file:
 
     ```shell
-    atuin init fish | source
+    atuin setup --only --shell-history --shells fish
     ```
-
-    to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 === "Nushell"
 
@@ -315,11 +353,16 @@ After installing, remember to restart your shell.
 
 === "PowerShell"
 
-    Add the following to the end of your `$PROFILE` file:
+    Run setup, which adds `atuin init powershell | Out-String | Invoke-Expression` to the end of
+    your PowerShell profile:
 
     ```shell
-    atuin init powershell | Out-String | Invoke-Expression
+    atuin setup --only --shell-history --shells powershell
     ```
+
+    On Windows, setup writes to the profiles of both PowerShell 7 and Windows PowerShell, in your
+    Documents folder. Elsewhere, setup writes to
+    `~/.config/powershell/Microsoft.PowerShell_profile.ps1`.
 
 ## Upgrade
 

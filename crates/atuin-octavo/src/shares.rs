@@ -35,18 +35,25 @@ impl Configs {
         self.off_runtime(move |configs| configs.common(&dirs)).await
     }
 
+    /// Whether `dir` is in a workspace: at or under a project's config file. The user's own
+    /// doesn't make one. A file that can't be read or run fails, as it may be what keeps the
+    /// thread to itself.
+    pub async fn in_workspace(&self, dir: PathBuf) -> Result<bool, LookupError> {
+        self.off_runtime(move |_| is_workspace(&dir)).await
+    }
+
     /// Runs `look_up` on a blocking thread, as a hung network mount hangs it.
-    async fn off_runtime(
+    async fn off_runtime<T: Send + 'static>(
         &self,
-        look_up: impl FnOnce(&Self) -> Result<Vec<OrgSlug>, LoadError> + Send + 'static,
-    ) -> Result<Vec<OrgSlug>, LookupError> {
+        look_up: impl FnOnce(&Self) -> Result<T, LoadError> + Send + 'static,
+    ) -> Result<T, LookupError> {
         // A config file runs for half a second at most, so the rest is the disk.
         const TIMEOUT: Duration = Duration::from_secs(5);
 
         let configs = self.clone();
         let lookup = tokio::task::spawn_blocking(move || look_up(&configs));
         match tokio::time::timeout(TIMEOUT, lookup).await {
-            Ok(Ok(orgs)) => Ok(orgs?),
+            Ok(Ok(found)) => Ok(found?),
             Ok(Err(err)) => Err(LookupError::Failed(err)),
             Err(_elapsed) => Err(LookupError::TimedOut),
         }
@@ -79,6 +86,11 @@ impl Configs {
         }
         Ok(orgs)
     }
+}
+
+/// Whether a project's config file is at or above `dir`, and reads.
+fn is_workspace(dir: &Path) -> Result<bool, LoadError> {
+    ConfigFile::projects(dir).next().transpose().map(|file| file.is_some())
 }
 
 #[derive(Debug, Error)]
@@ -168,6 +180,31 @@ mod tests {
         let orgs = orgs_in(root.path(), started_in).expect("the lookup");
 
         assert_eq!(orgs, expected);
+    }
+
+    #[rstest]
+    #[case::in_a_project(&[("projects/work/.atuin.lua", ACME)], "work/src", true)]
+    #[case::without_orgs(&[("projects/work/atuin.lua", r"atuin.config = {}")], "work", true)]
+    #[case::outside_any(&[("projects/work/atuin.lua", ACME)], "elsewhere", false)]
+    #[case::only_the_users_own(&[("home/atuin.lua", USERS)], "work", false)]
+    fn a_workspace_is_under_a_projects_config(
+        root: TempDir,
+        #[case] configs: &[(&str, &str)],
+        #[case] dir: &str,
+        #[case] expected: bool,
+    ) {
+        for (file, source) in configs {
+            write(root.path(), file, source);
+        }
+        let dir = root.path().join("projects").joined(dir);
+        assert_eq!(is_workspace(&dir).expect("the lookup"), expected);
+    }
+
+    /// A broken file could be what keeps the thread to itself.
+    #[rstest]
+    fn a_broken_project_config_is_no_workspace_to_upload_from(root: TempDir) {
+        write(root.path(), "projects/work/atuin.lua", r"atuin.config = { org = {} }");
+        assert!(is_workspace(&root.path().join("projects/work")).is_err());
     }
 
     /// A broken file could be an opt-out with a typo, so the thread must not go to the user's list.

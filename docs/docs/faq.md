@@ -25,9 +25,15 @@ See [Keeping Secrets Out of Atuin](guide/excluding-commands.md) for more options
 
 ## How do I remove the default up arrow binding?
 
-Open your shell config file, find the line containing `atuin init`.
+Run:
 
-Add `--disable-up-arrow`, e.g.:
+```shell
+atuin setup --only --no-up-arrow
+```
+
+Setup writes `bind_up_arrow = false` to your config, and new shells pick it up.
+
+You can also add `--disable-up-arrow` to the line containing `atuin init` in your shell config file. For example:
 
 ```shell
 eval "$(atuin init zsh --disable-up-arrow)"
@@ -93,10 +99,10 @@ This compiles out the update checker, the sync commands, and AI.
 ## I didn't set up sync, and now I have to reinstall my system!
 
 If you have a backup of your data directory (`~/.atuin/data`, or `~/.local/share/atuin` for older installs), you can import it by:
-1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
+1. disabling Atuin with `atuin setup --only --no-shell-history`
 2. copying the backup to `~/.atuin/data`
-3. reenabling Atuin
-4. setting up sync!
+3. reenabling Atuin with `atuin setup --only --shell-history`
+4. setting up sync with `atuin setup --sync cloud`!
 
 ## Alternative projects
 

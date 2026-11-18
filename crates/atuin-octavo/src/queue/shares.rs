@@ -1,6 +1,7 @@
 //! The organizations a user's config had their threads shared with, how far each got, and the
 //! directories each thread's rows went up from, which keep it to those they all share with.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -39,12 +40,13 @@ impl UploadQueue {
     }
 
     /// The first page of `login`'s threads queued to be opened to organizations, the longest
-    /// queued first.
+    /// queued first, past those that wait: the `waiting` threads stay queued, and fill no page.
     pub async fn pending_opens<'a>(
         &'a self,
         login: &'a HubLogin,
+        waiting: &HashSet<pb::HarnessSession>,
     ) -> Result<Vec<PendingOpen<'a>>, QueueError> {
-        let pending = self.pending_in(login, ShareState::Opening).await?;
+        let pending = self.pending_in(login, ShareState::Opening, waiting).await?;
         Ok(pending.into_iter().map(PendingOpen).collect())
     }
 
@@ -54,7 +56,7 @@ impl UploadQueue {
         &'a self,
         login: &'a HubLogin,
     ) -> Result<Vec<PendingClose<'a>>, QueueError> {
-        let pending = self.pending_in(login, ShareState::Closing).await?;
+        let pending = self.pending_in(login, ShareState::Closing, &HashSet::new()).await?;
         Ok(pending.into_iter().map(PendingClose).collect())
     }
 
@@ -114,14 +116,20 @@ impl UploadQueue {
         &'a self,
         login: &'a HubLogin,
         state: ShareState,
+        waiting: &HashSet<pb::HarnessSession>,
     ) -> Result<Vec<Pending<'a>>, QueueError> {
+        let waiting: Vec<[&str; 2]> =
+            waiting.iter().map(|thread| [thread.harness.as_str(), &thread.session_id]).collect();
         let rows: Vec<(String, String, String)> = db::query_as(
             "SELECT harness, session_id, org_slug FROM thread_org_shares WHERE user_id = ?1 AND \
-             state = ?2 ORDER BY queued_at, harness, session_id LIMIT ?3",
+             state = ?2 AND NOT EXISTS (SELECT 1 FROM json_each(?4) w WHERE w.value ->> 0 = \
+             harness AND w.value ->> 1 = session_id) ORDER BY queued_at, harness, session_id \
+             LIMIT ?3",
         )
         .bind(login.user_id().as_str())
         .bind(state as i64)
         .bind(PAGE_SIZE.get())
+        .bind(serde_json::to_string(&waiting).expect("a list of string pairs serializes"))
         .fetch_all(self.db.pool())
         .await?;
 
@@ -502,7 +510,7 @@ mod tests {
 
     /// Each thread queued to be opened, by its session id, with its orgs.
     async fn opens(queue: &UploadQueue, login: &HubLogin) -> Vec<(String, Vec<String>)> {
-        let opens = queue.pending_opens(login).await.expect("read");
+        let opens = queue.pending_opens(login, &HashSet::new()).await.expect("read");
         opens.iter().map(|open| (open.thread().session_id.clone(), named(open.orgs()))).collect()
     }
 
@@ -521,7 +529,7 @@ mod tests {
 
     /// Settles each queued open, as Octavo's answer to it would.
     async fn open_all(queue: &UploadQueue, login: &HubLogin) {
-        for open in queue.pending_opens(login).await.expect("read") {
+        for open in queue.pending_opens(login, &HashSet::new()).await.expect("read") {
             let sent = SentOpen {
                 open,
                 skipped: Vec::new(),
@@ -563,6 +571,31 @@ mod tests {
         assert_eq!(queue.opening_threads(alice.user_id()).await.expect("read").len(), 2);
     }
 
+    /// Opens that wait fill no page, so a page of them doesn't hold back those queued after.
+    #[rstest]
+    #[tokio::test]
+    async fn waiting_opens_fill_no_page(#[future(awt)] queue: TempQueue) {
+        let login = HubLogin::offline("alice");
+        let queue = queue.queue;
+        let many: Vec<String> = (0..=PAGE_SIZE.get()).map(|n| format!("org-{n}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        for (session, orgs) in [("held", &many[..]), ("next", &["acme"][..])] {
+            let thread = thread(session);
+            let queued = queue.thread(login.user_id(), &thread);
+            queued.push_shares(&slugs(orgs)).await.expect("push");
+        }
+
+        let all = queue.pending_opens(&login, &HashSet::new()).await.expect("read");
+        assert!(all.iter().all(|open| open.thread().session_id == "held"));
+        let waiting = HashSet::from([thread("held")]);
+        let past = queue.pending_opens(&login, &waiting).await.expect("read");
+        let past: Vec<_> = past
+            .iter()
+            .map(|open| (open.thread().session_id.clone(), named(open.orgs())))
+            .collect();
+        assert_eq!(past, [pair("next", &["acme"])]);
+    }
+
     /// A settled row is what keeps a thread the user unshared from being shared by its next
     /// message, however the slug is cased, while an organization added to the config still goes.
     #[rstest]
@@ -599,7 +632,12 @@ mod tests {
         open_all(&queue, &login).await;
         queued.push_shares(&slugs(&["globex"])).await.expect("push");
 
-        let open = queue.pending_opens(&login).await.expect("read").pop().expect("an open");
+        let open = queue
+            .pending_opens(&login, &HashSet::new())
+            .await
+            .expect("read")
+            .pop()
+            .expect("an open");
 
         assert_eq!(open.expire(after).await.expect("expire"), expired);
         // The opened row stays, so only the expired one can be queued afresh.

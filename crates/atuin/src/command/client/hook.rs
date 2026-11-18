@@ -5,11 +5,10 @@ use std::sync::Arc;
 
 use atuin_client::history::{AuthorKind, HistoryId};
 use atuin_client::settings::Settings;
-use atuin_common::harnesstools::{AnyHarness, Harness, InstallHookError, codex};
+use atuin_common::harnesstools::{AnyHarness, Harness, codex};
 use atuin_common::path::PathBufExt as _;
-use atuin_common::userio;
 use clap::{Parser, Subcommand};
-use eyre::{Result, bail};
+use eyre::Result;
 use tracing::instrument;
 
 use super::history;
@@ -21,37 +20,35 @@ use event::HookEvent;
 
 use crate::i18n::fl;
 
+#[derive(Parser, Debug)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+pub struct Cmd {
+    #[command(subcommand)]
+    moved: Option<Moved>,
+
+    #[arg(value_name = "AGENT", required = true, help = fl!("arg-hook-agent"))]
+    agent: Option<String>,
+}
+
+/// What `atuin hook` did before setup did it, kept so that the scripts still running it say what
+/// to run instead.
 #[derive(Subcommand, Debug)]
-enum Action {
-    #[command(about = fl!("cmd-hook-install"))]
+enum Moved {
+    #[command(hide = true)]
     Install {
-        #[arg(value_name = "AGENT", help = fl!("arg-hook-install-agent"))]
         agent: String,
     },
 }
 
-#[derive(Parser, Debug)]
-#[command(infer_subcommands = true, args_conflicts_with_subcommands = true)]
-pub struct Cmd {
-    #[command(subcommand)]
-    action: Option<Action>,
-
-    #[arg(value_name = "AGENT", hide = true, help = fl!("arg-hook-agent"))]
-    agent: Option<String>,
-}
-
 impl Cmd {
-    #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
-        match (self.action, self.agent) {
-            (Some(Action::Install { agent }), None) => install(&agent).await,
+        match (self.moved, self.agent) {
+            (Some(Moved::Install { agent }), _) => Err(super::setup::moved_here(
+                "atuin hook install",
+                &format!("--agent-history --agents {agent}"),
+            )),
             (None, Some(agent)) => handle(&agent, settings).await,
-            (None, None) => {
-                bail!("expected `atuin hook <agent>` or `atuin hook install <agent>`");
-            }
-            (Some(_), Some(_)) => {
-                bail!("hook action cannot be combined with a positional agent");
-            }
+            (None, None) => Err(eyre::eyre!("name the agent whose hook this is")),
         }
     }
 }
@@ -66,48 +63,6 @@ fn take_history_id(tool_use_id: &str) -> Option<HistoryId> {
     let history_id = std::fs::read_to_string(&id_path).ok()?;
     let _ = std::fs::remove_file(&id_path);
     HistoryId::from_str(history_id.trim()).ok()
-}
-
-/// Tells the user how to make an agent pick up freshly installed hooks. The extension-based
-/// agents need a nudge, and so does Kiro, which reads its hook files when a session starts;
-/// the other command-hook agents load them on the next run.
-fn show_reload_hint(harness_name: &str) {
-    match harness_name {
-        "pi" => userio::log::info!("hook-reload-hint-pi"),
-        "omp" => userio::log::info!("hook-reload-hint-omp"),
-        "opencode" => userio::log::info!("hook-reload-hint-opencode"),
-        "amp" => userio::log::info!("hook-reload-hint-amp"),
-        "kiro" => userio::log::info!("hook-reload-hint-kiro"),
-        _ => {}
-    }
-}
-
-async fn install(agent_name: &str) -> Result<()> {
-    let harness = AnyHarness::from_name(agent_name)?;
-
-    match harness.install_hooks().await {
-        Ok(path) => {
-            userio::log::info!(
-                "hook-installed",
-                harness = harness.name(),
-                path = path.display().to_string()
-            );
-            if harness.name() == "codex" {
-                // Codex runs only the hooks the user trusted (see `codex::hook_trust`).
-                let config = path.with_file_name("config.toml");
-                userio::log::info!("hook-codex-trusted", config = config.display().to_string());
-            }
-            show_reload_hint(harness.name());
-        }
-        Err(InstallHookError::AlreadyInstalled) => {
-            userio::log::info!("hook-already-installed", harness = harness.name());
-        }
-        Err(err) => return Err(err.into()),
-    }
-
-    userio::log::info!("hook-mcp-hint", name = harness.name());
-
-    Ok(())
 }
 
 /// Grok Build executes Claude Code hooks from `~/.claude/settings.json` when Claude compatibility
@@ -136,6 +91,7 @@ fn resolve_hook_author_with(
     Some(harness_name)
 }
 
+#[instrument(level = "trace", skip_all, err)]
 async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
     let harness = AnyHarness::from_name(agent_name)?;
 
@@ -209,25 +165,18 @@ mod tests {
     use crate::Atuin;
     use crate::command::{AtuinCmd, client};
 
+    /// An agent's hook parses, and so does the install setup took over, to say what to run.
     #[rstest]
-    fn parse_hook_agent_command() {
-        let cmd = Cmd::try_parse_from(["hook", "codex"]).unwrap();
-
-        assert!(matches!((cmd.action, cmd.agent.as_deref()), (None, Some("codex"))));
-    }
-
-    #[rstest]
-    #[case::codex("codex")]
-    #[case::grok("grok")]
-    #[case::opencode("opencode")]
-    #[case::pi("pi")]
-    fn parse_hook_install_command(#[case] agent_name: &str) {
-        let cmd = Cmd::try_parse_from(["hook", "install", agent_name]).unwrap();
-
-        match (cmd.action, cmd.agent) {
-            (Some(Action::Install { agent }), None) => assert_eq!(agent, agent_name),
-            other => panic!("unexpected parsed command: {other:?}"),
-        }
+    #[case::hook(&["hook", "codex"], None, Some("codex"))]
+    #[case::moved_install(&["hook", "install", "codex"], Some("codex"), None)]
+    fn parse_hook_agent_command(
+        #[case] args: &[&str],
+        #[case] moved: Option<&str>,
+        #[case] agent: Option<&str>,
+    ) {
+        let cmd = Cmd::try_parse_from(args).unwrap();
+        let installs = cmd.moved.map(|Moved::Install { agent }| agent);
+        assert_eq!((installs.as_deref(), cmd.agent.as_deref()), (moved, agent));
     }
 
     /// A harness whose author is missing from `KNOWN_AGENTS` would be installable
@@ -267,7 +216,7 @@ mod tests {
 
         assert!(matches!(
             cmd.atuin,
-            AtuinCmd::Client(client::Cmd::Hook(Cmd { action: None, agent: Some(agent) }))
+            AtuinCmd::Client(client::Cmd::Hook(Cmd { moved: None, agent: Some(agent) }))
                 if agent == "codex"
         ));
     }

@@ -1,6 +1,7 @@
 mod auto_share;
 mod engine;
 mod gate;
+mod workspaces;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ use engine::{UploadEngine, UploadRetryLater, Uploaded};
 use gate::{Cleared, CloseHalt, Closes, Rows};
 use thiserror::Error;
 use tokio::sync::Notify;
+use workspaces::Workspaces;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
@@ -47,12 +49,14 @@ impl ActiveOctavoClient {
         handle: DaemonHandle,
         outputs: Arc<OutputStore>,
         records: AiSessionStore,
+        sidecar: Option<AiSessionDatabase>,
     ) -> Result<Self, OpenActiveOctavoClientError> {
         let queue = UploadQueue::open(settings.octavo_queue_path()).await?;
         let hub = HubClient::new(settings)?;
         let wake = Arc::new(Notify::new());
         // Without a home, the user has no config of their own.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
+        let workspaces = Workspaces::new(configs, sidecar);
         let engine = UploadEngine::spawn(
             queue.clone(),
             hub.clone(),
@@ -60,7 +64,7 @@ impl ActiveOctavoClient {
             outputs,
             records,
             wake.clone(),
-            configs.clone(),
+            workspaces.clone(),
         );
 
         let uploader = Arc::new(DirectUploader {
@@ -68,7 +72,7 @@ impl ActiveOctavoClient {
             handle,
             queue,
             wake,
-            configs,
+            workspaces,
         });
 
         Ok(Self {
@@ -82,7 +86,7 @@ impl ActiveOctavoClient {
 impl OctavoClient for ActiveOctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId) {
         let settings = self.uploader.handle.settings().await.clone();
-        if !settings.teams.enabled {
+        if !(settings.teams.enabled && settings.teams.upload_history) {
             return;
         }
         // Read now, so the command goes to whoever was logged in as it finished.
@@ -102,7 +106,8 @@ impl OctavoClient for ActiveOctavoClient {
 
     async fn push_output(&self, id: HistoryId) {
         let settings = self.uploader.handle.settings().await.clone();
-        if !(settings.teams.enabled && settings.teams.upload_output) {
+        let teams = &settings.teams;
+        if !(teams.enabled && teams.upload_history && teams.upload_output) {
             return;
         }
         // Read now, so the output goes to whoever was logged in as it was captured.
@@ -131,6 +136,11 @@ impl OctavoClient for ActiveOctavoClient {
         if !settings.teams.enabled {
             return ThreadUpload::Nothing;
         }
+        let uploads = settings.teams.upload_threads;
+        let messages = self.uploader.workspaces.uploads(uploads, messages.to_vec()).await;
+        if messages.is_empty() {
+            return ThreadUpload::Nothing;
+        }
         // Read now, so the messages go to whoever was logged in as they were captured.
         let Some(session) = self.uploader.session(&settings).await else {
             return ThreadUpload::Nothing;
@@ -149,7 +159,7 @@ impl OctavoClient for ActiveOctavoClient {
                 uploader: Arc::clone(&self.uploader),
                 settings,
                 session,
-                messages: messages.to_vec(),
+                messages,
             });
         }
 
@@ -194,8 +204,8 @@ struct DirectUploader {
     handle: DaemonHandle,
     queue: UploadQueue,
     wake: Arc<Notify>,
-    /// Who threads are shared with.
-    configs: Configs,
+    /// Who threads are shared with, and which started in a workspace.
+    workspaces: Workspaces,
 }
 
 impl DirectUploader {
@@ -336,7 +346,7 @@ impl DirectUploader {
         messages: Vec<Message>,
     ) -> Result<Vec<Message>, CloseHalt> {
         let rows = Rows::new(&self.queue, login.user_id(), messages);
-        let closing = rows.record_dirs(&self.configs).await?.narrow().await?;
+        let closing = rows.record_dirs(self.workspaces.configs()).await?.narrow().await?;
         let deadline = tokio::time::Instant::now() + engine::PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
         let Cleared { ready, waiting } = closing.clear(sent).await?;

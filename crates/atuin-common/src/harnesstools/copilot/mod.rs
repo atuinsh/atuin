@@ -69,6 +69,16 @@ impl Harness for Copilot {
         Ok(config_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&copilot_home().joined("hooks").joined("atuin.json"), self.name()).await
+    }
+
+    /// The file goes with atuin's hooks, unless something else was put in it.
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        let config_path = copilot_home().joined("hooks").joined("atuin.json");
+        json_hooks::uninstall_own(&config_path, self.name(), &json!({"version": 1})).await
+    }
+
     /// `copilot --resume=<id>`. Copilot finds the session from anywhere and reopens it in the
     /// directory its log records, wherever it is run from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {

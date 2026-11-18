@@ -63,6 +63,14 @@ impl Harness for Kiro {
         hooks::install(&kiro_home(), &std::env::current_exe()?).await
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&hooks::path(&kiro_home())).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&hooks::path(&kiro_home())).await
+    }
+
     /// `kiro-cli chat --resume-id <id>`. Kiro finds the session in whichever bucket holds it,
     /// wherever it is run from, and goes on in that session's own directory.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {

@@ -16,6 +16,11 @@ written `<binary id>@<test name>`.
       configured) uploads. Each result is tagged with its selector
       (test.selector.primary), which is how Test Engine matches timings to
       the selectors of later plans. Exits with nextest's status.
+  all
+      bktec's test command for a job that runs every test, which names none:
+      bktec would put their selectors on the command line, which they
+      overflow on macOS. Runs $NEXTEST_COMMAND whole, then reports as `run`
+      does for every selector in $BUILDKITE_TEST_ENGINE_SELECTOR_FILE.
 """
 
 import json
@@ -61,6 +66,17 @@ def run(chosen):
             tests = " | ".join(f"test(={n})" for n in names[i : i + TESTS_PER_FILTER])
             args += ["-E", f"binary_id(={binary_id}) & ({tests})"]
 
+    test(args, chosen)
+
+
+def run_all():
+    with open(os.environ["BUILDKITE_TEST_ENGINE_SELECTOR_FILE"]) as f:
+        chosen = [line for line in f.read().splitlines() if line]
+    test(shlex.split(os.environ["NEXTEST_COMMAND"]), chosen)
+
+
+def test(args, chosen):
+    """Runs nextest as `args`, then reports `chosen`'s results to bktec."""
     if os.path.exists(JUNIT):
         os.remove(JUNIT)
     status = subprocess.call(args)
@@ -109,5 +125,7 @@ if __name__ == "__main__":
         selectors(*rest)
     elif mode == "run":
         run(rest)
+    elif mode == "all":
+        run_all()
     else:
         sys.exit(f"nextest-bktec: unknown mode {mode}")

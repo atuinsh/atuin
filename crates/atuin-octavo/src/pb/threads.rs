@@ -2,12 +2,13 @@ use std::fmt;
 use std::ops::RangeInclusive;
 
 use atuin_client::ai_session::{
-    AtuinSessionId, HarnessSession as DomainHarnessSession, MAX_ROW_TOKENS, Message,
+    AtuinSessionId, HarnessKind, HarnessSession as DomainHarnessSession, MAX_ROW_TOKENS, Message,
+    NativeSessionId,
 };
-use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::session::{
     Change, Content, FilePatch, Hunk, ParentKind, Patch, Role, StopReason, ToolResult, ToolUse,
 };
+use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::string::{Bounded, NonNulStr, TooLong};
 use atuin_domain::record::RecordId;
 use prost::Message as _;
@@ -281,6 +282,17 @@ impl HarnessSession {
         Self::from_captured(Field::ThreadSessionId, session).ok().flatten()
     }
 
+    /// The thread Octavo names so, as [`Self::of_thread`] names it: `None` for a harness this
+    /// build doesn't know.
+    #[must_use]
+    pub fn thread(&self) -> Option<DomainHarnessSession> {
+        let harness = AnyHarness::from_name(&self.harness).ok()?;
+        Some(DomainHarnessSession {
+            harness: HarnessKind::from(&harness),
+            session: NativeSessionId::from(self.session_id.clone()),
+        })
+    }
+
     /// The thread whose share holds `message`: its parent for a subagent's, else its own.
     #[must_use]
     pub fn sharing(message: &Message) -> Option<Self> {
@@ -502,7 +514,7 @@ impl From<Payload> for String {
 mod tests {
     use std::path::PathBuf;
 
-    use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
+    use atuin_client::ai_session::SourceId;
     use atuin_common::harnesstools::session::{ToolCallId, Usage};
     use atuin_domain::record::HostId as DomainHostId;
     use prost_types::{FileDescriptorProto, FileDescriptorSet, Timestamp};
@@ -513,6 +525,31 @@ mod tests {
 
     use super::*;
     use crate::pb::{HostId, InsertThreadMessagesRequest, ThreadBatch};
+
+    /// A thread Octavo names comes back as the thread it was.
+    #[rstest]
+    fn a_thread_comes_back_from_its_name(
+        #[values(
+            HarnessKind::Amp,
+            HarnessKind::ClaudeCode,
+            HarnessKind::Codex,
+            HarnessKind::Copilot,
+            HarnessKind::Grok,
+            HarnessKind::Hermes,
+            HarnessKind::Kiro,
+            HarnessKind::Opencode,
+            HarnessKind::Pi,
+            HarnessKind::Omp
+        )]
+        harness: HarnessKind,
+    ) {
+        let thread = DomainHarnessSession {
+            harness,
+            session: NativeSessionId::from("a-session".to_owned()),
+        };
+        let named = HarnessSession::of_thread(thread.clone()).expect("a thread Octavo names");
+        assert_eq!(named.thread(), Some(thread));
+    }
 
     /// A UUIDv7 told apart from others by `n`.
     fn v7(n: u8) -> Uuid {

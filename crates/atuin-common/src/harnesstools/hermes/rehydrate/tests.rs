@@ -667,7 +667,7 @@ async fn a_title_taken_meanwhile_is_tried_again_under_the_next() {
 
 /// What `hermes atuin import` says when nothing was written, as an error.
 #[rstest]
-#[case::no_plugin(CliOutput { code: Some(2), stdout: String::new(), stderr: "hermes: 'atuin' is not a `hermes` command.\n".into() }, "atuin hook install hermes")]
+#[case::no_plugin(CliOutput { code: Some(2), stdout: String::new(), stderr: "hermes: 'atuin' is not a `hermes` command.\n".into() }, "atuin setup --only --agent-history")]
 #[case::refused(said(r#"{"ok": false, "error": "revision_conflict"}"#, 1), "already exists")]
 #[case::skipped(
     said(r#"{"ok": false, "error": "skipped", "receipt": {"imported": 0}}"#, 1),

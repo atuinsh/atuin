@@ -4,7 +4,7 @@
  * Tracks bash commands executed by pi in Atuin history with author `pi`.
  *
  * Install with:
- *   atuin hook install pi
+ *   atuin setup --only --agent-history
  *
  * Then restart pi or run /reload.
  */

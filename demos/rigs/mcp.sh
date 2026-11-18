@@ -20,7 +20,7 @@ rig_up() {
   configure_daemon "$home" </dev/null
   env=(HOME="$home" PATH="$home/bin:/usr/bin:/bin" ATUIN_HOST_NAME=laptop)
   # Before the daemon, which would race it to make the database.
-  env -i "${env[@]}" atuin mcp install claude-code >/dev/null 2>&1
+  env -i "${env[@]}" atuin setup --only --mcp >/dev/null 2>&1
   start_daemon "$work/daemon.log" "${env[@]}"
   wait_for "the daemon" "$work/daemon.log" test -S "$home/d.sock"
 

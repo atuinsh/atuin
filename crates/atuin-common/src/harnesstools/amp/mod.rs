@@ -63,6 +63,14 @@ impl Harness for Amp {
         Ok(plugin_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
     /// `amp threads continue <id>`: Amp fetches the thread from its servers, from anywhere, and
     /// works in the directory it runs from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {

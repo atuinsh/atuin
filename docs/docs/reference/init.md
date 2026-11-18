@@ -10,7 +10,26 @@ belongs in your shell's startup file rather than being run by hand.
 atuin init zsh
 ```
 
-See [installation](../guide/installation.md#installing-the-shell-plugin) for the
+`atuin setup` adds the `atuin init` line to the startup files of zsh, bash, fish
+and PowerShell. To add it without the setup screen, pass `--only` and name the
+shells with `--shells`:
+
+```shell
+atuin setup --only --shell-history --shells zsh,bash,fish,powershell
+```
+
+| Shell | Startup file that setup writes to |
+|-------|-----------------------------------|
+| zsh | `$ZDOTDIR/.zshrc`, or `~/.zshrc` when `ZDOTDIR` isn't set |
+| bash | `~/.bashrc` |
+| fish | `~/.config/fish/config.fish`, inside an `if status is-interactive` block |
+| PowerShell | `~/.config/powershell/Microsoft.PowerShell_profile.ps1`, or on Windows, the profiles of both PowerShell 7 and Windows PowerShell |
+
+Setup leaves a startup file that already runs `atuin init` as it is.
+`atuin setup --only --no-shell-history` takes out the lines that setup wrote.
+
+For Nushell and xonsh, add the line to your startup file yourself. See
+[installation](../guide/installation.md#installing-the-shell-plugin) for the
 exact line to add for your shell — the syntax differs between shells.
 
 Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
@@ -39,6 +58,11 @@ For example, to keep ++ctrl+r++ but leave the up arrow alone:
 ```shell
 eval "$(atuin init zsh --disable-up-arrow)"
 ```
+
+`atuin setup --only --no-up-arrow` and `atuin setup --only --no-ctrl-r` turn
+the same keys off through the
+[`bind_up_arrow` and `bind_ctrl_r`](../configuration/config.md#bind_ctrl_r-and-bind_up_arrow)
+settings, and leave the `atuin init` line as it is.
 
 ## Binding `atuin resume`
 

@@ -91,6 +91,43 @@ async fn install_with(
     }
 }
 
+/// Whether the plugin is in `<home>/plugins/atuin/`.
+pub async fn has(home: &Path) -> Result<bool, InstallHookError> {
+    let manifest = home.join("plugins").joined(NAME).joined("plugin.yaml");
+    Ok(tokio::fs::try_exists(manifest).await?)
+}
+
+/// Remove the plugin: `<home>/plugins/atuin/`, and its entries in `config.yaml`. `false` when it
+/// wasn't there.
+pub async fn uninstall(home: &InstallHome) -> Result<bool, InstallHookError> {
+    uninstall_with(home.path(), &HermesCommand::new(home)).await
+}
+
+/// [`uninstall`], with `hermes plugins remove`, which deletes the directory and takes the plugin
+/// out of `plugins.enabled` and `plugins.disabled` (`cmd_remove` in
+/// `hermes_cli/plugins_cmd_remove.py`). As with enabling it, a failed remove is no error: the
+/// directory goes anyway, so Hermes has nothing of it to load.
+async fn uninstall_with(home: &Path, hermes: &impl HermesCli) -> Result<bool, InstallHookError> {
+    let dir = home.join("plugins").joined(NAME);
+    if !tokio::fs::try_exists(&dir).await? {
+        return Ok(false);
+    }
+    let remove = ["plugins", "remove", NAME];
+    if let Err(err) = hermes.run(&remove).await {
+        crate::userio::log::warn!(
+            "hermes-plugin-remove-failed",
+            error = err.to_string(),
+            command = hermes.command_line(&remove)
+        );
+    }
+    // Gone already when Hermes removed it.
+    match tokio::fs::remove_dir_all(&dir).await {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
+        _ => {}
+    }
+    Ok(true)
+}
+
 /// [`PLUGIN`] with `executable` in place of the bare `atuin` and `env` in place of the empty
 /// mapping, as Python literals: a JSON string is one, escapes and all, and so is a JSON object of
 /// strings.
@@ -141,6 +178,36 @@ mod tests {
         assert!(source.lines().any(|line| line == r#"ATUIN = "/opt/atuin/bin/atuin""#), "{source}");
         assert!(!source.contains(ATUIN_LINE));
         assert_eq!(hermes.ran(), ["plugins enable atuin"]);
+    }
+
+    /// Taken out, the plugin goes through Hermes, and its directory with it; again, there's
+    /// nothing to do.
+    #[rstest]
+    #[tokio::test]
+    async fn uninstall_removes_the_plugin_through_hermes() {
+        let home = tempfile::tempdir().unwrap();
+        let hermes = FakeHermes::default();
+        let atuin = Path::new("/opt/atuin/bin/atuin");
+        install_with(home.path(), atuin, &BTreeMap::new(), &hermes).await.unwrap();
+        assert!(has(home.path()).await.unwrap());
+
+        assert!(uninstall_with(home.path(), &hermes).await.unwrap());
+        assert!(!has(home.path()).await.unwrap());
+        assert!(!home.path().join("plugins").joined("atuin").exists());
+        assert_eq!(hermes.ran(), ["plugins enable atuin", "plugins remove atuin"]);
+        assert!(!uninstall_with(home.path(), &hermes).await.unwrap());
+    }
+
+    /// Without `hermes`, the directory goes all the same.
+    #[rstest]
+    #[tokio::test]
+    async fn uninstall_without_hermes_removes_the_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let atuin = Path::new("/opt/atuin/bin/atuin");
+        install_with(home.path(), atuin, &BTreeMap::new(), &FakeHermes::default()).await.unwrap();
+
+        assert!(uninstall_with(home.path(), &FakeHermes::missing()).await.unwrap());
+        assert!(!has(home.path()).await.unwrap());
     }
 
     /// The same files again change nothing, but the plugin is enabled again, in case it wasn't.

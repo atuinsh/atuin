@@ -224,18 +224,9 @@ enum Quiet {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
-        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do, and
-        // `atuin threads enable` is `atuin config enable threads`.
+        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do.
         #[cfg(feature = "ai")]
         match self {
-            #[cfg(feature = "daemon")]
-            Self::Threads(atuin_ai::commands::ThreadsCmd::Enable)
-            | Self::Ai(atuin_ai::commands::Command::Threads(
-                atuin_ai::commands::ThreadsCmd::Enable,
-            )) => {
-                let feature = config::Feature::Threads;
-                return Self::Config(config::Cmd::Enable(config::EnableCmd { feature })).run();
-            }
             Self::Threads(cmd) => return Self::Ai(cmd.into()).run(),
             Self::Resume(cmd) => return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run(),
             _ => {}

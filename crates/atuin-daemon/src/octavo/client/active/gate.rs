@@ -273,18 +273,20 @@ impl<'a> LookedAgain<'a> {
 pub(super) struct OpensNarrowed<'a>(LookedAgain<'a>);
 
 impl<'a> OpensNarrowed<'a> {
-    /// The opens that may go, once the closes are sent: not an unsure thread's.
+    /// The opens that may go, once the closes are sent: neither an unsure thread's nor one of
+    /// those `held`, which stay queued.
     pub(super) async fn pending(
         self,
         _sent: ClosesSent,
+        held: HashSet<pb::HarnessSession>,
     ) -> Result<Vec<PendingOpen<'a>>, QueueError> {
         let LookedAgain {
             queue,
             login,
-            unsure,
+            mut unsure,
         } = self.0;
-        let opens = queue.pending_opens(login).await?;
-        Ok(opens.into_iter().filter(|open| !unsure.contains(open.thread())).collect())
+        unsure.extend(held);
+        queue.pending_opens(login, &unsure).await
     }
 }
 

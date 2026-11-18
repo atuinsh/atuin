@@ -9,7 +9,7 @@ use std::time::Duration;
 use atuin_client::ai_session::{AiSessionStore, Loaded, Message};
 use atuin_client::history::HistoryId;
 use atuin_client::record::decode::map_parallel;
-use atuin_client::settings::Settings;
+use atuin_client::settings::{Settings, ThreadUploads};
 use atuin_common::futures::{Backoff, Debounce, Delays};
 use atuin_domain::record::{HostId, RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, HubLogin};
@@ -18,7 +18,6 @@ use atuin_octavo::queue::{
     NotSent, PendingHistoryUpload, PendingOpen, PendingOutputUpload, PendingThreadMessageUpload,
     QueueError, ThreadBackfill, UploadQueue,
 };
-use atuin_octavo::shares::Configs;
 use futures::StreamExt;
 use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
@@ -30,6 +29,7 @@ use tonic::Code;
 use uuid::Uuid;
 
 use super::gate::{Cleared, CloseHalt, Closes, Opening, Rows};
+use super::workspaces::Workspaces;
 use super::{clear_off, forget_output, is_off, mark_off};
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
@@ -82,7 +82,7 @@ impl UploadEngine {
         outputs: Arc<OutputStore>,
         records: AiSessionStore,
         wake: Arc<Notify>,
-        configs: Configs,
+        workspaces: Workspaces,
     ) -> Self {
         let events = handle.subscribe();
         let inner = EngineInner {
@@ -94,7 +94,7 @@ impl UploadEngine {
             wake,
             logins: Notify::new(),
             logins_heard: AtomicU64::new(0),
-            configs,
+            workspaces,
         };
 
         Self {
@@ -253,8 +253,8 @@ struct EngineInner {
     logins: Notify,
     /// How many logins the engine has heard of, so background work backing off can tell one came.
     logins_heard: AtomicU64,
-    /// Who threads are shared with.
-    configs: Configs,
+    /// Who threads are shared with, and which started in a workspace.
+    workspaces: Workspaces,
 }
 
 impl EngineInner {
@@ -393,7 +393,7 @@ impl EngineInner {
             return Ok(None);
         }
 
-        match self.send_live_uploads(&login).await {
+        match self.send_live_uploads(&login, &settings).await {
             Ok(()) => Ok(Some(Sending { login, settings })),
             Err(Halt::Off) => Ok(None),
             Err(Halt::RetryLater) => Err(RetryLater),
@@ -401,13 +401,17 @@ impl EngineInner {
     }
 
     /// Sends `login`'s queued thread messages, then their queued thread shares, for up to
-    /// [`PASS_BUDGET`], all up to the first [`Halt::Off`].
-    async fn send_live_uploads(&self, login: &HubLogin) -> Result<(), Halt> {
-        self.send_threads(login).await?;
+    /// [`PASS_BUDGET`], all up to the first [`Halt::Off`]. While `settings` keep threads here, both
+    /// stay queued.
+    async fn send_live_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
+        if settings.teams.upload_threads == ThreadUploads::Off {
+            return Ok(());
+        }
+        self.send_threads(login, settings).await?;
         // Last, as a share waits for its thread's messages. One that may go later waits for the
         // next pass rather than backing off: a wake can't cut a backoff short, so the thread
         // messages it brings would wait it out too.
-        if matches!(self.send_thread_shares(login).await, Err(Halt::Off)) {
+        if matches!(self.send_thread_shares(login, settings).await, Err(Halt::Off)) {
             return Err(Halt::Off);
         }
         Ok(())
@@ -415,15 +419,26 @@ impl EngineInner {
 
     /// Sends a page of `login`'s first thread backfill not done, then their queued history
     /// entries, then (only after all history is done) their queued command output, all up to the
-    /// first [`Halt::Off`], saying whether more may be left.
+    /// first [`Halt::Off`], saying whether more may be left. What `settings` keep here stays
+    /// queued.
     ///
     /// History uploads and command output uploads each stop at [`Budget`].
     async fn send_backlog(&self, Sending { login, settings }: &Sending) -> Result<NextPass, Halt> {
         let mut wake = pin!(self.wake.notified());
-        let threads = self.backfill(login).await?;
-        let commands = match self.send_history(login, wake.as_mut()).await? {
-            NextPass::Waiting => self.send_outputs(login, settings, wake.as_mut()).await?,
-            next @ (NextPass::Now | NextPass::Woken) => next,
+        // Only of every thread: a backfill takes the account's, from other machines too, where
+        // whether one started in a workspace can't be told.
+        let threads = if settings.teams.upload_threads == ThreadUploads::All {
+            self.backfill(login).await?
+        } else {
+            NextPass::Waiting
+        };
+        let commands = if settings.teams.upload_history {
+            match self.send_history(login, wake.as_mut()).await? {
+                NextPass::Waiting => self.send_outputs(login, settings, wake.as_mut()).await?,
+                next @ (NextPass::Now | NextPass::Woken) => next,
+            }
+        } else {
+            NextPass::Waiting
         };
 
         Ok(match (threads, commands) {
@@ -573,8 +588,8 @@ impl EngineInner {
         Ok(NextPass::Waiting)
     }
 
-    /// Sends the queued thread messages of `login`'s user.
-    async fn send_threads(&self, login: &HubLogin) -> Result<(), Halt> {
+    /// Sends the queued thread messages of `login`'s user, as `settings` say which go up.
+    async fn send_threads(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
         let mut pending = self.queue.pending_thread_messages(login.user_id());
         while let Some(page) = pending.next().await {
             let ids = page
@@ -585,15 +600,21 @@ impl EngineInner {
                     tracing::warn!(?err, "failed to read the octavo thread queue; retrying later");
                     RetryLater
                 })?;
-            self.send_thread_page(login, &ids).await?;
+            self.send_thread_page(login, settings, &ids).await?;
         }
         Ok(())
     }
 
     /// Uploads the queued thread messages `ids`, and settles each: dequeued once uploaded or
-    /// refused, held while this build can't read its record, and expired while its record isn't
-    /// stored. Those to upload stay queued while Octavo refuses them as off for the account.
-    async fn send_thread_page(&self, login: &HubLogin, ids: &[RecordId]) -> Result<(), Halt> {
+    /// refused, or once `settings` keep its thread here, held while this build can't read its
+    /// record, and expired while its record isn't stored. Those to upload stay queued while
+    /// Octavo refuses them as off for the account.
+    async fn send_thread_page(
+        &self,
+        login: &HubLogin,
+        settings: &Settings,
+        ids: &[RecordId],
+    ) -> Result<(), Halt> {
         let user = login.user_id();
         let loaded = self.records.load(ids).await.map_err(|err| {
             tracing::warn!(?err, "failed to load queued thread messages; retrying later");
@@ -615,6 +636,10 @@ impl EngineInner {
                 Loaded::Missing => missing.push(id),
             }
         }
+        // Queued while every thread went up, those not from a workspace stay here once only those
+        // do.
+        let uploads = settings.teams.upload_threads;
+        let messages = self.workspaces.uploads(uploads, messages).await;
         // Those that must wait stay queued for the next pass.
         let Cleared { ready, waiting } = self.clear(login, messages).await?;
         let waiting: HashSet<_> = waiting.into_iter().collect();
@@ -666,20 +691,39 @@ impl EngineInner {
     }
 
     /// Sends `login`'s queued thread shares for up to [`PASS_BUDGET`], up to the first that fails
-    /// for a reason that may pass, as one the budget cuts short does.
+    /// for a reason that may pass, as one the budget cuts short does. A share of a thread that
+    /// `settings` keep here stays queued.
     ///
     /// A share cut short goes again, which Octavo takes as a repeat even if it stored the first.
-    async fn send_thread_shares(&self, login: &HubLogin) -> Result<(), Halt> {
+    async fn send_thread_shares(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
         let opening = Opening::of(&self.queue, login).await?;
-        let narrowed = opening.look_again(&self.configs).await?.narrow().await?;
+        let narrowed = opening.look_again(self.workspaces.configs()).await?.narrow().await?;
+        // Before the budget starts, as each thread's workspace may take a lookup of its own.
+        let held = self.held_shares(login, settings).await?;
         // First, so no share opens to an organization one of its thread's directories keeps out.
         let deadline = Instant::now() + PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
-        for open in narrowed.pending(sent).await? {
+        for open in narrowed.pending(sent, held).await? {
             let sent = tokio::time::timeout_at(deadline, self.send_thread_share(login, open)).await;
             sent.unwrap_or(Err(Halt::RetryLater))?;
         }
         Ok(())
+    }
+
+    /// The threads of `login` queued to be opened that `settings` keep here, whose shares wait:
+    /// queued while every thread went up, those from outside a workspace wait for that again.
+    async fn held_shares(
+        &self,
+        login: &HubLogin,
+        settings: &Settings,
+    ) -> Result<HashSet<pb::HarnessSession>, Halt> {
+        let mut held = HashSet::new();
+        for thread in self.queue.opening_threads(login.user_id()).await? {
+            if !self.workspaces.shares(settings.teams.upload_threads, &thread).await {
+                held.insert(thread);
+            }
+        }
+        Ok(held)
     }
 
     async fn send_thread_share(&self, login: &HubLogin, open: PendingOpen<'_>) -> Result<(), Halt> {
@@ -730,7 +774,7 @@ impl EngineInner {
     /// [`gate`](super::gate)).
     async fn clear(&self, login: &HubLogin, messages: Vec<Message>) -> Result<Cleared, Halt> {
         let rows = Rows::new(&self.queue, login.user_id(), messages);
-        let closing = rows.record_dirs(&self.configs).await?.narrow().await?;
+        let closing = rows.record_dirs(self.workspaces.configs()).await?.narrow().await?;
         let sent = Closes::of(&self.queue, login).send(Instant::now() + PASS_BUDGET).await?;
         Ok(closing.clear(sent).await?)
     }

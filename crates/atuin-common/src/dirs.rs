@@ -31,6 +31,13 @@ pub fn home_dir() -> PathBuf {
     try_home_dir().unwrap_or_else(|err| panic!("{err}"))
 }
 
+/// The user's documents folder, where PowerShell keeps its profiles on Windows. It's the system's,
+/// which follows the folder where it's been moved (to OneDrive, say), else `Documents` in the home.
+#[must_use]
+pub fn documents_dir() -> PathBuf {
+    dirs::document_dir().unwrap_or_else(|| home_dir().joined("Documents"))
+}
+
 /// Represents the path to Atuin's home directory.
 ///
 /// See [`atuin_home`].

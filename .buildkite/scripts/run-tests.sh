@@ -45,4 +45,9 @@ echo "+++ :test_tube: Tests (job $((BUILDKITE_PARALLEL_JOB + 1)) of ${BUILDKITE_
 test_engine_uploads_on_main
 export BUILDKITE_TEST_ENGINE_SELECTOR_FILE=$selectors
 export NEXTEST_COMMAND="cargo-nextest nextest run --archive-file $archive --workspace-remap $PWD --extract-to $PWD --extract-overwrite --no-tests=pass"
+# A job that runs every test names none: on macOS, bktec's command line can't
+# hold the selectors of them all (ARG_MAX is 1 MiB, environment included).
+if [ "${BUILDKITE_PARALLEL_JOB_COUNT:-1}" -eq 1 ]; then
+  export BUILDKITE_TEST_ENGINE_TEST_CMD="python3 .buildkite/scripts/nextest-bktec.py all"
+fi
 bktec run || { .buildkite/scripts/proptest-regressions.sh; exit 1; }

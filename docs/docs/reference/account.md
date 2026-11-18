@@ -5,6 +5,11 @@
 Manage your sync account. This page is the command reference. For a walkthrough
 of registering and logging in, see [Setting up Sync](../guide/sync.md).
 
+To sign this machine in to Atuin Cloud, run `atuin setup --sync cloud`. Setup
+opens your browser to sign in, and asks for your encryption key only when your
+account has data that this machine's key can't read. Use the commands on this
+page to sign in to a server of your own, and for unattended logins.
+
 `atuin register`, `atuin login`, and `atuin logout` are shorthand for the
 corresponding `atuin account` subcommands.
 

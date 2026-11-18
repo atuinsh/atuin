@@ -8,4 +8,4 @@
 
 **Workspace search** is now on by default, and supports jj.
 
-**History search via the daemon** is now much faster. Try it with `atuin config enable daemon`.
+**History search via the daemon** is now much faster. Try it with `atuin setup --only --daemon`.

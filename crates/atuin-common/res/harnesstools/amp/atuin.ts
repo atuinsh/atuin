@@ -6,7 +6,7 @@
  * Threads with `atuin threads push` (see `atuin threads push --help`).
  *
  * Install with:
- *   atuin hook install amp
+ *   atuin setup --only --agent-history
  *
  * Then restart Amp.
  */

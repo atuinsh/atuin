@@ -5,7 +5,7 @@ use std::sync::Arc;
 use atuin_client::history::HistoryId;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
-use atuin_client::settings::Settings;
+use atuin_client::settings::{Settings, ThreadUploads};
 use atuin_daemon::service::pidfile::Pidfile;
 use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
 use atuin_domain::caps::OctavoCap;
@@ -21,7 +21,7 @@ use super::upload::Upload;
 use super::{Status, Step, Updates, count, names, send};
 
 /// Turn Atuin for Teams on, if the account has it, and upload what Atuin already has here if
-/// `backfill`. Returns the upload to watch, if it started one.
+/// `backfill`, of what `settings` say it uploads. Returns the upload to watch, if it started one.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
     store: &SqliteStore,
@@ -108,7 +108,7 @@ async fn turn_on(
 
     let upload = uploading
         .is_some()
-        .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone()));
+        .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone(), settings));
     let uploading =
         uploading.map_or_else(String::new, |what| format!(", uploading {what} in the background"));
     let old = if old > 0 {
@@ -130,18 +130,29 @@ struct Backfill {
 }
 
 impl Backfill {
+    /// What's here of what `settings` say Atuin for Teams uploads.
     async fn read(settings: &Arc<Settings>, store: &SqliteStore) -> Result<Self> {
-        let db = atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout);
-        let (history, old): (Vec<_>, Vec<_>) = db
-            .await?
-            .active_ids()
-            .await?
-            .into_iter()
-            .partition(|&id| pb::UuidV7::try_from(id).is_ok());
+        let (history, old) = if settings.teams.upload_history {
+            let db = atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout);
+            db.await?
+                .active_ids()
+                .await?
+                .into_iter()
+                .partition(|&id| pb::UuidV7::try_from(id).is_ok())
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        // Only of every thread: those of the account's other machines can't be told to have
+        // started in a workspace here.
+        let threads = if settings.teams.upload_threads == ThreadUploads::All {
+            StoredThreads::read(settings, store).await?
+        } else {
+            None
+        };
         Ok(Self {
             history,
             old: old.len(),
-            threads: StoredThreads::read(settings, store).await?,
+            threads,
         })
     }
 

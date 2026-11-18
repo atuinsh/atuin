@@ -84,6 +84,35 @@ pub(super) async fn trust(
     Ok(changed)
 }
 
+/// Forget the trust of the hooks running `atuin hook <harness>` in `home/hooks.json`, before
+/// they're taken out, returning whether that changed `config`. Codex keys trust by where a hook
+/// is, so a user's hook after atuin's in the same stage moves up and needs trusting again; atuin
+/// adds its own last, so that's rare.
+pub(super) async fn untrust(
+    home: &Path,
+    harness: &str,
+    mut config: Config,
+) -> Result<bool, InstallHookError> {
+    let text = match tokio::fs::read_to_string(home.join("hooks.json")).await {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    let hooks: Value = serde_json::from_str(&text)?;
+    let hooks_path =
+        AbsPathBuf::canonicalize_async(home).await?.into_path_buf().joined("hooks.json");
+    let state = state(&mut config.doc)?;
+    let mut changed = false;
+    for (event, group, handler, _) in atuin_hooks(&hooks, harness) {
+        let key = format!("{}:{event}:{group}:{handler}", hooks_path.display());
+        changed |= state.remove(&key).is_some();
+    }
+    if changed {
+        tokio::fs::write(&config.path, config.doc.to_string()).await?;
+    }
+    Ok(changed)
+}
+
 fn implicit() -> Item {
     let mut table = Table::new();
     table.set_implicit(true);
@@ -168,6 +197,34 @@ mod tests {
 
     fn installed() -> Value {
         json!({"matcher": "^Bash$", "hooks": [{"type": "command", "command": COMMAND}]})
+    }
+
+    /// Untrusting forgets the trust of atuin's hooks, and only theirs.
+    #[rstest]
+    #[tokio::test]
+    async fn untrusting_forgets_atuins_hooks_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let theirs = json!({"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]});
+        let hooks =
+            json!({"hooks": {"PreToolUse": [theirs, installed()], "PostToolUse": [installed()]}});
+        std::fs::write(home.path().join("hooks.json"), hooks.to_string()).unwrap();
+        let path =
+            AbsPathBuf::canonicalize(home.path()).unwrap().into_path_buf().joined("hooks.json");
+        let their_key = format!("{}:pre_tool_use:0:0", path.display());
+        // A literal key, as a Windows path's backslashes would be escapes in a quoted one.
+        let before = format!("[hooks.state.'{their_key}']\ntrusted_hash = \"sha256:theirs\"\n");
+        std::fs::write(home.path().join("config.toml"), before).unwrap();
+        let config_of = || config(home.path());
+        trust(home.path(), "codex", config_of().await.unwrap()).await.unwrap();
+
+        assert!(untrust(home.path(), "codex", config_of().await.unwrap()).await.unwrap());
+        assert!(!untrust(home.path(), "codex", config_of().await.unwrap()).await.unwrap());
+
+        let text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+        let config: toml_edit::DocumentMut = text.parse().unwrap();
+        let state = config["hooks"]["state"].as_table_like().unwrap();
+        let keys: Vec<_> = state.iter().map(|(key, _)| key.to_owned()).collect();
+        assert_eq!(keys, [their_key]);
     }
 
     /// Atuin's hooks are trusted where they are, beside the user's, which are left untrusted;

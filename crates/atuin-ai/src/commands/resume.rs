@@ -423,7 +423,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
         if settings.threads.capture {
             bail!("no threads here yet: the Atuin daemon hasn't recorded any");
         }
-        bail!("no threads here yet: turn them on with `atuin config enable threads`");
+        bail!("no threads here yet: turn them on with `atuin setup --only --threads --daemon`");
     }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
     startup("session database open");

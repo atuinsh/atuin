@@ -117,7 +117,9 @@ pub enum Cmd {
     /// Pick a captured thread and resume it.
     Resume(super::resume::Cmd),
 
-    /// Turn thread capture on (short for `atuin config enable threads`).
+    /// What `atuin threads enable` did before `atuin setup` did it, kept so that the scripts still
+    /// running it say what to run instead.
+    #[command(hide = true)]
     Enable,
 }
 
@@ -199,15 +201,21 @@ impl Style {
 pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     let style = match cmd {
         Cmd::Resume(cmd) => return super::resume::run(cmd, settings).await,
-        // The atuin binary runs it as `atuin config enable threads`, which needs the daemon.
-        Cmd::Enable => return Err(eyre!("threads need the daemon, which this build leaves out")),
+        Cmd::Enable => {
+            return Err(eyre!(
+                "`atuin threads enable` is now part of `atuin setup`: run `atuin setup --only \
+                 --threads --daemon`"
+            ));
+        }
         Cmd::List { ref output }
         | Cmd::Show { ref output, .. }
         | Cmd::Search { ref output, .. }
         | Cmd::Tail { ref output }
         | Cmd::Import { ref output, .. } => output.style.resolve(),
         Cmd::Push { .. } if !settings.threads.capture => {
-            return Err(eyre!("thread capture is off; `atuin config enable threads` turns it on"));
+            return Err(eyre!(
+                "thread capture is off; `atuin setup --only --threads --daemon` turns it on"
+            ));
         }
         Cmd::Push { .. } => Style::Plain,
     };

@@ -97,7 +97,9 @@ key binding](configuration/advanced-key-binding.md).
 
 Atuin records commands run by AI coding agents through their hook systems. See
 [AI agent hooks](guide/agent-hooks.md) for setup. The supported agents are
-_Claude Code_, _Codex_, _Copilot_, _Hermes Agent_, _Kiro_, _opencode_ and _pi_.
+_Claude Code_, _Codex_, _Copilot_, _Grok Build_, _Hermes Agent_, _Kiro_,
+_opencode_, _pi_ and _omp_. For _Amp_, Atuin captures Amp's sessions as
+[threads](ai/threads.md#amp) only.
 
 ## Getting help
 

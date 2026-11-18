@@ -92,6 +92,14 @@ impl Harness for Opencode {
         Ok(extension_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
     /// `opencode --session <id>`. opencode looks the id up in its one global database and serves
     /// the session from the directory recorded for it, but the TUI starts in the directory it is
     /// run from (its project's session list, config and the new sessions it creates), so the

@@ -63,6 +63,19 @@ impl Harness for Codex {
         Ok(config_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&home().joined("hooks.json"), self.name()).await
+    }
+
+    /// With their trust, read first, as Codex keys it by where each hook is.
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        let home = home();
+        let config = hook_trust::config(&home).await?;
+        let untrusted = hook_trust::untrust(&home, self.name(), config).await?;
+        let removed = json_hooks::uninstall(&home.join("hooks.json"), self.name()).await?;
+        Ok(removed || untrusted)
+    }
+
     /// `codex resume <id>`. Codex finds the id from any directory, but asks whether to work in
     /// the session's directory or the current one when they differ.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {

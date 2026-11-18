@@ -55,6 +55,14 @@ impl Harness for Ccode {
         Ok(config_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&config_dir().joined("settings.json"), self.name()).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::uninstall(&config_dir().joined("settings.json"), self.name()).await
+    }
+
     /// `claude --resume <id>`. Claude Code finds the id from any directory, but the session
     /// works in the directory it is started from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
