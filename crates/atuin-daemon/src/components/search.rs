@@ -7,11 +7,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_client::database::Sqlite;
 use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_common::shell::Shell;
+use atuin_domain::record::HostId;
 use eyre::Result;
 use futures::StreamExt;
 use tokio_stream::Stream;
@@ -347,7 +349,21 @@ impl SearchSvc for SearchGrpcService {
                 );
 
                 // Convert proto FilterMode + context to IndexFilterMode
-                let index_filter = convert_filter_mode(filter_mode, proto_context.as_ref());
+                let index_filter = match convert_filter_mode(
+                    this.handle.history_db(),
+                    filter_mode,
+                    proto_context.as_ref(),
+                )
+                .await
+                {
+                    Ok(filter) => filter,
+                    Err(err) => {
+                        error!(?err, "failed to prepare search filter");
+                        let _ =
+                            tx.send(Err(Status::internal("failed to prepare search filter"))).await;
+                        break;
+                    }
+                };
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
@@ -474,11 +490,12 @@ impl SearchSvc for SearchGrpcService {
 }
 
 /// Convert proto FilterMode and context to IndexFilterMode.
-fn convert_filter_mode(
+async fn convert_filter_mode(
+    db: &Sqlite,
     mode: FilterMode,
     context: Option<&crate::search::SearchContext>,
-) -> IndexFilterMode {
-    match (mode, context) {
+) -> Result<IndexFilterMode> {
+    Ok(match (mode, context) {
         (FilterMode::Global, _) => IndexFilterMode::Global,
         (FilterMode::Directory, Some(ctx)) => {
             IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
@@ -491,12 +508,16 @@ fn convert_filter_mode(
                 IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
             }
         }
-        (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
+        (FilterMode::Host, Some(ctx)) => {
+            let id = uuid::Uuid::parse_str(&ctx.host_id).ok().map(HostId);
+            let names = db.host_names(id, &ctx.hostname).await?;
+            IndexFilterMode::Host { id, names }
+        }
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
             IndexFilterMode::SessionPreload(ctx.session_id.clone())
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
-    }
+    })
 }

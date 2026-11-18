@@ -196,7 +196,10 @@ mod unix {
         // alpha: bash, host-a, session A, inside the workspace
         // beta:  zsh, host-b, session B, outside the workspace
         // gamma: unknown shell, host-a, session A, workspace root
-        let alpha = seed_history("echo alpha", "/work/repo/sub", "host-a", SESSION_A, Some("bash"));
+        let mut alpha =
+            seed_history("echo alpha", "/work/repo/sub", "host-a", SESSION_A, Some("bash"));
+        let host_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+        alpha.host_id = Some(host_id);
         let beta = seed_history("echo beta", "/elsewhere", "host-b", SESSION_B, Some("zsh"));
         let gamma = seed_history("echo gamma", "/work/repo", "host-a", SESSION_A, None);
         let seeded = [alpha.clone(), beta.clone(), gamma.clone()];
@@ -252,6 +255,12 @@ mod unix {
         )
         .await;
         assert_eq!(sorted(results), ids_of(&[&beta]), "host filter");
+
+        let mut renamed = context("/work/repo", "new-host", SESSION_A, None);
+        renamed.host_id = host_id.as_simple().to_string();
+        query_id += 1;
+        let results = search(&mut client, query_id, "echo", FilterMode::Host, renamed, &[""]).await;
+        assert_eq!(sorted(results), ids_of(&[&gamma]), "learn names from excluded shells");
 
         // Session: both session-A commands.
         query_id += 1;
