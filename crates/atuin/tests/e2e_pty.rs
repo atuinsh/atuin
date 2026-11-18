@@ -227,10 +227,17 @@ fn filter_switching_changes_results(
     env.record(&commands[1], SESSION, &cwd);
     env.record(&commands[2], SESSION, &sibling);
     env.record(&commands[3], SESSION, env.home());
-    let mut remote = env.atuin(&["history", "start", "--", &commands[4]]);
-    remote.env("ATUIN_SESSION", SESSION).env("ATUIN_HOST_NAME", "e2e-other-host");
-    let id = output(remote);
-    env.run(&["history", "end", "--exit", "0", id.trim()]);
+    let remote = FreshEnv::new();
+    let history = env.data_dir().join("history.db");
+    let mut start = remote.atuin(&["history", "start", "--", &commands[4]]);
+    start
+        .env("ATUIN_DB_PATH", &history)
+        .env("ATUIN_SESSION", SESSION)
+        .env("ATUIN_HOST_NAME", "e2e-other-host");
+    let id = output(start);
+    let mut end = remote.atuin(&["history", "end", "--exit", "0", id.trim()]);
+    end.env("ATUIN_DB_PATH", history);
+    output(end);
 
     pty.send_line("clear");
     pty.send_ctrl_r();
