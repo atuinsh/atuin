@@ -348,7 +348,10 @@ async fn details(
             Request::Flatten(session, cwd) => {
                 let flattened =
                     source.rehydrate(&session, &cwd).await.map_err(|e| format!("{e:#}")).and_then(
-                        |original| continuation::flattened(&original).map_err(|e| e.to_string()),
+                        |original| {
+                            continuation::flattened(&original, resumer.continue_max_bytes())
+                                .map_err(|e| e.to_string())
+                        },
                     );
                 Response::Flattened(session, flattened)
             }
