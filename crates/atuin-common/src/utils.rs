@@ -375,7 +375,9 @@ mod tests {
     fn repo_walk_returns_the_nearest_marker() {
         use proptest::prelude::*;
 
-        let parts = prop::collection::vec("[a-z]{1,12}", 0..16);
+        // The leading `d` keeps every segment clear of Windows' reserved device names
+        // (`nul`, `con`, `aux`, `prn`), which `create_dir_all` can't create.
+        let parts = prop::collection::vec("d[a-z]{0,11}", 0..16);
         proptest!(|(parts in parts, index in any::<usize>())| {
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().to_path_buf();
