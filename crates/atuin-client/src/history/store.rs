@@ -15,6 +15,7 @@ use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
 use futures::{Stream, StreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use itertools::Itertools as _;
 use tracing::instrument;
 use tracing_futures::Instrument;
 
@@ -226,8 +227,7 @@ impl CreateChunk<'_> {
         &self.histories
     }
 
-    /// Drop the entries whose ids already have a row in the history database. That includes
-    /// tombstones from older versions.
+    /// Fill missing host IDs on existing live rows and remove existing rows from this chunk.
     ///
     /// Committing such an entry does nothing, because the save skips ids that already have a row.
     /// Call this before the entries are registered with the search index. Otherwise the index
@@ -239,6 +239,13 @@ impl CreateChunk<'_> {
         }
         let existing = self.database.existing_ids(self.histories.iter().map(id)).await?;
         if !existing.is_empty() {
+            let ids: Vec<_> = self
+                .histories
+                .iter()
+                .filter(|h| existing.contains(&h.id))
+                .filter_map(|h| Some((h.id, h.host_id?)))
+                .collect();
+            self.database.set_host_ids(&ids).await?;
             self.histories.retain(|h| !existing.contains(&h.id));
         }
         Ok(())
@@ -402,21 +409,8 @@ impl HistoryStore {
 
         for record in records {
             let id = record.id;
-            let (host, created) = (record.host.id, record.timestamp);
-            let version = record.version.clone();
-
-            // A record we can't decrypt or decode must not block the rest of the store -
-            // skip it, and load everything else.
-            let hist =
-                match Version::from_name(version.as_str()) {
-                    Some(_) => record.decrypt(&self.encryption_key).map_err(Into::into).and_then(
-                        |decrypted| HistoryRecord::deserialize(&decrypted.data, version.as_str()),
-                    ),
-                    None => Err(eyre!("unknown history version {version:?}")),
-                };
-
-            match hist {
-                Ok(hist) => ret.push(hist.with_record_host(host, created)),
+            match self.decode_record(&record) {
+                Ok(hist) => ret.push(hist),
                 Err(e) => {
                     warn!("failed to decode history record {}, skipping: {e}", id.0);
                     skipped += 1;
@@ -429,6 +423,55 @@ impl HistoryStore {
         }
 
         Ok(ret)
+    }
+
+    /// Fill missing host IDs from records already in the local store.
+    ///
+    /// Concurrent scans can write the same batches safely. Unreadable records are reported
+    /// and skipped as in history rebuild. A storage error leaves the scan incomplete.
+    pub async fn backfill_host_ids(&self, database: &Sqlite) -> Result<()> {
+        if database.host_id_backfill_complete().await? {
+            return Ok(());
+        }
+        let mut skipped = 0;
+        let status = self.store.status().await?;
+        for (host, tags) in status.hosts.into_iter().sorted_by_key(|(host, _)| *host) {
+            let Some(&tail) = tags.get(&RecordTag::History) else {
+                continue;
+            };
+            let series = RecordSeriesKey::new(host, RecordTag::History);
+            let mut next = 0;
+            while next <= tail {
+                let records =
+                    self.store.next(&series, next, u64::conv(BUILD_BATCH_SIZE.get())).await?;
+                if records.is_empty() {
+                    break;
+                }
+                next = records.last().expect("nonempty page").idx + 1;
+                let mut ids = Vec::with_capacity(records.len());
+                for record in records.into_iter().take_while(|record| record.idx <= tail) {
+                    let id = record.id;
+                    match self.decode_record(&record) {
+                        Ok(HistoryRecord::Create(history)) => {
+                            if let Some(host) = history.host_id {
+                                ids.push((history.id, host));
+                            }
+                        }
+                        Ok(HistoryRecord::Delete(_)) => {}
+                        Err(err) => {
+                            warn!(?id, %err, "failed to decode history record during host ID backfill");
+                            skipped += 1;
+                        }
+                    }
+                }
+                database.set_host_ids(&ids).await?;
+            }
+        }
+        if skipped > 0 {
+            userio::log::warn!("history-records-skipped", skipped = skipped);
+        }
+        database.finish_host_id_backfill().await?;
+        Ok(())
     }
 
     /// This function builds the history database from the current history record state.
@@ -472,6 +515,10 @@ impl HistoryStore {
 
         database.save_bulk(&creates).await?;
         database.delete_rows(deletes).await?;
+        for batch in creates.chunks(BUILD_BATCH_SIZE.get()) {
+            let ids: Vec<_> = batch.iter().filter_map(|h| Some((h.id, h.host_id?))).collect();
+            database.set_host_ids(&ids).await?;
+        }
 
         Ok(())
     }
@@ -537,26 +584,24 @@ impl HistoryStore {
             return None;
         }
 
-        let (host, created) = (record.host.id, record.timestamp);
-        let version = record.version.clone();
-
-        // Skip records we can't decrypt or decode, rather than failing the entire build.
-        let record = match Version::from_name(version.as_str()) {
-            Some(_) => {
-                record.decrypt(&self.encryption_key).map_err(Into::into).and_then(|decrypted| {
-                    HistoryRecord::deserialize(&decrypted.data, version.as_str())
-                })
-            }
-            None => Err(eyre!("unknown history version {version:?}")),
-        };
-
-        match record {
-            Ok(record) => Some(record.with_record_host(host, created)),
+        match self.decode_record(&record) {
+            Ok(record) => Some(record),
             Err(e) => {
                 warn!("failed to decode history record {}, skipping: {e}", id.0);
                 None
             }
         }
+    }
+
+    fn decode_record(&self, record: &Record<paseto_v4::EncryptedData>) -> Result<HistoryRecord> {
+        let (host, created) = (record.host.id, record.timestamp);
+        let version = record.version.clone();
+        if Version::from_name(version.as_str()).is_none() {
+            bail!("unknown history version {version:?}");
+        }
+        let decrypted = record.decrypt(&self.encryption_key)?;
+        HistoryRecord::deserialize(&decrypted.data, version.as_str())
+            .map(|history| history.with_record_host(host, created))
     }
 
     /// Apply records to the history database. Each chunk of [`Self::incremental_build`] is
@@ -569,7 +614,10 @@ impl HistoryStore {
         let mut chunks = std::pin::pin!(self.incremental_build(database, ids));
         while let Some(chunk) = chunks.next().await {
             match chunk {
-                BuildChunk::Create(chunk) => chunk.commit().await?,
+                BuildChunk::Create(mut chunk) => {
+                    chunk.skip_existing().await?;
+                    chunk.commit().await?;
+                }
                 BuildChunk::Delete(chunk) => {
                     chunk.commit().await?;
                 }
@@ -1059,6 +1107,32 @@ mod tests {
         assert!(history_store.build_all(&db, &[record_id]).await.is_err());
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn backfill_is_safe_to_repeat_and_scoped_to_the_history_database(
+        #[future(awt)] stores: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (_, host, store) = stores;
+        let mut recent = history_n(1);
+        recent.timestamp = jiff::Timestamp::now();
+        let old = history_n(2);
+        store.push(recent.clone()).await.unwrap();
+        store.push(old.clone()).await.unwrap();
+
+        for db in [memory_db().await, memory_db().await] {
+            db.save(&recent).await.unwrap();
+            db.save(&old).await.unwrap();
+            let (first, second) =
+                tokio::join!(store.backfill_host_ids(&db), store.backfill_host_ids(&db));
+            first.unwrap();
+            second.unwrap();
+            assert!(db.host_id_backfill_complete().await.unwrap());
+            assert_eq!(db.host_id_generation().await.unwrap(), 1);
+            assert_eq!(db.load(recent.id).await.unwrap().unwrap().host_id, Some(host));
+            assert_eq!(db.load(old.id).await.unwrap().unwrap().host_id, None);
+        }
+    }
+
     /// A full rebuild never writes a row for an id the store also deletes. The end state (deleted
     /// absent, kept present) is what this pins; that no row is written even transiently is by
     /// construction of `build`, which filters the creates before touching the database.
@@ -1070,19 +1144,21 @@ mod tests {
         parts: (SqliteStore, HostId, HistoryStore),
         #[from(sample_history)] history: History,
     ) {
-        let (_store, _host_id, history_store) = parts;
+        let (_store, host_id, history_store) = parts;
         let deleted_id = history.id;
         let mut kept = history.clone();
+        kept.timestamp = jiff::Timestamp::now();
         kept.id = "018cd4fe81757cd2aee65cd7861f9c82".parse().unwrap();
         history_store.push(history).await.unwrap();
         history_store.delete(deleted_id).await.unwrap();
         history_store.push(kept.clone()).await.unwrap();
 
         let db = memory_db().await;
+        db.save(&kept).await.unwrap();
         history_store.build(&db).await.unwrap();
 
         assert!(db.load(deleted_id).await.unwrap().is_none());
-        assert!(db.load(kept.id).await.unwrap().is_some());
+        assert_eq!(db.load(kept.id).await.unwrap().unwrap().host_id, Some(host_id));
     }
 
     /// A batch delete appends one tombstone per id, in order, on consecutive indices, and

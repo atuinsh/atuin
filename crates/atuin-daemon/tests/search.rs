@@ -52,7 +52,9 @@ mod unix {
 
     /// Boots a daemon whose history db already contains `seeded`, and returns
     /// a connected search client plus the seeded entries' ids.
-    async fn start_seeded_daemon(seeded: &[History]) -> (SearchClient, DaemonHandle, TempDir) {
+    async fn start_seeded_daemon(
+        seeded: &[History],
+    ) -> (SearchClient, DaemonHandle, Arc<atuin_daemon::search::SharedSearchIndex>, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
 
         let db_path = tmp.path().join("history.db");
@@ -91,6 +93,7 @@ mod unix {
             atuin_scripts::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
 
         let search_component = SearchComponent::default();
+        let search_index = search_component.index().clone();
         // This test exercises command search only; there is no output store, so the searcher is a
         // nop.
         let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());
@@ -137,7 +140,7 @@ mod unix {
 
         let client = SearchClient::new(socket_path.clone()).await.unwrap();
 
-        (client, handle, tmp)
+        (client, handle, search_index, tmp)
     }
 
     fn context(cwd: &str, hostname: &str, session: &str, vcs_root: Option<&str>) -> Context {
@@ -204,7 +207,7 @@ mod unix {
         let gamma = seed_history("echo gamma", "/work/repo", "host-a", SESSION_A, None);
         let seeded = [alpha.clone(), beta.clone(), gamma.clone()];
 
-        let (mut client, handle, _tmp) = start_seeded_daemon(&seeded).await;
+        let (mut client, handle, search_index, _tmp) = start_seeded_daemon(&seeded).await;
         let ctx = || context("/work/repo", "host-a", SESSION_A, None);
 
         // Wait for the background loader to finish indexing the seeded db.
@@ -314,6 +317,17 @@ mod unix {
                 search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &shells).await;
             assert_eq!(sorted(results), expected, "shell filter: {label}");
         }
+
+        let backfilled_id = atuin_domain::record::HostId(atuin_common::utils::uuid_v7());
+        handle.history_db().set_host_ids(&[(beta.id, backfilled_id)]).await.unwrap();
+        assert_eq!(search_index.read().settings().host_id_generation, 0);
+        let mut backfilled = context("/work/repo", "new-host", SESSION_A, None);
+        backfilled.host_id = backfilled_id.as_simple().to_string();
+        query_id += 1;
+        let results =
+            search(&mut client, query_id, "echo", FilterMode::Host, backfilled, &[]).await;
+        assert_eq!(sorted(results), ids_of(&[&beta]), "backfilled host");
+        assert_eq!(search_index.read().settings().host_id_generation, 1);
 
         handle.shutdown();
     }

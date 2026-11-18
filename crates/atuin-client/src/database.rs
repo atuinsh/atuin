@@ -680,16 +680,49 @@ impl Sqlite {
     /// Entries that already have a host ID keep it, and IDs that match no entry are skipped.
     #[instrument(level = "trace", skip_all, err)]
     pub async fn set_host_ids(&self, host_ids: &[(HistoryId, HostId)]) -> Result<()> {
-        let mut tx = self.sqlite.pool().begin().await?;
-        for (id, host_id) in host_ids {
-            db::query("update history set host_id = ?1 where id = ?2 and host_id is null")
-                .bind(host_id)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+        if host_ids.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let mut tx = self.sqlite.pool().begin().await?;
+        let mut changed = false;
+        for (id, host_id) in host_ids {
+            let result = db::query(
+                "update history set host_id = ?1 where id = ?2 and host_id is null and deleted_at \
+                 is null",
+            )
+            .bind(host_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+            changed |= result.rows_affected() != 0;
+        }
+        if changed {
+            db::query(
+                "update history_host_id_backfill set generation = generation + 1 where id = 1",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await
+    }
 
+    /// The generation changes whenever a batch fills IDs in existing rows.
+    pub async fn host_id_generation(&self) -> Result<i64> {
+        db::query_scalar("select generation from history_host_id_backfill where id = 1")
+            .fetch_one(self.sqlite.pool())
+            .await
+    }
+
+    pub(crate) async fn host_id_backfill_complete(&self) -> Result<bool> {
+        db::query_scalar("select complete from history_host_id_backfill where id = 1")
+            .fetch_one(self.sqlite.pool())
+            .await
+    }
+
+    pub(crate) async fn finish_host_id_backfill(&self) -> Result<()> {
+        db::query("update history_host_id_backfill set complete = 1 where id = 1")
+            .execute(self.sqlite.pool())
+            .await?;
         Ok(())
     }
 
