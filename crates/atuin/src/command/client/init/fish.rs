@@ -82,10 +82,5 @@ pub fn init_static(options: &StaticInitOptions<'_>) {
         print_ai_resume_bindings(&indent, options, r"\c]");
 
         println!("end");
-
-        #[cfg(feature = "ai")]
-        if options.enable_ai {
-            println!("{}", atuin_ai::shell::FISH_INIT);
-        }
     }
 }

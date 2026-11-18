@@ -43,7 +43,7 @@ use crate::tools::session::read::AtuinThreadsReadToolCall;
 use crate::tools::session::search::AtuinThreadsSearchToolCall;
 use crate::tools::{
     AtuinHistoryToolCall, AtuinOutputToolCall, DEFAULT_HISTORY_RESULTS, HistorySearchFilterMode,
-    MAX_HISTORY_RESULTS, ToolOutcome,
+    MAX_HISTORY_RESULTS,
 };
 
 struct AtuinMcp {
@@ -291,34 +291,34 @@ impl ServerHandler for AtuinMcp {
         let outcome = match request.name.as_ref() {
             "atuin_history" => match AtuinHistoryToolCall::try_from(&Value::Object(arguments)) {
                 Ok(call) => call.execute(&self.db, &self.settings).await,
-                Err(e) => invalid_arguments("atuin_history", e),
+                Err(e) => Err(invalid_arguments("atuin_history", e)),
             },
             "atuin_output" => match AtuinOutputToolCall::try_from(&Value::Object(arguments)) {
                 Ok(call) => call.execute().await,
-                Err(e) => invalid_arguments("atuin_output", e),
+                Err(e) => Err(invalid_arguments("atuin_output", e)),
             },
             "atuin_output_search" => {
                 match parse::<AtuinOutputSearchToolCall>("atuin_output_search", arguments) {
                     Ok(call) => call.execute(&self.db, &self.settings).await,
-                    Err(outcome) => outcome,
+                    Err(e) => Err(e),
                 }
             }
             "atuin_threads_search" | "atuin_ai_session_search" => {
                 match parse::<AtuinThreadsSearchToolCall>("atuin_threads_search", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
-                    Err(outcome) => outcome,
+                    Err(e) => Err(e),
                 }
             }
             "atuin_threads_list" | "atuin_ai_session_list" => {
                 match parse::<AtuinThreadsListToolCall>("atuin_threads_list", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
-                    Err(outcome) => outcome,
+                    Err(e) => Err(e),
                 }
             }
             "atuin_threads_read" | "atuin_ai_session_read" => {
                 match parse::<AtuinThreadsReadToolCall>("atuin_threads_read", arguments) {
                     Ok(call) => call.execute(&self.settings, &caller).await,
-                    Err(outcome) => outcome,
+                    Err(e) => Err(e),
                 }
             }
             name => {
@@ -327,34 +327,26 @@ impl ServerHandler for AtuinMcp {
         };
 
         let result = match outcome {
-            ToolOutcome::Success(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
-            ToolOutcome::Error(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
-            // The atuin tools only produce Success/Error; fall back to the
-            // generic formatting should that ever change.
-            outcome @ ToolOutcome::Structured { .. } => {
-                CallToolResult::success(vec![ContentBlock::text(outcome.format_for_llm(None))])
-            }
+            Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+            Err(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
         };
         Ok(result.into())
     }
 }
 
-fn parse<T: serde::de::DeserializeOwned>(
-    tool: &str,
-    arguments: JsonObject,
-) -> Result<T, ToolOutcome> {
+fn parse<T: serde::de::DeserializeOwned>(tool: &str, arguments: JsonObject) -> Result<T, String> {
     serde_json::from_value(Value::Object(arguments)).map_err(|e| invalid_arguments(tool, e))
 }
 
 /// Carries the tool's input schema, because a model that guessed the arguments often never saw
 /// it: clients like Claude Code defer MCP schemas until the model asks for them.
-fn invalid_arguments(tool: &str, err: impl std::fmt::Display) -> ToolOutcome {
+fn invalid_arguments(tool: &str, err: impl std::fmt::Display) -> String {
     let schema =
         TOOLS.iter().find(|t| t.name == tool).map(|t| Value::Object((*t.input_schema).clone()));
-    ToolOutcome::Error(format!(
+    format!(
         "Invalid arguments: {err}. Retry with arguments matching this input schema: {}",
         schema.unwrap_or_default()
-    ))
+    )
 }
 
 /// Lists Octavo's tools into the cache that [`run`] starts from. The daemon calls this to keep the
@@ -609,7 +601,7 @@ mod tests {
     #[rstest]
     fn unknown_arguments_are_rejected() {
         let args = |v: Value| v.as_object().unwrap().clone();
-        let Err(ToolOutcome::Error(err)) = parse::<AtuinThreadsReadToolCall>(
+        let Err(err) = parse::<AtuinThreadsReadToolCall>(
             "atuin_threads_read",
             args(json!({
                 "session_id": "latest",

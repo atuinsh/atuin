@@ -199,10 +199,10 @@ impl Scope<'_> {
     }
 }
 
-/// Agents' hooks and Atuin's MCP server are Atuin AI's.
+/// Agents' hooks and Atuin's MCP server need the `ai` feature.
 const AGENTS: bool = cfg!(feature = "ai");
 
-/// Agent threads need a daemon to capture them, and Atuin AI to read them.
+/// Agent threads need a daemon to capture them, and the `ai` feature to read them.
 const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
 
 /// Sync needs the sync client, which `sync` builds in.
@@ -1705,19 +1705,18 @@ async fn print_summary(plan: &Plan, found: &Found, scope: Scope<'_>, steps: &[(S
     if plan.threads.0 {
         tips.push(("atuin resume", "pick a thread back up, in any agent"));
     }
-    if plan.shell.0 {
-        tips.push(("?", "ask Atuin AI for a command"));
-    }
-    if !tips.is_empty() {
+    // A shell picks up its key bindings as it starts.
+    let keys_changed = plan.ctrl_r.0 != found.ctrl_r || plan.up_arrow.0 != found.up_arrow;
+    let shell_changed = !found.hooked || keys_changed || plan.output.0 != found.output;
+    let new_terminal = plan.shell.0 && shell_changed;
+    if new_terminal || !tips.is_empty() {
         println!();
-        // A shell picks up its key bindings as it starts.
-        let keys_changed = plan.ctrl_r.0 != found.ctrl_r || plan.up_arrow.0 != found.up_arrow;
-        let shell_changed = !found.hooked || keys_changed || plan.output.0 != found.output;
-        if plan.shell.0 && shell_changed {
-            println!("  {}", "Open a new terminal, then try".bold());
-        } else {
-            println!("  {}", "Try".bold());
-        }
+        let heading = match (new_terminal, tips.is_empty()) {
+            (true, true) => "Open a new terminal",
+            (true, false) => "Open a new terminal, then try",
+            (false, _) => "Try",
+        };
+        println!("  {}", heading.bold());
         for (keys, what) in tips {
             println!("    {:<14} {}", keys.bold(), what.dimmed());
         }

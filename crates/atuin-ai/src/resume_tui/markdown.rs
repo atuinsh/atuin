@@ -10,9 +10,6 @@
 //! *source*, and every text event pulldown-cmark produces knows the source range it came from, so
 //! a highlighted source byte stays highlighted wherever it lands in the rendering, whatever the
 //! syntax around it did (see [`map_highlights`]).
-//!
-//! The chat UI renders its markdown with eye_declare's `Markdown` element, which draws straight
-//! into a buffer and keeps its parser private, so there's nothing there to share.
 
 use std::cell::RefCell;
 use std::ops::Range;

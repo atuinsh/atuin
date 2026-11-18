@@ -31,7 +31,6 @@ export ATUIN_RECORD_STORE_PATH=/tmp/atuin_records.db # path to primary record st
 export ATUIN_DB_PATH=/tmp/atuin_dev.db               # path to materialized history database
 export ATUIN_KV__DB_PATH=/tmp/atuin_kv.db            # path to key-value store
 export ATUIN_SCRIPTS__DB_PATH=/tmp/atuin_scripts.db  # path to scripts database
-export ATUIN_AI__DB_PATH=/tmp/atuin_ai_sessions.db   # path to AI sessions database
 export ATUIN_META__DB_PATH=/tmp/atuin_meta.db        # path to meta database
 ```
 

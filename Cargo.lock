@@ -357,32 +357,22 @@ dependencies = [
  "atuin-common",
  "atuin-daemon",
  "atuin-domain",
- "atuin-vt100",
  "base64 0.22.1",
  "chrono",
  "chrono-humanize",
  "clap",
  "crossterm",
  "derive_more",
- "easy-cast",
- "enum_dispatch",
- "eventsource-stream",
- "eye_declare",
- "eye_declare_engine",
  "eyre",
  "fs-err",
  "futures",
- "glob-match",
  "i18n-embed",
- "imara-diff",
  "interim",
  "parking_lot",
  "proptest",
  "pulldown-cmark",
  "ratatui",
- "ratatui-core",
  "regex",
- "reqwest",
  "rmcp",
  "rstest",
  "rust-embed",
@@ -391,27 +381,17 @@ dependencies = [
  "serde",
  "serde_json",
  "shellexpand",
- "sqlx",
  "strum 0.27.2",
  "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
- "toml_edit",
  "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-fish",
- "tui-textarea-2",
- "typed-builder",
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "uuid",
  "xxhash-rust",
- "yaml-rust2",
 ]
 
 [[package]]
@@ -2186,46 +2166,6 @@ checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
  "parking",
  "pin-project-lite",
-]
-
-[[package]]
-name = "eventsource-stream"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74fef4569247a5f429d9156b9d0a2599914385dd189c539334c625d8099d90ab"
-dependencies = [
- "futures-core",
- "nom 7.1.3",
- "pin-project-lite",
-]
-
-[[package]]
-name = "eye_declare"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9d82f1f1422761dc7630fa2b8c52f4e11f87dc2308fd2e577176d0542d0eacd"
-dependencies = [
- "crossterm",
- "eye_declare_engine",
- "futures-core",
- "pulldown-cmark",
- "ratatui-core",
- "ratatui-widgets",
- "tokio",
- "unicode-segmentation",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "eye_declare_engine"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "199fcf8b7e20444380bd20226490c4ba54a19ec13966dc2aab39862a0f55dd86"
-dependencies = [
- "ratatui-core",
- "ratatui-widgets",
- "unicode-width 0.2.2",
- "vte",
 ]
 
 [[package]]
@@ -7127,20 +7067,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "tui-textarea-2"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdf2865f7f32ae9e779f6185986fd920fa6b00ac878e906927ec7e78d32316ed"
-dependencies = [
- "crossterm",
- "portable-atomic",
- "ratatui-core",
- "ratatui-widgets",
- "unicode-segmentation",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "twox-hash"
 version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7370,16 +7296,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vte"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
-dependencies = [
- "arrayvec",
- "memchr",
-]
 
 [[package]]
 name = "vtparse"

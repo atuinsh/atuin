@@ -135,9 +135,9 @@ pub enum Cmd {
     #[couture(category = "advanced")]
     Hook(hook::Cmd),
 
-    /// Run the AI assistant
+    /// `atuin threads`, as it was called before, and what old shell init scripts call.
     #[cfg(feature = "ai")]
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     #[couture(category = "ai")]
     Ai(atuin_ai::commands::Command),
 
@@ -227,6 +227,10 @@ impl Cmd {
         // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do.
         #[cfg(feature = "ai")]
         match self {
+            Self::Ai(atuin_ai::commands::Command::Inline { args }) => {
+                atuin_ai::commands::inline(&args);
+                return Ok(());
+            }
             Self::Threads(cmd) => return Self::Ai(cmd.into()).run(),
             Self::Resume(cmd) => return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run(),
             _ => {}
@@ -241,6 +245,7 @@ impl Cmd {
             atuin_daemon::service::Subproc::daemonize()?;
         }
 
+        // The resume picker's search, transcript and detail workers run alongside its UI.
         #[cfg(feature = "ai")]
         let use_multi_thread_runtime = matches!(&self, Self::Ai(_));
         #[cfg(not(feature = "ai"))]
@@ -314,9 +319,6 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
-    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
-    // await points.
-    #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings, messages: Held) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
         let mut theme_manager = theme::ThemeManager::default();
@@ -528,7 +530,6 @@ mod tests {
         case::change_new(&["account", "change-password", "--new-password", SECRET])
     )]
     #[case::rekey(&["store", "rekey", SECRET])]
-    #[cfg_attr(feature = "ai", case::ai_token(&["ai", "inline", "--api-token", SECRET]))]
     fn debug_redacts_argv_secrets(#[case] args: &[&str]) {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");

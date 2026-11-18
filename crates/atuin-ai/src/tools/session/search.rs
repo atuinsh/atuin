@@ -64,10 +64,6 @@ pub struct AtuinThreadsSearchToolCall {
 
 impl AtuinThreadsSearchToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        self.run(settings, caller).await.map_or_else(|outcome| outcome, ToolOutcome::Success)
-    }
-
-    async fn run(&self, settings: &Settings, caller: &Caller<'_>) -> Result<String, ToolOutcome> {
         let mut client = connect(settings).await?;
         let scope = Scope {
             harness: self.harness.map(HarnessKind::from),
@@ -194,7 +190,7 @@ async fn search(
     cwd: Option<&str>,
     any_term: bool,
     limit: u32,
-) -> Result<Vec<SessionMatch>, ToolOutcome> {
+) -> Result<Vec<SessionMatch>, String> {
     let filter = SessionFilter {
         harness: scope.harness,
         workspace: cwd.map(PathBuf::from),
@@ -211,7 +207,7 @@ async fn search(
     client
         .search_sessions(terms, &filter, limit)
         .await
-        .map_err(|e| ToolOutcome::Error(format!("Thread search failed: {e}")))?
+        .map_err(|e| format!("Thread search failed: {e}"))?
         .map(|hit| {
             hit.map_err(|e| format!("Thread search failed: {e}")).and_then(|hit| {
                 SessionMatch::try_from(hit)
@@ -220,7 +216,6 @@ async fn search(
         })
         .try_collect()
         .await
-        .map_err(ToolOutcome::Error)
 }
 
 /// Whether to fall back to any-term matching: only when no message has every term, neither in

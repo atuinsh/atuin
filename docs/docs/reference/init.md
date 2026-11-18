@@ -39,8 +39,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 
 - **Hooks** that record each command, its exit code, and its duration. See
   [Shell Integration](../guide/shell-integration.md).
-- **Key bindings** for ++ctrl+r++ and the ++up++ arrow, and ++question++ for
-  [Atuin AI](../ai/introduction.md).
+- **Key bindings** for ++ctrl+r++ and the ++up++ arrow.
 - **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask
   for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
@@ -50,7 +49,6 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 |------|-------------|
 | `--disable-up-arrow` | Don't bind the ++up++ arrow key |
 | `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
-| `--disable-ai` | Don't bind ++question++ to [Atuin AI](../ai/introduction.md) |
 | `--bind-ai-resume` | Bind ++ctrl+bracket-right++ to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:

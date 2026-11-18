@@ -3,15 +3,6 @@ use atuin_common::string::StrExt as _;
 use atuin_common::time::{DurationExt, OffsetDateTimeExt};
 use time::UtcOffset;
 
-pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
-    format!(
-        "History ID: {} - `{}`\n{}",
-        history.id,
-        history.command,
-        format_history_metadata(history, local_offset)
-    )
-}
-
 /// How much of a command a search result shows. Agent-run commands are often multi-kilobyte
 /// heredocs or scripts; shown whole, a page of 30 results can run past 100k characters, which
 /// floods a model's context for what is a lookup. The opening shows what the command was.
@@ -114,15 +105,6 @@ mod tests {
         assert!(out.contains("… [+4"), "{out}");
         assert!(
             format_history_search_result(1, &history(0), UtcOffset::UTC).contains("`cargo test`")
-        );
-    }
-
-    #[rstest]
-    fn formats_last_command() {
-        assert_eq!(
-            format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c9a0a70008000000000000001 - `cargo test`\n[1970-01-01 00:00:00] \
-             (in `/repo`, exit 2), 1.234s"
         );
     }
 

@@ -42,15 +42,9 @@ pub struct AtuinThreadsListToolCall {
 
 impl AtuinThreadsListToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        let mut client = match connect(settings).await {
-            Ok(client) => client,
-            Err(outcome) => return outcome,
-        };
+        let mut client = connect(settings).await?;
         let harness = self.harness.map(Into::into);
-        let root = match resolve_cwd(self.cwd.as_deref()) {
-            Ok(root) => root,
-            Err(outcome) => return outcome,
-        };
+        let root = resolve_cwd(self.cwd.as_deref())?;
         let limit = self.limit.get() as usize;
         let offset = time::UtcOffset::local_or_utc();
 
@@ -63,7 +57,7 @@ impl AtuinThreadsListToolCall {
                 match parse_since(since, now, settings.dialect.into(), offset_at) {
                     Ok(parsed) => Some(parsed),
                     Err(e) => {
-                        return ToolOutcome::Error(format!(
+                        return Err(format!(
                             "Could not parse since {since:?} ({e}). Try 'today', '2 days ago' or \
                              a date like '2026-09-01'."
                         ));
@@ -80,7 +74,7 @@ impl AtuinThreadsListToolCall {
         let fetch_since = since.map(|since| since.min(caller.active_since()));
         let all = match super::list_sessions(&mut client, harness, fetch_since).await {
             Ok(all) => all,
-            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
+            Err(e) => return Err(format!("Listing threads failed: {e}")),
         };
         let own = caller.own_in(&all);
         let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
@@ -103,7 +97,7 @@ impl AtuinThreadsListToolCall {
                 let _ = write!(scope, " active since {}", super::timestamp(since, offset));
             }
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
-            return ToolOutcome::Success(format!(
+            return Ok(format!(
                 "No captured threads{scope}.{note} Only threads recorded while thread capture was \
                  enabled are available."
             ));
@@ -117,7 +111,7 @@ impl AtuinThreadsListToolCall {
             let _ = writeln!(out, "\n{note}");
         }
         let _ = write!(out, "\nRead one with atuin_threads_read and its thread id.");
-        ToolOutcome::Success(out)
+        Ok(out)
     }
 }
 

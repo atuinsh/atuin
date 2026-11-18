@@ -325,15 +325,12 @@ impl AtuinThreadsReadToolCall {
     }
 
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        let mut client = match connect(settings).await {
-            Ok(client) => client,
-            Err(outcome) => return outcome,
-        };
+        let mut client = connect(settings).await?;
 
         let selector = self.session_id.trim();
         let sessions = match super::list_sessions(&mut client, None, None).await {
             Ok(sessions) => sessions,
-            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
+            Err(e) => return Err(format!("Listing threads failed: {e}")),
         };
         // `latest` means the last session a person ran before this one: not the caller's own
         // live session, and not a subagent fragment.
@@ -346,11 +343,11 @@ impl AtuinThreadsReadToolCall {
         let handle = match select_session(sessions, selector) {
             Ok(handle) => handle,
             Err(e @ SelectError::NotFound(_)) => {
-                return ToolOutcome::Error(format!(
+                return Err(format!(
                     "{e}. Find one with atuin_threads_list or atuin_threads_search."
                 ));
             }
-            Err(e) => return ToolOutcome::Error(e.to_string()),
+            Err(e) => return Err(e.to_string()),
         };
 
         // A forward page needs the messages up to it plus one it would show beyond (to know more
@@ -365,15 +362,9 @@ impl AtuinThreadsReadToolCall {
         });
         let (session, messages, complete) = match read_session(&mut client, handle, page).await {
             Ok(read) => read,
-            Err(e) => return ToolOutcome::Error(format!("Reading the thread failed: {e}")),
+            Err(e) => return Err(format!("Reading the thread failed: {e}")),
         };
-        ToolOutcome::Success(self.render(
-            &session,
-            &messages,
-            complete,
-            &filter,
-            time::UtcOffset::local_or_utc(),
-        ))
+        Ok(self.render(&session, &messages, complete, &filter, time::UtcOffset::local_or_utc()))
     }
 
     /// Render a page of `messages`: the whole transcript when `complete`, otherwise at least

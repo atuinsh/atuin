@@ -18,14 +18,13 @@ use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::commands::session::{harness_name, one_line};
-use crate::tools::ToolOutcome;
 
-async fn connect(settings: &Settings) -> Result<AiClient, ToolOutcome> {
+async fn connect(settings: &Settings) -> Result<AiClient, String> {
     AiClient::from_settings(settings).await.map_err(|e| {
-        ToolOutcome::Error(format!(
+        format!(
             "Threads are unavailable: could not connect to the Atuin daemon ({e}). Shell history \
              search still works."
-        ))
+        )
     })
 }
 
@@ -59,11 +58,11 @@ pub async fn list_sessions(
 /// project is, and `.` would silently match nearly everything, so that is an error.
 ///
 /// `None`, or a blank string (models often pass `""` for "no filter"), is no filter.
-fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, ToolOutcome> {
+fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, String> {
     let Some(cwd) = cwd.map(str::trim).filter(|c| !c.is_empty()) else {
         return Ok(None);
     };
-    let path = crate::tools::expand_path(cwd);
+    let path = PathBuf::from(shellexpand::tilde(cwd).into_owned());
     let joined = if path.is_absolute() {
         path
     } else {
@@ -72,10 +71,10 @@ fn resolve_cwd(cwd: Option<&str>) -> Result<Option<PathBuf>, ToolOutcome> {
             .ok()
             .filter(|dir| dir.parent().is_some() && home.as_ref().is_none_or(|home| dir != home));
         let Some(dir) = dir else {
-            return Err(ToolOutcome::Error(format!(
+            return Err(format!(
                 "cwd {cwd:?} is relative, but this MCP server was not started in a project \
                  directory, so it cannot be resolved. Pass the project's absolute path."
-            )));
+            ));
         };
         dir.joined(path)
     };

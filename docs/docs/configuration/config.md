@@ -50,50 +50,16 @@ SQLite opens as written.
     mkdir -p ~/.atuin
     ```
 
-    Check whether you have any AI-related files in `~/.atuin`:
-
-    ```sh
-    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
-    ```
-
-    If you do, please expand and follow this section:
-
-    ??? note "Migrating home-scoped AI config"
-
-        In older installations, `permissions.ai.toml` and `skills` in
-        `~/.atuin` are scoped to your home directory, whereas in newer
-        installations, they are applied *globally*. The existence of
-        `~/.atuin/config.toml` is what determines whether the new or old
-        behavior is used; if `~/.atuin/config.toml` exists, these items are
-        interpreted as global.
-
-        Before you move your `config.toml` to `~/.atuin`, review the existing
-        AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything
-        you're ok with being made global can be left as-is (global is likely
-        not too different from applying to your entire home directory anyway);
-        anything else should be deleted or moved to subdirectories (meaning
-        moving it into `~/subdir/.atuin/` for each subdirectory).
-
-        After you've confirmed that the AI items in `~/.atuin` can be
-        interpreted as global, check whether any AI items appear in both
-        `~/.atuin` and `~/.config/atuin`:
-
-        ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
-            sort | uniq -d
-        ```
-
-        If there are any such items, you must merge the items in
-        `~/.config/atuin` into the configuration at `~/.atuin` if you still
-        want them to take effect; otherwise, the items in `~/.config/atuin`
-        will be shadowed by those in `~/.atuin`.
-
     Next, move your config items:
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.ai.toml) ~/.atuin/
+        -e themes) ~/.atuin/
     ```
+
+    If you have `permissions.ai.toml` or `skills`, they were for Atuin AI,
+    which is gone. Nothing reads them now, so you can leave them where they
+    are.
 
     Then, move your data:
 
@@ -1571,6 +1537,3 @@ so commands are shown unhighlighted there.
 syntax_highlight = false
 ```
 
-## ai
-
-The settings for Atuin AI are listed in [a separate section](../ai/settings.md).

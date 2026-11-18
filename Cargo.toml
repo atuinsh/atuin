@@ -62,9 +62,6 @@ dirs = "6"
 # which was released in 0.6.0
 easy-cast = { version = "0.5", features = ["assert_nonzero"] }
 enum_dispatch = "0.3"
-eventsource-stream = "0.2"
-eye_declare = "0.7"
-eye_declare_engine = { version = "0.7", features = ["test-util"] }
 eyre = "0.6"
 fjall = { version = "3" }
 fixedbitset = "0.5"
@@ -123,7 +120,6 @@ protox = "0.9"
 pulldown-cmark = "0.13"
 rand = { version = "0.8", features = ["std"] }
 ratatui = "0.30"
-ratatui-core = "0.1"
 ref-cast = "1"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream", "gzip", "zstd"] }
@@ -185,7 +181,6 @@ tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
 tree-sitter-fish = "3"
 tree-sitter-powershell = "0.26"
-tui-textarea-2 = "0.13"
 typed-builder = "0.23"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"

@@ -7,11 +7,9 @@ use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
-// `AsDuration`/`AsDisableableDuration` are deprecated.
+// `AsDuration` is deprecated.
 #[allow(deprecated)]
-use atuin_common::time::{
-    AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
-};
+use atuin_common::time::{AsDuration, Days, Seconds};
 use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
@@ -761,97 +759,8 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
-/// Endpoint protocol for Atuin AI.
-///
-/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
-/// an unset or official Atuin address is treated as Hub, anything else as an
-/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
-/// endpoint (useful for local development against a Hub instance).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum AiEndpointProtocol {
-    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
-    Hub,
-    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
-    /// the endpoint, authenticated with `ai.api_token` if set.
-    Oss,
-    /// Infer from ai.endpoint (default behavior)
-    #[default]
-    Auto,
-}
-
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ai {
-    /// Whether or not the AI features are enabled.
-    pub enabled: Option<bool>,
-
-    /// The address of the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
-    pub endpoint: Option<Url>,
-
-    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
-    #[serde(default)]
-    pub endpoint_protocol: AiEndpointProtocol,
-
-    /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
-    #[serde(skip_serializing)]
-    pub api_token: Option<SecretString>,
-
-    /// Path to the AI sessions database.
-    #[serde_as(as = "RelativeTo<ConfigDir>")]
-    pub db_path: DbLocation,
-
-    /// The maximum time an AI session can be automatically resumed (a bare number is minutes).
-    /// `0` disables auto-resume.
-    #[serde_as(as = "AsDisableableDuration<Minutes>")]
-    pub session_continue_minutes: Option<NonZeroDuration>,
-
-    /// The AI model to use for AI chats, based on the Atuin AI model alias.
-    pub model: Option<String>,
-
-    /// Whether to enable YOLO mode (skips all permission checks)
-    #[serde(default)]
-    pub yolo: bool,
-
-    /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
-    #[serde(default)]
-    pub send_cwd: Option<bool>,
-
-    /// Configuration for what context is sent in the opening AI request.
-    #[serde(default)]
-    pub opening: AiOpening,
-
-    /// Tool capability flags.
-    #[serde(default)]
-    pub capabilities: AiCapabilities,
-
-    /// Whether the AI TUI surfaces feature tips. `None` = enabled.
-    pub tips: Option<bool>,
-}
-
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiCapabilities {
-    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_history_search: Option<bool>,
-    /// Whether the AI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_history_output: Option<bool>,
-    /// Whether the AI can request to read and write files. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_file_tools: Option<bool>,
-    /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_command_execution: Option<bool>,
-}
-
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiOpening {
-    /// Whether or not to send the current working directory to the AI endpoint.
-    pub send_cwd: Option<bool>,
-
-    /// Whether or not to send the last command as context in the opening AI request.
-    pub send_last_command: Option<bool>,
-}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RetiredAi {}
 
 impl Default for Preview {
     fn default() -> Self {
@@ -1265,7 +1174,9 @@ pub struct Settings {
 
     pub meta: meta::Settings,
 
-    pub ai: Ai,
+    /// Atuin AI's settings, from before it was removed, so that a typo in `[ai]` is still found.
+    #[serde(default)]
+    pub ai: RetiredAi,
 
     #[serde(default)]
     pub threads: Threads,
@@ -1417,22 +1328,6 @@ impl Settings {
             SyncProtocol::Hub => true,
             SyncProtocol::Legacy => false,
             SyncProtocol::Auto => Self::is_official_address(&self.sync_address),
-        }
-    }
-
-    /// Returns whether the resolved AI endpoint should be treated as an Atuin
-    /// Hub instance (browser login flow, Hub session management, usage
-    /// reporting) rather than a standalone OSS server.
-    ///
-    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
-    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
-    /// parameter rather than read from `self.ai.endpoint`.
-    #[must_use]
-    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
-        match self.ai.endpoint_protocol {
-            AiEndpointProtocol::Hub => true,
-            AiEndpointProtocol::Oss => false,
-            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
         }
     }
 
@@ -1622,7 +1517,7 @@ impl Settings {
     /// The default of each path setting, for `data_dir`, [escaped](ShellExpanded::escape) as
     /// config.toml would write it. An empty value of a path setting falls back to its default
     /// here, so every path setting needs one.
-    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 14] {
+    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 13] {
         let path = |path: &Path| path.to_str().map(ShellExpanded::escape);
         [
             ("data_dir", path(data_dir)),
@@ -1638,7 +1533,6 @@ impl Settings {
             ("kv.db_path", path(&data_dir.join("kv.db"))),
             ("scripts.db_path", path(&data_dir.join("scripts.db"))),
             ("meta.db_path", path(&data_dir.join("meta.db"))),
-            ("ai.db_path", path(&data_dir.join("ai_sessions.db"))),
         ]
     }
 
@@ -1769,10 +1663,6 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("search.shells", "auto")?
-            .set_default("ai.session_continue_minutes", 60)?
-            .set_default("ai.send_cwd", false)?
-            .set_default("ai.opening.send_cwd", false)?
-            .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
             .set_default("search.filters", vec![
                 "global",
@@ -1944,12 +1834,24 @@ impl Settings {
         },
     ];
 
-    /// Keys that this build has no setting for, but that a build with other features reads.
-    const UNCHECKED_KEYS: &[&str] = if cfg!(feature = "octavo") {
-        &[]
-    } else {
-        &["teams"]
-    };
+    /// Keys that this build has no setting for, but that a build with other features reads, or
+    /// that Atuin AI read before it was removed.
+    const UNCHECKED_KEYS: &[&str] = &[
+        #[cfg(not(feature = "octavo"))]
+        "teams",
+        "ai.api_token",
+        "ai.capabilities",
+        "ai.db_path",
+        "ai.enabled",
+        "ai.endpoint",
+        "ai.endpoint_protocol",
+        "ai.model",
+        "ai.opening",
+        "ai.send_cwd",
+        "ai.session_continue_minutes",
+        "ai.tips",
+        "ai.yolo",
+    ];
 
     /// Read renamed keys under their new names, for any key the new name doesn't set itself:
     /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
@@ -2030,7 +1932,7 @@ impl Settings {
     /// The path settings by key, as deserialization resolved them; the merged [`Config`] holds
     /// them as written, with Atuin's own defaults [escaped](ShellExpanded::escape). A new path
     /// setting belongs here too, or `atuin config get --resolved` shows it as written.
-    fn resolved_paths(&self) -> [(&'static str, &OsStr); 13] {
+    fn resolved_paths(&self) -> [(&'static str, &OsStr); 12] {
         [
             ("data_dir", self.data_dir.as_os_str()),
             ("db_path", self.db_path.as_os_str()),
@@ -2044,7 +1946,6 @@ impl Settings {
             ("kv.db_path", self.kv.db_path.as_os_str()),
             ("scripts.db_path", self.scripts.db_path.as_os_str()),
             ("meta.db_path", self.meta.db_path.as_os_str()),
-            ("ai.db_path", self.ai.db_path.as_os_str()),
         ]
     }
 
@@ -2215,8 +2116,8 @@ mod tests {
     use super::ThreadUploads;
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
-        AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
-        SearchMode, Settings, UtcOffsetSpec,
+        ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode, SearchMode, Settings,
+        UtcOffsetSpec,
     };
 
     #[rstest]
@@ -2251,26 +2152,6 @@ mod tests {
     #[case::bare_hour_minutes("10:30")]
     fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
         assert!(UtcOffsetSpec::from_str(input).is_err());
-    }
-
-    #[rstest]
-    // Auto: official addresses are Hub, anything else is OSS
-    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
-    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
-    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
-    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
-    // An explicit protocol overrides the address check
-    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
-    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
-    fn ai_endpoint_protocol_resolution(
-        #[case] protocol: AiEndpointProtocol,
-        #[case] endpoint: &str,
-        #[case] expected: bool,
-    ) {
-        let mut settings = Settings::default();
-        settings.ai.endpoint_protocol = protocol;
-
-        assert_eq!(settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()), expected,);
     }
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
@@ -2474,7 +2355,6 @@ mod tests {
         s.scripts.db_path.file().unwrap().to_path_buf()
     })]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.file().unwrap().to_path_buf())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.file().unwrap().to_path_buf())]
     fn relative_paths_resolve_next_to_config_toml(
         #[case] key: &str,
         #[case] path: fn(&Settings) -> PathBuf,
@@ -2506,7 +2386,6 @@ mod tests {
     #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.clone())]
     #[case::scripts_db_path("scripts.db_path", |s: &Settings| s.scripts.db_path.clone())]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.clone())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.clone())]
     fn database_paths_take_sqlite_urls_as_written(
         #[case] key: &str,
         #[case] location: fn(&Settings) -> DbLocation,
@@ -2565,8 +2444,7 @@ mod tests {
             "logs.ai.file",
             "kv.db_path",
             "scripts.db_path",
-            "meta.db_path",
-            "ai.db_path"
+            "meta.db_path"
         )]
         key: &str,
     ) {
@@ -2590,7 +2468,6 @@ mod tests {
     #[case::kv_db_path("kv.db_path", true)]
     #[case::scripts_db_path("scripts.db_path", true)]
     #[case::meta_db_path("meta.db_path", true)]
-    #[case::ai_db_path("ai.db_path", true)]
     fn a_path_setting_with_an_unset_variable_loads_as_written(
         config_env: MockEnv,
         #[case] key: &str,
@@ -2885,16 +2762,6 @@ mod tests {
     }
 
     #[rstest]
-    fn negative_session_continue_minutes_disables_resume() {
-        // Legacy clamped a negative value to 0 (disabled); it must load, not error.
-        Settings::validate_str("[ai]\nsession_continue_minutes = -5\n")
-            .expect("negative session_continue_minutes must load");
-
-        let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
-        assert_eq!(settings.ai.session_continue_minutes, None);
-    }
-
-    #[rstest]
     #[case::anchored(Some(r#"["^cat "]"#), "cat .env", true)]
     #[case::anchor_holds(Some(r#"["^cat "]"#), "echo cat .env", false)]
     #[case::unanchored(Some(r#"["token"]"#), "gh auth token", true)]
@@ -3120,10 +2987,13 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[case::example(Settings::example_config())]
     #[case::shells("search.shells = \"auto\"\n")]
     #[case::nested_and_optional(
-        "filter_mode = \"directory\"\nai.enabled = true\n[keys]\nscroll_exits = false\n"
+        "filter_mode = \"directory\"\nthreads.mouse = false\n[keys]\nscroll_exits = false\n"
     )]
     #[case::legacy_keys(
         "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n"
+    )]
+    #[case::retired_ai_keys(
+        "[ai]\nenabled = false\nmodel = \"m\"\nyolo = true\n\n[ai.opening]\nsend_cwd = true\n"
     )]
     fn known_settings_are_not_unknown(#[case] toml: &str) {
         assert_unknown(&load_file(toml).unknown, &[]);
@@ -3132,12 +3002,12 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[rstest]
     fn known_nested_and_optional_settings_are_honored() {
         let settings = load_file(
-            "filter_mode = \"directory\"\nai.enabled = true\n[keys]\nscroll_exits = false\n",
+            "filter_mode = \"directory\"\nthreads.mouse = false\n[keys]\nscroll_exits = false\n",
         )
         .value;
         assert!(!settings.keys.scroll_exits);
         assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
-        assert_eq!(settings.ai.enabled, Some(true));
+        assert_eq!(settings.threads.mouse, Some(false));
     }
 
     #[rstest]
@@ -3145,6 +3015,7 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         "[ai.sessions]\nmouse_typo = false\n",
         &["ai.sessions.mouse_typo"]
     )]
+    #[case::under_ai("[ai]\ncapture_sesions = true\n", &["ai.capture_sesions"])]
     #[case::under_both_spellings(
         "[threads]\nmouse_typo = true\n\n[ai.sessions]\nmouse_typo = false\n",
         &["ai.sessions.mouse_typo", "threads.mouse_typo"]

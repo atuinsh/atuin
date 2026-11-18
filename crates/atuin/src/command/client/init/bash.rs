@@ -43,11 +43,6 @@ fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) 
     writeln!(writer, "__atuin_bind_ai_resume={bind_ai_resume}")?;
     writeln!(writer, "{}", BASH.main)?;
 
-    #[cfg(feature = "ai")]
-    if options.enable_ai {
-        writeln!(writer, "{}", atuin_ai::shell::BASH_INIT)?;
-    }
-
     writeln!(writer, "}}") // end include guard
 }
 

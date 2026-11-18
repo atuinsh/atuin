@@ -58,7 +58,7 @@ default = [
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
-daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
+daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon"]
 ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
 # Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
@@ -172,7 +172,6 @@ arboard = { workspace = true, optional = true, features = ["wayland-data-control
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
 # Windows cross-compiles, and potentially other exotic targets.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "illumos"))'.dependencies]
-atuin-ai = { workspace = true, optional = true, features = ["tree-sitter"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-fish = { workspace = true }
