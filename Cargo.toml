@@ -165,7 +165,7 @@ tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "1"
 toml_edit = "0.25"
-tonic = "0.14"
+tonic = { version = "0.14", features = ["gzip"] }
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tonic-types = "0.14"

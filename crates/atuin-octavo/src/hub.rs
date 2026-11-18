@@ -171,7 +171,9 @@ impl HubClient {
         }
         let channel = connect(target.address(), settings.network_connect_timeout)?;
         Ok(Self {
-            service: HubServiceClient::new(channel),
+            // Uploads are mostly text: gzip shrinks them several times over a slow uplink.
+            service: HubServiceClient::new(channel)
+                .send_compressed(tonic::codec::CompressionEncoding::Gzip),
             hub: settings.hub_endpoint(),
             target,
         })
