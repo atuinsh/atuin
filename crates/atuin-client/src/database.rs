@@ -110,7 +110,7 @@ impl Context {
             session: entry.session.clone(),
             cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
-            host_id: String::new(),
+            host_id: entry.host_id.map_or_else(String::new, |id| id.as_simple().to_string()),
             vcs_root: utils::in_vcs_repo(entry.cwd.as_ref()),
         }
     }
@@ -222,36 +222,26 @@ fn workspace_sql_filter(root: &str) -> (&'static str, [String; 2]) {
     (WORKSPACE_SQL_FILTER, [exact.to_owned(), format!("{escaped}%")])
 }
 
-/// SQL predicate to match for a [`CmdOrigin`].
-fn origin_sql_filter(origin: &CmdOrigin) -> String {
-    // This helper implements logic to support host-only matching against a combined host:user pair.
-    // Normally, you'd think we could just do
-    // `lower(hostname) = {origin.host().into_inner().to_lowercase()}`, but that does not work.
-    //
-    // Normally, `CmdOrigin` is intended to be serialized as a string "<host>:<user>", but, certain
-    // parsing logic we historically had would parse a string "<host>", rather than
-    // "<host>:unknown-user" (which other logic did). An example offender is the `nushell` importer.
-    //
-    // The database column `hostname` is a misnomer -- it actually refers to the `cmd_origin`. Some
-    // importers, have parsed it as "<host>:<user>", others as "<host>" and others yet as "<host>:".
-    //
-    // In effect, there's this crappy data in the database. Another case for writing
-    // application-specific types.
-    //
-    // You'd think that we could apply a migration and call it a day, but unfortunately that doesn't
-    // work -- the `history` table is actually a cache over the `records` table, and the records
-    // table only holds this information in encrypted, synced form. If we want to get it, we need to
-    // decrypt all the local `records` rows, patch them up, re-encrypt them and then sync that to
-    // the cloud. Recipe for disaster.
-    //
-    // So this function exists.
-    let host = origin.host().into_inner().to_lowercase();
-    format!(
-        "(lower(hostname) = {eq} OR (lower(hostname) >= {lo} AND lower(hostname) < {hi}))",
-        eq = quote(&host),
-        lo = quote(format!("{host}:")),
-        hi = quote(format!("{host};")),
-    )
+/// Normalize a stored or probed origin for host matching. SQLite's lower() folds ASCII.
+#[must_use]
+pub fn normalized_hostname(origin: &str) -> String {
+    origin.split_once(':').map_or(origin, |(host, _)| host).to_ascii_lowercase()
+}
+
+fn host_sql_filter(names: &[String], id_parameter: Option<&str>) -> String {
+    let mut predicates: Vec<_> =
+        id_parameter.map(|parameter| format!("host_id = {parameter}")).into_iter().collect();
+    // Match both bare legacy names and names followed by a user. The range can use the
+    // lower(hostname) index.
+    predicates.extend(names.iter().map(|host| {
+        format!(
+            "(lower(hostname) = {eq} OR (lower(hostname) >= {lo} AND lower(hostname) < {hi}))",
+            eq = quote(host),
+            lo = quote(format!("{host}:")),
+            hi = quote(format!("{host};")),
+        )
+    }));
+    format!("({})", predicates.join(" OR "))
 }
 
 /// Controls the type of search [`Sqlite::search`] performs.
@@ -703,6 +693,23 @@ impl Sqlite {
         Ok(())
     }
 
+    /// Names associated with the install in live history, plus the current effective name.
+    pub async fn host_names(&self, id: Option<HostId>, origin: &str) -> Result<Vec<String>> {
+        let mut names = vec![normalized_hostname(origin)];
+        if let Some(id) = id {
+            let origins = db::query_scalar::<_, String>(
+                "select distinct hostname from history where host_id = ? and deleted_at is null",
+            )
+            .bind(id)
+            .fetch_all(self.sqlite.pool())
+            .await?;
+            names.extend(origins.iter().map(|origin| normalized_hostname(origin)));
+            names.sort_unstable();
+            names.dedup();
+        }
+        Ok(names)
+    }
+
     // make a unique list, that only shows the *newest* version of things
     #[instrument(level = "trace", skip_all, fields(unique, include_deleted), err)]
     pub async fn list(
@@ -725,10 +732,25 @@ impl Sqlite {
         let mut workspace_values = None;
         let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
+        let filters: Vec<_> = filters.into_iter().collect();
+        let host_id = if filters.contains(&FilterMode::Host) {
+            uuid::Uuid::parse_str(&context.host_id).ok().map(HostId)
+        } else {
+            None
+        };
+        let id_parameter = if filters.contains(&FilterMode::Workspace) {
+            "?3"
+        } else {
+            "?1"
+        };
+
         for filter in filters {
             match filter {
                 FilterMode::Global => &mut query,
-                FilterMode::Host => query.and_where(origin_sql_filter(&context.cmd_origin)),
+                FilterMode::Host => {
+                    let names = self.host_names(host_id, context.cmd_origin.as_str()).await?;
+                    query.and_where(host_sql_filter(&names, host_id.map(|_| id_parameter)))
+                }
                 FilterMode::Session => query.and_where_eq("session", quote(&context.session)),
                 FilterMode::SessionPreload => {
                     query.and_where_eq("session", quote(&context.session));
@@ -766,6 +788,9 @@ impl Sqlite {
         let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(query));
         for value in workspace_values.into_iter().flatten() {
             query = query.bind(value);
+        }
+        if let Some(id) = host_id {
+            query = query.bind(id);
         }
         let res = query.fetch_all(self.sqlite.pool()).await?;
 
@@ -845,9 +870,14 @@ impl Sqlite {
         let mut workspace_values = None;
         let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
+        let mut host_id = None;
         match filter {
             FilterMode::Global => &mut sql,
-            FilterMode::Host => sql.and_where(origin_sql_filter(&context.cmd_origin)),
+            FilterMode::Host => {
+                host_id = uuid::Uuid::parse_str(&context.host_id).ok().map(HostId);
+                let names = self.host_names(host_id, context.cmd_origin.as_str()).await?;
+                sql.and_where(host_sql_filter(&names, host_id.map(|_| "?1")))
+            }
             FilterMode::Session => sql.and_where_eq("session", quote(&context.session)),
             FilterMode::SessionPreload => {
                 sql.and_where_eq("session", quote(&context.session));
@@ -1001,6 +1031,9 @@ impl Sqlite {
         let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(query));
         for value in workspace_values.into_iter().flatten() {
             query = query.bind(value);
+        }
+        if let Some(id) = host_id {
+            query = query.bind(id);
         }
         let res = query.fetch_all(self.sqlite.pool()).await?;
 
@@ -3320,6 +3353,50 @@ mod test {
         let err = new_history_item(&db, "pwd").await.expect_err("read-only history took a write");
         let code = err.as_database_error().and_then(|e| e.code()).expect("a database error");
         assert_eq!(code.parse::<u32>().unwrap() & 0xff, SQLITE_READONLY, "{err}");
+    }
+
+    #[rstest]
+    #[case::known_id(true, vec!["current", "learned", "old", "shared"])]
+    #[case::name_only(false, vec!["current"])]
+    #[tokio::test]
+    async fn host_filter_matches_id_and_live_names(
+        #[future(awt)] empty_db: Sqlite,
+        #[case] known_id: bool,
+        #[case] expected: Vec<&str>,
+    ) {
+        let own = HostId(atuin_common::utils::uuid_v7());
+        let foreign = HostId(atuin_common::utils::uuid_v7());
+        for (command, origin, id, deleted) in [
+            ("current", "test:other", None, false),
+            ("learned", "Old-Mac:jack", Some(own), false),
+            ("old", "OLD-MAC:other", None, false),
+            ("shared", "old-mac:other", Some(foreign), false),
+            ("foreign", "foreign:other", Some(foreign), false),
+            ("deleted", "gone:jack", Some(own), true),
+            ("unlearned", "gone:jack", None, false),
+        ] {
+            let mut history = save_history_item(&empty_db, command).await;
+            history.cmd_origin = CmdOrigin::try_from(origin).unwrap();
+            history.host_id = id;
+            history.deleted_at = deleted.then(Timestamp::now);
+            empty_db.update(&history).await.unwrap();
+        }
+        let mut context = new_context();
+        if known_id {
+            context.host_id = own.as_simple().to_string();
+        }
+        let searched = empty_db
+            .search(DbSearchMode::Prefix, FilterMode::Host, &context, "", OptFilters::default())
+            .await
+            .unwrap();
+        let listed = empty_db
+            .list([FilterMode::Workspace, FilterMode::Host], &context, None, false, false, None)
+            .await
+            .unwrap();
+        for rows in [searched, listed] {
+            let commands: Vec<_> = rows.iter().map(|row| row.command.as_str()).sorted().collect();
+            assert_eq!(commands, expected);
+        }
     }
 
     /// `set_host_ids` fills only unknown host IDs, and `update` never clears a known one.
