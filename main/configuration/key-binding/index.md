@@ -4,6 +4,8 @@ Note
 
 The snippets on this page must go in your shell's startup file (`~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`, etc.) — the same file where you run `atuin init`. Custom bindings that set `ATUIN_NOBIND` and bind keys afterwards only take effect if they run at shell startup. Running them once in an interactive session, or placing them in a file your shell does not source, has no lasting effect.
 
+`atuin setup` adds the `atuin init` line to the startup file of zsh, bash, fish and PowerShell. If your startup file already has that line, use it in place of the snippet's own `atuin init` line. Set `ATUIN_NOBIND` before that line, and put your bindings after it.
+
 ## Custom up arrow filter mode
 
 It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
@@ -20,11 +22,19 @@ Our default up-arrow binding can be a bit contentious. Some people love it, some
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while Ctrl-r searches history globally. See the [config](https://docs.atuin.sh/configuration/config/#filter_mode_shell_up_key_binding) for more.
 
-Otherwise, if you don't like it, you can disable it.
+Otherwise, if you don't like it, you can disable it. `atuin setup` turns off the up-arrow or `Ctrl`+`R` binding individually:
 
-You can also disable either the up-arrow or `Ctrl`+`R` bindings individually, by passing `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
+```
+# Bind ctrl-r but not up arrow
+atuin setup --only --no-up-arrow
 
-An example for zsh:
+# Bind up-arrow but not ctrl-r
+atuin setup --only --no-ctrl-r
+```
+
+Setup writes `bind_up_arrow = false` or `bind_ctrl_r = false` to your [config](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow), and new shells pick it up. `--up-arrow` and `--ctrl-r` bind the keys again.
+
+To do it by hand, pass `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file. An example for zsh:
 
 ```
 # Bind ctrl-r but not up arrow
@@ -34,9 +44,9 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your [config](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow).
+Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your config yourself.
 
-If you don't want either key to be bound, either pass both `--disable` arguments, or set the environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
+If you don't want either key to be bound, run `atuin setup --only --no-ctrl-r --no-up-arrow`. By hand, either pass both `--disable` arguments, or set the environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`. `ATUIN_NOBIND` also leaves `?` unbound, so Atuin binds no keys at all:
 
 ```
 ## Do not bind any keys

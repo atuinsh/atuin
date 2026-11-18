@@ -41,7 +41,7 @@ Some key bindings depend on the terminal, not the shell. Terminals that implemen
 
 ## AI agents
 
-Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *Hermes Agent*, *Kiro*, *opencode* and *pi*.
+Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *Grok Build*, *Hermes Agent*, *Kiro*, *opencode*, *pi* and *omp*. For *Amp*, Atuin captures Amp's sessions as [threads](https://docs.atuin.sh/ai/threads/#amp) only.
 
 ## Getting help
 

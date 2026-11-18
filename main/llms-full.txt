@@ -22,17 +22,10 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
 Restart your shell, then press `Ctrl`+`R` or the `Up` arrow to search. Type a query, press enter to run the selected command, or tab to put it on your command line for editing.
 
-To bring your existing history with you:
+The install script runs `atuin setup`, which imports your existing history and offers to sync it across machines. Sync is optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md). If you skipped sync, sign in later with:
 
 ```
-atuin import auto
-```
-
-To sync it across machines — optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md):
-
-```
-atuin register -u <USERNAME> -e <EMAIL>
-atuin sync
+atuin setup --sync cloud
 ```
 
 If you'd rather take it one step at a time, [Getting Started](https://docs.atuin.sh/guide/getting-started/index.md) walks through the same thing with more explanation. From there, [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) covers driving the TUI, and [Config](https://docs.atuin.sh/configuration/config/index.md) documents every setting.
@@ -88,7 +81,7 @@ Some key bindings depend on the terminal, not the shell. Terminals that implemen
 
 ## AI agents
 
-Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *Hermes Agent*, *Kiro*, *opencode* and *pi*.
+Atuin records commands run by AI coding agents through their hook systems. See [AI agent hooks](https://docs.atuin.sh/guide/agent-hooks/index.md) for setup. The supported agents are *Claude Code*, *Codex*, *Copilot*, *Grok Build*, *Hermes Agent*, *Kiro*, *opencode*, *pi* and *omp*. For *Amp*, Atuin captures Amp's sessions as [threads](https://docs.atuin.sh/ai/threads/#amp) only.
 
 ## Getting help
 
@@ -99,7 +92,7 @@ If something isn't working, [`atuin doctor`](https://docs.atuin.sh/reference/doc
 
 This guide walks through setting Atuin up properly, one step at a time. If you just want the commands, the [quickstart on the home page](https://docs.atuin.sh/#quickstart) has them.
 
-Setup takes four steps, and only the first is required:
+Setting Atuin up takes four steps, and only the first is required. The install script runs `atuin setup`, which walks you through the first three:
 
 1. [Install Atuin](https://docs.atuin.sh/guide/installation/index.md) and its shell plugin
 1. [Import your existing history](https://docs.atuin.sh/guide/import/index.md)
@@ -108,36 +101,39 @@ Setup takes four steps, and only the first is required:
 
 ## 1. Install
 
-The install script handles the binary and the shell plugin, and walks you through the rest:
+The install script installs the binary, then runs `atuin setup`, which installs the shell plugin and walks you through the rest:
 
 ```
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-Then restart your shell. Prefer a package manager, or want to install the pieces yourself? See [Installation](https://docs.atuin.sh/guide/installation/index.md).
+Then restart your shell. Prefer a package manager, or want to install the pieces yourself? See [Installation](https://docs.atuin.sh/guide/installation/index.md). After installing the binary another way, run `atuin setup` to do the rest.
 
 At this point Atuin is recording new commands. Press `Ctrl`+`R` or the `Up` arrow to search them.
 
 ## 2. Import your existing history
 
-Atuin only records commands run after it's installed, so bring the old ones in:
+Atuin only records commands run after it's installed, so setup brings the old ones in. Setup imports your current shell's history file, which stays untouched — your shell keeps writing to it as usual.
+
+If you skipped the import, or your sync account already had history, import this machine's history with:
 
 ```
 atuin import auto
 ```
 
-This detects your shell and imports from its history file, which stays untouched — your shell keeps writing to it as usual. See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
+See [Import existing history](https://docs.atuin.sh/guide/import/index.md) for importing from a specific shell or a non-default file.
 
 ## 3. Set up sync (optional)
 
 Sync backs your history up and shares it between machines, end-to-end encrypted. You can use our server or [host your own](https://docs.atuin.sh/self-hosting/server-setup/index.md).
 
+Setup offers to sign you in to Atuin Cloud. If you skipped sync, sign in through your browser with:
+
 ```
-atuin register -u <USERNAME> -e <EMAIL>
-atuin sync
+atuin setup --sync cloud
 ```
 
-Registration generates an encryption key. **Save it somewhere safe** — you'll need it to log in on any other machine, and it can't be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
+Atuin encrypts your history with a key that it keeps on this machine. Run `atuin key` to show the key. **Save the key somewhere safe** — you'll need it to log in on any other machine, and it can't be recovered. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including logging in elsewhere.
 
 Skipping this step is fine. Your history stays on this machine, not backed up and not synchronized.
 
@@ -147,7 +143,7 @@ Once you're up and running:
 
 - [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) — what Atuin records, and how to drive the TUI
 - [Filter and search modes](https://docs.atuin.sh/guide/advanced-usage/index.md) — narrow searches to this directory, this machine, or this session
-- [Key bindings](https://docs.atuin.sh/configuration/key-binding/index.md) — including how to [disable the up arrow binding](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow) if it isn't for you
+- [Key bindings](https://docs.atuin.sh/configuration/key-binding/index.md) — including how to [disable the up arrow binding](https://docs.atuin.sh/configuration/key-binding/#disable-up-arrow) with `atuin setup --only --no-up-arrow` if it isn't for you
 - [Config](https://docs.atuin.sh/configuration/config/index.md) — every setting, including an [inline window](https://docs.atuin.sh/configuration/config/#inline_height) instead of full screen
 
 ## Getting help
@@ -168,13 +164,13 @@ It will install a binary to `~/.atuin/bin`, and if you'd rather do something els
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-The install script will walk you through importing your shell history and setting up a sync account. To skip these interactive prompts (for example, in CI or Dockerfiles), pass `--non-interactive`:
+After installing, the script runs `atuin setup`. Setup hooks Atuin into your shells, imports your shell history, and offers to set up a sync account. To skip these interactive prompts (for example, in CI or Dockerfiles), pass `--non-interactive`:
 
 ```
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --non-interactive
 ```
 
-The script also automatically detects non-interactive environments (piped input, no TTY) and skips the prompts in those cases.
+The script also automatically detects non-interactive environments (piped input, no TTY) and skips the prompts in those cases. Without prompts, the script runs `atuin setup --yes --no-import`, which sets Atuin up without asking and doesn't import your history.
 
 Anything else you pass goes to `atuin setup`, which starts from those choices. For example, to leave the up arrow to your shell and keep everything on this machine:
 
@@ -182,21 +178,25 @@ Anything else you pass goes to `atuin setup`, which starts from those choices. F
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh -s -- --no-up-arrow --sync off
 ```
 
-Run `atuin setup --help` for every option.
+Run `atuin setup --help` for every option. You can run `atuin setup` again at any time to change what it set up.
 
-[**Set up sync** - Move on to the next step, or read on to manually install Atuin instead.](https://docs.atuin.sh/guide/sync/index.md)
+If you skipped sync during setup, sign in to Atuin Cloud later with `atuin setup --sync cloud`. See [Setting up sync](https://docs.atuin.sh/guide/sync/index.md) for the details, including how to use your own server.
+
+[**Basic usage** - Move on to the next step, or read on to manually install Atuin instead.](https://docs.atuin.sh/guide/basic-usage/index.md)
 
 ### On Windows
 
-The recommended approach on Windows is to use WinGet to install Atuin. Then, if you use PowerShell, add the initialization command to your PowerShell profile, and restart your shell.
+The recommended approach on Windows is to use WinGet to install Atuin. Then, in a new shell, run `atuin setup`, and restart your shell once setup finishes.
 
 ```
 winget install -e Atuinsh.Atuin
-if (-not (Test-Path -Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-Write-Output 'atuin init powershell | Out-String | Invoke-Expression' >> $PROFILE
 ```
 
-Note that the `$PROFILE` path may depend on your PowerShell version.
+```
+atuin setup
+```
+
+Setup adds Atuin to the profiles of both PowerShell 7 and Windows PowerShell.
 
 Installing for every user
 
@@ -208,7 +208,9 @@ winget install -e Atuinsh.Atuin --scope machine
 
 You may also want to try the `default-powershell` [theme](https://docs.atuin.sh/guide/theming/index.md), which uses the default PowerShell syntax colors.
 
-[**Set up sync** - Move on to the next step.](https://docs.atuin.sh/guide/sync/index.md)
+If you skipped sync during setup, sign in to Atuin Cloud later with `atuin setup --sync cloud`.
+
+[**Basic usage** - Move on to the next step.](https://docs.atuin.sh/guide/basic-usage/index.md)
 
 ## Manual installation
 
@@ -286,17 +288,33 @@ cargo install --path crates/atuin --locked
 
 Please be advised
 
-If you choose to manually install Atuin rather than using the recommended installation script, merely installing the binary isn't sufficient, you should also set up the shell plugin.
+After installing the binary by hand, run `atuin setup` to hook Atuin into your shells:
+
+```
+atuin setup
+```
+
+Setup also imports your shell history and offers to set up sync. For Nushell, xonsh, and zsh plugin managers, see [Installing the shell plugin](#installing-the-shell-plugin).
 
 ______________________________________________________________________
 
 ### Installing the shell plugin
 
-Once the binary is installed, the shell plugin requires installing. If you use the install script, this should all be done for you! After installing, remember to restart your shell.
+Once the binary is installed, the shell plugin requires installing. For zsh, bash, fish, and PowerShell, `atuin setup` installs it for you. The install script runs `atuin setup`, so if you used the install script, this is already done. After installing, remember to restart your shell.
+
+To hook only some shells and change nothing else, pass `--only` and name the shells with `--shells`. For example, this command hooks zsh and fish:
 
 ```
-echo 'eval "$(atuin init zsh)"' >> ~/.zshrc
+atuin setup --only --shell-history --shells zsh,fish
 ```
+
+Run setup, which adds `eval "$(atuin init zsh)"` to `$ZDOTDIR/.zshrc`, or to `~/.zshrc` when `ZDOTDIR` isn't set:
+
+```
+atuin setup --only --shell-history --shells zsh
+```
+
+If you use a plugin manager, load Atuin with it instead.
 
 ```
 # if you _only_ want to install the shell-plugin, do this; otherwise look above for a "everything via zinit" solution
@@ -313,10 +331,10 @@ antidote install atuinsh/atuin
 
 Atuin works best in bash when using [ble.sh](https://github.com/akinomyoga/ble.sh) >= 0.4.
 
-With ble.sh (>= 0.4) installed and loaded in `~/.bashrc`, just add atuin to your `~/.bashrc`
+With ble.sh (>= 0.4) installed and loaded in `~/.bashrc`, run setup, which adds `eval "$(atuin init bash)"` to the end of your `~/.bashrc`:
 
 ```
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+atuin setup --only --shell-history --shells bash
 ```
 
 [bash-preexec](https://github.com/rcaloras/bash-preexec) can also be used, but you may experience some minor problems with the recorded duration and exit status of some commands.
@@ -329,7 +347,13 @@ To use `atuin < 18.10.0` in `bash < 4` with bash-preexec, the option `enter_acce
 
 bash-preexec can't properly invoke the `preexec` hook for subshell commands `(...)`, function definitions `func() { ...; }`, empty for-in-statements `for i in; do ...; done`, etc., so those commands and duration may not be recorded in the Atuin's history correctly.
 
-As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To disable this behavior, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init`, e.g.:
+As of Atuin 18.18.0, `atuin init bash` will automatically load bash-preexec if no other preexec backend has been loaded (ble.sh or an external copy of bash-preexec). To use the built-in copy, run setup, which adds `eval "$(atuin init bash)"` to your `~/.bashrc`:
+
+```
+atuin setup --only --shell-history --shells bash
+```
+
+To disable the built-in copy, pass `ATUIN_NO_BUILTIN_PREEXEC=1` to `atuin init` in your `~/.bashrc`, e.g.:
 
 ```
 eval "$(ATUIN_NO_BUILTIN_PREEXEC=1 atuin init bash)"
@@ -342,19 +366,17 @@ curl https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec
 echo '[[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh' >> ~/.bashrc
 ```
 
-Then set up Atuin:
+Then run setup, which adds Atuin to the end of your `~/.bashrc`, after bash-preexec:
 
 ```
-echo 'eval "$(atuin init bash)"' >> ~/.bashrc
+atuin setup --only --shell-history --shells bash
 ```
 
-Add
+Run setup, which adds an `is-interactive` block that runs `atuin init fish | source` to your `~/.config/fish/config.fish` file:
 
 ```
-atuin init fish | source
+atuin setup --only --shell-history --shells fish
 ```
-
-to your `is-interactive` block in your `~/.config/fish/config.fish` file
 
 Run in *Nushell*:
 
@@ -395,11 +417,13 @@ execx($(atuin init xonsh))
 
 to the end of your `~/.xonshrc`
 
-Add the following to the end of your `$PROFILE` file:
+Run setup, which adds `atuin init powershell | Out-String | Invoke-Expression` to the end of your PowerShell profile:
 
 ```
-atuin init powershell | Out-String | Invoke-Expression
+atuin setup --only --shell-history --shells powershell
 ```
+
+On Windows, setup writes to the profiles of both PowerShell 7 and Windows PowerShell, in your Documents folder. Elsewhere, setup writes to `~/.config/powershell/Microsoft.PowerShell_profile.ps1`.
 
 ## Upgrade
 
@@ -419,19 +443,35 @@ If you'd like to uninstall Atuin, please check out [the uninstall page](https://
 
 # Setting up Sync
 
-At this point, you have Atuin storing and searching your shell history! But it isn't syncing it just yet. To do so, you'll need to register with the sync server. All of your history is fully end-to-end encrypted, so there are no risks of the server snooping on you.
+At this point, you have Atuin storing and searching your shell history! To sync it between machines, you'll need an account on the sync server. All of your history is fully end-to-end encrypted, so there are no risks of the server snooping on you.
 
-If you don't have an account, please [register](#register). If you have already registered, proceed to [login](#login).
+`atuin setup` offers to sign you in to Atuin Cloud when it sets Atuin up. If you skipped sync and don't have an account yet, please [register](#register). If you have already registered, proceed to [login](#login).
 
-**Note:** You first have to set up your `sync_address` if you want to use a [self hosted server](https://docs.atuin.sh/self-hosting/server-setup/index.md).
+**Note:** To use a [self hosted server](https://docs.atuin.sh/self-hosting/server-setup/index.md), first set your `sync_address` with setup:
+
+```
+atuin setup --only --sync https://your.server
+```
+
+Setup writes the address to your config. Then register or log in with the self-hosted commands below.
 
 ## Register
+
+To create an Atuin Cloud account, run:
+
+```
+atuin setup --sync cloud
+```
+
+Setup opens your browser, where you can create an account or sign in. Because sign-in needs the browser, `atuin setup --yes` and `atuin setup --only` can't sign you in to Atuin Cloud.
+
+On a self-hosted server, register with:
 
 ```
 atuin register -u <YOUR_USERNAME> -e <YOUR EMAIL>
 ```
 
-After registration, Atuin will generate an encryption key for you and store it locally. This is needed for logging in to other machines, and can be seen with
+Atuin generates an encryption key for you and stores it locally. This is needed for logging in to other machines, and can be seen with
 
 ```
 atuin key
@@ -465,7 +505,15 @@ When only signed in on one machine, Atuin sync operates as a backup. This is pre
 
 First, make sure you're [registered with the sync server](#register) and make a note of your key. You can see this with `atuin key`.
 
-Then, install Atuin on a new machine. Once installed, login with
+Then, install Atuin on a new machine. The install script runs `atuin setup`, which offers to sign you in. If you skipped sync during setup, or installed Atuin another way, sign in with
+
+```
+atuin setup --sync cloud
+```
+
+Setup opens your browser to sign in. If your account has data that this machine's key can't read, setup asks for your key.
+
+On a self-hosted server, log in with
 
 ```
 atuin login -u <USERNAME>
@@ -489,11 +537,15 @@ atuin sync -f
 
 Atuin uses a shell plugin to capture new shell history. But for older history, you will need to import it.
 
-This will import the history for your current shell:
+`atuin setup` imports the history for your current shell when it sets Atuin up. Setup reads the history file of zsh, bash, fish, or PowerShell. Setup skips the import when Atuin or your sync account already has history.
+
+To import the history for your current shell yourself, run:
 
 ```
 atuin import auto
 ```
+
+Run `atuin import auto` if you skipped the import during setup, or to add this machine's history to an account that already has history.
 
 Alternatively, you can specify the shell like so:
 
@@ -501,6 +553,8 @@ Alternatively, you can specify the shell like so:
 atuin import bash
 atuin import zsh # etc
 ```
+
+Other sources need `atuin import <source>`. For example, run `atuin import nu` for Nushell, or `atuin import zsh-hist-db` for a zsh-histdb database. See the [import reference](https://docs.atuin.sh/reference/import/index.md) for every source.
 
 Your old shell history file will continue to be updated, regardless of Atuin usage.
 
@@ -537,7 +591,13 @@ The default configuration file is located at `~/.atuin/config.toml`.
 
 ### Keybindings
 
-We've got a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). It covers a whole bunch of options, including disabling the up arrow behavior if you don't like it.
+If you don't like the up arrow opening Atuin, turn that binding off:
+
+```
+atuin setup --only --no-up-arrow
+```
+
+We've got a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). It covers a whole bunch of other options.
 
 ### Enter to run
 
@@ -607,7 +667,7 @@ The search mode decides how Atuin interprets your query text. Cycle through the 
 | fulltext        | Commands that contain your query anywhere                                                                                                                                   |
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](https://docs.atuin.sh/reference/daemon/index.md) in-memory index, with tunable scoring                                         |
 
-To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode).
+To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode). `atuin setup --only --daemon` turns on the daemon and sets `search_mode` to `daemon-fuzzy`. If the daemon is on already, set `search_mode` yourself.
 
 ## Context switch
 
@@ -627,7 +687,7 @@ To keep specific commands *out* of your history on purpose, see [Keeping Secrets
 
 ## How Atuin's Shell Integration Works
 
-When you add `eval "$(atuin init <shell>)"` to your shell configuration, Atuin installs hooks that run at specific points in your shell's command lifecycle:
+`atuin setup` adds a line that runs `atuin init <shell>` to your shell configuration. For example, for zsh, setup adds `eval "$(atuin init zsh)"` to your `.zshrc`. When that line runs at shell startup, Atuin installs hooks that run at specific points in your shell's command lifecycle:
 
 1. **Preexec hook**: Runs *before* each command executes. Atuin records the command text, timestamp, and working directory.
 1. **Precmd hook**: Runs *after* each command completes. Atuin records the exit code and duration.
@@ -767,54 +827,37 @@ Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also 
 
 ### Nushell, xonsh, and PowerShell
 
-These shells are supported too. For how to load the plugin in each, see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin).
+These shells are supported too. `atuin setup` adds Atuin to your PowerShell profile. For how to load the plugin in Nushell and xonsh, see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin).
 
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro CLI, opencode, and pi) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro CLI, opencode, pi, and omp) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
-Install hooks for your agent, then restart or reload the agent:
+Install hooks for your agents:
 
 ```
-# Claude Code
-atuin hook install claude-code
-
-# Codex
-atuin hook install codex
-
-# GitHub Copilot CLI
-atuin hook install copilot
-
-# Grok Build
-atuin hook install grok
-
-# Hermes Agent
-atuin hook install hermes
-
-# Kiro CLI
-atuin hook install kiro
-
-# opencode
-atuin hook install opencode
-
-# pi
-atuin hook install pi
+atuin setup --only --agent-history
 ```
 
-That's it. Commands the agent runs will now appear in your Atuin history, tagged with the agent's name.
+This installs hooks for every coding agent that setup finds on this machine. An agent counts when its program is on your `PATH` or it has sessions here. To pick the agents, name them with `--agents`, as `atuin setup --only --agent-history --agents codex,claude-code`; the setup screen lists them under Connected agents, each of which gets its hooks and Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md). Amp, Kiro, opencode, pi and omp load hooks only as they start, so setup tells you to restart them. `atuin setup` without `--only` offers the same, among its other choices.
 
-To let the agent search your history too, connect it to Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md) with `atuin mcp install <agent>`.
+That's it. Commands your agents run will now appear in your Atuin history, tagged with the agent's name.
+
+To take the hooks out again, run `atuin setup --only --no-agent-history`, or name the agents with `--agents`. On the setup screen, clear an agent under Connected agents, or clear Shell history beneath it. Setup leaves the rest of each agent's config as it is.
+
+To let your agents search your history too, connect them to Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md) with `atuin setup --only --mcp`.
 
 ## How It Works
 
 AI coding agents support hook systems that notify external tools when they're about to run a shell command and when the command finishes. Atuin uses these hooks to record each command as a history entry, just like commands you type yourself.
 
-When `atuin hook install` runs, it writes the agent's config file or extension to register Atuin as a hook handler:
+When setup installs an agent's hooks, it writes the agent's config file or extension to register Atuin as a hook handler:
 
 | Agent        | Config file / extension                                                                                                      |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Amp          | `~/.config/amp/plugins/atuin.ts`                                                                                             |
 | Claude Code  | `~/.claude/settings.json`                                                                                                    |
 | Codex        | `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`), trusted in `$CODEX_HOME/config.toml`                            |
 | Copilot      | `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`)                                                  |
@@ -823,6 +866,7 @@ When `atuin hook install` runs, it writes the agent's config file or extension t
 | Kiro CLI     | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`)                                                        |
 | opencode     | `~/.config/opencode/plugins/atuin.ts`                                                                                        |
 | pi           | `~/.pi/agent/extensions/atuin.ts`                                                                                            |
+| omp          | `~/.omp/agent/extensions/atuin.ts`                                                                                           |
 
 The hook lifecycle:
 
@@ -831,7 +875,7 @@ The hook lifecycle:
 
 Atuin only captures shell tool invocations (`Bash`, Kiro's `execute_bash`, or Hermes's `terminal`). It ignores other tool types (file writes, web fetches, etc.).
 
-Agents that load extensions rather than shelling out to a hook command -- opencode and pi -- call `atuin history start` and `atuin history end` directly instead, but record the same thing. Hermes loads a plugin too, which passes Hermes's own events to `atuin hook hermes`.
+Agents that load extensions rather than shelling out to a hook command -- opencode, pi and omp -- call `atuin history start` and `atuin history end` directly instead, but record the same thing. Hermes loads a plugin too, which passes Hermes's own events to `atuin hook hermes`.
 
 ## Filtering by Author
 
@@ -865,75 +909,59 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`, `omp`, `opencode`, and `pi`.
+Currently recognized agent names are: `amp`, `claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
 For support tiers, see [Supported platforms](https://docs.atuin.sh/support/index.md).
 
+`atuin setup --only --agent-history` installs the hooks of each of these agents that it finds. The sections below say what the install writes for each one.
+
+### Amp
+
+The install writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp.
+
+The plugin captures Amp's sessions as [threads](https://docs.atuin.sh/ai/threads/#amp). The commands that Amp runs don't reach your shell history.
+
 ### Claude Code
 
-```
-atuin hook install claude-code
-```
-
-This adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each Bash tool use matching `^Bash$`, passing the event as JSON on `stdin`.
+The install adds hook entries to `~/.claude/settings.json`. Claude Code calls `atuin hook claude-code` on each Bash tool use matching `^Bash$`, passing the event as JSON on `stdin`.
 
 ### Codex
 
-```
-atuin hook install codex
-```
+The install adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
 
-This adds hook entries to `$CODEX_HOME/hooks.json` (by default `~/.codex/hooks.json`). Codex calls `atuin hook codex` on each Bash tool use matching `^Bash$`.
-
-Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run the install again to trust them.
+Codex 0.160 and later only run hooks you have trusted, so the install also records Atuin's hooks as trusted in `$CODEX_HOME/config.toml` (`[hooks.state]` entries). It trusts only Atuin's own hooks, as installed, and leaves your other hooks and settings as they are. If you installed the hooks with an earlier version of Atuin, run `atuin setup --only --agent-history` again to trust them.
 
 ### Copilot
 
-```
-atuin hook install copilot
-```
-
-This writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
+The install writes Atuin's hooks to `$COPILOT_HOME/hooks/atuin.json` (by default `~/.copilot/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Copilot calls `atuin hook copilot` on each shell command, with the same event Claude Code sends.
 
 Copilot doesn't tell the hook which call a command belongs to, so Atuin matches a command's start with its end by the session and the command text. Two identical commands running at the same time in one session are recorded as one.
 
 ### Grok Build
 
-```
-atuin hook install grok
-```
-
-This writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
+The install writes hook entries to `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`). Grok Build maps the `^Bash$` matcher to its `run_terminal_command` shell tool and calls `atuin hook grok`, passing the event as JSON on `stdin`.
 
 Grok Build also runs hooks from `~/.claude/settings.json` when Claude compatibility is enabled. Inside a Grok Build session, Atuin attributes inherited `atuin hook claude-code` events to `grok`, and skips them when native `grok` hooks are installed too so commands aren't recorded twice.
 
 ### Hermes Agent
 
-```
-atuin hook install hermes
-```
+The install writes Atuin's plugin to `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`) and runs `hermes plugins enable atuin`, which turns the plugin on in `config.yaml` and loads it into a running Hermes gateway, so nothing needs a restart. If `hermes` isn't on your `PATH`, or the command fails, the install says so and prints the command to run yourself.
 
-This writes Atuin's plugin to `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`) and runs `hermes plugins enable atuin`, which turns the plugin on in `config.yaml` and loads it into a running Hermes gateway, so nothing needs a restart. If `hermes` isn't on your `PATH`, or the command fails, the install says so and prints the command to run yourself.
-
-The plugin records each command Hermes's `terminal` tool runs, with author `hermes`. Hermes runs plugins in its gateway, not in your shell, which is why the plugin calls Atuin by the full path of the `atuin` that installed it (if you move Atuin, install again), and looks up the directory each command runs in, following the agent's `cd`s. For the same reason, the install writes into the plugin the `ATUIN_*` settings in your shell that say where Atuin's config and data are: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, and nothing else. If you change one, install again.
+The plugin records each command Hermes's `terminal` tool runs, with author `hermes`. Hermes runs plugins in its gateway, not in your shell, which is why the plugin calls Atuin by the full path of the `atuin` that installed it (if you move Atuin, run `atuin setup --only --agent-history` again), and looks up the directory each command runs in, following the agent's `cd`s. For the same reason, the install writes into the plugin the `ATUIN_*` settings in your shell that say where Atuin's config and data are: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME` or `ATUIN_CONFIG_DIR`, and nothing else. If you change one, run the install again.
 
 Each Hermes profile is a home of its own, with its own plugins. The install picks the home as `hermes` does: `HERMES_HOME` if you have set it to a profile's directory, else the profile that `hermes profile use` made active, else `~/.hermes` (or the `HERMES_HOME` you set). To record another profile's commands, install into it too:
 
 ```
-HERMES_HOME=~/.hermes/profiles/work atuin hook install hermes
+HERMES_HOME=~/.hermes/profiles/work atuin setup --only --agent-history --agents hermes
 ```
 
 Atuin records a command Hermes refused to run (blocked, or waiting for your approval) with the exit code `-1`. It doesn't record a command started in the background, nor one Hermes moved to the background after it ran too long, since neither reports an exit code.
 
 ### Kiro CLI
 
-```
-atuin hook install kiro
-```
-
-This writes Atuin's hooks to `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Kiro calls `atuin hook kiro` before and after each `execute_bash` command (`execute_pwsh` on Windows), with the same event Claude Code sends. These hooks run under the V3 engine of Kiro CLI; on Kiro CLI 2.x, where the classic engine is still the default, run `kiro-cli --v3 chat` or set `chat.agentEngine` to `v3`.
+The install writes Atuin's hooks to `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`), a file of their own, so your other hooks are untouched. Kiro calls `atuin hook kiro` before and after each `execute_bash` command (`execute_pwsh` on Windows), with the same event Claude Code sends. These hooks run under the V3 engine of Kiro CLI; on Kiro CLI 2.x, where the classic engine is still the default, run `kiro-cli --v3 chat` or set `chat.agentEngine` to `v3`.
 
 Kiro loads hooks when a session starts, so restart any Kiro already running. Hooks in your home directory run in every workspace; a hook file in a project's `.kiro/hooks` only runs once you have trusted that workspace, which is why the install writes to your home.
 
@@ -941,15 +969,11 @@ Like Copilot, Kiro doesn't tell the hook which call a command belongs to, so Atu
 
 ### opencode
 
-```
-atuin hook install opencode
-```
-
-This writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
+The install writes Atuin's plugin to `~/.config/opencode/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/opencode/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`.
 
 Then restart opencode. The plugin records every shell tool command with author `opencode`, using the tool's description as the entry's intent when opencode supplies one.
 
-opencode 1.x and 2.x load plugins differently, so the install writes the plugin for the opencode it finds (`opencode --version`). After upgrading to opencode 2, run `atuin hook install opencode` again.
+opencode 1.x and 2.x load plugins differently, so the install writes the plugin for the opencode it finds (`opencode --version`). After upgrading to opencode 2, run `atuin setup --only --agent-history` again.
 
 A few details are worth knowing:
 
@@ -958,13 +982,15 @@ A few details are worth knowing:
 
 ### pi
 
-```
-atuin hook install pi
-```
-
-This writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
+The install writes Atuin's extension to `~/.pi/agent/extensions/atuin.ts`.
 
 Then restart pi or run `/reload`. The extension listens to pi's tool events and records every `bash` tool command with author `pi` by calling `atuin history start` before execution and `atuin history end` afterward. Because it observes events rather than registering its own `bash` tool, it works alongside other extensions that replace pi's bash tool (such as sandboxes or RTK implementations).
+
+### omp
+
+omp, or oh-my-pi, is a fork of pi. The install writes the same extension as pi's to `~/.omp/agent/extensions/atuin.ts`.
+
+Then restart omp. The extension records every `bash` tool command with author `omp`.
 
 ## Verifying Installation
 
@@ -981,6 +1007,9 @@ atuin search --author '$all-agent' -- ''
 You can also check the agent's config file directly to confirm the hooks are registered:
 
 ```
+# Amp
+ls ~/.config/amp/plugins/atuin.ts
+
 # Claude Code
 cat ~/.claude/settings.json | grep atuin
 
@@ -998,19 +1027,16 @@ ls ~/.config/opencode/plugins/atuin.ts
 
 # pi
 ls ~/.pi/agent/extensions/atuin.ts
+
+# omp
+ls ~/.omp/agent/extensions/atuin.ts
 ```
 
 ## Re-installing
 
-Running `atuin hook install` again is safe. If hooks are already installed, the command will skip them and print a message:
+Running `atuin setup --only --agent-history` again is safe. Hooks that are already installed are left as they are.
 
-```
-hooks.PreToolUse: already installed, skipping
-hooks.PostToolUse: already installed, skipping
-hooks.PostToolUseFailure: already installed, skipping
-```
-
-For opencode and pi, reinstalling will also skip if the installed extension already matches the one for your agent's version. For Hermes, it rewrites the plugin only if it has changed, and runs `hermes plugins enable atuin` again either way.
+For opencode, pi and omp, reinstalling will also skip if the installed extension already matches the one for your agent's version. For Hermes, it rewrites the plugin only if it has changed, and runs `hermes plugins enable atuin` again either way.
 
 # Keeping Secrets Out of Atuin
 
@@ -1185,26 +1211,12 @@ Output capture is off by default. It needs [pty-proxy](https://docs.atuin.sh/ref
 ## Setting it up
 
 ```
-atuin config enable output-capture
+atuin setup --only --output-capture --daemon
 ```
 
-This turns on the daemon (with `autostart`) if it isn't on already, enables pty-proxy and `[output]`, and restarts the daemon. Open a new shell afterward.
+This turns on the daemon (with `autostart`) if it isn't on already, enables pty-proxy and `[output]`, and restarts the daemon. Setup writes these as `daemon.enabled`, `daemon.autostart`, `pty_proxy.enabled` and `output.enabled` in your config file. Output capture also needs Atuin to capture your shell history, which `--shell-history` turns on. Open a new shell afterward.
 
-To do the same by hand, add to your config file:
-
-```
-[daemon]
-enabled = true
-autostart = true
-
-[pty_proxy]
-enabled = true
-
-[output]
-enabled = true
-```
-
-If you manage the daemon yourself (systemd, `launchd`), restart it after changing `[output]`. See [`[pty_proxy]`](https://docs.atuin.sh/reference/pty-proxy/#initialization) for other ways to start pty-proxy.
+If you manage the daemon yourself (systemd, `launchd`), restart it after running setup. See [`[pty_proxy]`](https://docs.atuin.sh/reference/pty-proxy/#initialization) for other ways to start pty-proxy.
 
 ## Reading captured output
 
@@ -1252,7 +1264,7 @@ Output is stored on disk in the `output-capture` directory of Atuin's data direc
 
 - **Disk budget.** Output may use up to [`max_disk_usage`](https://docs.atuin.sh/configuration/config/#max_disk_usage), 10% of the disk by default. The daemon checks about once a minute; past 95% of the budget, it deletes the oldest output until usage is back to 90%.
 - **Deleting history deletes output.** Deleting an entry from the search UI, with `atuin search --delete`, `atuin history prune`, or `atuin history dedup` also deletes its output.
-- **Turning it off.** Set `[output] enabled = false`. The daemon stops storing output right away; open a new shell so pty-proxy stops capturing it too. Output already stored stays on disk; to remove it, stop the daemon and delete the `output-capture` directory.
+- **Turning it off.** Run `atuin setup --only --no-output-capture`, which sets `output.enabled = false`. The daemon stops storing output right away; open a new shell so pty-proxy stops capturing it too. Output already stored stays on disk; to remove it, stop the daemon and delete the `output-capture` directory.
 
 ## When changes take effect
 
@@ -1348,14 +1360,13 @@ The cleaner approach is to delete your sync account and start over:
 # Delete your sync account and all server-side data
 atuin account delete
 
-# Register a new account
-atuin register
-
-# Import your shell history fresh (optional)
-atuin import auto
+# Sign in to Atuin Cloud with a new account
+atuin setup --sync cloud
 ```
 
-This leaves no leftover records on the server. Your other machines can then register with the new account and start fresh too.
+Setup opens your browser, where you can create the new account. If Atuin has no history on this machine, setup also imports your shell history fresh. On a self-hosted server, run `atuin register` to create the new account instead.
+
+This leaves no leftover records on the server. Your other machines can then sign in to the new account with `atuin setup --sync cloud` and start fresh too.
 
 Tip
 
@@ -1427,16 +1438,16 @@ This removes your account and all synchronized history from the server. **Local 
 
 ## Summary
 
-| Goal                                     | Command                                             |
-| ---------------------------------------- | --------------------------------------------------- |
-| Delete one entry (TUI)                   | `Ctrl`+`O` then `Ctrl`+`D`, or `Ctrl`+`A` then `D`  |
-| Delete entries by query                  | `atuin search --delete <query>`                     |
-| Delete all history                       | `atuin search --delete-it-all`                      |
-| Start fresh (with sync)                  | `atuin account delete` then re-register             |
-| Remove filtered entries                  | `atuin history prune`                               |
-| Remove undecryptable local store records | `atuin store verify` then `atuin store purge`       |
-| Remove duplicates                        | `atuin history dedup --before <date> --dupkeep <n>` |
-| Delete sync account                      | `atuin account delete`                              |
+| Goal                                     | Command                                                |
+| ---------------------------------------- | ------------------------------------------------------ |
+| Delete one entry (TUI)                   | `Ctrl`+`O` then `Ctrl`+`D`, or `Ctrl`+`A` then `D`     |
+| Delete entries by query                  | `atuin search --delete <query>`                        |
+| Delete all history                       | `atuin search --delete-it-all`                         |
+| Start fresh (with sync)                  | `atuin account delete` then `atuin setup --sync cloud` |
+| Remove filtered entries                  | `atuin history prune`                                  |
+| Remove undecryptable local store records | `atuin store verify` then `atuin store purge`          |
+| Remove duplicates                        | `atuin history dedup --before <date> --dupkeep <n>`    |
+| Delete sync account                      | `atuin account delete`                                 |
 
 # Theming
 
@@ -1669,6 +1680,8 @@ Default: `https://api.atuin.sh`
 
 The address of the server to sync with!
 
+`atuin setup --only --sync <URL>` sets this to the address of your own server. For example, run `atuin setup --only --sync https://atuin.example.com`. Then run `atuin register` to create an account on that server, or `atuin login` to sign in to an account you already have there.
+
 ```
 sync_address = "https://api.atuin.sh"
 ```
@@ -1703,7 +1716,9 @@ daemon-fuzzy search mode
 
 The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
 
-To use the new `"daemon-fuzzy"` mode, enable the daemon, set autostart to true (unless you manage its lifecycle yourself), and set the search mode:
+To use the new `"daemon-fuzzy"` mode, run `atuin setup --only --daemon`. Setup turns on the daemon with autostart, and sets the search mode to `"daemon-fuzzy"`.
+
+To do it by hand, or if the daemon is on already, enable the daemon and set the search mode. Set autostart to true unless you manage the daemon's lifecycle yourself:
 
 ```
 search_mode = "daemon-fuzzy"
@@ -1758,6 +1773,8 @@ filter_mode = "host"
 Default: `true`
 
 Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+`atuin setup --only --no-ctrl-r` sets `bind_ctrl_r = false`, and `atuin setup --only --no-up-arrow` sets `bind_up_arrow = false`. `--ctrl-r` and `--up-arrow` set them back to `true`.
 
 ```
 bind_up_arrow = false
@@ -2475,9 +2492,9 @@ height = "60%"
 
 Default: `false`
 
-Enable the background daemon
+Enable the background daemon.
 
-Add the new section to the bottom of your config file
+`atuin setup --only --daemon` turns this on, along with [`autostart`](#autostart) and the `daemon-fuzzy` [search mode](#search_mode). To turn it on by hand, add the new section to the bottom of your config file:
 
 ```
 [daemon]
@@ -2488,11 +2505,11 @@ enabled = true
 
 Default: `false`
 
-Automatically start and manage the daemon when needed. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart. On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR` set, Atuin starts the daemon itself instead.
+Automatically start and manage the daemon when needed. `atuin setup --only --daemon` turns this on along with the daemon. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart. On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR` set, Atuin starts the daemon itself instead.
 
 The agent is listed as `atuin` in System Settings, under General > Login Items. Switched off there, Atuin leaves it off and works without the daemon until you switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's logs directory says why. The agent gets the environment variables your config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`. It also gets the ones that say where your coding agents keep their sessions, such as `CODEX_HOME` or `HERMES_HOME`. It keeps the values they had when Atuin installed it, so after you add or change one, run `atuin daemon restart`.
 
-`atuin daemon stop` stops the agent, but with `autostart` on, the next command that needs the daemon starts it again. `atuin config disable daemon` turns the daemon off and removes the agent.
+`atuin daemon stop` stops the agent, but with `autostart` on, the next command that needs the daemon starts it again. `atuin setup --only --no-daemon` turns the daemon off and removes the agent.
 
 ```
 autostart = false
@@ -2572,7 +2589,7 @@ command_filter = []
 
 Default: `false`
 
-Capture and store the output of the commands you run. When `false`, nothing is captured and the other keys in this section are ignored. Turning it off stops the daemon storing output right away; turning it on takes a daemon restart and a new shell, or run `atuin config enable output-capture`, which also sets up the daemon and pty-proxy.
+Capture and store the output of the commands you run. When `false`, nothing is captured and the other keys in this section are ignored. Turning it off stops the daemon storing output right away; turning it on takes a daemon restart and a new shell, or run `atuin setup --only --output-capture --daemon`, which also sets up the daemon and pty-proxy.
 
 ```
 [output]
@@ -2889,6 +2906,8 @@ Note
 
 The snippets on this page must go in your shell's startup file (`~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`, etc.) — the same file where you run `atuin init`. Custom bindings that set `ATUIN_NOBIND` and bind keys afterwards only take effect if they run at shell startup. Running them once in an interactive session, or placing them in a file your shell does not source, has no lasting effect.
 
+`atuin setup` adds the `atuin init` line to the startup file of zsh, bash, fish and PowerShell. If your startup file already has that line, use it in place of the snippet's own `atuin init` line. Set `ATUIN_NOBIND` before that line, and put your bindings after it.
+
 ## Custom up arrow filter mode
 
 It can be useful to use a different filter or search mode on the up arrow. For example, you could use ctrl-r for searching globally, but the up arrow for searching history from the current directory only.
@@ -2905,11 +2924,19 @@ Our default up-arrow binding can be a bit contentious. Some people love it, some
 
 It becomes much more powerful if you consider binding a different filter mode to the up arrow. For example, on "up" Atuin can default to searching all history for the current directory only, while Ctrl-r searches history globally. See the [config](https://docs.atuin.sh/configuration/config/#filter_mode_shell_up_key_binding) for more.
 
-Otherwise, if you don't like it, you can disable it.
+Otherwise, if you don't like it, you can disable it. `atuin setup` turns off the up-arrow or `Ctrl`+`R` binding individually:
 
-You can also disable either the up-arrow or `Ctrl`+`R` bindings individually, by passing `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file:
+```
+# Bind ctrl-r but not up arrow
+atuin setup --only --no-up-arrow
 
-An example for zsh:
+# Bind up-arrow but not ctrl-r
+atuin setup --only --no-ctrl-r
+```
+
+Setup writes `bind_up_arrow = false` or `bind_ctrl_r = false` to your [config](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow), and new shells pick it up. `--up-arrow` and `--ctrl-r` bind the keys again.
+
+To do it by hand, pass `--disable-up-arrow` or `--disable-ctrl-r` to the call to `atuin init` in your shell config file. An example for zsh:
 
 ```
 # Bind ctrl-r but not up arrow
@@ -2919,9 +2946,9 @@ eval "$(atuin init zsh --disable-up-arrow)"
 eval "$(atuin init zsh --disable-ctrl-r)"
 ```
 
-Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your [config](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow).
+Or set `bind_up_arrow = false` or `bind_ctrl_r = false` in your config yourself.
 
-If you don't want either key to be bound, either pass both `--disable` arguments, or set the environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`:
+If you don't want either key to be bound, run `atuin setup --only --no-ctrl-r --no-up-arrow`. By hand, either pass both `--disable` arguments, or set the environment variable `ATUIN_NOBIND` to any value before the call to `atuin init`. `ATUIN_NOBIND` also leaves `?` unbound, so Atuin binds no keys at all:
 
 ```
 ## Do not bind any keys
@@ -3674,6 +3701,8 @@ If you're migrating from `[keys]` to `[keymap]`, here is how the old flags map:
 
 Manage your sync account. This page is the command reference. For a walkthrough of registering and logging in, see [Setting up Sync](https://docs.atuin.sh/guide/sync/index.md).
 
+To sign this machine in to Atuin Cloud, run `atuin setup --sync cloud`. Setup opens your browser to sign in, and asks for your encryption key only when your account has data that this machine's key can't read. Use the commands on this page to sign in to a server of your own, and for unattended logins.
+
 `atuin register`, `atuin login`, and `atuin logout` are shorthand for the corresponding `atuin account` subcommands.
 
 ## Subcommands
@@ -3837,8 +3866,10 @@ Set a configuration value in your `config.toml`. The file's existing formatting 
 
 ```
 $ atuin config set search_mode fuzzy
-$ atuin config set daemon.enabled true
+$ atuin config set logs.level debug
 ```
+
+To turn on the daemon, run `atuin setup --only --daemon`, which sets `daemon.autostart` along with `daemon.enabled`. See [daemon](https://docs.atuin.sh/reference/daemon/#to-enable).
 
 #### Type detection
 
@@ -3873,38 +3904,6 @@ Setting a key that's currently a table will produce an error directing you to us
 $ atuin config set logs true
 Error: 'logs' is a table; use a dotted key like 'logs.key' to set a value within it
 ```
-
-### `atuin config enable <feature>`
-
-Turn on a feature along with the settings it depends on, then restart the daemon so it takes effect.
-
-```
-$ atuin config enable output-capture
-```
-
-| Feature          | What it sets                                                                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `daemon`         | `daemon.enabled`, `daemon.autostart`, and `search_mode = "daemon-fuzzy"`                                                                                             |
-| `output-capture` | `daemon.enabled`, `daemon.autostart`, `pty_proxy.enabled`, and `output.enabled`. See [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md) |
-
-If the daemon is already enabled, its `autostart` is left alone, since a service manager such as systemd or `launchd` may run it. With `autostart` off, Atuin asks you to restart the daemon rather than doing it itself. Open a new shell afterward.
-
-### `atuin config disable <feature>`
-
-Turn off a feature.
-
-```
-$ atuin config disable output-capture
-```
-
-| Feature          | What it sets                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `daemon`         | `daemon.enabled = false`, `daemon.autostart = false`, and `search_mode = "fuzzy"` if it was `"daemon-fuzzy"` |
-| `output-capture` | `output.enabled = false`. Leaves the daemon and search mode unchanged                                        |
-
-Disabling the daemon stops it if it was running.
-
-Disabling output capture restarts an enabled daemon with `autostart` on so it picks up the change. Open a new shell afterward.
 
 ### `atuin config check`
 
@@ -3943,7 +3942,13 @@ It may also work around issues with ZFS/SQLite performance.
 
 ## To enable
 
-Add the following to the bottom of your Atuin config file
+```
+atuin setup --only --daemon
+```
+
+Setup sets `enabled = true` and `autostart = true` in the `[daemon]` section of your config, and sets the search mode to [`daemon-fuzzy`](https://docs.atuin.sh/configuration/config/#search_mode). `atuin setup --only --no-daemon` turns the daemon off and stops it. On macOS, setup also removes the launchd agent that autostart installed.
+
+To enable the daemon by hand, add the following to the bottom of your Atuin config file:
 
 ```
 [daemon]
@@ -4029,7 +4034,22 @@ Prints the shell plugin for the given shell. Evaluating its output is what insta
 atuin init zsh
 ```
 
-See [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin) for the exact line to add for your shell — the syntax differs between shells.
+`atuin setup` adds the `atuin init` line to the startup files of zsh, bash, fish and PowerShell. To add it without the setup screen, pass `--only` and name the shells with `--shells`:
+
+```
+atuin setup --only --shell-history --shells zsh,bash,fish,powershell
+```
+
+| Shell      | Startup file that setup writes to                                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| zsh        | `$ZDOTDIR/.zshrc`, or `~/.zshrc` when `ZDOTDIR` isn't set                                                                        |
+| bash       | `~/.bashrc`                                                                                                                      |
+| fish       | `~/.config/fish/config.fish`, inside an `if status is-interactive` block                                                         |
+| PowerShell | `~/.config/powershell/Microsoft.PowerShell_profile.ps1`, or on Windows, the profiles of both PowerShell 7 and Windows PowerShell |
+
+Setup leaves a startup file that already runs `atuin init` as it is. `atuin setup --only --no-shell-history` takes out the lines that setup wrote.
+
+For Nushell and xonsh, add the line to your startup file yourself. See [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin) for the exact line to add for your shell — the syntax differs between shells.
 
 Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Supported platforms](https://docs.atuin.sh/support/index.md) for what each tier means.
 
@@ -4053,6 +4073,8 @@ For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 ```
 eval "$(atuin init zsh --disable-up-arrow)"
 ```
+
+`atuin setup --only --no-up-arrow` and `atuin setup --only --no-ctrl-r` turn the same keys off through the [`bind_up_arrow` and `bind_ctrl_r`](https://docs.atuin.sh/configuration/config/#bind_ctrl_r-and-bind_up_arrow) settings, and leave the `atuin init` line as it is.
 
 ## Binding `atuin resume`
 
@@ -4657,6 +4679,8 @@ Atuin can back up your history to a server, and use this to make sure multiple m
 
 Anyone can host a server (see the [self-hosting docs](https://docs.atuin.sh/self-hosting/server-setup/index.md)), and we host one at <https://api.atuin.sh>. This is the default server address, which can be changed in the [config](https://docs.atuin.sh/configuration/config/#sync_address). Again, we *can't* see your data, and don't want to.
 
+To sync with your own server, run `atuin setup --only --sync <URL>`, which sets that address.
+
 ## Sync frequency
 
 Syncing will happen automatically, unless configured otherwise. The sync frequency is configurable in [config](https://docs.atuin.sh/configuration/config/#sync_frequency)
@@ -4667,7 +4691,7 @@ You can manually trigger a sync with `atuin sync`
 
 ## Register
 
-Register for a sync account with
+`atuin setup --sync cloud` signs this machine in to Atuin Cloud through your browser. To register on a server of your own, or from a script, run:
 
 ```
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
@@ -4703,7 +4727,9 @@ Never share this with anyone!
 
 ## Login
 
-If you want to log in to a new machine, you will require your encryption key (`atuin key`).
+On a new machine, `atuin setup --sync cloud` signs in to Atuin Cloud through your browser. Setup asks for your encryption key only when your account has data that this machine's key can't read.
+
+To log in to a server of your own, you need your encryption key. `atuin key` prints it on a machine that's already logged in. For unattended logins, see [`atuin account login`](https://docs.atuin.sh/reference/account/#atuin-account-login).
 
 ```
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>
@@ -4899,9 +4925,27 @@ We can't guarantee that all updates will apply cleanly, and some may require som
 
 ## Client setup
 
-In order use a self hosted server with Atuin, you'll have to set up the `sync_address` in the config file at `~/.atuin/config.toml`. See the [config](https://docs.atuin.sh/configuration/config/#sync_address) page for more details on how to set the `sync_address`.
+To use a self hosted server with Atuin, point Atuin at your server:
+
+```
+atuin setup --only --sync https://your.server
+```
+
+Setup sets `sync_address` in the config file at `~/.atuin/config.toml`. If this machine is logged in to another server, setup logs it out. See the [config](https://docs.atuin.sh/configuration/config/#sync_address) page for more details on `sync_address`.
 
 Alternatively you can set the environment variable `ATUIN_SYNC_ADDRESS` to the correct host, for example `ATUIN_SYNC_ADDRESS=https://api.atuin.sh`.
+
+Then create an account on your server, or log in to the account you already have there:
+
+```
+# Create a new account
+atuin register -u <USERNAME> -e <EMAIL>
+
+# Log in to an existing account
+atuin login -u <USERNAME>
+```
+
+Both commands ask for your password. `atuin login` also asks for your encryption key, which `atuin key` prints on a machine that's already logged in. See [`atuin account`](https://docs.atuin.sh/reference/account/index.md) for every flag.
 
 # Docker
 
@@ -5515,9 +5559,9 @@ All the settings that control the behavior of [Atuin AI](https://docs.atuin.sh/a
 
 ### enabled
 
-Default: `false`
+Default: unset
 
-Whether the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether Atuin AI is on. While `enabled` is unset, the `?` key is bound, and the first press asks whether to turn Atuin AI on or unbind the key. Atuin saves the answer as `enabled`. With `enabled = true`, Atuin AI is on. With `enabled = false`, the `?` key is unbound from the next shell you open. To change it later, run `atuin config set ai.enabled true` or `atuin config set ai.enabled false`.
 
 ### model
 
@@ -5644,7 +5688,7 @@ Settings for capturing your AI coding agents' sessions as [threads](https://docs
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin setup --only --threads --daemon` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
 
 ### `capture_tools`
 
@@ -5951,7 +5995,7 @@ Atuin doesn't capture output by default. See [Capturing Command Output](https://
 Turn on output capture, which sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) and [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md) it needs:
 
 ```
-atuin config enable output-capture
+atuin setup --only --output-capture --daemon
 ```
 
 Then open a new terminal. To set it up by hand instead, see [Setting it up](https://docs.atuin.sh/guide/output-capture/#setting-it-up).
@@ -5989,10 +6033,10 @@ Captured output isn't limited to Atuin AI: external tools like Claude Code and C
 A thread is an AI coding agent's session as Atuin captured it. To turn capture on, run:
 
 ```
-atuin threads enable
+atuin setup --only --threads --daemon
 ```
 
-That's short for `atuin config enable threads`. It sets `capture = true` under `[threads]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while capture is off, and `atuin config disable threads` turns it off again.
+That sets `capture = true` under `[threads]`, and turns on the daemon that capture needs if it isn't on already. `atuin setup` without `--only` offers the same, and then offers to import the sessions your agents already have. `atuin resume` offers to turn capture on each time it runs while capture is off, and `atuin setup --only --no-threads` turns it off again.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro, opencode, Pi and Amp) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
@@ -6011,10 +6055,10 @@ That imports every session the agents have on this machine (or just one agent's,
 Amp keeps its threads on its servers, not on disk, so a plugin hands them to Atuin instead:
 
 ```
-atuin hook install amp
+atuin setup --only --agent-history
 ```
 
-This writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
+That installs the hooks of every agent that setup finds, Amp's among them. For Amp, it writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
 
 ```
 atuin threads import --harness amp
@@ -6037,7 +6081,7 @@ When you `/undo`, `/retry` or edit a turn, the turn it drops stays in the thread
 Atuin writes Hermes sessions through its Hermes plugin, so restoring a session recorded on another machine, forking one, or continuing another agent's session in Hermes needs it installed, as Amp's capture does:
 
 ```
-atuin hook install hermes
+atuin setup --only --agent-history
 ```
 
 That installs it into the profile a bare `hermes` uses, which is where Atuin writes. Only Hermes's gateway writes its database, so the plugin adds a `hermes atuin import` command that hands the gateway one new session. Hermes takes only new sessions that way, so Atuin never catches up or switches a Hermes copy: it forks instead. Titles are unique in a Hermes store, so a fork, or a restore whose title is taken, gets the next of its line, as `/branch` names one. For example, a fork of `Fix the flaky test` is `Fix the flaky test #2`.
@@ -6259,26 +6303,43 @@ The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/
 
 ## Quick start
 
-Connect all your configured agents with one command:
+Connect your agents with one command:
 
 ```
-atuin mcp install
+atuin setup --only --mcp
 ```
 
-Atuin checks for existing user config files for Claude Code, Codex, Grok Build (`grok`), Hermes Agent (`hermes`), Kiro CLI, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `grok`, `hermes`, `kiro`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
+This registers the MCP server with every coding agent that setup finds on this machine, such as Amp, Claude Code, Codex, GitHub Copilot CLI (`copilot`), Grok Build (`grok`), Hermes Agent (`hermes`), Kiro CLI, opencode, pi and oh-my-pi (`omp`). An agent counts when its program is on your `PATH` or it has sessions here. To connect only some, name them with `--agents`, as `atuin setup --only --mcp --agents claude-code`.
 
 Then restart the agents you connected. They can now search your shell history.
 
-To let it read and search what your commands printed, and your past [threads](https://docs.atuin.sh/ai/threads/index.md) with other agents, turn those on too (each also sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) they need):
+To let them read and search what your commands printed, and your past [threads](https://docs.atuin.sh/ai/threads/index.md) with other agents, turn those on too, along with the [daemon](https://docs.atuin.sh/reference/daemon/index.md) they need:
 
 ```
-atuin config enable output-capture
-atuin config enable threads
+atuin setup --only --output-capture --threads --daemon
 ```
 
 To check it worked, ask the agent *"What's the last command I ran that failed?"*
 
-`atuin mcp install` registers the server for your user, so it works in every project, and it uses the full path to `atuin`, so the agent doesn't need it on its `PATH`. Running it again is safe, and updates the path if `atuin` has moved.
+Setup registers the server for your user, so it works in every project, and it uses the full path to `atuin`, so the agent doesn't need it on its `PATH`. Running it again is safe, and updates the path if `atuin` has moved.
+
+To disconnect your agents, run `atuin setup --only --no-mcp`, or clear them under Connected agents on the setup screen. Setup takes the server out of Hermes with `hermes config unset mcp_servers.atuin`. If `hermes` isn't on your `PATH`, or is too old to have `config unset`, setup tells you to remove `mcp_servers.atuin` from Hermes's `config.yaml` yourself.
+
+### Hermes Agent
+
+Setup adds the server to the `config.yaml` of the Hermes home that `hermes` uses. By default, that's `~/.hermes/config.yaml`, or the active profile's. A running Hermes gateway picks the server up within about a minute, with no restart. Check it with `hermes mcp list`. Hermes names the tools `mcp__atuin__atuin_history` and so on.
+
+Each profile has its own `config.yaml`. To add the server to another profile, run setup with `HERMES_HOME` set to the profile's directory:
+
+```
+HERMES_HOME=~/.hermes/profiles/work atuin setup --only --mcp --agents hermes
+```
+
+Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. To make up for that, setup copies the `ATUIN_*` settings in your shell that say where Atuin's config and data are into the server's `env`: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`. It copies nothing else, so no secret reaches Hermes's config. Run `atuin setup --only --mcp` again after you change one. If your config's paths use other variables, such as `$HISTDIR`, add them to its `env` yourself, or it reads the default Atuin data:
+
+```
+hermes config set mcp_servers.atuin.env '{"ATUIN_CONFIG_DIR": "/path/to/config"}'
+```
 
 ## Setting it up by hand
 
@@ -6288,122 +6349,9 @@ The server runs over stdio: your agent starts it when it needs it, so there's no
 atuin mcp
 ```
 
+Setup registers this command with the coding agents listed in [Quick start](#quick-start). To connect one of them, name it with `--agents`. For example, `atuin setup --only --mcp --agents codex` connects Codex. Add the server to the editors and desktop apps below yourself.
+
 Editors and desktop apps often don't get your shell's `PATH`. If one can't find `atuin`, replace `atuin` below with the full path that `which atuin` prints.
-
-### Claude Code
-
-```
-claude mcp add --scope user atuin -- atuin mcp
-```
-
-Check it with `claude mcp list`, or `/mcp` inside Claude Code.
-
-### Codex
-
-```
-codex mcp add atuin -- atuin mcp
-```
-
-Or add it to `~/.codex/config.toml` yourself:
-
-```
-[mcp_servers.atuin]
-command = "atuin"
-args = ["mcp"]
-```
-
-### Grok Build
-
-```
-grok mcp add atuin -- atuin mcp
-```
-
-Or add it to `~/.grok/config.toml` yourself:
-
-```
-[mcp_servers.atuin]
-command = "atuin"
-args = ["mcp"]
-```
-
-### Hermes Agent
-
-```
-hermes config set mcp_servers.atuin '{"command": "atuin", "args": ["mcp"], "env": {}}'
-```
-
-This adds the server to the `config.yaml` of the Hermes home that `hermes` uses (by default `~/.hermes/config.yaml`, or the active profile's), keeping the rest of the file and its comments; `atuin mcp install hermes` runs the same command for that home, with the full path to `atuin`. `hermes mcp add` asks whether to turn on the server's tools, so it needs a terminal. A running Hermes gateway picks the server up within about a minute, with no restart. Check it with `hermes mcp list`. Each profile has its own `config.yaml`: to add the server to another, run the command with `hermes -p <name>`, or `atuin mcp install hermes` with `HERMES_HOME` set to the profile's directory (`~/.hermes/profiles/<name>`).
-
-Hermes doesn't run the server with your shell's `PATH`, so if it can't find `atuin`, use the full path from `which atuin`:
-
-```
-mcp_servers:
-  atuin:
-    command: /full/path/to/atuin
-    args: ["mcp"]
-    env: {}
-```
-
-Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. To make up for that, `atuin mcp install hermes` copies the `ATUIN_*` settings in your shell that say where Atuin's config and data are into the server's `env`: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`. It copies nothing else, so no secret reaches Hermes's config. Run it again after you change one. If your config's paths use other variables, such as `$HISTDIR`, or you set the server up by hand, add them to its `env` yourself, or it reads the default Atuin data:
-
-```
-hermes config set mcp_servers.atuin.env '{"ATUIN_CONFIG_DIR": "/path/to/config"}'
-```
-
-Hermes names the tools `mcp__atuin__atuin_history` and so on.
-
-### Kiro CLI
-
-```
-kiro-cli mcp add --name atuin --command atuin --args mcp --scope global
-```
-
-This adds it to `~/.kiro/settings/mcp.json` (under `$KIRO_HOME` if you have set it), which every session loads; `atuin mcp install kiro` writes the same file without going through `kiro-cli`. Check it with `kiro-cli mcp list`. Kiro doesn't run the server with your shell's `PATH`, so if it can't find `atuin`, use the full path from `which atuin`:
-
-```
-{
-  "mcpServers": {
-    "atuin": {
-      "command": "/full/path/to/atuin",
-      "args": ["mcp"],
-      "env": {}
-    }
-  }
-}
-```
-
-### opencode
-
-Add it to `~/.config/opencode/opencode.json`:
-
-```
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "atuin": {
-      "type": "local",
-      "command": ["atuin", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
-
-Check it with `opencode mcp list`.
-
-opencode 2
-
-Use the config above on opencode 2 as well. opencode 2.0's own `opencode mcp add` writes the server under `mcp.servers`, which opencode 2.0 doesn't load.
-
-### pi
-
-pi 1.0 and later:
-
-```
-pi mcp add atuin -- atuin mcp
-```
-
-This adds it to `~/.pi/agent/mcp.json`. Check it with `pi mcp list`.
 
 ### Cursor
 
@@ -6515,7 +6463,7 @@ Like `atuin_output`, this needs output capture set up and the daemon running.
 
 Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro CLI, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
 
-These need thread capture turned on with `atuin config enable threads`.
+These need thread capture, which `atuin setup --only --threads --daemon` turns on.
 
 Session scope
 
@@ -6668,9 +6616,15 @@ See [Keeping Secrets Out of Atuin](https://docs.atuin.sh/guide/excluding-command
 
 ## How do I remove the default up arrow binding?
 
-Open your shell config file, find the line containing `atuin init`.
+Run:
 
-Add `--disable-up-arrow`, e.g.:
+```
+atuin setup --only --no-up-arrow
+```
+
+Setup writes `bind_up_arrow = false` to your config, and new shells pick it up.
+
+You can also add `--disable-up-arrow` to the line containing `atuin init` in your shell config file. For example:
 
 ```
 eval "$(atuin init zsh --disable-up-arrow)"
@@ -6732,10 +6686,10 @@ This compiles out the update checker, the sync commands, and AI.
 
 If you have a backup of your data directory (`~/.atuin/data`, or `~/.local/share/atuin` for older installs), you can import it by:
 
-1. disabling Atuin by commenting out the shell integration; for example, for bash it's `eval "$(atuin init bash)"`
+1. disabling Atuin with `atuin setup --only --no-shell-history`
 1. copying the backup to `~/.atuin/data`
-1. reenabling Atuin
-1. setting up sync!
+1. reenabling Atuin with `atuin setup --only --shell-history`
+1. setting up sync with `atuin setup --sync cloud`!
 
 ## Alternative projects
 
@@ -6754,21 +6708,31 @@ Sorry to see you go!
 
 If you used the Atuin installer, you can totally delete it by following these steps:
 
+1. Before you delete anything, take Atuin out of your shells, the daemon, and your agents:
+
+```
+atuin setup --only --no-shell-history --no-daemon --no-agent-history --no-mcp --no-threads
+```
+
+Setup removes the `atuin init` lines that it wrote to your shell's config files, such as `.zshrc`, and lists any other lines that load Atuin. Setup also stops the daemon, removes the daemon's launchd agent on macOS, and takes Atuin's hooks and MCP server out of your agents.
+
+Setup takes Atuin's MCP server and plugin out of Hermes through the `hermes` command. If `hermes` isn't on your `PATH`, remove the `atuin` entry under `mcp_servers` in Hermes's `config.yaml` yourself. By default, Hermes keeps that file in `~/.hermes`.
+
 1. Delete the `~/.atuin` directory (and `$ATUIN_HOME`, if set).
 1. Delete the `~/.config/atuin` and `~/.local/share/atuin` directories if they exist. Older versions of Atuin used to store data there.
-1. On macOS, remove the daemon's launchd agent:
+1. On macOS, setup's `--no-daemon` removes the daemon's launchd agent. If setup couldn't remove it, remove it yourself:
 
 ```
 launchctl bootout gui/$(id -u)/sh.atuin.daemon
 rm -f ~/Library/LaunchAgents/sh.atuin.daemon.plist
 ```
 
-1. Remove the shell integration:
-1. On Bash, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.profile, ~/.bashrc, and ~/.bash_login. The installer may have installed bash-preexec; if you wish to remove it too, delete ~/.bash-preexec.sh and remove the line referencing it from ~/.bashrc.
-1. On Zsh, remove the lines referencing `atuin init` and `~/.atuin/bin/env` from ~/.zshrc and ~/.zshenv.
-1. On Fish, remove the line referencing `atuin init` from ~/.config/fish/config.fish and delete ~/.config/fish/conf.d/atuin.env.fish.
+1. Remove the rest of the shell integration, which the installer wrote:
+1. On Bash, remove the lines referencing `~/.atuin/bin/env` from ~/.profile, ~/.bashrc, and ~/.bash_login, and any line referencing `atuin init` that setup listed. The installer may have installed bash-preexec; if you wish to remove it too, delete ~/.bash-preexec.sh and remove the line referencing it from ~/.bashrc.
+1. On Zsh, remove the lines referencing `~/.atuin/bin/env` from ~/.zshrc and ~/.zshenv, and any line referencing `atuin init` that setup listed.
+1. On Fish, delete ~/.config/fish/conf.d/atuin.env.fish, and remove any line referencing `atuin init` that setup listed from ~/.config/fish/config.fish.
 
-Otherwise, uninstalling Atuin depends on your system, and how you installed it.
+Otherwise, uninstalling Atuin depends on your system, and how you installed it. Run the `atuin setup` command from step 1 first, then uninstall the package.
 
 For example, on macOS, you'd want to run
 

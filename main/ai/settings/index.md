@@ -4,9 +4,9 @@ All the settings that control the behavior of [Atuin AI](https://docs.atuin.sh/a
 
 ### enabled
 
-Default: `false`
+Default: unset
 
-Whether the AI features are enabled. When set to `false`, the question mark keybinding will output a message with instructions to run `atuin setup` to enable the feature.
+Whether Atuin AI is on. While `enabled` is unset, the `?` key is bound, and the first press asks whether to turn Atuin AI on or unbind the key. Atuin saves the answer as `enabled`. With `enabled = true`, Atuin AI is on. With `enabled = false`, the `?` key is unbound from the next shell you open. To change it later, run `atuin config set ai.enabled true` or `atuin config set ai.enabled false`.
 
 ### model
 
@@ -133,7 +133,7 @@ Settings for capturing your AI coding agents' sessions as [threads](https://docs
 
 Default: `false`
 
-Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin config enable threads` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
+Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin setup --only --threads --daemon` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
 
 ### `capture_tools`
 

@@ -4,6 +4,8 @@ Atuin can back up your history to a server, and use this to make sure multiple m
 
 Anyone can host a server (see the [self-hosting docs](https://docs.atuin.sh/self-hosting/server-setup/index.md)), and we host one at <https://api.atuin.sh>. This is the default server address, which can be changed in the [config](https://docs.atuin.sh/configuration/config/#sync_address). Again, we *can't* see your data, and don't want to.
 
+To sync with your own server, run `atuin setup --only --sync <URL>`, which sets that address.
+
 ## Sync frequency
 
 Syncing will happen automatically, unless configured otherwise. The sync frequency is configurable in [config](https://docs.atuin.sh/configuration/config/#sync_frequency)
@@ -14,7 +16,7 @@ You can manually trigger a sync with `atuin sync`
 
 ## Register
 
-Register for a sync account with
+`atuin setup --sync cloud` signs this machine in to Atuin Cloud through your browser. To register on a server of your own, or from a script, run:
 
 ```
 atuin register -u <USERNAME> -e <EMAIL> -p <PASSWORD>
@@ -50,7 +52,9 @@ Never share this with anyone!
 
 ## Login
 
-If you want to log in to a new machine, you will require your encryption key (`atuin key`).
+On a new machine, `atuin setup --sync cloud` signs in to Atuin Cloud through your browser. Setup asks for your encryption key only when your account has data that this machine's key can't read.
+
+To log in to a server of your own, you need your encryption key. `atuin key` prints it on a machine that's already logged in. For unattended logins, see [`atuin account login`](https://docs.atuin.sh/reference/account/#atuin-account-login).
 
 ```
 atuin login -u <USERNAME> -p <PASSWORD> -k <KEY>

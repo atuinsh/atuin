@@ -30,7 +30,7 @@ The search mode decides how Atuin interprets your query text. Cycle through the 
 | fulltext        | Commands that contain your query anywhere                                                                                                                                   |
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](https://docs.atuin.sh/reference/daemon/index.md) in-memory index, with tunable scoring                                         |
 
-To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode).
+To change the default, set [`search_mode`](https://docs.atuin.sh/configuration/config/#search_mode). `atuin setup --only --daemon` turns on the daemon and sets `search_mode` to `daemon-fuzzy`. If the daemon is on already, set `search_mode` yourself.
 
 ## Context switch
 

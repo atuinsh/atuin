@@ -12,17 +12,10 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
 Restart your shell, then press `Ctrl`+`R` or the `Up` arrow to search. Type a query, press enter to run the selected command, or tab to put it on your command line for editing.
 
-To bring your existing history with you:
+The install script runs `atuin setup`, which imports your existing history and offers to sync it across machines. Sync is optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md). If you skipped sync, sign in later with:
 
 ```
-atuin import auto
-```
-
-To sync it across machines — optional, and covered in [Setting up sync](https://docs.atuin.sh/guide/sync/index.md):
-
-```
-atuin register -u <USERNAME> -e <EMAIL>
-atuin sync
+atuin setup --sync cloud
 ```
 
 If you'd rather take it one step at a time, [Getting Started](https://docs.atuin.sh/guide/getting-started/index.md) walks through the same thing with more explanation. From there, [Basic usage](https://docs.atuin.sh/guide/basic-usage/index.md) covers driving the TUI, and [Config](https://docs.atuin.sh/configuration/config/index.md) documents every setting.

@@ -3,10 +3,10 @@
 A thread is an AI coding agent's session as Atuin captured it. To turn capture on, run:
 
 ```
-atuin threads enable
+atuin setup --only --threads --daemon
 ```
 
-That's short for `atuin config enable threads`. It sets `capture = true` under `[threads]`, turns on the daemon if it isn't already, and offers to import the sessions your agents already have. `atuin resume` offers the same each time it runs while capture is off, and `atuin config disable threads` turns it off again.
+That sets `capture = true` under `[threads]`, and turns on the daemon that capture needs if it isn't on already. `atuin setup` without `--only` offers the same, and then offers to import the sessions your agents already have. `atuin resume` offers to turn capture on each time it runs while capture is off, and `atuin setup --only --no-threads` turns it off again.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro, opencode, Pi and Amp) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
@@ -25,10 +25,10 @@ That imports every session the agents have on this machine (or just one agent's,
 Amp keeps its threads on its servers, not on disk, so a plugin hands them to Atuin instead:
 
 ```
-atuin hook install amp
+atuin setup --only --agent-history
 ```
 
-This writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
+That installs the hooks of every agent that setup finds, Amp's among them. For Amp, it writes Atuin's plugin to `~/.config/amp/plugins/atuin.ts`, or to `$XDG_CONFIG_HOME/amp/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`. Then restart Amp. At the end of each turn, the plugin pushes the turn's messages with `atuin threads push`. Only turns taken with the plugin installed, while the daemon is running, are captured. To bring in the rest (threads from before the plugin, or turns it missed), import them from Amp's servers:
 
 ```
 atuin threads import --harness amp
@@ -51,7 +51,7 @@ When you `/undo`, `/retry` or edit a turn, the turn it drops stays in the thread
 Atuin writes Hermes sessions through its Hermes plugin, so restoring a session recorded on another machine, forking one, or continuing another agent's session in Hermes needs it installed, as Amp's capture does:
 
 ```
-atuin hook install hermes
+atuin setup --only --agent-history
 ```
 
 That installs it into the profile a bare `hermes` uses, which is where Atuin writes. Only Hermes's gateway writes its database, so the plugin adds a `hermes atuin import` command that hands the gateway one new session. Hermes takes only new sessions that way, so Atuin never catches up or switches a Hermes copy: it forks instead. Titles are unique in a Hermes store, so a fork, or a restore whose title is taken, gets the next of its line, as `/branch` names one. For example, a fork of `Fix the flaky test` is `Fix the flaky test #2`.

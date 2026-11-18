@@ -7,26 +7,12 @@ Output capture is off by default. It needs [pty-proxy](https://docs.atuin.sh/ref
 ## Setting it up
 
 ```
-atuin config enable output-capture
+atuin setup --only --output-capture --daemon
 ```
 
-This turns on the daemon (with `autostart`) if it isn't on already, enables pty-proxy and `[output]`, and restarts the daemon. Open a new shell afterward.
+This turns on the daemon (with `autostart`) if it isn't on already, enables pty-proxy and `[output]`, and restarts the daemon. Setup writes these as `daemon.enabled`, `daemon.autostart`, `pty_proxy.enabled` and `output.enabled` in your config file. Output capture also needs Atuin to capture your shell history, which `--shell-history` turns on. Open a new shell afterward.
 
-To do the same by hand, add to your config file:
-
-```
-[daemon]
-enabled = true
-autostart = true
-
-[pty_proxy]
-enabled = true
-
-[output]
-enabled = true
-```
-
-If you manage the daemon yourself (systemd, `launchd`), restart it after changing `[output]`. See [`[pty_proxy]`](https://docs.atuin.sh/reference/pty-proxy/#initialization) for other ways to start pty-proxy.
+If you manage the daemon yourself (systemd, `launchd`), restart it after running setup. See [`[pty_proxy]`](https://docs.atuin.sh/reference/pty-proxy/#initialization) for other ways to start pty-proxy.
 
 ## Reading captured output
 
@@ -74,7 +60,7 @@ Output is stored on disk in the `output-capture` directory of Atuin's data direc
 
 - **Disk budget.** Output may use up to [`max_disk_usage`](https://docs.atuin.sh/configuration/config/#max_disk_usage), 10% of the disk by default. The daemon checks about once a minute; past 95% of the budget, it deletes the oldest output until usage is back to 90%.
 - **Deleting history deletes output.** Deleting an entry from the search UI, with `atuin search --delete`, `atuin history prune`, or `atuin history dedup` also deletes its output.
-- **Turning it off.** Set `[output] enabled = false`. The daemon stops storing output right away; open a new shell so pty-proxy stops capturing it too. Output already stored stays on disk; to remove it, stop the daemon and delete the `output-capture` directory.
+- **Turning it off.** Run `atuin setup --only --no-output-capture`, which sets `output.enabled = false`. The daemon stops storing output right away; open a new shell so pty-proxy stops capturing it too. Output already stored stays on disk; to remove it, stop the daemon and delete the `output-capture` directory.
 
 ## When changes take effect
 

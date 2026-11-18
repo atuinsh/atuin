@@ -6,7 +6,7 @@ To keep specific commands *out* of your history on purpose, see [Keeping Secrets
 
 ## How Atuin's Shell Integration Works
 
-When you add `eval "$(atuin init <shell>)"` to your shell configuration, Atuin installs hooks that run at specific points in your shell's command lifecycle:
+`atuin setup` adds a line that runs `atuin init <shell>` to your shell configuration. For example, for zsh, setup adds `eval "$(atuin init zsh)"` to your `.zshrc`. When that line runs at shell startup, Atuin installs hooks that run at specific points in your shell's command lifecycle:
 
 1. **Preexec hook**: Runs *before* each command executes. Atuin records the command text, timestamp, and working directory.
 1. **Precmd hook**: Runs *after* each command completes. Atuin records the exit code and duration.
@@ -146,4 +146,4 @@ Fish uses its event system (`fish_preexec` and `fish_postexec` events). It also 
 
 ### Nushell, xonsh, and PowerShell
 
-These shells are supported too. For how to load the plugin in each, see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin).
+These shells are supported too. `atuin setup` adds Atuin to your PowerShell profile. For how to load the plugin in Nushell and xonsh, see [installation](https://docs.atuin.sh/guide/installation/#installing-the-shell-plugin).

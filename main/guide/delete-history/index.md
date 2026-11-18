@@ -81,14 +81,13 @@ The cleaner approach is to delete your sync account and start over:
 # Delete your sync account and all server-side data
 atuin account delete
 
-# Register a new account
-atuin register
-
-# Import your shell history fresh (optional)
-atuin import auto
+# Sign in to Atuin Cloud with a new account
+atuin setup --sync cloud
 ```
 
-This leaves no leftover records on the server. Your other machines can then register with the new account and start fresh too.
+Setup opens your browser, where you can create the new account. If Atuin has no history on this machine, setup also imports your shell history fresh. On a self-hosted server, run `atuin register` to create the new account instead.
+
+This leaves no leftover records on the server. Your other machines can then sign in to the new account with `atuin setup --sync cloud` and start fresh too.
 
 Tip
 
@@ -160,13 +159,13 @@ This removes your account and all synchronized history from the server. **Local 
 
 ## Summary
 
-| Goal                                     | Command                                             |
-| ---------------------------------------- | --------------------------------------------------- |
-| Delete one entry (TUI)                   | `Ctrl`+`O` then `Ctrl`+`D`, or `Ctrl`+`A` then `D`  |
-| Delete entries by query                  | `atuin search --delete <query>`                     |
-| Delete all history                       | `atuin search --delete-it-all`                      |
-| Start fresh (with sync)                  | `atuin account delete` then re-register             |
-| Remove filtered entries                  | `atuin history prune`                               |
-| Remove undecryptable local store records | `atuin store verify` then `atuin store purge`       |
-| Remove duplicates                        | `atuin history dedup --before <date> --dupkeep <n>` |
-| Delete sync account                      | `atuin account delete`                              |
+| Goal                                     | Command                                                |
+| ---------------------------------------- | ------------------------------------------------------ |
+| Delete one entry (TUI)                   | `Ctrl`+`O` then `Ctrl`+`D`, or `Ctrl`+`A` then `D`     |
+| Delete entries by query                  | `atuin search --delete <query>`                        |
+| Delete all history                       | `atuin search --delete-it-all`                         |
+| Start fresh (with sync)                  | `atuin account delete` then `atuin setup --sync cloud` |
+| Remove filtered entries                  | `atuin history prune`                                  |
+| Remove undecryptable local store records | `atuin store verify` then `atuin store purge`          |
+| Remove duplicates                        | `atuin history dedup --before <date> --dupkeep <n>`    |
+| Delete sync account                      | `atuin account delete`                                 |

@@ -31,7 +31,13 @@ The default configuration file is located at `~/.atuin/config.toml`.
 
 ### Keybindings
 
-We've got a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). It covers a whole bunch of options, including disabling the up arrow behavior if you don't like it.
+If you don't like the up arrow opening Atuin, turn that binding off:
+
+```
+atuin setup --only --no-up-arrow
+```
+
+We've got a [full page dedicated to keybinding adjustments](https://docs.atuin.sh/configuration/key-binding/index.md). It covers a whole bunch of other options.
 
 ### Enter to run
 

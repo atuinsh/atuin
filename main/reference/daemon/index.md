@@ -14,7 +14,13 @@ It may also work around issues with ZFS/SQLite performance.
 
 ## To enable
 
-Add the following to the bottom of your Atuin config file
+```
+atuin setup --only --daemon
+```
+
+Setup sets `enabled = true` and `autostart = true` in the `[daemon]` section of your config, and sets the search mode to [`daemon-fuzzy`](https://docs.atuin.sh/configuration/config/#search_mode). `atuin setup --only --no-daemon` turns the daemon off and stops it. On macOS, setup also removes the launchd agent that autostart installed.
+
+To enable the daemon by hand, add the following to the bottom of your Atuin config file:
 
 ```
 [daemon]

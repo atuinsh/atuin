@@ -126,6 +126,8 @@ Default: `https://api.atuin.sh`
 
 The address of the server to sync with!
 
+`atuin setup --only --sync <URL>` sets this to the address of your own server. For example, run `atuin setup --only --sync https://atuin.example.com`. Then run `atuin register` to create an account on that server, or `atuin login` to sign in to an account you already have there.
+
 ```
 sync_address = "https://api.atuin.sh"
 ```
@@ -160,7 +162,9 @@ daemon-fuzzy search mode
 
 The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
 
-To use the new `"daemon-fuzzy"` mode, enable the daemon, set autostart to true (unless you manage its lifecycle yourself), and set the search mode:
+To use the new `"daemon-fuzzy"` mode, run `atuin setup --only --daemon`. Setup turns on the daemon with autostart, and sets the search mode to `"daemon-fuzzy"`.
+
+To do it by hand, or if the daemon is on already, enable the daemon and set the search mode. Set autostart to true unless you manage the daemon's lifecycle yourself:
 
 ```
 search_mode = "daemon-fuzzy"
@@ -215,6 +219,8 @@ filter_mode = "host"
 Default: `true`
 
 Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+
+`atuin setup --only --no-ctrl-r` sets `bind_ctrl_r = false`, and `atuin setup --only --no-up-arrow` sets `bind_up_arrow = false`. `--ctrl-r` and `--up-arrow` set them back to `true`.
 
 ```
 bind_up_arrow = false
@@ -932,9 +938,9 @@ height = "60%"
 
 Default: `false`
 
-Enable the background daemon
+Enable the background daemon.
 
-Add the new section to the bottom of your config file
+`atuin setup --only --daemon` turns this on, along with [`autostart`](#autostart) and the `daemon-fuzzy` [search mode](#search_mode). To turn it on by hand, add the new section to the bottom of your config file:
 
 ```
 [daemon]
@@ -945,11 +951,11 @@ enabled = true
 
 Default: `false`
 
-Automatically start and manage the daemon when needed. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart. On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR` set, Atuin starts the daemon itself instead.
+Automatically start and manage the daemon when needed. `atuin setup --only --daemon` turns this on along with the daemon. This isn't compatible with `systemd_socket = true`. If a legacy experimental daemon is already running, restart it manually once before using autostart. On macOS, when you're logged in graphically, Atuin runs the daemon as a launchd agent at `~/Library/LaunchAgents/sh.atuin.daemon.plist`, and macOS tells you it added a background item the first time. With `ATUIN_HOME` or `ATUIN_CONFIG_DIR` set, Atuin starts the daemon itself instead.
 
 The agent is listed as `atuin` in System Settings, under General > Login Items. Switched off there, Atuin leaves it off and works without the daemon until you switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's logs directory says why. The agent gets the environment variables your config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`. It also gets the ones that say where your coding agents keep their sessions, such as `CODEX_HOME` or `HERMES_HOME`. It keeps the values they had when Atuin installed it, so after you add or change one, run `atuin daemon restart`.
 
-`atuin daemon stop` stops the agent, but with `autostart` on, the next command that needs the daemon starts it again. `atuin config disable daemon` turns the daemon off and removes the agent.
+`atuin daemon stop` stops the agent, but with `autostart` on, the next command that needs the daemon starts it again. `atuin setup --only --no-daemon` turns the daemon off and removes the agent.
 
 ```
 autostart = false
@@ -1029,7 +1035,7 @@ command_filter = []
 
 Default: `false`
 
-Capture and store the output of the commands you run. When `false`, nothing is captured and the other keys in this section are ignored. Turning it off stops the daemon storing output right away; turning it on takes a daemon restart and a new shell, or run `atuin config enable output-capture`, which also sets up the daemon and pty-proxy.
+Capture and store the output of the commands you run. When `false`, nothing is captured and the other keys in this section are ignored. Turning it off stops the daemon storing output right away; turning it on takes a daemon restart and a new shell, or run `atuin setup --only --output-capture --daemon`, which also sets up the daemon and pty-proxy.
 
 ```
 [output]

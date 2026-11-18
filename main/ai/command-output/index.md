@@ -9,7 +9,7 @@ Atuin doesn't capture output by default. See [Capturing Command Output](https://
 Turn on output capture, which sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) and [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md) it needs:
 
 ```
-atuin config enable output-capture
+atuin setup --only --output-capture --daemon
 ```
 
 Then open a new terminal. To set it up by hand instead, see [Setting it up](https://docs.atuin.sh/guide/output-capture/#setting-it-up).
