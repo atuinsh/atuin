@@ -1,5 +1,5 @@
 use atuin_common::utils::normalize_optional_string;
-use atuin_domain::record::CmdOrigin;
+use atuin_domain::record::{CmdOrigin, HostId};
 use typed_builder::TypedBuilder;
 
 use super::{AuthorKind, History, HistoryId, is_known_agent};
@@ -135,6 +135,8 @@ pub struct HistoryFromDb {
     deleted_at: Option<jiff::Timestamp>,
     shell: Option<String>,
     author_kind: Option<AuthorKind>,
+    #[builder(default)]
+    host_id: Option<HostId>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -155,6 +157,7 @@ impl From<HistoryFromDb> for History {
             deleted_at: from_db.deleted_at,
             shell: from_db.shell,
             author_kind: from_db.author_kind,
+            host_id: from_db.host_id,
         }
     }
 }

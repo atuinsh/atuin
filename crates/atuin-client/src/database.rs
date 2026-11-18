@@ -9,7 +9,7 @@ use atuin_common::filter::{self, OrFilter};
 use atuin_common::path::DisplayRichExt;
 use atuin_common::time::{TimeZoneSpec, TimestampExt};
 use atuin_common::{db, utils};
-use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
+use atuin_domain::record::{CmdOrigin, HostId, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
 use futures::stream::BoxStream;
 use futures::{TryStreamExt as _, future};
@@ -293,7 +293,8 @@ impl SearchMode {
 }
 
 pub const HISTORY_COLUMNS: &str = "id, timestamp, duration, exit, command, cwd, session, \
-                                   hostname, deleted_at, author, intent, shell, author_kind";
+                                   hostname, deleted_at, author, intent, shell, author_kind, \
+                                   host_id";
 
 /// The live entries that a delete removed.
 ///
@@ -390,6 +391,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
         let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
         let author_kind =
             author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
+        let host_id: Option<HostId> = row.try_get("host_id").ok().flatten();
 
         Ok(Self::from_db()
             .id(row.try_get("id")?)
@@ -405,6 +407,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             .deleted_at(deleted_at.map(Timestamp::from_unix_nanos_i64))
             .shell(shell)
             .author_kind(author_kind)
+            .host_id(host_id)
             .build()
             .into())
     }
@@ -500,8 +503,8 @@ impl Sqlite {
         db::query(
             "insert or ignore into history(
                 id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                deleted_at, shell, author_kind
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                deleted_at, shell, author_kind, host_id
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )
         .bind(h.id)
         .bind(i64::conv(h.timestamp.as_nanosecond()))
@@ -516,6 +519,7 @@ impl Sqlite {
         .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+        .bind(h.host_id)
         .execute(&mut **tx)
         .await?;
 
@@ -541,7 +545,7 @@ impl Sqlite {
 
         debug!("saving history to sqlite");
 
-        const HISTORY_INSERT_COLUMNS: usize = 13;
+        const HISTORY_INSERT_COLUMNS: usize = 14;
         let rows_per_insert =
             (self.sqlite.info().await.variable_number_limit() / HISTORY_INSERT_COLUMNS).max(1);
 
@@ -551,7 +555,7 @@ impl Sqlite {
             let mut builder = sqlx::QueryBuilder::new(
                 "insert or ignore into history(
                     id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                    deleted_at, shell, author_kind
+                    deleted_at, shell, author_kind, host_id
                 ) ",
             );
 
@@ -568,7 +572,8 @@ impl Sqlite {
                     .push_bind(h.intent.as_deref())
                     .push_bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
                     .push_bind(h.shell.as_deref())
-                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
+                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+                    .push_bind(h.host_id);
             });
 
             builder.build().execute(&mut *tx).await?;
@@ -657,7 +662,8 @@ impl Sqlite {
         db::query(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
-             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
+             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12, \
+             host_id = coalesce(?13, host_id)
                 where id = ?1",
         )
         .bind(h.id)
@@ -672,8 +678,27 @@ impl Sqlite {
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+        .bind(h.host_id)
         .execute(self.sqlite.pool())
         .await?;
+
+        Ok(())
+    }
+
+    /// Sets the host ID of each entry whose host ID isn't known yet.
+    ///
+    /// Entries that already have a host ID keep it, and IDs that match no entry are skipped.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn set_host_ids(&self, host_ids: &[(HistoryId, HostId)]) -> Result<()> {
+        let mut tx = self.sqlite.pool().begin().await?;
+        for (id, host_id) in host_ids {
+            db::query("update history set host_id = ?1 where id = ?2 and host_id is null")
+                .bind(host_id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
 
         Ok(())
     }
@@ -3295,5 +3320,26 @@ mod test {
         let err = new_history_item(&db, "pwd").await.expect_err("read-only history took a write");
         let code = err.as_database_error().and_then(|e| e.code()).expect("a database error");
         assert_eq!(code.parse::<u32>().unwrap() & 0xff, SQLITE_READONLY, "{err}");
+    }
+
+    /// `set_host_ids` fills only unknown host IDs, and `update` never clears a known one.
+    #[rstest]
+    #[tokio::test]
+    async fn host_ids_are_kept_once_known(#[future(awt)] empty_db: Sqlite) {
+        let (first, second) =
+            (HostId(atuin_common::utils::uuid_v7()), HostId(atuin_common::utils::uuid_v7()));
+        let mut known = save_history_item(&empty_db, "known").await;
+        known.host_id = Some(first);
+        empty_db.update(&known).await.unwrap();
+        let unknown = save_history_item(&empty_db, "unknown").await;
+
+        empty_db.set_host_ids(&[(known.id, second), (unknown.id, second)]).await.unwrap();
+        let mut cleared = known.clone();
+        cleared.host_id = None;
+        empty_db.update(&cleared).await.unwrap();
+
+        let host_of = async |id| empty_db.load(id).await.unwrap().unwrap().host_id;
+        assert_eq!(host_of(known.id).await, Some(first));
+        assert_eq!(host_of(unknown.id).await, Some(second));
     }
 }

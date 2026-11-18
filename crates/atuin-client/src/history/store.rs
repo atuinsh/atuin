@@ -653,6 +653,7 @@ mod tests {
             deleted_at: None,
             shell: None,
             author_kind: None,
+            host_id: None,
         }
     }
 
@@ -701,6 +702,7 @@ mod tests {
             deleted_at: None,
             shell: Some("bash".to_owned()),
             author_kind: None,
+            host_id: None,
         }),
         vec![
             204, 0, 196, 154, 205, 0, 2, 157, 217, 32, 48, 49, 56, 99, 100, 52, 102, 101, 56, 49,
