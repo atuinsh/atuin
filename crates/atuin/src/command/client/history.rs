@@ -482,6 +482,7 @@ async fn handle_end(
         None => i64::try_from((Timestamp::now() - h.timestamp).as_nanos())
             .context("command took over 292 years")?,
     };
+    h.host_id = Some(history_store.host_id);
 
     db.update(&h).await?;
     history_store.push(h).await?;

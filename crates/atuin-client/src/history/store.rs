@@ -23,6 +23,19 @@ use crate::database::{DeletedLiveRows, Sqlite, query_context};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
+const HOST_ID_CLOCK_SKEW_NANOS: i128 = 5 * 60 * 1_000_000_000;
+const HOST_ID_MAX_DELAY_NANOS: i128 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Infers a command's host ID from a record created close to the command's end.
+///
+/// A small negative delay allows for clock changes. The record's host is the install that
+/// wrote it, so a recent import can still be attributed to the wrong install.
+fn trusted_host_id(host: HostId, record_created: u64, history: &History) -> Option<HostId> {
+    let ended = history.timestamp.as_nanosecond() + i128::from(history.duration.max(0));
+    let delay = i128::from(record_created) - ended;
+    (-HOST_ID_CLOCK_SKEW_NANOS..HOST_ID_MAX_DELAY_NANOS).contains(&delay).then_some(host)
+}
+
 #[derive(Debug, Clone)]
 pub struct HistoryStore {
     pub store: SqliteStore,
@@ -43,6 +56,18 @@ pub enum HistoryRecord {
 }
 
 impl HistoryRecord {
+    /// Sets a created entry's host ID from the host and creation time of the record that holds it.
+    /// Delete records are returned unchanged.
+    fn with_record_host(self, host: HostId, record_created: u64) -> Self {
+        match self {
+            Self::Create(mut history) => {
+                history.host_id = trusted_host_id(host, record_created, &history);
+                Self::Create(history)
+            }
+            Self::Delete(id) => Self::Delete(id),
+        }
+    }
+
     /// Serialize a history record, returning DecryptedData
     /// The record will be of a certain type
     /// We map those like so:
@@ -377,6 +402,7 @@ impl HistoryStore {
 
         for record in records {
             let id = record.id;
+            let (host, created) = (record.host.id, record.timestamp);
             let version = record.version.clone();
 
             // A record we can't decrypt or decode must not block the rest of the store -
@@ -390,7 +416,7 @@ impl HistoryStore {
                 };
 
             match hist {
-                Ok(hist) => ret.push(hist),
+                Ok(hist) => ret.push(hist.with_record_host(host, created)),
                 Err(e) => {
                     warn!("failed to decode history record {}, skipping: {e}", id.0);
                     skipped += 1;
@@ -511,6 +537,7 @@ impl HistoryStore {
             return None;
         }
 
+        let (host, created) = (record.host.id, record.timestamp);
         let version = record.version.clone();
 
         // Skip records we can't decrypt or decode, rather than failing the entire build.
@@ -524,7 +551,7 @@ impl HistoryStore {
         };
 
         match record {
-            Ok(record) => Some(record),
+            Ok(record) => Some(record.with_record_host(host, created)),
             Err(e) => {
                 warn!("failed to decode history record {}, skipping: {e}", id.0);
                 None
@@ -655,6 +682,48 @@ mod tests {
             author_kind: None,
             host_id: None,
         }
+    }
+
+    const SECOND: i64 = 1_000_000_000;
+    const DAY: i64 = 24 * 60 * 60 * SECOND;
+
+    #[rstest]
+    #[case::live_push(SECOND, SECOND, true)]
+    #[case::clock_behind(SECOND, -SECOND, true)]
+    #[case::at_skew_limit(SECOND, -300 * SECOND, true)]
+    #[case::outside_skew_limit(SECOND, -300 * SECOND - 1, false)]
+    #[case::long_command(3 * DAY, 30 * SECOND, true)]
+    #[case::unfinished(-1, SECOND, true)]
+    #[case::recent_import(0, DAY / 2, true)]
+    #[case::just_inside(0, DAY - 1, true)]
+    #[case::at_window(0, DAY, false)]
+    #[case::migrated_later(SECOND, 90 * DAY, false)]
+    fn record_host_is_trusted_soon_after_the_command(
+        mut sample_history: History,
+        #[case] duration: i64,
+        #[case] created_after_end: i64,
+        #[case] trusted: bool,
+    ) {
+        sample_history.duration = duration;
+        let ended = sample_history.timestamp.as_nanosecond() + i128::from(duration.max(0));
+        let created = u64::try_from(ended + i128::from(created_after_end)).unwrap();
+        let host = HostId(atuin_common::utils::uuid_v7());
+
+        let expected = trusted.then_some(host);
+        assert_eq!(super::trusted_host_id(host, created, &sample_history), expected);
+        let HistoryRecord::Create(built) =
+            HistoryRecord::Create(sample_history).with_record_host(host, created)
+        else {
+            unreachable!("a create record stays a create record");
+        };
+        assert_eq!(built.host_id, expected);
+    }
+
+    #[rstest]
+    fn delete_records_ignore_the_record_host(sample_history: History) {
+        let delete = HistoryRecord::Delete(sample_history.id);
+        let host = HostId(atuin_common::utils::uuid_v7());
+        assert_eq!(delete.clone().with_record_host(host, 0), delete);
     }
 
     /// A `:memory:` `SqliteStore`, its `HostId`, and the `HistoryStore` built on it.
