@@ -51,14 +51,14 @@ Atuin runs on a range of shells and operating systems, but not every combination
 
 Feature coverage varies by shell:
 
-| Tier       | Shell   | History search | Inline popup | Atuin AI | pty-proxy |
-| ---------- | ------- | -------------- | ------------ | -------- | --------- |
-| **1**      | zsh     | ✓              | ✓            | ✓        | ✓         |
-| bash       | ✓       | ✓              | ✓            | ✓        |           |
-| fish       | ✓       | ✓              | ✓            | ✓        |           |
-| **2**      | nushell | ✓              | ✗            | ✗        | ✓         |
-| xonsh      | ✓       | ✗              | ✗            | ✗        |           |
-| PowerShell | ✓       | ✗              | ✗            | ✗        |           |
+| Tier       | Shell   | History search | Inline popup | pty-proxy |
+| ---------- | ------- | -------------- | ------------ | --------- |
+| **1**      | zsh     | ✓              | ✓            | ✓         |
+| bash       | ✓       | ✓              | ✓            |           |
+| fish       | ✓       | ✓              | ✓            |           |
+| **2**      | nushell | ✓              | ✗            | ✓         |
+| xonsh      | ✓       | ✗              | ✗            |           |
+| PowerShell | ✓       | ✗              | ✗            |           |
 
 ## Operating systems and architectures
 
@@ -1204,7 +1204,7 @@ Threads and captured output already stored keep what they had. Changes to these 
 
 # Capturing Command Output
 
-Atuin can store what each command printed next to its history entry. You can then read it back in the inspector UI, search across it with `atuin output search`, and let [Atuin AI](https://docs.atuin.sh/ai/command-output/index.md) or other AI tools read what a command actually did.
+Atuin can store what each command printed next to its history entry. You can then read it back in the inspector UI, search across it with `atuin output search`, and let AI tools read what a command actually did.
 
 Output capture is off by default. It needs [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md), which sees what your terminal displays, and the [daemon](https://docs.atuin.sh/reference/daemon/index.md), which stores it.
 
@@ -1234,7 +1234,6 @@ atuin output search connection refused
 
 ### From AI tools
 
-- [Atuin AI](https://docs.atuin.sh/ai/command-output/index.md) reads a command's output when you ask it why something failed.
 - Claude Code, Cursor, and other agents can read and search it through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md).
 
 ## What gets captured
@@ -1256,7 +1255,6 @@ When a command prints more than [`max_output_size`](https://docs.atuin.sh/config
 - Recognised credentials in the output (API keys, tokens, private keys, passwords in URLs and connection strings, values assigned to names like `DB_PASSWORD`) are replaced with `****` before storage, while [`secrets_filter`](https://docs.atuin.sh/configuration/config/#secrets_filter) is on (the default). Add patterns of your own with [`redact_patterns`](https://docs.atuin.sh/configuration/config/#redact_patterns). This is best-effort: it only knows common formats, and misses a credential that colour codes split apart. Output that can't be redacted quickly isn't stored.
 - For a command that prints secrets, don't rely on redaction: add it to [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) to keep it in your history but never store its output. See [Keeping secrets out](https://docs.atuin.sh/guide/excluding-commands/#a-commands-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with [sync](https://docs.atuin.sh/guide/sync/index.md) set up. We're actively working on supporting this.
-- Atuin AI only sends output to the LLM when it asks for a specific command's output, and asks your permission first by default. See [Reading Command Output](https://docs.atuin.sh/ai/command-output/#permissions).
 
 ## Storage and retention
 
@@ -1581,35 +1579,14 @@ Make sure `~/.atuin` exists:
 mkdir -p ~/.atuin
 ```
 
-Check whether you have any AI-related files in `~/.atuin`:
-
-```
-ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
-```
-
-If you do, please expand and follow this section:
-
-Migrating home-scoped AI config
-
-In older installations, `permissions.ai.toml` and `skills` in `~/.atuin` are scoped to your home directory, whereas in newer installations, they are applied *globally*. The existence of `~/.atuin/config.toml` is what determines whether the new or old behavior is used; if `~/.atuin/config.toml` exists, these items are interpreted as global.
-
-Before you move your `config.toml` to `~/.atuin`, review the existing AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything you're ok with being made global can be left as-is (global is likely not too different from applying to your entire home directory anyway); anything else should be deleted or moved to subdirectories (meaning moving it into `~/subdir/.atuin/` for each subdirectory).
-
-After you've confirmed that the AI items in `~/.atuin` can be interpreted as global, check whether any AI items appear in both `~/.atuin` and `~/.config/atuin`:
-
-```
-ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
-    sort | uniq -d
-```
-
-If there are any such items, you must merge the items in `~/.config/atuin` into the configuration at `~/.atuin` if you still want them to take effect; otherwise, the items in `~/.config/atuin` will be shadowed by those in `~/.atuin`.
-
 Next, move your config items:
 
 ```
 cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-    -e themes -e skills -e permissions.ai.toml) ~/.atuin/
+    -e themes) ~/.atuin/
 ```
+
+If you have `permissions.ai.toml` or `skills`, they were for Atuin AI, which is gone. Nothing reads them now, so you can leave them where they are.
 
 Then, move your data:
 
@@ -2896,10 +2873,6 @@ Not available on platforms where tree-sitter doesn't build, so commands are show
 syntax_highlight = false
 ```
 
-## ai
-
-The settings for Atuin AI are listed in [a separate section](https://docs.atuin.sh/ai/settings/index.md).
-
 # Key Binding
 
 Note
@@ -4056,17 +4029,16 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 ## What it sets up
 
 - **Hooks** that record each command, its exit code, and its duration. See [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md).
-- **Key bindings** for `Ctrl`+`R` and the `Up` arrow, and `?` for [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md).
+- **Key bindings** for `Ctrl`+`R` and the `Up` arrow.
 - **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
 ## Flags
 
-| Flag                 | Description                                                                  |
-| -------------------- | ---------------------------------------------------------------------------- |
-| `--disable-up-arrow` | Don't bind the `Up` arrow key                                                |
-| `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                        |
-| `--disable-ai`       | Don't bind `?` to [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) |
-| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default)       |
+| Flag                 | Description                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `--disable-up-arrow` | Don't bind the `Up` arrow key                                          |
+| `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                  |
+| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 
@@ -4158,8 +4130,7 @@ Because pty-proxy sits between your terminal and your shell, it can also record 
 
 That capture is what lets AI tools see what actually happened, rather than guessing from the command alone:
 
-- [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) can answer "why did that fail?" by reading the real error, via its `AtuinOutput` tool
-- External agents such as Claude Code and Cursor can do the same through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md)
+- Agents such as Claude Code and Cursor can answer "why did that fail?" by reading the real error through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md)
 
 Output capture needs **both** pty-proxy and the daemon running. Nothing is captured by default. See [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md) for setup, retention limits, and privacy.
 
@@ -5509,525 +5480,6 @@ systemctl status atuin-server
 If it started fine, it should have created the default config inside `/etc/atuin/`.
 # AI
 
-# Atuin AI
-
-Atuin AI is a subcommand that enables shell command generation and other information lookup via an LLM directly from your terminal.
-
-Atuin AI requires an account on [Atuin Hub](https://hub.atuin.sh/), and Atuin asks you to log in upon first use of the binary. Alternatively, you can [self-host the Atuin AI backend](https://docs.atuin.sh/ai/self-hosting/index.md).
-
-Usage of Atuin AI is currently free.
-
-## Getting Started
-
-Atuin AI currently supports zsh, bash, and fish shells. See [Supported platforms](https://docs.atuin.sh/support/index.md) for the full support matrix. Your shell's usual `atuin init` call will automatically bind the question mark key to the Atuin AI UI (only when the prompt is empty).
-
-Disabling Atuin AI
-
-You can disable the default question mark key binding by passing `--disable-ai` to your shell's `atuin init` call, or by setting `ai.enabled` to `false` in your Atuin config.
-
-## Settings
-
-For a list of settings that control the behavior of Atuin AI, see [its dedicated settings documentation](https://docs.atuin.sh/ai/settings/index.md).
-
-## Features
-
-### Command generation
-
-Prompt the LLM to create a command, and get one back, no fuss. Press `enter` to run, or `tab` to insert.
-
-### Follow-up
-
-You can follow-up with another prompt to update the command that will be inserted.
-
-You can also follow-up with questions to get responses in natural language.
-
-You can still use `enter` or `tab` to run or insert the last suggested command, even if the LLM suggested it in a previous turn.
-
-### Conversational and search usage
-
-If you prompt the LLM with a question that doesn't imply you want to generate a command, it can respond in natural language, and use web search if necessary to fetch the data it needs.
-
-### Dangerous or low-confidence command detection
-
-The LLM scores its confidence in the command and how dangerous the command is. This information is shown if a threshold is exceeded, and requires an extra confirmation step before running automatically with `enter`.
-
-The Atuin Hub server also monitors suggested commands for dangerous patterns the LLM didn't catch, and appends its own assessment at the end of the LLM's own assessment.
-
-# AI Settings
-
-All the settings that control the behavior of [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) are specified in an `[ai]` section in your `config.toml`. See [the configuration documentation](https://docs.atuin.sh/configuration/config/index.md) for more detailed information about Atuin's configuration system.
-
-### enabled
-
-Default: unset
-
-Whether Atuin AI is on. While `enabled` is unset, the `?` key is bound, and the first press asks whether to turn Atuin AI on or unbind the key. Atuin saves the answer as `enabled`. With `enabled = true`, Atuin AI is on. With `enabled = false`, the `?` key is unbound from the next shell you open. To change it later, run `atuin config set ai.enabled true` or `atuin config set ai.enabled false`.
-
-### model
-
-Default: unset
-
-The Atuin AI model to use for new sessions. If unset, the default model will be used. You can see the available models by running `/model` inside the Atuin AI interface.
-
-### `session_continue_minutes`
-
-Default: `1h`
-
-The amount of time after the last interaction with Atuin AI that a session is considered "recent" and can be automatically continued, given as a duration like `30m`, `1h`, or `2h`. If you interact with Atuin AI and then invoke it again within this time window, the second interaction will be part of the same session. If you wait longer than this time window, a new session will be started. You can always start a new session manually by using the `/new` slash command in the Atuin AI interface.
-
-A bare number is read as a count of minutes (`session_continue_minutes = 60`), for backwards compatibility.
-
-### endpoint
-
-Default: `null`
-
-The address of the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting because it's only necessary for custom AI endpoints.
-
-### `api_token`
-
-Default: `null`
-
-The API token for the Atuin AI endpoint. Used for AI features like command generation. Most users won't need this setting because it's only necessary for custom AI endpoints.
-
-### `endpoint_protocol`
-
-Default: `"auto"`
-
-How the client talks to the configured `endpoint`. One of:
-
-- `"auto"` — infer from `endpoint`: official Atuin addresses use the Hub protocol, anything else is treated as an OSS server.
-- `"hub"` — treat the endpoint as an Atuin Hub instance: log in via the browser-based Hub flow and report credit usage. Mostly useful for developing against a local Hub instance.
-- `"oss"` — treat the endpoint as a standalone AI server, such as [`atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). No login flow; requests are authenticated with `api_token` if set.
-
-With the default of `"auto"`, pointing `endpoint` at your own server just works: set `api_token` if your server requires one.
-
-### `yolo`
-
-Default: `false`
-
-Enables YOLO mode, which automatically allows all permission checks. **Use this setting with caution.**
-
-This setting *doesn't* enable any capabilities. Instead, it only bypasses any permission checks.
-
-### `tips`
-
-Default: `true`
-
-Display tips in Atuin AI at the bottom of agent turns.
-
-## Capabilities
-
-Settings that control what capabilities are sent to the LLM, which the LLM uses to understand what features the client has available. These are specified under `[ai.capabilities]`.
-
-### `enable_history_search`
-
-Default: `true`
-
-Whether to include the "history search" capability in the context sent to the LLM. The AI can then request to search your Atuin history for relevant commands when generating suggestions or answering questions.
-
-### `enable_history_output`
-
-Default: `true`
-
-Whether to include the "history output" capability in the context sent to the LLM. The AI can then request to view the output of previous commands. This requires the [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md) and [daemon](https://docs.atuin.sh/reference/daemon/index.md) to be enabled and running in order for Atuin to capture commands' outputs — see [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md) for setup.
-
-### `enable_file_tools`
-
-Default: `true`
-
-Whether to include the "file tools" capability in the context sent to the LLM. The AI can then request to read and update files on your system.
-
-### `enable_command_execution`
-
-Default: `true`
-
-Whether to include the "command execution" capability in the context sent to the LLM. The AI can then request to execute commands on your system.
-
-**Example config**
-
-```
-[ai.capabilities]
-enable_history_search = false
-```
-
-## Opening context
-
-Settings that control what context is sent in the opening AI request. These are specified under `[ai.opening]`.
-
-### `send_cwd`
-
-Default: `false`
-
-Whether to include your current working directory in the context sent to the LLM. By default, only your OS and current shell are sent.
-
-**Example config**
-
-```
-[ai.opening]
-send_cwd = true
-```
-
-### `send_last_command`
-
-Default: `false`
-
-Whether to send your previous command as context in the initial request, so the AI can provide more relevant suggestions.
-
-**Example config**
-
-```
-[ai.opening]
-send_last_command = true
-```
-
-## Threads
-
-Settings for capturing your AI coding agents' sessions as [threads](https://docs.atuin.sh/ai/threads/index.md). These are specified under `[threads]`. Before `[threads]`, they were `capture_sessions` and `capture_tools` under `[ai]`, which still work when the `[threads]` setting isn't set.
-
-### `capture`
-
-Default: `false`
-
-Capture the sessions of your AI coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro, opencode and Pi) as threads into the encrypted record store, and sync them. Only sessions your agents work in after you turn it on are captured; `atuin threads import` brings in the rest. `atuin setup --only --threads --daemon` sets it, along with the daemon it needs. See [Threads](https://docs.atuin.sh/ai/threads/index.md).
-
-### `capture_tools`
-
-Default: `true`
-
-With `capture`, also capture what each tool call was given and what it returned, and the diff of each edit, so a resumed session has its tool calls and edits back. Set it to `false` to keep only the name of each tool called. See [What's captured](https://docs.atuin.sh/ai/threads/#whats-captured).
-
-The picker's own settings also go under `[threads]`: see [Settings](https://docs.atuin.sh/ai/threads/#settings).
-
-# Atuin AI Slash Commands
-
-Atuin AI includes several slash commands that help you control various aspects of Atuin AI's behavior. To access them, type `/` in the Atuin AI prompt, and a list of all available slash commands will appear. You can continue typing to filter the list of commands, and press `tab` to expand the selected command.
-
-## Built-in Slash Commands
-
-- **`/help`** - Show a list of all available slash commands, along with a brief description of each, and a link to this documentation.
-- **`/new`** - Start a new session. This will clear the current session's context and history and start fresh.
-- **`/model`** - Select a different model for the current session. This will override the default model specified in your Atuin config. You can see a list of available models by running this command.
-
-## Slash Commands from Skills
-
-Any [user-defined skills](https://docs.atuin.sh/ai/skills/index.md) with a name will register that name as a slash command, with the skill's description as the slash command description (shown in `/help` and in the slash command fuzzy picker). For example, if you have a skill named `my-skill`, you can invoke it by typing `/my-skill` in the Atuin AI prompt. If the skill has any parameters, you can provide them after the skill name, separated by spaces.
-
-# Skills
-
-Skills are reusable instruction sets for Atuin AI: playbooks, conventions, workflows, or any structured guidance you want the LLM to follow for specific tasks.
-
-## How Skills Work
-
-Skills are lazily loaded: Atuin sends only skill names and descriptions to the server. The LLM decides which skills are relevant and loads their full content on demand. You can also invoke skills directly with `/skill-name` in the TUI.
-
-## Creating a Skill
-
-A skill is a directory containing a `SKILL.md` file with optional YAML frontmatter:
-
-```
-.atuin/skills/code-review/SKILL.md
-```
-
-```
----
-name: code-review
-description: Conducts a structured code review. Use when the user asks to review code, a PR, or a diff.
----
-
-When reviewing code:
-
-1. **Correctness** — Does the code do what it claims?
-2. **Edge cases** — What inputs could break it?
-3. **Style** — Does it match the project's conventions?
-
-Current branch: !`git branch --show-current`
-```
-
-## Skill Locations
-
-| Scope   | Path                              |
-| ------- | --------------------------------- |
-| Project | `.atuin/skills/<name>/SKILL.md`   |
-| Global  | `~/.atuin/skills/<name>/SKILL.md` |
-
-Project skills override global skills when names collide. Nested directories are supported for organization (for example, `.atuin/skills/ops/deploy/SKILL.md`).
-
-## Frontmatter
-
-All frontmatter fields are optional. YAML frontmatter goes between `---` markers at the top of `SKILL.md`.
-
-| Field                      | Default                 | Description                                                                                 |
-| -------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
-| `name`                     | directory name          | Display name. Lowercase letters, numbers, hyphens.                                          |
-| `description`              | first paragraph of body | What the skill does. Sent to the server so the LLM knows when to load it.                   |
-| `disable-model-invocation` | `false`                 | If `true`, the LLM can't discover or load the skill. Only reachable via `/name` in the TUI. |
-
-Multiline descriptions using the YAML `>` (folded) or `|` (literal) syntax are supported.
-
-## Invoking Skills
-
-### From the TUI
-
-Type `/skill-name` to invoke a skill directly. Tab-completion is available. Arguments are supported:
-
-```
-/deploy patch
-```
-
-The LLM will see the skill content with `[Loaded skill: deploy]` and `[Arguments: patch]` headers.
-
-### By the LLM
-
-When the LLM determines a skill is relevant to your request, it calls `load_skill` automatically to fetch the full content. Atuin excludes skills with `disable-model-invocation: true` from this — the LLM won't see them.
-
-## Dynamic Content
-
-Skills support shell substitution:
-
-- **Inline:** `!`command`` ` — replaced with command ``stdout\`
-- **Block:** ```` ```! ```` code block — entire block replaced with script `stdout`
-
-Commands run at skill load time (when invoked), not at discovery time.
-
-## Arguments
-
-When invoking a skill with arguments (for example, `/deploy patch`), the `$ARGUMENTS` placeholder in the skill body is replaced with the argument string before shell substitution runs:
-
-```
----
-name: deploy
-description: Deploy the application
-disable-model-invocation: true
----
-
-Deploy $ARGUMENTS to production.
-Current status: !`kubectl get deployment $ARGUMENTS`
-```
-
-If the body doesn't contain `$ARGUMENTS` and you provided arguments, Atuin appends them as `ARGUMENTS: <value>`.
-
-## Description Budget
-
-Atuin sends skill descriptions to the server under a total character budget. It cuts each description to 1024 bytes, then skips any skill whose entry would exceed the budget and continues packing the rest. If Atuin leaves any skills out, it tells the server which ones.
-
-# Atuin AI Tools & Permissions
-
-Atuin AI has several tools that it can use to interact with your system, given your permission. The AI can use these tools to help answer questions and perform actions on your behalf.
-
-## Permission System
-
-By default, Atuin AI asks your permission before using any client-side tool. You can change these defaults using a *permission file*.
-
-### Permission Files
-
-Permission files live at `.atuin/permissions.ai.toml` in any project. When the AI wants to run a tool, Atuin AI will check its working directory for a `.atuin/permissions.ai.toml` file, and will also check every permission file in parent directories, up to the root of the filesystem. Finally, Atuin AI checks for a `permissions.ai.toml` file in your Atuin home directory (`~/.atuin/permissions.ai.toml`[1](#fn:1) by default).
-
-A permission file is a TOML file with the following format:
-
-```
-[permissions]
-
-allow = [
-    # rules for automatically allowed tools
-]
-
-deny = [
-    # rules for automatically denied tools
-]
-
-ask = [
-    # rules for tools that require asking for permission
-]
-```
-
-If Atuin AI doesn't find a matching rule, it defaults to asking for permission before running the tool.
-
-Permission files found deeper in the filesystem take priority over permission files found higher up. For example, if Atuin AI finds a permission file in the current working directory that allows a tool, it will allow that tool, even if a parent directory has a permission file that denies it.
-
-Within a permissions file, `ask` rules take priority over `deny` rules, which take priority over `allow` rules. For example, if a permission file has a rule that allows a tool, but also has a rule that asks for permission for that tool, Atuin AI will ask for permission before running the tool.
-
-### Permission Scopes
-
-Most rules can be scoped to a particular path or other context. For example, you can allow Atuin AI to read files in a particular directory, but not in others. For rules about file operations, the scope is a glob pattern that matches file paths.
-
-### Example Config
-
-Here's an example of a permission file that allows Atuin AI to read and write any markdown files in the current project (because Write implies Read — see below), but denies it access to any `.env` files. Attempts to read or write any *other* files will result in Atuin AI requesting permission before proceeding.
-
-```
-[permissions]
-
-allow = [
-    "Write(**/*.md)"
-]
-
-deny = [
-    "Read(.env)"
-]
-```
-
-## Tools
-
-### Atuin History
-
-The `AtuinHistory` tool allows Atuin AI to search your Atuin history for relevant commands. This tool is read-only. Atuin AI might ask to use this tool when you ask it to recall a command or information about a command you ran in the past, or when you ask for help with a failing command (for example, "why did my last command fail?").
-
-**Permission rule and scope:** `AtuinHistory`
-
-**Config value:** `ai.capabilities.enable_history_search` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities))
-
-**Example permissions file:**
-
-```
-[permissions]
-
-allow = ["AtuinHistory"]
-```
-
-### Atuin Output
-
-The `AtuinOutput` tool allows Atuin AI to read the captured output of commands in your Atuin history. This tool is read-only. Atuin AI might ask to use this tool when you ask about the result of a command you ran, or for help with a failing command. Output capture has to be set up first — see [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md).
-
-**Permission rule and scope:** `AtuinOutput`
-
-**Config value:** `ai.capabilities.enable_history_output` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities))
-
-**Example permissions file:**
-
-```
-[permissions]
-
-allow = ["AtuinOutput"]
-```
-
-### Read
-
-The `Read` tool allows Atuin AI to read files on your system. Atuin AI might ask to use this tool when you ask it to analyze the contents of a file, when you ask for edits to the contents of a file, or when you ask a question that's best answered by consulting the contents of a file.
-
-**Permission rule and scope:** `Read(<glob_pattern>)` (for example, `Read(**/*.md)` to allow reading all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Read`) matches all files.
-
-**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
-
-**Example permissions file:**
-
-```
-[permissions]
-allow = ["Read(**/*.md)"]
-deny = ["Read(.secret/**)"]
-```
-
-Write Implies Read
-
-To prevent accidental data loss, Atuin AI is required to read the contents of a file before writing to it. This means that any permission rule that allows the `Write` tool for a particular file or set of files will also automatically allow the `Read` tool for those same files. For example, if you have a rule that allows `Write(**/*.md)`, Atuin AI will also be able to read any markdown files in the current directory and subdirectories, even if you don't have an explicit rule allowing `Read(**/*.md)`.
-
-### Write
-
-The `Write` tool allows Atuin AI to create and edit files on your system. Atuin AI might ask to use this tool when you ask it to update configuration for a tool or help debug a problem.
-
-**Permission rule and scope:** `Write(<glob_pattern>)` (for example, `Write(**/*.md)` to allow writing all markdown files in the current directory and subdirectories). A missing glob pattern (for example, `Write`) matches all files.
-
-**Config value:** `ai.capabilities.enable_file_tools` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)) — this setting enables both the `Read` and `Write` tools.
-
-**Example permissions file:**
-
-```
-[permissions]
-allow = ["Write(**/*.md)"]
-deny = ["Write(.secret/**)"]
-```
-
-File Backups
-
-The first time Atuin AI writes to a file in a session, it creates a backup of the original file and stores it in Atuin's data directory, under `ai/sessions/<session_id>`. A manifest file in that directory maps the original file paths to the backup file paths. In the future, we'll be providing easier ways to recover from accidental data loss.
-
-### Shell Command Execution
-
-The `Shell` tool allows Atuin AI to execute shell commands on your system. Atuin AI might ask to use this tool when you ask it to perform an action that's best accomplished by running a shell command itself, or when you ask for help debugging a failing command, or during a multi-step workflow.
-
-**Permission rule and scope:** `Shell(<command pattern>)` (for example, `Shell(git *)` to allow any command that starts with `git`). A missing command pattern (for example, `Shell`) matches all commands.
-
-**Config value:** `ai.capabilities.enable_command_execution` (see [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities))
-
-**Example permissions file:**
-
-```
-[permissions]
-allow = [
-    "Shell(git add *)",
-    "Shell(git commit *)"
-]
-```
-
-Command Execution Scope
-
-The command pattern in a `Shell` permission rule is matched against the words in the command. The `*` wildcard has different behavior depending on where it appears:
-
-| Pattern         | Matches                                    | Doesn't Match                            |
-| --------------- | ------------------------------------------ | ---------------------------------------- |
-| `*`             | Any command                                | —                                        |
-| `git commit *`  | `git commit`, `git commit -m "msg"`        | `git`, `git push`                        |
-| `ls*`           | `ls`, `ls -a`, `lsof`                      | `cat`                                    |
-| `git * --amend` | `git commit --amend`, `git rebase --amend` | `git commit`                             |
-| `git commit`    | `git commit`                               | `git`, `git push`, `git commit -m "msg"` |
-
-Note the difference between `ls *` (with a space) and `ls*` (without). The space-separated form uses **word-boundary** matching — `ls *` matches `ls` and `ls -a` but *not* `lsof`. The attached form uses **prefix** matching — `ls*` matches all of those, including `lsof`.
-
-For `allow` and `ask` rules, a pattern without any wildcard (for example, `git commit`) is an **exact match** — it only matches when the command words are identical. Use `git commit *` if you want to allow `git commit` with any arguments.
-
-For `deny` rules, a pattern without any wildcard (for example, `rm`) is a **prefix match** — it matches any command that starts with that prefix. This means that a `deny` rule of `rm` would deny `rm`, `rm -rf /`, and `rm ./README.md` so be careful when writing `deny` rules without explicit wildcards.
-
-Compound Commands
-
-When the AI runs a compound command (for example, `git add . && npm test`), Atuin parses it into individual subcommands. For a command to be automatically allowed, all subcommands must be allowed. This means that `git add . && npm test` must be enabled by both `Shell(git add *)` and `Shell(npm test)` for it to be allowed, else it would fall through and ask for permission. However, our parsing isn't perfect, and there may be edge cases where it fails to correctly identify the subcommands, and some shells where command parsing is sub-par. For this reason, we recommend being cautious when allowing compound commands with broad patterns.
-
-______________________________________________________________________
-
-1. Because `~/.atuin/permissions.ai.toml` is the global permissions file, "Always allow in this directory" is unavailable when your current directory is `$HOME`. (Similarly, if your `$HOME` is a Git repository, "Always allow in this workspace" is unavailable when your workspace is that repository.) If a global rule is acceptable, select "Always allow" instead. [↩](#fnref:1 "Jump back to footnote 1 in the text")
-
-# Reading Command Output
-
-Atuin AI can read the output of commands you've run. Ask "why did that fail?" and it can look at the actual error message, rather than guessing from the command alone.
-
-Atuin doesn't capture output by default. See [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md) for how capture works, what it keeps, and how to control it.
-
-## Setup
-
-Turn on output capture, which sets up the [daemon](https://docs.atuin.sh/reference/daemon/index.md) and [pty-proxy](https://docs.atuin.sh/reference/pty-proxy/index.md) it needs:
-
-```
-atuin setup --only --output-capture --daemon
-```
-
-Then open a new terminal. To set it up by hand instead, see [Setting it up](https://docs.atuin.sh/guide/output-capture/#setting-it-up).
-
-To try it out, run a command that fails, then press `?` and ask Atuin AI why it failed. It will ask permission to use the `AtuinOutput` tool, then read the output and answer.
-
-## How it works
-
-pty-proxy sits between your terminal and your shell, and uses your shell's prompt markers to work out where each command's output starts and ends. It then sends each captured command to the daemon, which stores it on disk alongside its Atuin history ID. When Atuin AI wants to see what a command printed, it asks the daemon for the output by history ID, and can ask for just the lines it needs.
-
-## Privacy
-
-Captured output stays on your machine, and Atuin sends nothing to the LLM until the LLM requests the output of a specific command. By default, Atuin AI asks your permission first.
-
-To keep a command's output away from the AI, keep it out of the store: add the command to [`command_filter`](https://docs.atuin.sh/configuration/config/#command_filter) to keep it in your history without its output. See [Privacy](https://docs.atuin.sh/guide/output-capture/#privacy) for what else is filtered or redacted.
-
-## Permissions
-
-Output retrieval is controlled by the `AtuinOutput` permission rule — see [Tools & Permissions](https://docs.atuin.sh/ai/tools-permissions/index.md). To let Atuin AI read command output without asking every time:
-
-```
-[permissions]
-
-allow = ["AtuinOutput"]
-```
-
-To turn the capability off entirely, set `ai.capabilities.enable_history_output` to `false` in your Atuin config (see the [settings documentation](https://docs.atuin.sh/ai/settings/#capabilities)).
-
-## Reading output from other AI tools
-
-Captured output isn't limited to Atuin AI: external tools like Claude Code and Cursor can read it too, via Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md).
-
 # Threads
 
 A thread is an AI coding agent's session as Atuin captured it. To turn capture on, run:
@@ -6299,7 +5751,7 @@ If `atuin resume` reports that the threads database is at an older schema versio
 
 Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Hermes Agent, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
 
-The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) uses, plus output search and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
+The server exposes history search, command output and output search, and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
 ## Quick start
 
@@ -6468,78 +5920,6 @@ These need thread capture, which `atuin setup --only --threads --daemon` turns o
 Session scope
 
 The `session` filter mode only works when the MCP server is launched from inside an Atuin-enabled shell session. Clients like editors usually launch it outside of one, in which case the other filter modes still work as normal.
-
-# Self-Hosting the Atuin AI Backend
-
-The core of Atuin AI's backend is open source, available at [`atuinsh/atuin-ai-server`](https://github.com/atuinsh/atuin-ai-server). It's based on [`atuin-ai-core`](https://github.com/atuinsh/atuin-ai-core), the same Gleam library that powers the production Atuin AI backend.
-
-The Atuin AI server currently supports any **OpenAI-compatible, chat completions-style endpoint**. For local models, this includes Ollama, vLLM, LM Studio, llama.cpp, and LiteLLM, among others. You can also use OpenAI-compatible web services, like OpenRouter.
-
-## Getting Started
-
-After cloning the repository, copy the example config file, `config.example.toml`, to `config.toml`. Follow the configuration section of the README to set up your instance.
-
-Here's a basic example of an Ollama-based setup:
-
-```
-port = 8080
-endpoint = "http://localhost:11434/v1" # or host.docker.internal
-api_key = "ollama"
-
-default_model = "llama31"
-
-[request.body]
-stream_options = { include_usage = true }
-
-[[models]]
-alias = "llama31"
-name = "Llama 3.1 70b"
-description = "Ollama Llama 3.1 70b"
-model = "llama3.1:70b"
-
-[[models]]
-alias = "gemma4"
-name = "Gemma 4 r4b"
-description = "Ollama Gemma 4 - Effective 4b"
-model = "gemma4:e4b"
-```
-
-See the [repository README](https://github.com/atuinsh/atuin-ai-server#readme) for more setup details, including configuring server-side tools, like web search and web content scraping.
-
-Once done, you can start the server one of two ways:
-
-## Running from Source
-
-If you have Erlang, Elixir, and Gleam installed (see `.tool-versions` for required versions), you can run the server natively:
-
-```
-mix deps.get
-mix run --no-halt
-```
-
-If your `config.toml` specifies API keys via environment variables, remember to set them when you start the server.
-
-## Running with Docker
-
-To run the server with docker, run the following:
-
-```
-docker run \
-  -v ./config.toml:/etc/atuin-ai/config.toml \
-  -p 8080:8080 \
-  ghcr.io/atuinsh/atuin-ai-server:latest
-```
-
-If you're running via Docker and want the Atuin AI server to connect to a local LLM service on the host (for example, Ollama), use `host.docker.internal` as the endpoint instead of `localhost`. `localhost` would otherwise resolve to the container's own loopback interface, not the host machine.
-
-## Configuring Atuin AI
-
-Once your server is running, you can configure Atuin AI to connect to it by setting the endpoint config:
-
-```
-[ai]
-endpoint = "http://localhost:8080"
-```
 # Misc
 
 # Known Issues
@@ -6631,16 +6011,6 @@ eval "$(atuin init zsh --disable-up-arrow)"
 ```
 
 See [key binding](https://docs.atuin.sh/configuration/key-binding/index.md) for more
-
-## How do I remove the default question mark binding for Atuin AI?
-
-Open your shell config file, find the line containing `atuin init`.
-
-Add `--disable-ai`, e.g.:
-
-```
-eval "$(atuin init zsh --disable-ai)"
-```
 
 ## How do I edit a command instead of running it immediately?
 

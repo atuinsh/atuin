@@ -30,17 +30,16 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 ## What it sets up
 
 - **Hooks** that record each command, its exit code, and its duration. See [Shell Integration](https://docs.atuin.sh/guide/shell-integration/index.md).
-- **Key bindings** for `Ctrl`+`R` and the `Up` arrow, and `?` for [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md).
+- **Key bindings** for `Ctrl`+`R` and the `Up` arrow.
 - **Widgets** for `atuin resume` (zsh, bash and fish), unbound unless you ask for them: see [Binding `atuin resume`](#binding-atuin-resume).
 
 ## Flags
 
-| Flag                 | Description                                                                  |
-| -------------------- | ---------------------------------------------------------------------------- |
-| `--disable-up-arrow` | Don't bind the `Up` arrow key                                                |
-| `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                        |
-| `--disable-ai`       | Don't bind `?` to [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) |
-| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default)       |
+| Flag                 | Description                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `--disable-up-arrow` | Don't bind the `Up` arrow key                                          |
+| `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                  |
+| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 

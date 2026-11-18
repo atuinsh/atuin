@@ -2,7 +2,7 @@
 
 Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Hermes Agent, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
 
-The server exposes the same history tools that [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) uses, plus output search and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
+The server exposes history search, command output and output search, and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
 ## Quick start
 

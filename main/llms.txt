@@ -62,15 +62,8 @@ usage, self-hosting, and AI features.
 
 ## AI
 
-- [Introduction](https://docs.atuin.sh/ai/introduction/index.md): Atuin AI - command generation and lookup via LLM from your terminal.
-- [Settings](https://docs.atuin.sh/ai/settings/index.md): AI configuration in config.toml - enabled, endpoint, session timeout.
-- [Slash Commands](https://docs.atuin.sh/ai/slash-commands/index.md): Slash commands available in Atuin AI.
-- [Skills](https://docs.atuin.sh/ai/skills/index.md): Reusable instruction sets (skills) for Atuin AI - playbooks, conventions, workflows.
-- [Tools & Permissions](https://docs.atuin.sh/ai/tools-permissions/index.md): Tools the AI can use (shell, filesystem) and permission files to control access.
-- [Reading Command Output](https://docs.atuin.sh/ai/command-output/index.md): Let Atuin AI read command outputs - capture via pty-proxy and the daemon.
 - [Threads](https://docs.atuin.sh/ai/threads/index.md): Threads - search and resume the AI coding-agent sessions the daemon captures, and rebuild their index.
 - [MCP Server](https://docs.atuin.sh/ai/mcp/index.md): Built-in MCP server exposing history search and command output to Claude Code, Cursor, and other AI tools.
-- [Self Hosting & Local Models](https://docs.atuin.sh/ai/self-hosting/index.md): Self-hosting the Atuin AI backend.
 
 ## Misc
 

@@ -41,16 +41,6 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 See [key binding](https://docs.atuin.sh/configuration/key-binding/index.md) for more
 
-## How do I remove the default question mark binding for Atuin AI?
-
-Open your shell config file, find the line containing `atuin init`.
-
-Add `--disable-ai`, e.g.:
-
-```
-eval "$(atuin init zsh --disable-ai)"
-```
-
 ## How do I edit a command instead of running it immediately?
 
 Press tab! By default, enter will execute a command, and tab will insert it ready for editing.

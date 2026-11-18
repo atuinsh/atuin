@@ -22,8 +22,7 @@ Because pty-proxy sits between your terminal and your shell, it can also record 
 
 That capture is what lets AI tools see what actually happened, rather than guessing from the command alone:
 
-- [Atuin AI](https://docs.atuin.sh/ai/introduction/index.md) can answer "why did that fail?" by reading the real error, via its `AtuinOutput` tool
-- External agents such as Claude Code and Cursor can do the same through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md)
+- Agents such as Claude Code and Cursor can answer "why did that fail?" by reading the real error through Atuin's [MCP server](https://docs.atuin.sh/ai/mcp/index.md)
 
 Output capture needs **both** pty-proxy and the daemon running. Nothing is captured by default. See [Capturing Command Output](https://docs.atuin.sh/guide/output-capture/index.md) for setup, retention limits, and privacy.
 
