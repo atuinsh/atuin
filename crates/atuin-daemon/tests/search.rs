@@ -18,6 +18,7 @@ mod unix {
     use atuin_daemon::client::{SearchClient, SearchParams};
     use atuin_daemon::components::SearchComponent;
     use atuin_daemon::{Daemon, DaemonHandle, OutputCaptureEngine};
+    use rstest::rstest;
     use tempfile::TempDir;
     use tokio::net::UnixListener;
     use tokio_stream::wrappers::UnixListenerStream;
@@ -85,8 +86,11 @@ mod unix {
             history_db.save(history).await.unwrap();
         }
         let store = SqliteStore::new(&record_path, Duration::from_secs(5)).await.unwrap();
+        let kv_db = atuin_kv::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
+        let scripts_db =
+            atuin_scripts::database::Database::in_memory(Duration::from_secs(5)).await.unwrap();
 
-        let search_component = SearchComponent::new();
+        let search_component = SearchComponent::default();
         // This test exercises command search only; there is no output store, so the searcher is a
         // nop.
         let search_service = search_component.grpc_service(OutputCaptureEngine::nop().store());
@@ -94,6 +98,8 @@ mod unix {
         let mut daemon = Daemon::builder(Arc::new(settings))
             .store(store)
             .history_db(history_db)
+            .kv_db(kv_db)
+            .scripts_db(scripts_db)
             .component(search_component)
             .build()
             .unwrap();
@@ -134,14 +140,14 @@ mod unix {
         (client, handle, tmp)
     }
 
-    fn context(cwd: &str, hostname: &str, session: &str, git_root: Option<&str>) -> Context {
+    fn context(cwd: &str, hostname: &str, session: &str, vcs_root: Option<&str>) -> Context {
         Context {
             session: session.to_string(),
             cwd: cwd.to_string(),
             #[allow(deprecated)]
             cmd_origin: atuin_domain::record::CmdOrigin::parse_lenient(hostname),
             host_id: "test-host-id".to_string(),
-            git_root: git_root.map(Into::into),
+            vcs_root: vcs_root.map(Into::into),
         }
     }
 
@@ -184,6 +190,7 @@ mod unix {
         ids
     }
 
+    #[rstest]
     #[tokio::test]
     async fn filters_and_shell_switching_work_end_to_end() {
         // alpha: bash, host-a, session A, inside the workspace
@@ -220,7 +227,7 @@ mod unix {
             search(&mut client, query_id, "echo", FilterMode::Directory, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&gamma]), "directory filter");
 
-        // Workspace: everything under the git root.
+        // Workspace: everything under the repo root.
         query_id += 1;
         let results = search(
             &mut client,
@@ -250,6 +257,27 @@ mod unix {
         query_id += 1;
         let results = search(&mut client, query_id, "echo", FilterMode::Session, ctx(), &[]).await;
         assert_eq!(sorted(results), ids_of(&[&alpha, &gamma]), "session");
+
+        // Session preload: this session started after every seeded command. It finds all of them,
+        // even though none of them ran in the session. The first search uses the database query.
+        // The second search uses the cache.
+        let new_session = atuin_common::utils::uuid_v7().as_simple().to_string();
+        let new_ctx = || context("/work/repo", "host-a", &new_session, None);
+        for attempt in ["query", "cache"] {
+            query_id += 1;
+            let results =
+                search(&mut client, query_id, "echo", FilterMode::SessionPreload, new_ctx(), &[])
+                    .await;
+            assert_eq!(
+                sorted(results),
+                ids_of(&[&alpha, &beta, &gamma]),
+                "session preload, from the {attempt}"
+            );
+        }
+        query_id += 1;
+        let results =
+            search(&mut client, query_id, "echo", FilterMode::Session, new_ctx(), &[]).await;
+        assert!(results.is_empty(), "the new session has no commands of its own");
 
         // Unknown filter targets match nothing rather than erroring.
         query_id += 1;

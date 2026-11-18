@@ -61,6 +61,11 @@ pub enum DurationStyle {
     /// there is. Like a real stopwatch it never rolls past hours, so a three-day
     /// duration reads `72h0m0s`.
     Stopwatch,
+    /// How long ago something happened, in whole days: `today`, `yesterday`, `3 days ago`.
+    ///
+    /// The duration is the time since the event. Any part of a day is dropped. For example, 47
+    /// hours reads `yesterday`.
+    DaysAgo,
 }
 
 /// [`Display`](fmt::Display) adapter produced by [`DurationExt::display`].
@@ -82,6 +87,13 @@ impl DurationDisplay {
     #[must_use]
     pub const fn stopwatch(mut self) -> Self {
         self.style = DurationStyle::Stopwatch;
+        self
+    }
+
+    /// Render as [`DurationStyle::DaysAgo`].
+    #[must_use]
+    pub const fn days_ago(mut self) -> Self {
+        self.style = DurationStyle::DaysAgo;
         self
     }
 
@@ -166,6 +178,11 @@ impl fmt::Display for DurationDisplay {
         match self.style {
             DurationStyle::LargestUnit => self.fmt_largest_unit(f),
             DurationStyle::Stopwatch => self.fmt_stopwatch(f),
+            DurationStyle::DaysAgo => match self.duration.as_secs() / 86400 {
+                0 => f.write_str("today"),
+                1 => f.write_str("yesterday"),
+                days => write!(f, "{days} days ago"),
+            },
         }
     }
 }
@@ -592,6 +609,17 @@ mod tests {
             std::time::Duration::from_nanos(nanos).display().largest_unit().to_string(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::zero(0, "today")]
+    #[case::under_a_day(86_399, "today")]
+    #[case::one_day(86_400, "yesterday")]
+    #[case::under_two_days(172_799, "yesterday")]
+    #[case::two_days(172_800, "2 days ago")]
+    #[case::a_month(30 * 86_400, "30 days ago")]
+    fn days_ago_counts_whole_days(#[case] secs: u64, #[case] expected: &str) {
+        assert_eq!(std::time::Duration::from_secs(secs).display().days_ago().to_string(), expected);
     }
 
     #[rstest]

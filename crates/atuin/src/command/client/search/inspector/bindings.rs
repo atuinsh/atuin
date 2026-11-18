@@ -102,6 +102,7 @@ mod tests {
             results_len: 2,
             original_input_empty: false,
             has_context: false,
+            shell_up_key_binding: false,
         };
         let mut keymap = Keymap::new();
         keymap.bind(KeyInput::parse("enter").unwrap(), Action::Noop);

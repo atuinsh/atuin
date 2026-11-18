@@ -3,6 +3,7 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
+use atuin_common::userio;
 use atuin_scripts::store::ScriptStore;
 use clap::Args;
 use eyre::{Context as _, Result, bail};
@@ -36,9 +37,10 @@ impl Rebuild {
             }
 
             // The daemon owns the sidecar, and rebuilds it. `ai-session` is the threads' record tag.
+            #[cfg(feature = "ai")]
             "threads" | "ai-session" => {
                 super::reset_ai_sessions(settings).await?;
-                println!("The daemon is rebuilding the threads index");
+                userio::log::info!("store-rebuild-threads");
             }
 
             tag => {
@@ -84,7 +86,7 @@ impl Rebuild {
         )
         .await?;
 
-        script_store.build(database).await?;
+        script_store.build(&database).await?;
 
         Ok(())
     }

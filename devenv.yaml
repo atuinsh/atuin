@@ -1,0 +1,14 @@
+# devenv inputs (https://devenv.sh); devenv.nix is the shell. flake.nix stays
+# for packaging and the nix-check CI step.
+inputs:
+  # The same channel as flake.nix. devenv's default nixpkgs lags it, and the
+  # tool versions CI pins (devenv.nix) arrive here first.
+  nixpkgs:
+    url: github:NixOS/nixpkgs/nixpkgs-unstable
+  # Rust at the exact versions CI uses: rust-toolchain.toml's, the nightly
+  # rustfmt, and the MSRV.
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs

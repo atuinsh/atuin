@@ -48,6 +48,7 @@ const LABELS: [&str; 3] = [SUMMARY_LABEL, MODEL_ERROR_LABEL, TOOL_ERROR_MARK];
 
 // Doc comments on the fields are the descriptions the model reads in the tool schema.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AtuinThreadsReadToolCall {
     /// The session to read: a full session id or atuin id, or a unique prefix of one, as returned by
     /// atuin_threads_list or atuin_threads_search. 'latest' reads the most recent session
@@ -296,7 +297,7 @@ fn searchable(m: &Message) -> String {
                     }
                 }
             }
-            Content::ReasoningSummary { .. } | Content::Other(_) => {}
+            Content::ReasoningSummary { .. } | Content::Other(_) | Content::Unknown(_) => {}
         }
     }
     out
@@ -614,7 +615,10 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
             // Empty (see `classify`).
             (
                 Block::Readable,
-                Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_),
+                Content::Reasoning(_)
+                | Content::ReasoningSummary { .. }
+                | Content::Other(_)
+                | Content::Unknown(_),
             ) => {}
         }
     }
@@ -749,10 +753,12 @@ fn classify(block: &Content) -> Block<'_> {
         }
         Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
         // Capture keeps only that reasoning happened, which says nothing to a reader, and never
-        // stores reasoning text or raw blocks.
-        Content::ReasoningSummary { .. } | Content::Reasoning(_) | Content::Other(_) => {
-            Block::Empty
-        }
+        // stores reasoning text or raw blocks. A block of a kind that this build doesn't know
+        // holds nothing that it can read.
+        Content::ReasoningSummary { .. }
+        | Content::Reasoning(_)
+        | Content::Other(_)
+        | Content::Unknown(_) => Block::Empty,
     }
 }
 

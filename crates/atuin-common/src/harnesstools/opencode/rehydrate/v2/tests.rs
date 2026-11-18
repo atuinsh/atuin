@@ -8,6 +8,7 @@ use sqlx::{Connection, Executor};
 use time::OffsetDateTime;
 
 use super::*;
+use crate::harnesstools::continuation::tests::{CLAUDE, OPENCODE};
 use crate::harnesstools::opencode::rehydrate::import;
 use crate::harnesstools::opencode::rehydrate::tests::{SES, captured, every_kind};
 use crate::harnesstools::opencode::session::projection::projected;
@@ -617,6 +618,56 @@ fn a_tool_s_output_is_written_as_opencode_2_keeps_it(
     let mut state = tool(&call, Some(&result), None, 0)["state"].clone();
     state.as_object_mut().unwrap().remove("input");
     assert_eq!(state, want);
+}
+
+/// A continuation's calls carried as opencode's own tools are written as opencode 2's: `shell`,
+/// and file tools that name their file `path`.
+#[rstest]
+fn a_continuation_s_calls_are_opencode_2_s_tools() {
+    let calls = [
+        ("c1", "Bash", json!({"command": "ls"})),
+        ("c2", "Read", json!({"file_path": "/a.rs", "offset": 2, "limit": 3})),
+        ("c3", "Write", json!({"file_path": "/b.rs", "content": "x"})),
+        ("c4", "Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"})),
+    ];
+    let call = |(id, name, input): &(&str, &str, Value)| {
+        Content::ToolUse(ToolUse {
+            id: (*id).to_owned().into(),
+            name: (*name).to_owned(),
+            input: input.clone(),
+        })
+    };
+    let answer = |(id, ..): &(&str, &str, Value)| {
+        Content::ToolResult(ToolResult {
+            call: (*id).to_owned().into(),
+            output: json!("ok"),
+            error: false,
+        })
+    };
+    let original = session("orig", None, vec![
+        prompt("u1", None),
+        said_by_assistant("a1", calls.iter().map(call).collect()),
+        RehydrateMessage {
+            role: Role::Tool,
+            ..said_by_assistant("t1", calls.iter().map(answer).collect())
+        },
+    ]);
+    let continued = continuation::continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    let written = export(&continued.session);
+    let tools: Vec<(String, Value)> = written["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
+        .filter(|item| item["type"] == "tool")
+        .map(|item| (item["name"].as_str().unwrap().to_owned(), item["state"]["input"].clone()))
+        .collect();
+    pretty_assertions::assert_eq!(tools, [
+        ("shell".to_owned(), json!({"command": "ls"})),
+        ("read".to_owned(), json!({"path": "/a.rs", "offset": 2, "limit": 3})),
+        ("write".to_owned(), json!({"path": "/b.rs", "content": "x"})),
+        ("edit".to_owned(), json!({"path": "/a.rs", "oldString": "a", "newString": "b"})),
+    ]);
 }
 
 /// A directory programs can be run from, next to the test binary: CI's temporary directory is

@@ -8,7 +8,9 @@ use atuin_client::ai_session::{
     Appended, DbError, HarnessKind, HarnessSession, Message, NativeSessionId, Session, SourceId,
 };
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::session::any::AnySessions;
+use atuin_common::harnesstools::session::any::{
+    AnySessions, ListenerExt as _, ObservableExt as _, SessionsExt as _,
+};
 use atuin_common::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, RuntimeError, SessionEvent, SessionId, TitleChange,
 };
@@ -51,6 +53,9 @@ impl SessionCaptureEngine {
     /// it changes after, then whole. The rest, sessions nobody touches since, are history, which
     /// is `atuin threads import`'s to bring in.
     pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool, since: SystemTime) -> Self {
+        // Before any listener reads, so no row it catches up on is taken for one written since.
+        #[cfg(feature = "octavo")]
+        sink.capturing_since(since);
         let mut listeners = Vec::new();
 
         for harness in AnyHarness::all() {
@@ -402,9 +407,10 @@ impl Start {
 /// The checkpoint handed to each session `events()` has (re)opened and not yielded from since.
 type Opened = Arc<Mutex<HashMap<SessionId, Option<Checkpoint>>>>;
 
-/// Set a session's bookkeeping up for a fresh read of its transcript: empty for one read from
-/// the beginning, whose every line replays; warmed from the sidecar for one resumed past its
-/// start, which replays none of the lines before it.
+/// Set a session's bookkeeping up for a fresh read of its transcript from what the sidecar holds
+/// of it: for one read from the beginning, whose every line replays, only its stored parent
+/// ([`MessageEnricher::begin`]); for one resumed past its start, which replays none of the lines
+/// before it, everything they set up ([`MessageEnricher::resume`]).
 ///
 /// The sidecar is read as capture's dedup gate reads it: with the store ready, under capture's
 /// locks (see [`Sink::lock_ready`]), waiting out a rebuild or a forget of this host's rows, and
@@ -431,10 +437,6 @@ pub(super) async fn warm(
     start: Start,
 ) {
     enricher.restart(session);
-    if start == Start::Beginning {
-        return;
-    }
-    let handle = enricher.handle(session);
     let backoff = sink.warm_backoff();
     let mut state = sink.state.clone();
     let mut failures = 0;
@@ -447,17 +449,8 @@ pub(super) async fn warm(
             }
             continue;
         };
-        match read_warm(sink, &handle, locks).await {
-            Ok(warmed) => {
-                let Warmed {
-                    row,
-                    titles,
-                    last,
-                    synthetic,
-                } = warmed;
-                enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
-                return;
-            }
+        match warm_once(sink, enricher, session, start, locks).await {
+            Ok(()) => return,
             Err(e) => {
                 failures += 1;
                 let delay = backoff.delay(failures);
@@ -465,7 +458,7 @@ pub(super) async fn warm(
                     ?e,
                     %session,
                     ?delay,
-                    "failed to warm a resumed ai-session up from the sidecar; retrying"
+                    "failed to warm an ai-session up from the sidecar; retrying"
                 );
                 tokio::time::sleep(delay).await;
             }
@@ -473,16 +466,42 @@ pub(super) async fn warm(
     }
 }
 
+/// One try of [`warm`], holding capture's `locks`: `session`'s bookkeeping set up in `enricher`
+/// for a read starting at `start`, or the error that kept it from being read. An import reads each
+/// session from its start this way too, so its rows name the parent capture's would.
+pub(super) async fn warm_once(
+    sink: &Sink,
+    enricher: &mut MessageEnricher,
+    session: &SessionId,
+    start: Start,
+    locks: CaptureLocks,
+) -> Result<(), WarmError> {
+    let handle = enricher.handle(session);
+    let Warmed {
+        row,
+        titles,
+        last,
+        synthetic,
+    } = read_warm(sink, &handle, locks, start).await?;
+    match start {
+        Start::Beginning => enricher.begin(session, row.as_ref()),
+        Start::Resumed => {
+            enricher.resume(session, row.as_ref(), &titles, last.as_ref(), &synthetic);
+        }
+    }
+    Ok(())
+}
+
 /// What a resumed session's warm-up reads from the sidecar.
-struct Warmed {
-    row: Option<Session>,
-    titles: Vec<TitleChange>,
-    last: Option<Message>,
-    synthetic: Vec<SourceId>,
+pub(super) struct Warmed {
+    pub(super) row: Option<Session>,
+    pub(super) titles: Vec<TitleChange>,
+    pub(super) last: Option<Message>,
+    pub(super) synthetic: Vec<SourceId>,
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WarmError {
+pub(super) enum WarmError {
     #[error(transparent)]
     Repair(#[from] AppendError),
     #[error(transparent)]
@@ -492,12 +511,14 @@ enum WarmError {
     Injected,
 }
 
-/// Read what [`warm`] needs from the sidecar, holding capture's `locks` (released on return,
-/// whether the reads failed or not).
-async fn read_warm(
+/// Read what [`warm`] needs from the sidecar for a read starting at `start`, holding capture's
+/// `locks` (released on return, whether the reads failed or not): for one from the beginning, the
+/// session's row alone.
+pub(super) async fn read_warm(
     sink: &Sink,
     handle: &HarnessSession,
     (mut pending, local): CaptureLocks,
+    start: Start,
 ) -> Result<Warmed, WarmError> {
     // A row capture pushed but did not project is one of the session's the reads must see.
     #[cfg(test)]
@@ -506,6 +527,14 @@ async fn read_warm(
     #[cfg(test)]
     inject(sink, WarmStep::Session).await?;
     let row = sink.sidecar.get_session(handle).await?;
+    if start == Start::Beginning {
+        return Ok(Warmed {
+            row,
+            titles: Vec::new(),
+            last: None,
+            synthetic: Vec::new(),
+        });
+    }
     #[cfg(test)]
     inject(sink, WarmStep::Last).await?;
     let last = sink.sidecar.last_message(handle).await?;
@@ -1009,7 +1038,7 @@ mod tests {
         #[case] long_first_line: bool,
     ) {
         use atuin_common::harnesstools::ccode::session::CcodeSessions;
-        use atuin_common::harnesstools::session::{Listener as _, Sessions as _};
+        use atuin_common::harnesstools::session::{Listener, Sessions};
 
         const WAIT: Duration = Duration::from_secs(20);
         let root = tempfile::tempdir().unwrap();
@@ -1023,12 +1052,11 @@ mod tests {
         std::fs::write(&path, &old).unwrap();
 
         let sink = Arc::new(sink().await);
-        let listener = CcodeSessions::builder()
+        let sessions = CcodeSessions::builder()
             .root(root.path().to_path_buf())
             .pool(BlockingPool::new(std::num::NonZeroUsize::MIN))
-            .build()
-            .listener()
-            .unwrap();
+            .build();
+        let listener = Sessions::listener(&sessions).unwrap();
         let opened: Opened = Arc::default();
         let checkpoint = {
             let (sink, opened) = (sink.clone(), opened.clone());
@@ -1041,7 +1069,7 @@ mod tests {
                 }
             }
         };
-        let events = listener.events(SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
+        let events = Listener::events(listener, SystemTime::UNIX_EPOCH, checkpoint).map(|ev| {
             ev.map(|ev| SessionEvent {
                 session: ev.session,
                 checkpoint: ev.checkpoint,

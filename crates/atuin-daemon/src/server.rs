@@ -3,8 +3,11 @@ use eyre::Result;
 use crate::components::search::SearchGrpcService;
 use crate::daemon::DaemonHandle;
 use crate::grpc;
+#[cfg(feature = "ai")]
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::grpc::request::RequestSpanLayer;
+use crate::grpc::userio::pb::user_io_server::UserIoServer;
 use crate::grpc::versioning::StrictVersionLayer;
 use crate::search::search_server::SearchServer;
 use crate::service::address::DaemonListener;
@@ -22,7 +25,8 @@ pub fn run_grpc_server(
     listener: DaemonListener,
     history_service: HistoryServer<grpc::HistoryService>,
     search_service: SearchServer<SearchGrpcService>,
-    ai_session_service: AiSessionServer<grpc::AiSessionService>,
+    #[cfg(feature = "ai")] ai_session_service: AiSessionServer<grpc::AiSessionService>,
+    userio_service: UserIoServer<grpc::UserIoService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tonic::transport::Server;
@@ -44,16 +48,18 @@ pub fn run_grpc_server(
         eprintln!("Shutting down gRPC server...");
     };
 
+    let router = Server::builder()
+        .layer(STRICT_VERSION_LAYER)
+        .layer(RequestSpanLayer)
+        .add_service(history_service)
+        .add_service(search_service);
+    #[cfg(feature = "ai")]
+    let router = router.add_service(ai_session_service);
+    let router = router.add_service(userio_service);
+
     // Spawn the server in the background
     tokio::spawn(async move {
-        if let Err(e) = Server::builder()
-            .layer(STRICT_VERSION_LAYER)
-            .add_service(history_service)
-            .add_service(search_service)
-            .add_service(ai_session_service)
-            .serve_with_incoming_shutdown(incoming, shutdown_signal)
-            .await
-        {
+        if let Err(e) = router.serve_with_incoming_shutdown(incoming, shutdown_signal).await {
             tracing::error!("gRPC server error: {e}");
         }
     });

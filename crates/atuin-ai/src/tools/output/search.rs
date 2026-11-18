@@ -20,6 +20,7 @@ use crate::tools::search_terms::SearchTermsArg;
 // Doc comments on the fields are the descriptions the model reads in the tool schema; the
 // struct deliberately has none, as it would become the schema's top-level description.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AtuinOutputSearchToolCall {
     /// What to look for in captured command output. Terms are AND-ed and matched as whole words
     /// (case-insensitive; no regex, no prefix matching), and the words of one term only together
@@ -146,7 +147,6 @@ mod tests {
     #[case::no_terms(json!({"terms": []}))]
     #[case::empty(json!({"terms": [""]}))]
     #[case::blank(json!({"terms": ["disk", "   "]}))]
-    #[case::not_a_list(json!({"terms": "disk"}))]
     fn rejects_missing_or_blank_terms(#[case] input: serde_json::Value) {
         assert!(serde_json::from_value::<AtuinOutputSearchToolCall>(input).is_err());
     }

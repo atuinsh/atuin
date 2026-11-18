@@ -28,9 +28,9 @@ pub struct AppContext {
     pub send_cwd: bool,
     pub last_command: Option<History>,
     pub history_db: Arc<atuin_client::database::Sqlite>,
-    /// Git root of the current working directory, if inside a git repo.
-    /// Resolves through worktrees to the main repo root.
-    pub git_root: Option<PathBuf>,
+    /// Repository root of the current working directory, if inside one. A git worktree
+    /// resolves to the main repo root; a jj workspace keeps its own root.
+    pub vcs_root: Option<PathBuf>,
     pub capabilities: AiCapabilities,
     pub daemon_enabled: bool,
     pub yolo: bool,

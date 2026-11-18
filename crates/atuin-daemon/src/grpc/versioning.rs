@@ -36,23 +36,10 @@
 //! the user with a homebrew service. This means the user can run `brew services start atuin` to run
 //! a new atuin daemon.
 //!
-//! We will try to restart it via the `Shutdown` RPC. When the daemon attempts to game end, it will
-//! terminate, and the client will immediately to try to run another daemon:
-//!
-//!   - Either `keep_alive` (on macOS launchd) wins, which means a new version of the daemon is
-//!     spawned, and managed by launchd.
-//!   - Or, more likely, the client-spawned daemon wins, which means a new version of the daemon is
-//!     managed by the client.
-//!
-//! **In effect, if the user updates via brew, the next command we send to the daemon will hit that
-//! build mismatch and the daemon will get restarted, one way or another.**
-//!
-//! The only exception to this rule is if they:
-//!  - Ran `brew service start atuin`
-//!  - And also said **no** to the daemon during setup.
-//!
-//! But in that case, we won't even try to talk to the daemon, so a mismatched version doesn't
-//! matter.
+//! The service runs `opt/atuin/bin/atuin`, which `brew upgrade` links to the new build, but
+//! `brew upgrade` doesn't restart it. With `daemon.autostart = true`, the first client of the new
+//! build has launchd restart it (`launchctl kickstart -k`), and so the daemon runs the new build.
+//! A client of another install, which the service doesn't run, refuses instead.
 //!
 //! ### Debian
 //!

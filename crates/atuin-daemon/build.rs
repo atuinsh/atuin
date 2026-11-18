@@ -28,16 +28,18 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let proto_paths = [
+    let mut proto_paths = vec![
         "proto/common.proto",
         "proto/history.proto",
         "proto/search.proto",
-        "proto/ai/agent.proto",
-        "proto/ai/session.proto",
+        "proto/userio.proto",
     ];
+    if cfg!(feature = "ai") {
+        proto_paths.extend(["proto/ai/agent.proto", "proto/ai/session.proto"]);
+    }
     let proto_include_dirs = ["proto"];
 
-    let file_descriptors = protox::compile(proto_paths, proto_include_dirs).unwrap();
+    let file_descriptors = protox::compile(&proto_paths, proto_include_dirs).unwrap();
 
     #[expect(
         clippy::disallowed_methods,

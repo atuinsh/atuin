@@ -18,7 +18,9 @@ atuin-domain = { workspace = true }
 
 derive_more = { workspace = true }
 eyre = { workspace = true }
+i18n-embed = { workspace = true }
 rmp = { workspace = true }
+rust-embed = { workspace = true }
 semver = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

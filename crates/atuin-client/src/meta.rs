@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use atuin_common::db;
-use atuin_common::db::sqlite::{Journaling, Sqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Access, Journaling, Sqlite, SqliteBuilder};
 use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use secrecy::{ExposeSecret, SecretString};
@@ -28,6 +28,7 @@ const KEY_SESSION: &str = "session";
 const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
+const KEY_WHATS_NEW_SEEN: &str = "whats_new_seen";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
 
@@ -58,7 +59,7 @@ impl MetaStore {
         let path = path.as_ref();
         debug!("opening meta sqlite database at {path:?}");
 
-        let builder = Sqlite::builder(path);
+        let builder = Sqlite::builder(path).access(Access::PreferReadWrite);
         let ephemeral = builder.is_memory();
 
         let store = Self::from_builder(builder, timeout).await?;
@@ -178,6 +179,14 @@ impl MetaStore {
         self.set(KEY_LATEST_VERSION, version).await
     }
 
+    pub async fn whats_new_seen(&self) -> Result<Option<String>> {
+        self.get(KEY_WHATS_NEW_SEEN).await
+    }
+
+    pub async fn save_whats_new_seen(&self, version: &str) -> Result<()> {
+        self.set(KEY_WHATS_NEW_SEEN, version).await
+    }
+
     pub async fn session_token(&self) -> Result<Option<SecretString>> {
         Ok(self.get(KEY_SESSION).await?.map(SecretString::from))
     }
@@ -207,20 +216,35 @@ impl MetaStore {
         Ok(self.get(KEY_HUB_SESSION).await?.map(SecretString::from))
     }
 
-    pub async fn save_hub_session(&self, token: &SecretString) -> Result<()> {
+    /// Saves `token` as the hub session, with `user_id`, the user it logs in, when the hub said
+    /// whose it is. Without one, [`Self::hub_user_id`] has none until
+    /// [`Self::save_hub_user_id`] records it.
+    pub async fn save_hub_session(
+        &self,
+        token: &SecretString,
+        user_id: Option<&str>,
+    ) -> Result<()> {
+        const UPSERT: &str = "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, \
+                              strftime('%s', 'now')) ON CONFLICT(key) DO UPDATE SET value = ?2, \
+                              updated_at = strftime('%s', 'now')";
+
         let mut tx = self.sqlite.pool().begin().await?;
-        db::query(
-            "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
-             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
-        )
-        .bind(KEY_HUB_SESSION)
-        .bind(token.expose_secret())
-        .execute(&mut *tx)
-        .await?;
-        db::query("DELETE FROM meta WHERE key = ?1")
-            .bind(KEY_HUB_USER_ID)
+        db::query(UPSERT)
+            .bind(KEY_HUB_SESSION)
+            .bind(token.expose_secret())
             .execute(&mut *tx)
             .await?;
+        match user_id {
+            Some(user_id) => {
+                db::query(UPSERT).bind(KEY_HUB_USER_ID).bind(user_id).execute(&mut *tx).await?;
+            }
+            None => {
+                db::query("DELETE FROM meta WHERE key = ?1")
+                    .bind(KEY_HUB_USER_ID)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         tx.commit().await?;
 
         Ok(())

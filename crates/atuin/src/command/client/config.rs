@@ -1,21 +1,10 @@
 use std::sync::Arc;
 
-#[cfg(feature = "octavo")]
-use atuin_client::history::HistoryId;
 use atuin_client::settings::Settings;
 use atuin_common::string::StrExt;
-#[cfg(feature = "octavo")]
-use atuin_domain::caps::OctavoCap;
-#[cfg(feature = "octavo")]
-use atuin_octavo::hub::{HubCallError, HubClient, UserId};
-#[cfg(feature = "octavo")]
-use atuin_octavo::pb;
-#[cfg(feature = "octavo")]
-use atuin_octavo::queue::UploadQueue;
+use atuin_common::userio;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::Result;
-#[cfg(feature = "octavo")]
-use eyre::WrapErr;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 use tracing::instrument;
 
@@ -48,19 +37,72 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-config-print"), long_about = fl!("cmd-config-print", "long"))]
     Print(PrintCmd),
+
+    #[command(about = fl!("cmd-config-check"), long_about = fl!("cmd-config-check", "long"))]
+    Check,
+
+    #[cfg(feature = "octavo")]
+    #[command(about = fl!("cmd-config-types"), long_about = fl!("cmd-config-types", "long"))]
+    Types,
 }
 
 impl Cmd {
     #[instrument(level = "trace", skip_all)]
     pub async fn run(self, settings: &Arc<Settings>) -> Result<()> {
+        if !matches!(self, Self::Check) {
+            warn_about_unknown_keys();
+        }
+
         match self {
             Self::Get(get) => get.run(settings).await,
             Self::Set(set) => set.run(settings).await,
             Self::Enable(enable) => enable.run(settings).await,
             Self::Disable(disable) => disable.run(settings).await,
             Self::Print(print) => print.run(settings).await,
+            Self::Check => check(),
+            #[cfg(feature = "octavo")]
+            Self::Types => {
+                print!("{}", atuin_client::lua_config::TYPES);
+                Ok(())
+            }
         }
     }
+}
+
+/// Warns about the keys of the config file that no setting reads.
+///
+/// Atuin loads its settings without these keys. Only `atuin config` and `atuin doctor` warn
+/// about them.
+pub fn warn_about_unknown_keys() {
+    let unknown = match Settings::unknown_keys() {
+        Ok(unknown) => unknown,
+        // Loading the settings succeeded already, so this only fails if the file changed since.
+        Err(e) => {
+            tracing::debug!(error = %e, "could not check the config file for unknown keys");
+            return;
+        }
+    };
+    if !unknown.is_empty() {
+        let file = Settings::get_config_path()
+            .map_or_else(|_| "config.toml".to_owned(), |path| path.display().to_string());
+        userio::log::warn!("config-unknown-keys", file = file, keys = unknown.to_string());
+    }
+}
+
+/// Fails if the config file has keys that no setting reads.
+///
+/// A config file that doesn't load fails every command earlier, while Atuin loads its settings.
+fn check() -> Result<()> {
+    let file = Settings::get_config_path()?;
+    let unknown = Settings::unknown_keys()?;
+    if unknown.is_empty() {
+        userio::log::info!("config-check-ok", file = file.display().to_string());
+        return Ok(());
+    }
+    eyre::bail!(
+        "{}",
+        fl!("config-unknown-keys", file = file.display().to_string(), keys = unknown.to_string())
+    )
 }
 
 /// Get a configuration value from your config.toml file,
@@ -159,6 +201,9 @@ pub struct SetCmd {
         help = fl!("arg-config-set-the-type")
     )]
     pub the_type: ValueType,
+
+    #[arg(long, help = fl!("arg-config-set-force"))]
+    pub force: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
@@ -199,13 +244,19 @@ impl SetCmd {
         let value = self.parse_value(existing_type.as_ref())?;
         let updated = update_config(config_str, [(key, value)])?;
 
-        Settings::validate_str(&updated).map_err(|e| {
+        let unknown = Settings::validate_str(&updated).map_err(|e| {
             eyre::eyre!(
                 "cannot update config: setting '{key}' to '{}' would make your configuration \
                  invalid\n\n{e}",
                 self.value,
             )
         })?;
+        if unknown.covers(key) && !self.force {
+            eyre::bail!(
+                "cannot update config: Atuin has no setting named '{key}'; pass --force to set it \
+                 anyway"
+            );
+        }
         Ok(updated)
     }
 
@@ -271,9 +322,6 @@ pub enum Feature {
     Daemon,
     #[value(help = fl!("value-config-feature-output-capture"))]
     OutputCapture,
-    #[cfg(feature = "octavo")]
-    #[value(help = fl!("value-config-feature-octavo"))]
-    Octavo,
     #[cfg(all(feature = "ai", feature = "daemon"))]
     #[value(help = fl!("value-config-feature-threads"), alias = "ai-sessions")]
     Threads,
@@ -287,52 +335,40 @@ impl EnableCmd {
             return Ok(());
         }
 
-        #[cfg(feature = "octavo")]
-        let octavo = match self.feature {
-            Feature::Octavo => {
-                let Some(onboarding) = onboard_octavo(settings).await? else {
-                    println!("{}", fl!("config-enable-octavo-declined"));
-                    return Ok(());
-                };
-                Some(onboarding)
-            }
-            _ => None,
-        };
-
         let config_file = Settings::get_config_path()?;
         let config_str = tokio::fs::read_to_string(&config_file).await?;
 
         let updated = self.get_updated_config(&config_str, settings.daemon.enabled)?;
         tokio::fs::write(&config_file, &updated).await?;
 
-        println!("Enabled.");
-
-        // Queued before the restart below so the daemon starts on it, and reported after it so a
-        // failure still leaves the daemon on the new config.
-        #[cfg(feature = "octavo")]
-        let backfilled = match octavo {
-            Some(onboarding) => onboarding.backfill().await,
-            None => Ok(()),
-        };
-        #[cfg(not(feature = "octavo"))]
-        let backfilled = Ok(());
+        userio::log::info!("config-enabled");
 
         // The daemon reads these settings only at startup, so it needs a restart to pick them
         // up. A running daemon with autostart off may be externally managed (systemd, launchd),
         // so leave that one alone and tell the user instead.
         #[cfg(feature = "daemon")]
-        if settings.daemon.enabled && !settings.daemon.autostart {
-            println!("Restart the Atuin daemon and your shell for the change to take effect.");
-            return backfilled;
-        } else if let Err(e) = daemon::restart_cmd(settings, false).await {
-            eprintln!(
-                "Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually."
-            );
+        {
+            // `settings` predates the edit, which may have switched the daemon and its autostart
+            // on: with them off, the restart would fork the daemon rather than install the launchd
+            // agent.
+            let settings = match Settings::new() {
+                Ok(settings) => settings,
+                Err(e) => {
+                    userio::log::warn!("config-reload-failed", error = e.to_string());
+                    return Ok(());
+                }
+            };
+            if settings.daemon.enabled && !settings.daemon.autostart {
+                userio::log::info!("config-restart-daemon-and-shell");
+                return Ok(());
+            } else if let Err(e) = daemon::restart_cmd(&settings, false).await {
+                userio::log::warn!("config-daemon-restart-failed", error = e.to_string());
+            }
         }
 
-        println!("Restart your shell for the change to take effect.");
+        userio::log::info!("config-restart-shell");
 
-        backfilled
+        Ok(())
     }
 
     pub(super) fn get_updated_config(
@@ -355,8 +391,6 @@ impl EnableCmd {
                 changes.push(("pty_proxy.enabled", Value::from(true)));
                 changes.push(("output.enabled", Value::from(true)));
             }
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => changes.push(("octavo.enabled", Value::from(true))),
             #[cfg(all(feature = "ai", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(true))),
         }
@@ -369,93 +403,6 @@ impl EnableCmd {
     }
 }
 
-/// What enabling Octavo queues once the config says it's on.
-#[cfg(feature = "octavo")]
-struct OctavoOnboarding {
-    queue: UploadQueue,
-    user: UserId,
-    backfill: Vec<HistoryId>,
-    old: usize,
-}
-
-#[cfg(feature = "octavo")]
-impl OctavoOnboarding {
-    async fn backfill(self) -> Result<()> {
-        if !self.backfill.is_empty() {
-            let queued = self.queue.push_many_history(&self.user, self.backfill).await.wrap_err(
-                "failed to queue your history for upload; run `atuin config enable octavo` again \
-                 to retry",
-            )?;
-            println!("{}", fl!("config-enable-octavo-backfilled", count = queued));
-        }
-        if self.old > 0 {
-            println!("{}", fl!("config-enable-octavo-backfill-old", count = self.old));
-        }
-
-        Ok(())
-    }
-}
-
-/// Asks the user to enable Octavo, and whether to upload the history they already have; `None`
-/// if they decline.
-#[cfg(feature = "octavo")]
-async fn onboard_octavo(settings: &Arc<Settings>) -> Result<Option<OctavoOnboarding>> {
-    let login = match HubClient::new(settings)?.login(settings).await {
-        Ok(login) => login,
-        Err(HubCallError::NotLoggedIn) => eyre::bail!(fl!("config-enable-octavo-not-logged-in")),
-        Err(err) => return Err(err).wrap_err("failed to ask the hub who you are logged in as"),
-    };
-
-    let caps = atuin_client::api_client::caps_client(settings)?;
-    caps.refresh().await?;
-    if caps.get_server::<OctavoCap>().await?.is_none() {
-        eyre::bail!(fl!(
-            "config-enable-octavo-not-enabled",
-            address = settings.sync_address.to_string()
-        ));
-    }
-
-    let accepted = super::setup::prompt(
-        "Octavo",
-        &fl!("config-enable-octavo-description"),
-        Some(&fl!("config-enable-octavo-disclaimer")),
-        super::setup::DefaultAnswer::No,
-    )?;
-    if !accepted {
-        return Ok(None);
-    }
-
-    let history =
-        atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout).await?;
-    let (ids, old): (Vec<_>, Vec<_>) =
-        history.active_ids().await?.into_iter().partition(|&id| pb::UuidV7::try_from(id).is_ok());
-
-    let backfill = super::setup::prompt(
-        "history backfill",
-        &fl!("config-enable-octavo-backfill", count = ids.len()),
-        None,
-        super::setup::DefaultAnswer::No,
-    )?;
-
-    let (backfill, old) = if backfill {
-        (ids, old.len())
-    } else {
-        (Vec::new(), 0)
-    };
-
-    // Opened before the config says Octavo is on, so a queue that can't be opened leaves it off.
-    let queue = UploadQueue::open(settings.octavo_queue_path())
-        .await
-        .wrap_err("failed to open Octavo's upload queue")?;
-
-    Ok(Some(OctavoOnboarding {
-        queue,
-        user: login.user_id().clone(),
-        backfill,
-        old,
-    }))
-}
-
 impl DisableCmd {
     pub async fn run(self, settings: &Settings) -> Result<()> {
         let config_file = Settings::get_config_path()?;
@@ -464,27 +411,27 @@ impl DisableCmd {
         let updated = self.get_updated_config(&config_str)?;
         tokio::fs::write(&config_file, &updated).await?;
 
-        println!("Disabled.");
+        userio::log::info!("config-disabled");
 
         #[cfg(feature = "daemon")]
         match self.feature {
             Feature::Daemon => {
                 if let Err(e) = daemon::stop_cmd(settings).await {
-                    eprintln!(
-                        "Could not stop the Atuin daemon: {e}\nRun `atuin daemon stop` manually."
-                    );
+                    userio::log::warn!("config-daemon-stop-failed", error = e.to_string());
                     return Ok(());
+                }
+                // Only stopped, the launchd agent would start again at the next login.
+                if let Err(e) = atuin_daemon::service::ActiveService::remove_launchd_agent().await {
+                    userio::log::warn!("config-launchd-agent-remove-failed", error = e.to_string());
                 }
             }
             Feature::OutputCapture => restart_autostarted_daemon(settings).await,
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => restart_autostarted_daemon(settings).await,
             // The daemon notices the change itself, and the shell doesn't care.
             #[cfg(feature = "ai")]
             Feature::Threads => return Ok(()),
         }
 
-        println!("Restart your shell for the change to take effect.");
+        userio::log::info!("config-restart-shell");
 
         Ok(())
     }
@@ -502,8 +449,6 @@ impl DisableCmd {
                 }
             }
             Feature::OutputCapture => changes.push(("output.enabled", Value::from(false))),
-            #[cfg(feature = "octavo")]
-            Feature::Octavo => changes.push(("octavo.enabled", Value::from(false))),
             #[cfg(all(feature = "ai", feature = "daemon"))]
             Feature::Threads => changes.push(("threads.capture", Value::from(false))),
         }
@@ -522,7 +467,7 @@ async fn restart_autostarted_daemon(settings: &Settings) {
         && settings.daemon.autostart
         && let Err(e) = daemon::restart_cmd(settings, true).await
     {
-        eprintln!("Could not restart the Atuin daemon: {e}\nRun `atuin daemon restart` manually.");
+        userio::log::warn!("config-daemon-restart-failed", error = e.to_string());
     }
 }
 
@@ -628,7 +573,7 @@ fn detect_existing_type(doc: &DocumentMut, key: &str) -> Option<ValueType> {
 /// If `config` doesn't already contain a key, this function tries to insert it at an intelligent
 /// location -- at or near a commented-out example of that key if one exists. See [`enable_example`]
 /// for more information.
-fn update_config<'a, C>(config: &str, changes: C) -> Result<String>
+pub(super) fn update_config<'a, C>(config: &str, changes: C) -> Result<String>
 where
     // These bounds allow passing arrays or `Vec`s. Don't try changing the `AsRef`-slice bound to
     // `for<'c> &'c C: IntoIterator<Item = &'c C::Item>` for more flexibility: it causes compilation
@@ -969,6 +914,7 @@ mod tests {
             key: key.to_string(),
             value: value.to_string(),
             the_type: ValueType::Auto,
+            force: false,
         }
     }
 
@@ -990,6 +936,18 @@ mod tests {
         "daemon.enabled",
         "true",
         "# my config\nauto_sync = true\n\n[daemon]\nenabled = true\n"
+    )]
+    #[case::a_known_key_beside_an_unknown_one(
+        "sync_url = \"https://example.test\"\n",
+        "auto_sync",
+        "false",
+        "sync_url = \"https://example.test\"\nauto_sync = false\n"
+    )]
+    #[case::a_key_that_a_setting_names_freely(
+        "",
+        "keymap.emacs.ctrl-x",
+        "exit",
+        "[keymap]\n\n[keymap.emacs]\nctrl-x = \"exit\"\n"
     )]
     fn set_writes(
         #[case] input: &str,
@@ -1107,6 +1065,21 @@ mod tests {
         &["style"]
     )]
     #[case::an_empty_key("", "  ", "fuzzy", &["non-empty"])]
+    #[case::an_unknown_key("", "sync_url", "https://example.test", &["sync_url", "--force"])]
+    #[case::an_unknown_key_in_a_known_table("", "keys.scroll_exists", "true", &["keys.scroll_exists"])]
+    #[case::a_key_in_an_unknown_table("", "nope.enabled", "true", &["nope.enabled"])]
+    #[case::an_unknown_key_under_a_legacy_name_beside_its_new_name(
+        "[threads]\nmouse_typo = true\n",
+        "ai.sessions.mouse_typo",
+        "true",
+        &["ai.sessions.mouse_typo"]
+    )]
+    #[case::an_unknown_key_that_the_file_has_already(
+        "sync_url = \"https://example.test\"\n",
+        "sync_url",
+        "https://other.example",
+        &["sync_url"]
+    )]
     fn set_rejects(
         #[case] input: &str,
         #[case] key: &str,
@@ -1121,5 +1094,28 @@ mod tests {
         for fragment in expected_err {
             assert!(err.contains(fragment), "error should mention `{fragment}`, got: {err}");
         }
+    }
+
+    #[rstest]
+    fn force_sets_an_unknown_key() {
+        let updated = SetCmd {
+            force: true,
+            ..set_cmd("sync_url", "https://example.test")
+        }
+        .get_updated_config("")
+        .expect("--force should accept an unknown key");
+        assert_eq!(updated, "sync_url = \"https://example.test\"\n");
+    }
+
+    #[rstest]
+    fn force_still_rejects_invalid_values() {
+        let err = SetCmd {
+            force: true,
+            ..set_cmd("auto_sync", "banana")
+        }
+        .get_updated_config("")
+        .expect_err("--force only skips the unknown-key check")
+        .to_string();
+        assert!(err.contains("auto_sync"), "{err}");
     }
 }

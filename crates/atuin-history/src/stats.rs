@@ -53,7 +53,17 @@ pub fn split_common_prefix<'a>(
     None
 }
 
-fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
+/// Whether `stats.ignored_commands` hides `command` from stats.
+#[must_use]
+pub fn is_ignored(settings: &Settings, command: &str) -> bool {
+    let program = interesting_command(settings, strip_leading_env_vars(command.trim()));
+    settings.stats.ignored_commands.iter().any(|c| c == program)
+}
+
+/// The program `command` runs, past any `stats.common_prefix` (`sudo`), with its subcommand when
+/// the program is one of `stats.common_subcommands` (`cargo build`).
+#[must_use]
+pub fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str {
     if let Some((prefix, remainder)) = split_common_prefix(settings, command) {
         if remainder.is_empty() {
             // no commands following, just use the prefix
@@ -84,11 +94,21 @@ fn interesting_command<'a>(settings: &Settings, mut command: &'a str) -> &'a str
     &command[..first_whitespace(command)]
 }
 
-fn split_at_pipe(command: &str) -> Vec<&str> {
+/// The commands of the pipeline `command`, split at each unquoted `|`.
+#[must_use]
+pub fn split_at_pipe(command: &str) -> Vec<&str> {
     let mut result = vec![];
     let mut quoted = false;
     let mut start = 0;
     let mut graphemes = UnicodeSegmentation::grapheme_indices(command, true);
+    // `|&` pipes stderr too; its `&` belongs to the operator, not to the next command.
+    let operator_len = |rest: &str| {
+        if rest.starts_with("|&") {
+            2
+        } else {
+            1
+        }
+    };
 
     while let Some((i, c)) = graphemes.next() {
         let current = i;
@@ -102,7 +122,7 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
             "\\" if graphemes.next().is_some() => {}
             "|" if !quoted => {
                 if current > start && command[start..].starts_with('|') {
-                    start += 1;
+                    start += operator_len(&command[start..]);
                 }
                 result.push(&command[start..current]);
                 start = current;
@@ -111,13 +131,15 @@ fn split_at_pipe(command: &str) -> Vec<&str> {
         }
     }
     if command[start..].starts_with('|') {
-        start += 1;
+        start += operator_len(&command[start..]);
     }
     result.push(&command[start..]);
     result
 }
 
-fn strip_leading_env_vars(command: &str) -> &str {
+/// `command` without its leading `FOO=bar` environment assignments.
+#[must_use]
+pub fn strip_leading_env_vars(command: &str) -> &str {
     // fast path: no equals sign, no environment variable
     if !command.contains('=') {
         return command;
@@ -263,13 +285,11 @@ pub fn compute(
     let mut prefixes = HashMap::<Vec<&str>, usize>::with_capacity(history.len());
 
     for i in history {
-        // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
-        let command = strip_leading_env_vars(i.command.trim());
-        let prefix = interesting_command(settings, command);
-
-        if settings.stats.ignored_commands.iter().any(|c| c == prefix) {
+        if is_ignored(settings, &i.command) {
             continue;
         }
+        // just in case it somehow has a leading tab or space or something (legacy atuin didn't ignore space prefixes)
+        let command = strip_leading_env_vars(i.command.trim());
 
         total_unignored += 1;
         commands.insert(command);
@@ -470,6 +490,9 @@ mod tests {
     #[case::emoji("git commit -m \"🚀\"", &["git commit -m \"🚀\""])]
     #[case::starts_with_pipe("| sed 's/[0-9a-f]//g'", &["", " sed 's/[0-9a-f]//g'"])]
     #[case::starts_with_spaces_and_pipe("  | sed 's/[0-9a-f]//g'", &["  ", " sed 's/[0-9a-f]//g'"])]
+    #[case::stderr_pipe("make |& tee build.log", &["make ", " tee build.log"])]
+    #[case::stderr_pipe_then_pipe("make |& tee log | wc -l", &["make ", " tee log ", " wc -l"])]
+    #[case::logical_or_is_not_a_command("a || b", &["a ", "", " b"])]
     fn splits_at_pipe(#[case] input: &str, #[case] expected: &[&str]) {
         assert_eq!(split_at_pipe(input), expected);
     }

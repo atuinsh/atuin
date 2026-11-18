@@ -176,6 +176,21 @@ Then update `CHANGELOG.md`:
 
 ---
 
+## Step 5.5 — Update Contributors
+
+Regenerate `CONTRIBUTORS`, which `atuin contributors` prints:
+
+```bash
+git log --format='%aN <%aE>' \
+    | grep -vE '\[bot\]|^atuin-bot ' \
+    | LC_ALL=C sort -uf > CONTRIBUTORS
+```
+
+`LC_ALL=C` keeps the order the same on macOS and Linux. Tell the user how
+many names were added (`git diff --numstat -- CONTRIBUTORS`).
+
+---
+
 ## Step 6 — Commit & Push
 
 Stage all changes and commit:

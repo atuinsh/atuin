@@ -20,7 +20,16 @@ impl SearchTermsArg {
 
 impl<'de> Deserialize<'de> for SearchTermsArg {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let terms = Vec::<NonBlankString>::deserialize(deserializer)?;
+        // Models often pass one string where the schema asks for a list; take it as one term.
+        let terms = match serde_json::Value::deserialize(deserializer)? {
+            term @ serde_json::Value::String(_) => vec![term],
+            other => Vec::deserialize(other).map_err(serde::de::Error::custom)?,
+        };
+        let terms = terms
+            .into_iter()
+            .map(NonBlankString::deserialize)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(serde::de::Error::custom)?;
         if terms.is_empty() {
             return Err(serde::de::Error::invalid_length(0, &"at least one term"));
         }

@@ -2,9 +2,12 @@
 
 use std::net::SocketAddr;
 
+use atuin_common::userio::log::{SINK, UserFilterExt as _, UserLayer};
+use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
 use clap::Parser;
 use eyre::{Context, Result};
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -24,13 +27,26 @@ enum Cmd {
 
     /// Print server example configuration
     DefaultConfig,
+
+    /// Manage the server by hand
+    #[clap(subcommand)]
+    Admin(AdminCmd),
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cmd = Cmd::parse();
 
-    tracing_subscriber::registry().with(fmt::layer()).with(EnvFilter::from_default_env()).init();
+    // Warnings show without RUST_LOG, since that is how loading the settings reports what it
+    // ignored. Messages for the operator, such as what an admin command did, show on the sink.
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy()
+        .without_user_messages();
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_filter(filter))
+        .with(UserLayer::new(&SINK))
+        .init();
 
     tracing::trace!(command = ?cmd, "server command");
 
@@ -53,6 +69,10 @@ async fn main() -> Result<()> {
         Cmd::DefaultConfig => {
             println!("{}", example_config());
             Ok(())
+        }
+        Cmd::Admin(cmd) => {
+            let settings = Settings::new().wrap_err("could not load server settings")?;
+            cmd.run(&settings.db_settings).await
         }
     }
 }

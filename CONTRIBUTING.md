@@ -51,6 +51,43 @@ This way, Atuin will read everything from `$ATUIN_HOME`, and won't touch your ex
 
 These variable exports can be added in a local `.envrc` file, read by [direnv](https://direnv.net/).
 
+### The devenv shell
+
+[devenv](https://devenv.sh/getting-started/) is the supported development shell. The flake's
+`nix develop` shell is a minimal one, kept for packaging: it has the Rust toolchain and the build
+inputs, but not CI's tools, the `ci-*` scripts or the sandbox below.
+
+With devenv installed, `devenv shell` gives you what CI runs, at CI's versions: the toolchain from
+`rust-toolchain.toml` with clippy, rust-src and rust-analyzer, the nightly rustfmt the format check
+uses (as the shell's `rustfmt`, so `cargo fmt` and your editor format the way CI checks),
+cargo-nextest, cargo-deny, Vale with the styles `.vale.ini` pins, codespell and shellcheck.
+`devenv up -d` starts a Postgres for `atuin-server`'s integration tests; `ATUIN_DB_URI` points at
+its socket, so the tests never reach a Postgres of your own, and `ci-test` treats it being stopped
+as having no Postgres. Every version comes from where CI pins it (`rust-toolchain.toml`,
+`Cargo.toml`'s `rust-version`, `.buildkite/`), so the two cannot drift.
+
+Each `ci-*` script runs one pipeline step's commands, step for step: `ci-fmt`, `ci-clippy`,
+`ci-check`, `ci-test` (extra arguments go to nextest, so `ci-test -p atuin-common`), `ci-deny`,
+`ci-docs`, `ci-vale`, `ci-codespell`, `ci-shellcheck` and `ci-msrv`. `ci-test` runs the tests as
+a CI agent does, in a fresh `HOME` with only CI's `ATUIN_*` variables.
+
+The shell is a sandbox. It sets `ATUIN_HOME`, `ATUIN_CONFIG_DIR`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME` and `XDG_CACHE_HOME` to paths under `.devenv/state/atuin/`, with a `config.toml`
+whose sync is off, whose sync address is a local server, and whose `daemon.socket_path` is in
+devenv's runtime directory. So `cargo run -- …`, a dev daemon and the e2e suite cannot
+read or write your own history, config or sync account, and a dev `atuin daemon start` never
+touches your launchd agent. `atuin-dev-reset` wipes the sandbox (stopping a dev daemon in it).
+
+To run a dev build against your real profile on purpose, run it outside the shell, or through
+`atuin-real`, which unsets the sandbox variables for one command:
+
+```shell
+atuin-real target/debug/atuin stats
+```
+
+A daemon started that way is your real one, so prefer `atuin-real target/debug/atuin daemon status`
+over `daemon start` unless you mean to replace it.
+
 ## Editor setup (optional)
 
 `cargo +nightly fmt` is the source of truth and CI enforces it. A nightly version of Rust is required for formatting because Atuin's `.rustfmt.toml` uses nightly-only options.

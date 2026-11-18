@@ -5,8 +5,7 @@
 //! gather and on every frame). Here the bridge is a plain
 //! `Stream<Item = Msg>` driven by `ctx.spawn`: dropping the app's `Task`
 //! drops this generator at whatever await point it's suspended on, which
-//! both aborts the HTTP stream and guarantees a replaced bridge can't
-//! populate the user-context cache with a stale gather.
+//! aborts the HTTP stream.
 
 use std::sync::Arc;
 
@@ -18,7 +17,6 @@ use crate::fsm::events::Event;
 use crate::skills::SkillSummary;
 use crate::stream::{ChatRequest, StreamContent, StreamControl, StreamFrame, create_chat_stream};
 use crate::tui::app::Msg;
-use crate::user_context::UserContextCache;
 
 pub fn stream_bridge(
     request: ChatRequest,
@@ -26,19 +24,9 @@ pub fn stream_bridge(
     client_ctx: ClientContext,
     skill_summaries: Vec<SkillSummary>,
     skill_overflow: Option<String>,
-    user_context_cache: UserContextCache,
     settings: Arc<Settings>,
 ) -> impl futures::Stream<Item = Msg> + Send {
     async_stream::stream! {
-        // User context files (TERMINAL.md) are gathered and interpolated on
-        // the first request, then served from the cache until `/reload`.
-        let shell = client_ctx.shell.clone().unwrap_or_else(|| "sh".to_string());
-        let start_dir = std::env::current_dir().unwrap_or_default();
-        let global_ctx_path = crate::user_context::global_context_path();
-        let user_contexts = user_context_cache
-            .get_or_gather(&start_dir, Some(&global_ctx_path), &shell)
-            .await;
-
         let stream = create_chat_stream(
             app_ctx.endpoint.clone(),
             app_ctx.token.clone(),
@@ -47,7 +35,6 @@ pub fn stream_bridge(
             client_ctx,
             app_ctx.send_cwd,
             app_ctx.last_command.clone(),
-            user_contexts,
             skill_summaries,
             skill_overflow,
             settings,

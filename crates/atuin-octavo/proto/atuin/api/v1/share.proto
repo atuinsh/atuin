@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package atuin.api.v1;
+
+import "atuin/api/v1/common.proto";
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+// Something a user lets anyone holding its link read, or the members of their organizations.
+message Share {
+  // Client-generated and unique. Not a secret: it names the share in its link, which opens it only
+  // with the link's token, or to the members of its organizations.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // Logically required.
+  ShareOwner owner = 2 [(buf.validate.field).required = true];
+  // What it shares. Logically required.
+  ShareTarget target = 3 [(buf.validate.field).required = true];
+  // When it was shared.
+  google.protobuf.Timestamp create_time = 4;
+  // Set only for its owner, who alone may change who it opens to or delete it.
+  ShareManagement management = 5;
+}
+
+// The user who shared a share.
+message ShareOwner {
+  // Their username now, which they can change.
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// What only a share's owner sees of it.
+message ShareManagement {
+  // Opens the share, with its id, to anyone, signed in or not; unset while it has no link. A
+  // secret: whoever the owner hands it to can read the share.
+  optional string link_token = 1 [(buf.validate.field).string.min_len = 1];
+  // The organizations, by slug, whose signed-in members it opens to with its id alone.
+  repeated string org_slugs = 2;
+}
+
+// Who a share opens to, beside its owner.
+message ShareAudience {
+  // Whether it has a link, which opens it to anyone holding the link's token.
+  bool link = 1;
+  // The organizations, by slug, whose signed-in members it opens to with its id alone, while its
+  // owner belongs to them too.
+  repeated string org_slugs = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {
+        min_len: 1
+        not_contains: "\x00"
+      }
+    }
+  }];
+}
+
+// A share to open.
+message ShareRef {
+  // The share, as `Share.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+  // The share's link token, as `ShareManagement.link_token` gives it. Only its owner, and the
+  // members of its organizations, may leave it out.
+  optional string link_token = 2;
+}
+
+// What a share lets its readers read.
+message ShareTarget {
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    // One thread and its subagents.
+    SharedThread thread = 1;
+  }
+}
+
+// One of the owner's threads, its messages as they are stored, and every thread spawned from it
+// as a subagent (`THREAD_PARENT_KIND_SUBAGENT`), and from those in turn. Its forks and
+// continuations are not shared.
+message SharedThread {
+  // The thread, as `Thread.id` gives it.
+  UuidV7 id = 1 [(buf.validate.field).required = true];
+}

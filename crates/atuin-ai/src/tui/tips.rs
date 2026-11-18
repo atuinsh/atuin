@@ -10,9 +10,6 @@ pub struct TipContext<'a> {
     pub settings: &'a Settings,
     /// A model is pinned — via `ai.model` or /model this session.
     pub model_set: bool,
-    /// Whether context files (`TERMINAL.md`) were gathered for this
-    /// invocation. `None` = not gathered yet (first request still in flight).
-    pub has_context_files: Option<bool>,
 }
 
 pub struct Tip {
@@ -72,16 +69,6 @@ pub const TIPS: &[Tip] = &[
         relevant: Some(|ctx| !ctx.settings.ai.opening.send_last_command.unwrap_or(false)),
     },
     Tip {
-        id: "reload-context",
-        text: "Run /reload to re-read your TERMINAL.md files mid-session",
-        relevant: Some(|ctx| ctx.has_context_files == Some(true)),
-    },
-    Tip {
-        id: "add-terminal-md",
-        text: "Add a TERMINAL.md to your project to give Atuin AI persistent context",
-        relevant: Some(|ctx| ctx.has_context_files == Some(false)),
-    },
-    Tip {
         id: "newline",
         text: "Shift+Enter or Ctrl+J inserts a newline",
         relevant: None,
@@ -129,6 +116,8 @@ impl TipRotation {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     fn settings() -> Settings {
@@ -139,11 +128,10 @@ mod tests {
         TipContext {
             settings,
             model_set: false,
-            has_context_files: None,
         }
     }
 
-    #[test]
+    #[rstest]
     fn tips_have_unique_ids() {
         let mut ids: Vec<_> = TIPS.iter().map(|t| t.id).collect();
         ids.sort_unstable();
@@ -151,7 +139,7 @@ mod tests {
         assert_eq!(ids.len(), TIPS.len(), "duplicate tip ids");
     }
 
-    #[test]
+    #[rstest]
     fn rotation_walks_in_order_and_wraps() {
         let settings = settings();
         let c = ctx(&settings);
@@ -172,7 +160,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn irrelevant_tips_are_skipped() {
         let settings = settings();
         let model_idx = TIPS.iter().position(|t| t.id == "model").unwrap();
@@ -182,13 +170,12 @@ mod tests {
             .next(&TipContext {
                 settings: &settings,
                 model_set: true,
-                has_context_files: None,
             })
             .unwrap();
         assert_ne!(tip.id, "model", "model tip should be skipped when set");
     }
 
-    #[test]
+    #[rstest]
     fn send_cwd_tip_respects_both_config_spellings() {
         let mut settings = settings();
         let idx = TIPS.iter().position(|t| t.id == "send-cwd").unwrap();
@@ -203,7 +190,7 @@ mod tests {
         assert_ne!(rotation.next(&ctx(&settings)).unwrap().id, "send-cwd");
     }
 
-    #[test]
+    #[rstest]
     fn disabled_setting_suppresses_all_tips() {
         let mut settings = settings();
         settings.ai.tips = Some(false);

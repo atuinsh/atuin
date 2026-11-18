@@ -31,6 +31,7 @@
 use atuin_client::ai_session::{
     Analysis, FastForward, HarnessKind, HarnessSession, Head, Message, SourceId,
 };
+use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::rehydrate::RehydrateMessage;
 use atuin_common::harnesstools::session::{Content, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
@@ -82,8 +83,9 @@ pub enum Why {
 /// nothing [substantive](is_substantive) past where it leaves the line, and no summary standing in
 /// for the conversation, which the model is given as context) is no branch of its own, and is
 /// fast-forwarded from where it leaves it, as the agent would go on from there. Only for a harness
-/// whose rows name the row they follow (Claude Code, pi), where the rows appended hang from that
-/// row; any other reads its transcript in order, twig and all.
+/// whose rows name the row they follow (Claude Code, pi, Kiro, whose turns end on a reasoning
+/// marker a copy written elsewhere may lack), where the rows appended hang from that row; any
+/// other reads its transcript in order, twig and all.
 pub fn classify(
     analysis: &Analysis,
     harness: HarnessKind,
@@ -114,8 +116,18 @@ pub fn classify(
     }
     let path = analysis.path_to(head);
     let shared = path.iter().zip(&mine).take_while(|(a, b)| a.source_id == b.source_id).count();
-    let linked = matches!(harness, HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp);
-    let twig = linked && !mine[shared..].iter().any(|m| carries_conversation(m));
+    // The copy's rows past the shared line can be stepped over when the agent will not see them
+    // once it goes on from the shared row. One whose rows name the row before them follows that
+    // chain, so any twig without conversation drops out of its context; Kiro reads its log in
+    // order and would still see the twig, so only its reasoning markers, which give the model
+    // nothing back, may be stepped over.
+    let twig = match harness {
+        HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => {
+            !mine[shared..].iter().any(|m| carries_conversation(m))
+        }
+        HarnessKind::Kiro => mine[shared..].iter().all(|m| is_reasoning_marker(m)),
+        _ => false,
+    };
     let rest = &path[shared..];
     let holds_none = !rest.iter().any(|m| tip.known_source_ids.contains(m.source_id.as_ref()));
     if twig && holds_none && shared > 0 {
@@ -134,6 +146,13 @@ pub fn classify(
 fn carries_conversation(row: &Message) -> bool {
     is_substantive(&row.role, &row.content)
         || row.content.iter().any(|c| matches!(c, Content::Summary(_)))
+}
+
+/// Whether `row` only marks that the model reasoned, its reasoning withheld (Kiro's redacted
+/// `Reasoning` row). Only for the twig rule.
+fn is_reasoning_marker(row: &Message) -> bool {
+    !row.content.is_empty()
+        && row.content.iter().all(|c| matches!(c, Content::ReasoningSummary { .. }))
 }
 
 /// How many messages `rows` hold: prompts and assistant text, as a [`Head`] counts them.
@@ -450,7 +469,7 @@ pub async fn fork_from(
     session: &HarnessSession,
     head: Option<&SourceId>,
 ) -> Result<ForkFrom, NotResumable> {
-    let rows = branch_rows(source, session, head)
+    let rows = branch_rows(source, session, head, writes_one_branch(session.harness))
         .await
         .map_err(|e| NotResumable::Fork(format!("{e:#}")))?;
     Ok(ForkFrom {
@@ -459,25 +478,43 @@ pub async fn fork_from(
     })
 }
 
+/// Whether a copy of a session of `harness` written out as itself, a restore or a fork, holds the
+/// one branch the harness resumes, as [`Harness::writes_one_branch`] says. A continuation writes a
+/// line of rows of its own, whatever its target.
+///
+/// [`Harness::writes_one_branch`]: atuin_common::harnesstools::Harness::writes_one_branch
+pub fn writes_one_branch(harness: HarnessKind) -> bool {
+    harness.harness().is_some_and(|h| h.writes_one_branch())
+}
+
 /// The rows a transcript of `session` written out along `head` holds (see
 /// [`Analysis::rows_for`]): a head named (`--branch`, or a fork line picked) is followed; without
 /// one, a session that went on separately on several machines follows its newest head, so no
-/// branch's messages land in another's. `None` for any other session (or one whose branches
-/// aren't known): it is written out from every row synced of it, as it always was, rows off every
-/// branch included. With the rows, the head followed, when it is one of the session's.
+/// branch's messages land in another's. When `one_branch` is set, any session follows its newest
+/// head, along [`Analysis::branch_rows`]. That is for a harness that resumes one branch alone, as
+/// [`writes_one_branch`] says: a turn undone on one machine is no divergence, but isn't the branch
+/// the harness resumes. `None` for any other session, or one whose branches aren't known:
+/// it is written out from every row synced of it, as it always was, rows off every branch
+/// included. With the rows, the head followed, when it is one of the session's.
 pub async fn branch_rows(
     source: &dyn SessionSource,
     session: &HarnessSession,
     head: Option<&SourceId>,
+    one_branch: bool,
 ) -> eyre::Result<Option<(Vec<RehydrateMessage>, Option<Head>)>> {
     let Some(analysis) = source.analyse(session).await? else {
         return Ok(None);
     };
-    let newest = analysis.diverged().then(|| analysis.heads().first()).flatten();
+    let newest = (analysis.diverged() || one_branch).then(|| analysis.heads().first()).flatten();
     let Some(head) = head.or(newest.map(|h| &h.source_id)) else {
         return Ok(None);
     };
-    let rows = analysis.rows_for(head).into_iter().map(|m| m.clone().into()).collect();
+    let rows = if one_branch {
+        analysis.branch_rows(head)
+    } else {
+        analysis.rows_for(head)
+    };
+    let rows = rows.into_iter().map(|m| m.clone().into()).collect();
     Ok(Some((rows, analysis.heads().iter().find(|h| h.source_id == *head).cloned())))
 }
 

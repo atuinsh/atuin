@@ -88,9 +88,18 @@ SHELLCHECK_VERSION=0.11.0
 SHELLCHECK_SHA256=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
 VALE_VERSION=3.15.2
 VALE_SHA256=fc72e64454d6bd7af91905d4faebbf411bae3eec17bb572f4101311212bc0d9e
+# The same release for the other platforms, which only devenv.nix installs.
+# shellcheck disable=SC2034
+VALE_LINUX_ARM64_SHA256=e8240a3304e2c07b0476d30423f241a80296865cf6d2b78b128fb7e4e14cbb69
+# shellcheck disable=SC2034
+VALE_MACOS_X86_64_SHA256=5d56b292f1612758f6d9e8d735dd739aec4e475830d0ba8c1e0ef7d8f08fa198
+# shellcheck disable=SC2034
+VALE_MACOS_ARM64_SHA256=d3f613ff9226935ace08895fc8557206f309cdbd3a81881d86b6ab5b8b408757
 CODESPELL_VERSION=2.4.3
 NIX_INSTALLER_VERSION=3.22.5
 NIX_INSTALLER_SHA256=9432d40ec1d0d4ebb6284848cc389bdb1bbf7aeb5c1cea11e7efc9daf0a1ec82
+BETAMAX_VERSION=0.3.1
+BETAMAX_SHA256=3e8cd7639242b69c2a9c35273072a94a06039b8319fc34fc0649689a741da6b1
 
 install_shellcheck() {
   fetch_verified "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz" \
@@ -98,6 +107,15 @@ install_shellcheck() {
   tar -xzf /tmp/shellcheck.tgz -C /tmp
   mv "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$TOOLS_BIN/"
   shellcheck --version | sed -n 2p
+}
+
+# Its Linux build needs glibc 2.43, which mono's CI image (Ubuntu 26.04) has
+# and the hosted image doesn't.
+install_betamax() {
+  fetch_verified "https://github.com/joshka/betamax/releases/download/betamax-v${BETAMAX_VERSION}/betamax-${BETAMAX_VERSION}-x86_64-unknown-linux-gnu.tgz" \
+    "$BETAMAX_SHA256" /tmp/betamax.tgz
+  tar -xzf /tmp/betamax.tgz -C "$TOOLS_BIN" betamax
+  betamax --version
 }
 
 install_vale() {

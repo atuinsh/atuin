@@ -10,6 +10,8 @@ macro_rules! include_shell {
     };
 }
 
+mod bash_preexec;
+
 pub struct Bash<'a> {
     pub include_guard: &'a str,
     pub main: &'a str,
@@ -19,7 +21,7 @@ pub struct Bash<'a> {
 pub const BASH: Bash<'_> = Bash {
     include_guard: include_shell!("atuin.bash.d/include-guard.bash"),
     main: include_shell!("atuin.bash"),
-    preexec: include_trimmed!("../vendor/bash-preexec/bash-preexec.sh"),
+    preexec: bash_preexec::PATCHED,
 };
 
 pub const FISH: &str = include_shell!("atuin.fish");

@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+#[cfg(feature = "ai")]
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
 use atuin_client::database::Sqlite as HistoryDatabase;
 use atuin_client::history::store::HistoryStore;
@@ -8,11 +9,17 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
 use atuin_common::sync::BlockingPool;
-use eyre::Result;
+use atuin_common::userio::log::SINK;
+use atuin_kv::database::Database as KvDatabase;
+use atuin_scripts::database::Database as ScriptsDatabase;
+use eyre::{Context, Result};
 
+#[cfg(feature = "ai")]
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+use crate::grpc::userio::pb::user_io_server::UserIoServer;
 use crate::service::address::DaemonListener;
+#[cfg(feature = "ai")]
 use crate::session_capture::AiHarnessSessionCapture;
 
 pub mod client;
@@ -27,12 +34,15 @@ mod output_capture;
 pub mod search;
 pub mod server;
 pub mod service;
+#[cfg(feature = "ai")]
 pub mod session_capture;
 mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-pub use client::{AiClient, HistoryClient};
+#[cfg(feature = "ai")]
+pub use client::AiClient;
+pub use client::HistoryClient;
 // Re-export components
 pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -62,8 +72,12 @@ pub async fn boot(
     store: SqliteStore,
     history_db: HistoryDatabase,
 ) -> Result<()> {
+    // The daemon has no terminal: what it would tell the user goes to the clients listening to it.
+    let userio = grpc::UserIoService::default();
+    let _userio = SINK.push(userio.clone());
+
     // Create the components
-    let search_component = SearchComponent::new();
+    let search_component = SearchComponent::new(Arc::clone(&settings)).await;
     let blocking_pool = BlockingPool::new(MAX_BLOCKING_WORKERS);
 
     let output_capture = match settings.output.limits() {
@@ -76,12 +90,21 @@ pub async fn boot(
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
     let search_service = search_component.grpc_service(output_capture.store());
-    let search_index = search_component.index();
+    let search_index = search_component.index().clone();
+
+    let kv_db = KvDatabase::new(&settings.kv.db_path, settings.local_timeout)
+        .await
+        .context("failed to open the kv database")?;
+    let scripts_db = ScriptsDatabase::new(&settings.scripts.db_path, settings.local_timeout)
+        .await
+        .context("failed to open the scripts database")?;
 
     // Build the daemon
     let mut daemon = Daemon::builder(settings.clone())
         .store(store)
         .history_db(history_db)
+        .kv_db(kv_db)
+        .scripts_db(scripts_db)
         .component(search_component)
         .build()?;
 
@@ -90,8 +113,11 @@ pub async fn boot(
     let host_id = settings.host_id().await?;
 
     // A rename that failed midway can leave the WAL apart from its database, so open neither.
+    #[cfg(feature = "ai")]
     let migrated = atuin_client::ai_session::migrate_sidecar_name(&settings);
+    #[cfg(feature = "ai")]
     let ai_session_db_path = atuin_client::ai_session::sidecar_path(&settings);
+    #[cfg(feature = "ai")]
     let ai_session_db = match migrated {
         Err(err) => {
             tracing::error!(
@@ -112,42 +138,50 @@ pub async fn boot(
             }
         },
     };
+    #[cfg(feature = "ai")]
+    let records = AiSessionStore::builder()
+        .store(handle.store().clone())
+        .host_id(host_id)
+        .key(handle.encryption_key().clone())
+        .build();
+    // Before capture, which tells it of each row it captures.
+    #[cfg(feature = "octavo")]
+    let octavo = Arc::new(
+        octavo::Octavo::open(&settings, handle.clone(), output_capture.store(), records.clone())
+            .await,
+    );
+    #[cfg(feature = "ai")]
     let ai_session_capture = Arc::new(match &ai_session_db {
         Some(db) => {
-            let records = AiSessionStore::builder()
-                .store(handle.store().clone())
-                .host_id(host_id)
-                .key(handle.encryption_key().clone())
-                .build();
-
             // Reprojects the sidecar from the synced record store in the background, then starts
             // capture. The record store is the source of truth; a sidecar that missed an append
             // (transient error, crash between the two writes, or a lost db file) is repaired there
             // instead of being stranded until — or re-pushed as duplicate records by — file
             // re-capture. Serving does not wait on it.
             AiHarnessSessionCapture::open(
-                records,
+                records.clone(),
                 db.clone(),
                 settings.threads.capture,
                 session_capture::ToolCapture::from_setting(settings.threads.capture_tools),
                 session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
+                #[cfg(feature = "octavo")]
+                octavo.clone(),
             )
         }
         None => AiHarnessSessionCapture::nop().await,
     });
 
-    let _sync_engine = sync::SyncEngine::spawn(
-        handle.clone(),
-        search_index.clone(),
-        ai_session_db,
-        ai_session_capture.recovery(),
-    );
+    #[cfg(feature = "ai")]
+    let ai_session_projector =
+        ai_session_db.map(|db| ai_session_capture.recovery().spawn_projector(records, db));
+    #[cfg(not(feature = "ai"))]
+    let ai_session_projector = None;
+    let _sync_engine =
+        sync::SyncEngine::spawn(handle.clone(), search_index.clone(), ai_session_projector);
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    #[cfg(feature = "octavo")]
-    let outputs = output_capture.store();
     let journal = HistoryJournal::new(
         handle.caps().clone(),
         history_store,
@@ -156,12 +190,15 @@ pub async fn boot(
         output_capture,
     );
     #[cfg(feature = "octavo")]
-    let journal =
-        journal.with_octavo(octavo::Octavo::open(&settings, handle.clone(), outputs).await);
+    let journal = journal.with_octavo(octavo);
     let journal = Arc::new(journal);
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
-    let ai_session_service =
-        AiSessionServer::new(grpc::AiSessionService::new(ai_session_capture.clone()));
+    // A push's message can be one large line (a tool's whole result), clipped only in capture.
+    #[cfg(feature = "ai")]
+    let ai_session_service = AiSessionServer::new(
+        grpc::AiSessionService::new(ai_session_capture.clone()).with_daemon(handle.clone()),
+    )
+    .max_decoding_message_size(usize::MAX);
 
     // Start all components first (so gRPC services can work)
     daemon.start_components().await?;
@@ -170,6 +207,7 @@ pub async fn boot(
     if let Ok(watcher) = global_settings_watcher() {
         let mut settings_rx = watcher.subscribe();
         let watcher_handle = handle.clone();
+        #[cfg(feature = "ai")]
         let ai_session_capture = ai_session_capture.clone();
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
@@ -177,6 +215,7 @@ pub async fn boot(
                 // Use the already-loaded settings from the watcher
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
+                #[cfg(feature = "ai")]
                 ai_session_capture.set_capture(new_settings.threads.capture);
                 watcher_handle.apply_settings(new_settings).await;
             }
@@ -201,7 +240,9 @@ pub async fn boot(
         listener,
         history_service,
         search_service.build(handle.clone()),
+        #[cfg(feature = "ai")]
         ai_session_service,
+        UserIoServer::new(userio),
         handle,
     )?;
 

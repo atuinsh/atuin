@@ -37,9 +37,9 @@ use crate::harnesstools::session::model::{
 };
 use crate::harnesstools::session::{
     Checkpoint, FilePatch, Listener, Message, MessageError, Observable, Patch, RuntimeError,
-    Session, SessionId, Sessions, WatchError, modified_after, scan_sessions,
+    Session, SessionId, Sessions, WatchError, checkpoint_offset, modified_after, scan_sessions,
 };
-use crate::io::{FollowLines, Line, PathLineReader, PooledReadLines};
+use crate::io::{FollowLines, PathLineReader, PooledReadLines};
 use crate::json::jsonl::JsonlExt;
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
@@ -140,6 +140,20 @@ fn settings_session_dir(agent_dir: &Path) -> Option<PathBuf> {
 
 impl Sessions for PiSessions {
     type Listener = PiListener;
+
+    /// When pi and omp share the root, only this flavour's session files count. Otherwise, use of
+    /// the other agent would make this one look recently used.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let Some(flavour) = self.only(&root) else {
+            return crate::fs::newest_modified(root);
+        };
+        crate::fs::newest_modified_where(root, |entry| {
+            let path = entry.path();
+            let is_omp = || belongs_to_omp(&path).unwrap_or(false);
+            PiListener::is_session_file(&path) && is_omp() == (flavour == Flavour::Omp)
+        })
+    }
 
     fn listener(&self) -> Result<PiListener, RuntimeError> {
         let root = self.resolve_root();
@@ -371,7 +385,7 @@ fn read_header(path: &Path) -> io::Result<Header> {
 }
 
 /// [`read_header`], taking a session of the other flavour for no session when `only` says whose
-/// files to take: omp's start with their title slot, pi's never do.
+/// files to take. [`belongs_to_omp`] says whose a file is.
 fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     let header = read_header(path)?;
     let Some(flavour) = only else {
@@ -380,15 +394,38 @@ fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     if !matches!(header, Header::Session { .. }) {
         return Ok(header);
     }
-    let mut first = Vec::new();
-    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
-    let titled = crate::json::js::from_slice::<serde_json::Value>(&first)
-        .is_ok_and(|entry| entry["type"] == "title");
-    Ok(if titled == (flavour == Flavour::Omp) {
+    Ok(if belongs_to_omp(path)? == (flavour == Flavour::Omp) {
         header
     } else {
         Header::Other
     })
+}
+
+/// Whether the file is one of omp's own sessions. omp's sessions start with their title slot, and
+/// pi's never do. Returns `false` when the file can't be read.
+///
+/// The transcripts of omp's subagents and advisors have no title slot, so this returns `false` for
+/// them. By contrast, [`belongs_to_omp`] counts them as omp's.
+pub(crate) fn is_omp_session_file(path: &Path) -> bool {
+    starts_with_title_slot(path).unwrap_or(false)
+}
+
+/// Whether the file belongs to omp, as a session or as a transcript that one of its sessions
+/// started.
+///
+/// omp's sessions start with their title slot, and pi's never do. However, only top-level omp
+/// sessions start with the title slot, so for subagent transcripts, we check the parent session to
+/// determine whether the subagent transcript belongs to omp.
+fn belongs_to_omp(path: &Path) -> io::Result<bool> {
+    let owner = path.parent().map(owner_file).filter(|owner| owner.is_file());
+    starts_with_title_slot(owner.as_deref().unwrap_or(path))
+}
+
+fn starts_with_title_slot(path: &Path) -> io::Result<bool> {
+    let mut first = Vec::new();
+    BufReader::new(File::open(path)?.take(MAX_HEADER_BYTES)).read_until(b'\n', &mut first)?;
+    Ok(crate::json::js::from_slice::<serde_json::Value>(&first)
+        .is_ok_and(|entry| entry["type"] == "title"))
 }
 
 /// The session id pi's own file naming (`<timestamp>_<id>.jsonl`, session-manager.ts
@@ -420,34 +457,9 @@ impl PiSession {
         }
     }
 
-    /// The byte offset to read from: `from`'s, if the line ending there is still the one `from`
-    /// was taken after, else the transcript's start.
+    /// The byte offset to read from (see [`checkpoint_offset`]).
     async fn start(&self, from: Checkpoint) -> u64 {
-        let path = self.path.clone();
-        let found = self
-            .pool
-            .run(move || File::open(path).and_then(|file| Line::ending_at(&file, from.at)))
-            .await
-            .map_err(io::Error::other)
-            .and_then(|found| found);
-        match found {
-            Ok(Some(line)) if from.names(&line.bytes) => from.at,
-            Ok(_) => {
-                tracing::debug!(
-                    path = %self.path.display(),
-                    "the checkpoint no longer names its line; reading from the start"
-                );
-                0
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    path = %self.path.display(),
-                    "failed to read the line a checkpoint names; reading from the start"
-                );
-                0
-            }
-        }
+        checkpoint_offset(&self.path, &self.pool, from).await
     }
 }
 
@@ -469,29 +481,40 @@ fn header_id(path: &Path) -> Option<SessionId> {
     }
 }
 
+/// The session file whose artifacts directory is `dir`: omp keeps the transcripts of a
+/// session's subagents and advisors in `<session>/<name>.jsonl` beside `<session>.jsonl` (omp
+/// `session-manager.ts` `resolveBreadcrumbToInteractiveRoot`, `advisor/transcript-recorder.ts`).
+fn owner_file(dir: &Path) -> PathBuf {
+    let mut file = dir.as_os_str().to_owned();
+    file.push(".jsonl");
+    PathBuf::from(file)
+}
+
 /// [`resolve_parent`], blocking: line `message` of a session file in `dir`, as capture reads it.
 pub(crate) fn resolve_parent_blocking(mut message: PiMessage, dir: Option<&Path>) -> PiMessage {
-    if let Some(id) = parent_file(&message, dir).and_then(|parent| header_id(&parent)) {
+    if message.entry.kind != "session" {
+        return message;
+    }
+    if let Some(owner) = dir.and_then(|dir| header_id(&owner_file(dir))) {
+        message.resolved_parent = Some(owner);
+        message.subagent = true;
+    } else if let Some(id) = parent_file(&message, dir).and_then(|parent| header_id(&parent)) {
         message.resolved_parent = Some(id);
     }
     message
 }
 
-/// Resolve a header's `parentSession` file path to the parent's session id by reading the
-/// parent's own header, so a custom-named parent (`pi --session <path>`) resolves too. Other
-/// lines pass through untouched; a parent whose header can't be read is named by its file name.
-async fn resolve_parent(
-    mut message: PiMessage,
-    dir: Option<&Path>,
-    pool: &BlockingPool,
-) -> PiMessage {
-    let Some(parent) = parent_file(&message, dir) else {
+/// Resolve a header's parent to the parent's session id, read from the parent's own header so a
+/// custom-named parent (`pi --session <path>`) resolves too: the session whose artifacts
+/// directory the file is in (an omp subagent's or advisor's, see [`owner_file`]), else the one
+/// its `parentSession` file path names. Other lines pass through untouched; a parent whose
+/// header can't be read is named by its file name.
+async fn resolve_parent(message: PiMessage, dir: Option<&Path>, pool: &BlockingPool) -> PiMessage {
+    if message.entry.kind != "session" {
         return message;
-    };
-    if let Ok(Some(id)) = pool.run(move || header_id(&parent)).await {
-        message.resolved_parent = Some(id);
     }
-    message
+    let (unresolved, dir) = (message.clone(), dir.map(Path::to_path_buf));
+    pool.run(move || resolve_parent_blocking(message, dir.as_deref())).await.unwrap_or(unresolved)
 }
 
 impl Session for PiSession {
@@ -568,6 +591,8 @@ pub struct PiMessage {
     migrated: bool,
     /// On the header: the parent's session id, read from the parent file's own header.
     resolved_parent: Option<SessionId>,
+    /// On the header: the file is in its parent's artifacts directory (see [`owner_file`]).
+    subagent: bool,
 }
 
 impl<'de> Deserialize<'de> for PiMessage {
@@ -586,6 +611,7 @@ impl<'de> Deserialize<'de> for PiMessage {
             entry,
             migrated,
             resolved_parent: None,
+            subagent: false,
         })
     }
 }
@@ -621,18 +647,32 @@ struct PiEntry {
     usage: Option<serde_json::Value>,
     /// On `custom_message`: what an extension injected into the model's context.
     content: Option<serde_json::Value>,
+    /// This is set on a `custom_message` whose `customType` is omp's `irc:incoming`. Such an
+    /// entry is a message that another agent sent this one.
+    #[serde(rename = "customType", default, deserialize_with = "is_agent_message")]
+    agent_message: bool,
+}
+
+/// This returns whether a `customType` is `irc:incoming`. Any other value, string or not, is not.
+fn is_agent_message<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(deserializer)? == "irc:incoming")
 }
 
 /// Entry types whose top-level `usage` records a model call of their own.
 fn has_own_usage(kind: &str) -> bool {
-    matches!(kind, "compaction" | "branch_summary" | "usage")
+    matches!(kind, "compaction" | "branch_summary" | "usage" | "model_usage")
 }
 
 impl PiMessage {
     fn block(value: &serde_json::Value) -> Content {
         match value["type"].as_str() {
             Some("text") => Content::Text(value["text"].as_str().unwrap_or_default().to_owned()),
-            Some("thinking") => Content::ReasoningSummary { tokens: None },
+            // omp's narration: prose the model addressed to the user, which the provider
+            // returned as a thinking block (omp pi-ai types.ts `ThinkingContent.narration`).
+            Some("thinking") if value["narration"] == true => {
+                Content::Text(value["thinking"].as_str().unwrap_or_default().to_owned())
+            }
+            Some("thinking" | "redactedThinking") => Content::ReasoningSummary { tokens: None },
             Some("toolCall") => Content::ToolUse(ToolUse {
                 id: ToolCallId::from(value["id"].as_str().unwrap_or_default().to_owned()),
                 name: value["name"].as_str().unwrap_or_default().to_owned(),
@@ -711,6 +751,9 @@ impl Message for PiMessage {
             // Summaries pi feeds back to the model as context (session-manager.ts
             // `sessionEntryToContextMessages`); neither the user nor the model said them.
             "compaction" | "branch_summary" => return Role::System,
+            // Since omp 18.18.9, a message from another agent reaches the agent as a user turn.
+            // It is the only copy of the message in this session.
+            "custom_message" if self.entry.agent_message => return Role::User,
             "custom_message" => "custom",
             other => other,
         };
@@ -719,7 +762,9 @@ impl Message for PiMessage {
             "assistant" => Role::Assistant,
             "system" | "branchSummary" | "compactionSummary" => Role::System,
             "toolResult" | "tool" => Role::Tool,
-            "bashExecution" => Role::User,
+            // And omp's: `$code` the user ran in its Python kernel, and the files the `@path`
+            // mentions in a prompt put in it.
+            "bashExecution" | "pythonExecution" | "fileMention" => Role::User,
             // Extension-injected context (`custom_message` entries, `role: "custom"` messages,
             // v2's `hookMessage` before pi's v3 migration renamed it). Pi sends it to the model
             // as a user message (messages.ts `convertToLlm`), but the user did not write it;
@@ -769,18 +814,19 @@ impl Message for PiMessage {
             // when the user kept it out of the model's context (messages.ts
             // `BashExecutionMessage.excludeFromContext`). It has no tool call of its own, so the
             // entry names it (a v1 entry by its time). A cancelled command has no exit code and
-            // failed all the same.
-            Some("bashExecution") => {
-                let prefix = if message["excludeFromContext"].as_bool() == Some(true) {
-                    "!!"
+            // failed all the same. omp's `$code` (`$$code`) Python runs are kept the same way.
+            Some(role @ ("bashExecution" | "pythonExecution")) => {
+                let (sigil, typed) = match role {
+                    "bashExecution" => ("!", &message["command"]),
+                    _ => ("$", &message["code"]),
+                };
+                let hidden = if message["excludeFromContext"].as_bool() == Some(true) {
+                    sigil
                 } else {
-                    "!"
+                    ""
                 };
                 vec![
-                    Content::Text(format!(
-                        "{prefix}{}",
-                        message["command"].as_str().unwrap_or_default()
-                    )),
+                    Content::Text(format!("{sigil}{hidden}{}", typed.as_str().unwrap_or_default())),
                     Content::ToolResult(ToolResult {
                         call: ToolCallId::from(self.id().map_or_else(
                             || {
@@ -797,6 +843,21 @@ impl Message for PiMessage {
                     }),
                 ]
             }
+            // Each file as omp puts it in the model's context (omp messages.ts `convertOne`).
+            Some("fileMention") => message["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|file| {
+                    let path = file["path"].as_str().unwrap_or_default();
+                    let inner = file["content"]
+                        .as_str()
+                        .filter(|c| !c.is_empty())
+                        .map_or_else(|| "\n".to_owned(), |c| format!("\n{c}\n"));
+                    let text = Content::Text(format!("<file path=\"{path}\">{inner}</file>"));
+                    std::iter::once(text).chain(file.get("image").map(Self::block))
+                })
+                .collect(),
             Some("branchSummary" | "compactionSummary") => message["summary"]
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -824,10 +885,15 @@ impl Message for PiMessage {
     fn model(&self) -> Option<String> {
         // Assistant turns name their model (the one the provider reports first); a
         // `model_change` line or v1 header names it at the top, a `usage` entry as `model`.
+        // omp's `model_change` names it `<provider>/<model>`, as pi's names it `modelId`.
+        let named = self.entry.model.as_deref().map(|model| match self.entry.kind.as_str() {
+            "model_change" => model.split_once('/').map_or(model, |(_, model)| model),
+            _ => model,
+        });
         self.message_str("responseModel")
             .or_else(|| self.message_str("model"))
             .or(self.entry.model_id.as_deref())
-            .or(self.entry.model.as_deref())
+            .or(named)
             .map(str::to_owned)
     }
 
@@ -841,7 +907,8 @@ impl Message for PiMessage {
             output: count("output"),
             cache_read: count("cacheRead"),
             cache_write: count("cacheWrite"),
-            reasoning: count("reasoning"),
+            // omp's pi-ai names it `reasoningTokens`.
+            reasoning: count("reasoning").or_else(|| count("reasoningTokens")),
         })
     }
 
@@ -867,16 +934,24 @@ impl Message for PiMessage {
         self.entry.cwd.clone()
     }
 
-    /// Only the `session` header names a parent, as the parent's file path; this is the id that
-    /// file's header carries when the session could read it, else the id its file name carries.
+    /// Only the `session` header names a parent: the session whose artifacts directory the file
+    /// is in, else the one its `parentSession` file path names; this is the id that file's header
+    /// carries when the session could read it, else the id its file name carries.
     fn parent_session(&self) -> Option<SessionId> {
+        if self.subagent {
+            return self.resolved_parent.clone();
+        }
         let path = self.parent_session_path()?;
         self.resolved_parent.clone().or_else(|| file_name_id(Path::new(path)).map(SessionId::from))
     }
 
-    /// pi links a session only to the one it branched from (`/fork`, `/tree`): a person's own
-    /// continuation, not a subagent.
+    /// An omp subagent's (or advisor's) transcript is in its parent's artifacts directory.
+    /// Otherwise pi links a session only to the one it branched from (`/fork`, `/tree`): a
+    /// person's own continuation.
     fn parent_kind(&self) -> Option<ParentKind> {
+        if self.subagent {
+            return Some(ParentKind::Subagent);
+        }
         self.parent_session_path().map(|_| ParentKind::Fork)
     }
 
@@ -1390,8 +1465,8 @@ mod tests {
         assert_eq!(got.len(), 2);
     }
 
-    /// pi and omp sharing a session directory each take only their own sessions there: omp's
-    /// start with a title slot.
+    /// pi and omp sharing a session directory each take only their own sessions there. omp's
+    /// sessions start with a title slot, and omp's subagent transcripts belong to omp too.
     #[rstest]
     #[tokio::test]
     async fn a_shared_session_dir_is_split_by_flavour(
@@ -1405,15 +1480,52 @@ mod tests {
         std::fs::write(dir.path().join("1_p.jsonl"), header("p")).unwrap();
         let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
         std::fs::write(dir.path().join("2_o.jsonl"), slot + &header("o")).unwrap();
+        // An omp subagent's transcript has no title slot. It is omp's because its parent is.
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        std::fs::write(dir.path().join("2_o").joined("0-Scout.jsonl"), header("c")).unwrap();
 
         let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
-        let ids: Vec<String> =
+        let mut ids: Vec<String> =
             sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
-        let want = match flavour {
-            Flavour::Pi => "p",
-            Flavour::Omp => "o",
+        ids.sort();
+        let want: &[&str] = match flavour {
+            Flavour::Pi => &["p"],
+            Flavour::Omp => &["c", "o"],
         };
-        assert_eq!(ids, vec![want.to_owned()]);
+        assert_eq!(ids, want);
+    }
+
+    /// When pi and omp share a session directory, each one's last use counts only its own
+    /// sessions. Daily use of omp doesn't make an uninstalled pi look recently used. That includes
+    /// omp's subagent transcripts, which have no title slot of their own.
+    #[rstest]
+    fn a_shared_session_dir_splits_last_active_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        let (pi, omp) = (dir.path().join("1_p.jsonl"), dir.path().join("2_o.jsonl"));
+        std::fs::write(&pi, header("p")).unwrap();
+        std::fs::write(&omp, slot + &header("o")).unwrap();
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        let child = dir.path().join("2_o").joined("0-Scout.jsonl");
+        std::fs::write(&child, header("c")).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let (pi_at, omp_at, child_at) = (at(1_000), at(2_000), at(3_000));
+        File::options().write(true).open(&pi).unwrap().set_modified(pi_at).unwrap();
+        File::options().write(true).open(&omp).unwrap().set_modified(omp_at).unwrap();
+        File::options().write(true).open(&child).unwrap().set_modified(child_at).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let want = match flavour {
+            Flavour::Pi => pi_at,
+            Flavour::Omp => child_at,
+        };
+        assert_eq!(sessions.last_active(), Some(want));
     }
 
     #[rstest]
@@ -1686,6 +1798,19 @@ mod tests {
         assert_eq!(m.role(), Role::Other("custom".to_owned()));
         assert_eq!(m.id(), Some(MessageId::from("x1".to_owned())));
         assert_eq!(m.usage(), None);
+    }
+
+    /// omp (18.18.9+) records a message from another agent as an `irc:incoming` entry, which it
+    /// sends to the model as a user turn.
+    #[rstest]
+    fn an_agent_message_is_a_user_turn() {
+        let m = pi(&serde_json::json!({"type": "custom_message", "customType": "irc:incoming",
+            "content": "<irc>\nIncoming IRC message from agent `subagent`:\n\nPING\n</irc>",
+            "display": true, "details": {"id": "15cb", "from": "subagent", "message": "PING"},
+            "attribution": "agent", "id": "x1", "parentId": "a1",
+            "timestamp": "2026-11-12T16:06:52.839Z"}));
+        assert_eq!(m.role(), Role::User);
+        assert!(texts(&m)[0].contains("PING"));
     }
 
     /// A tool result's `usage` is "not part of main LLM context accounting" (pi-ai types.ts
@@ -2088,5 +2213,133 @@ mod tests {
             }],
         });
         assert_eq!(patch, expected);
+    }
+
+    /// omp's `$code` (`$$code` kept out of context) runs in its Python kernel, with what it
+    /// printed (omp rpc wire `PythonExecutionMessage`).
+    #[rstest]
+    #[case::in_context(false, "$print(1+1)")]
+    #[case::kept_out_of_context(true, "$$print(1+1)")]
+    fn python_execution_is_a_user_command_with_its_output(
+        #[case] excluded: bool,
+        #[case] typed: &str,
+    ) {
+        let m = pi(&serde_json::json!({"type": "message", "id": "p1", "parentId": "u1",
+            "timestamp": "2026-10-20T10:00:02.000Z", "message": {"role": "pythonExecution",
+                "code": "print(1+1)", "output": "2", "exitCode": 0, "cancelled": false,
+                "truncated": false, "excludeFromContext": excluded, "timestamp": 1_792_000_002_000_u64}}));
+        assert_eq!(m.role(), Role::User);
+        assert_eq!(m.content(), vec![
+            Content::Text(typed.into()),
+            Content::ToolResult(ToolResult {
+                call: ToolCallId::from("p1".to_owned()),
+                output: serde_json::json!("2"),
+                error: false,
+            }),
+        ]);
+    }
+
+    /// omp reads the files a prompt `@`-mentions into it, each wrapped as the model sees it (omp
+    /// messages.ts `convertOne`); an image keeps what it was.
+    #[rstest]
+    fn file_mentions_keep_the_files() {
+        let m = pi(&serde_json::json!({"type": "message", "id": "f1", "parentId": "u1",
+            "timestamp": "2026-10-20T10:00:01.000Z", "message": {"role": "fileMention", "files": [
+                {"path": "src/a.rs", "content": "fn main() {}", "lineCount": 1},
+                {"path": "shot.png", "content": "", "image": {"type": "image", "data": "AAAA",
+                    "mimeType": "image/png"}},
+            ], "timestamp": 1_792_000_001_000_u64}}));
+        assert_eq!(m.role(), Role::User);
+        assert_eq!(m.content(), vec![
+            Content::Text("<file path=\"src/a.rs\">\nfn main() {}\n</file>".into()),
+            Content::Text("<file path=\"shot.png\">\n</file>".into()),
+            Content::Other(serde_json::json!({"type": "image", "mimeType": "image/png"})),
+        ]);
+    }
+
+    /// Lines of the real omp 18.11.2 session in `~/.cache/threads-audit/pi/omp`: omp's pi-ai
+    /// counts reasoning as `reasoningTokens`, and its `model_change` names `<provider>/<model>`.
+    #[rstest]
+    fn omp_usage_and_model_read_as_pis() {
+        let call = pi(&serde_json::json!({"type": "message", "id": "5bb867be",
+            "parentId": "ce386b05", "timestamp": "2026-10-16T18:39:48.190Z",
+            "runtime": {"version": "18.11.2"}, "message": {"role": "assistant",
+                "content": [{"type": "text", "text": "Hi! What can I help with?"}],
+                "api": "openai-codex-responses", "provider": "openai-codex",
+                "model": "gpt-5.6-luna", "usage": {"input": 9006, "output": 34, "cacheRead": 0,
+                    "cacheWrite": 0, "totalTokens": 9040, "reasoningTokens": 20,
+                    "premiumRequests": 0}, "stopReason": "stop"}}));
+        assert_eq!(call.usage().and_then(|u| u.reasoning), Some(20));
+        let change = pi(&serde_json::json!({"type": "model_change", "id": "78cda958",
+            "parentId": "131e8526", "timestamp": "2026-10-16T18:39:42.958Z",
+            "runtime": {"version": "18.11.2"}, "model": "openai-codex/gpt-5.6-luna",
+            "role": "default", "resolvedModelIsFallback": false}));
+        assert_eq!(change.model().as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    /// omp's `model_usage`: a model call outside the transcript, a title's say (omp
+    /// session-entries.ts `ModelUsageEntry`), counted as pi's own `usage` entries are.
+    #[rstest]
+    fn omp_model_usage_is_a_call_of_its_own() {
+        let m = pi(&serde_json::json!({"type": "model_usage", "id": "mu", "parentId": "a1",
+            "timestamp": "2026-10-20T10:00:04.000Z", "purpose": "title", "role": "tiny",
+            "api": "openai-responses", "provider": "openai", "model": "gpt-5.6-mini",
+            "usage": {"input": 900, "output": 100, "cacheRead": 0, "cacheWrite": 0,
+                "totalTokens": 1000}, "stopReason": "stop"}));
+        assert_eq!(m.usage(), Some(tokens(900, 100)));
+        assert_eq!(m.turn_id().as_deref(), Some("entry:mu:2026-10-20T10:00:04.000Z"));
+        assert_eq!(m.model().as_deref(), Some("gpt-5.6-mini"));
+    }
+
+    /// omp's narration is prose for the user in a thinking block, shown as answer text (omp
+    /// pi-ai `presentNarrationAsAnswer`); its `redactedThinking` is reasoning, kept as a marker.
+    #[rstest]
+    fn omp_narration_is_text_and_redacted_thinking_reasoning() {
+        let m = pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": "u1",
+        "timestamp": "2026-10-20T10:00:03.000Z", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "Now reading the config.",
+                "thinkingSignature": "sig", "narration": true},
+            {"type": "redactedThinking", "data": "ENCRYPTED"},
+            {"type": "thinking", "thinking": "private", "thinkingSignature": "sig"},
+        ]}}));
+        assert_eq!(m.content(), vec![
+            Content::Text("Now reading the config.".into()),
+            Content::ReasoningSummary { tokens: None },
+            Content::ReasoningSummary { tokens: None },
+        ]);
+    }
+
+    /// omp keeps a subagent's transcript, and an advisor's (which names no parent), in its
+    /// parent's artifacts directory: `<parent>/<agent>.jsonl` beside `<parent>.jsonl` (omp
+    /// task/executor.ts, advisor/transcript-recorder.ts).
+    #[rstest]
+    #[case::subagent(true)]
+    #[case::advisor(false)]
+    #[tokio::test]
+    async fn an_omp_subagent_is_its_parents_subagent(#[case] names_parent: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("2026-10-20T10-00-00-000Z_0199aaaa.jsonl");
+        let header = |id: &str| {
+            serde_json::json!({"type": "session", "version": 3, "id": id,
+            "timestamp": "2026-10-20T10:00:00.000Z", "cwd": "/w"})
+        };
+        std::fs::write(&parent, header("0199aaaa").to_string() + "\n").unwrap();
+        let artifacts = dir.path().join("2026-10-20T10-00-00-000Z_0199aaaa");
+        std::fs::create_dir(&artifacts).unwrap();
+        let mut child = header("0199bbbb");
+        if names_parent {
+            child["parentSession"] = serde_json::json!(parent);
+        }
+        let file = artifacts.join(if names_parent {
+            "0-Scout.jsonl"
+        } else {
+            "__advisor.jsonl"
+        });
+        std::fs::write(&file, child.to_string() + "\n").unwrap();
+
+        let session = PiSession::open(SessionId::from("0199bbbb".to_owned()), file, pool());
+        let read: Vec<PiMessage> = session.read().try_collect().await.unwrap();
+        assert_eq!(read[0].parent_session(), Some(SessionId::from("0199aaaa".to_owned())));
+        assert_eq!(read[0].parent_kind(), Some(ParentKind::Subagent));
     }
 }

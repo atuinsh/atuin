@@ -19,7 +19,7 @@ pub struct StoredSession {
     pub head_id: Option<String>,
     pub server_session_id: Option<String>,
     pub directory: Option<String>,
-    pub git_root: Option<String>,
+    pub vcs_root: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub archived_at: Option<i64>,
@@ -64,17 +64,17 @@ impl AiSessionStore {
         &self,
         id: &str,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
     ) -> Result<StoredSession> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
 
         db::query(
-            "INSERT INTO sessions (id, directory, git_root, created_at, updated_at)
+            "INSERT INTO sessions (id, directory, vcs_root, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?4)",
         )
         .bind(id)
         .bind(directory)
-        .bind(git_root)
+        .bind(vcs_root)
         .bind(now)
         .execute(self.sqlite.pool())
         .await?;
@@ -84,7 +84,7 @@ impl AiSessionStore {
             head_id: None,
             server_session_id: None,
             directory: directory.map(String::from),
-            git_root: git_root.map(String::from),
+            vcs_root: vcs_root.map(String::from),
             created_at: now,
             updated_at: now,
             archived_at: None,
@@ -94,7 +94,7 @@ impl AiSessionStore {
     #[allow(dead_code)] // used in tests; will be used by daemon service
     pub async fn get_session(&self, id: &str) -> Result<Option<StoredSession>> {
         let session = db::query_as::<_, StoredSession>(
-            "SELECT id, head_id, server_session_id, directory, git_root,
+            "SELECT id, head_id, server_session_id, directory, vcs_root,
                     created_at, updated_at, archived_at
              FROM sessions WHERE id = ?1",
         )
@@ -105,12 +105,12 @@ impl AiSessionStore {
         Ok(session)
     }
 
-    /// Find the most recent non-archived session matching the given directory or git
+    /// Find the most recent non-archived session matching the given directory or VCS
     /// root, updated within `window`. A `None` window disables auto-resume and returns `None`.
     pub async fn find_resumable_session(
         &self,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
         window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>> {
         // A `None` window means auto-resume is disabled.
@@ -122,18 +122,18 @@ impl AiSessionStore {
         let cutoff = OffsetDateTime::now_utc().unix_timestamp() - max_age_secs;
 
         let session = db::query_as::<_, StoredSession>(
-            "SELECT id, head_id, server_session_id, directory, git_root,
+            "SELECT id, head_id, server_session_id, directory, vcs_root,
                     created_at, updated_at, archived_at
              FROM sessions
              WHERE archived_at IS NULL
                AND updated_at > ?1
-               AND (directory = ?2 OR (git_root IS NOT NULL AND git_root = ?3))
+               AND (directory = ?2 OR (vcs_root IS NOT NULL AND vcs_root = ?3))
              ORDER BY updated_at DESC
              LIMIT 1",
         )
         .bind(cutoff)
         .bind(directory)
-        .bind(git_root)
+        .bind(vcs_root)
         .fetch_optional(self.sqlite.pool())
         .await?;
 
@@ -316,6 +316,20 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn migrations_name_repository_column_vcs_root(#[future] store: AiSessionStore) {
+        let store = store.await;
+        let columns: Vec<String> =
+            db::query_scalar("SELECT name FROM pragma_table_info('sessions')")
+                .fetch_all(store.sqlite.pool())
+                .await
+                .unwrap();
+
+        assert!(columns.iter().any(|column| column == "vcs_root"));
+        assert!(!columns.iter().any(|column| column == "git_root"));
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn test_create_and_get_session(#[future] store: AiSessionStore) {
         let store = store.await;
 
@@ -330,6 +344,35 @@ mod tests {
         let loaded = store.get_session("s1").await.unwrap().unwrap();
         assert_eq!(loaded.id, "s1");
         assert_eq!(loaded.directory.as_deref(), Some("/home/user/project"));
+    }
+
+    #[rstest]
+    #[case::unix("/tmp/O'Brien %_ 日本語")]
+    #[case::windows(r"C:\Users\O'Brien\100%_ 日本語")]
+    #[case::unc(r"\\server\share\O'Brien %_")]
+    #[case::verbatim(r"\\?\C:\O'Brien %_\trailing. ")]
+    #[case::whitespace("/tmp/line\n tab\t trailing ")]
+    #[case::predicate_injection("/tmp/x') OR 1=1 --")]
+    #[case::statement_injection("/tmp/x'); DROP TABLE sessions; --")]
+    #[tokio::test]
+    async fn session_paths_are_stored_as_data(#[future] store: AiSessionStore, #[case] root: &str) {
+        let store = store.await;
+        store.create_session("outside", Some("/outside"), Some("/outside")).await.unwrap();
+        store.create_session("selected", Some(root), Some(root)).await.unwrap();
+
+        let loaded = store.get_session("selected").await.unwrap().unwrap();
+        assert_eq!(loaded.directory.as_deref(), Some(root));
+        assert_eq!(loaded.vcs_root.as_deref(), Some(root));
+        for (directory, vcs_root) in [(Some(root), None), (None, Some(root))] {
+            let found = store.find_resumable_session(directory, vcs_root, hour()).await.unwrap();
+            assert_eq!(found.unwrap().id, "selected");
+        }
+        let outside = store.find_resumable_session(None, Some("/outside"), hour()).await.unwrap();
+        assert_eq!(outside.unwrap().id, "outside");
+        assert!(
+            store.find_resumable_session(None, Some("/missing"), hour()).await.unwrap().is_none()
+        );
+        assert!(store.get_session("selected").await.unwrap().is_some());
     }
 
     #[rstest]
@@ -379,7 +422,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn test_find_resumable_by_git_root(#[future] store: AiSessionStore) {
+    async fn test_find_resumable_by_vcs_root(#[future] store: AiSessionStore) {
         let store = store.await;
         store
             .create_session("s1", Some("/home/user/project/sub"), Some("/home/user/project"))

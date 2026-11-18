@@ -21,13 +21,7 @@ time = { workspace = true }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
-divan = { workspace = true }
-rand = { workspace = true }
 rstest = { workspace = true }
-
-[[bench]]
-name = "smart_sort"
-harness = false
 
 [lints]
 workspace = true

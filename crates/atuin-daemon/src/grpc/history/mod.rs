@@ -1,6 +1,7 @@
 pub mod pb;
 
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
@@ -13,19 +14,20 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::{Instrument, Level, instrument};
 
-use crate::DaemonHandle;
 // `Lagged` now lives in the shared `common` package (see `common.proto`).
 use crate::grpc::common::pb::Lagged;
 use crate::grpc::history::pb::history_server::History as GrpcService;
 use crate::grpc::history::pb::{
     CancelHistoryReply, CancelHistoryRequest, CompactStoreReply, CompactStoreRequest,
     DeleteHistoryReply, DeleteHistoryRequest, DeleteHistoryStreamExt, EndHistoryReply,
-    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, RebuildHistoryReply,
+    EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse, ImportHistoryReply,
+    ImportHistoryRequest, LoggedInReply, LoggedInRequest, RebuildHistoryReply,
     RebuildHistoryRequest, RegisterCommandOutputRequest, RegisterCommandOutputResponse,
     ShutdownReply, ShutdownRequest, StartHistoryReply, StartHistoryRequest, StatusReply,
     StatusRequest, TailHistoryEvent, TailHistoryReply, TailHistoryRequest,
 };
 use crate::history_journal::HistoryJournal;
+use crate::{DaemonEvent, DaemonHandle};
 
 /// The History gRPC service.
 ///
@@ -34,8 +36,24 @@ use crate::history_journal::HistoryJournal;
 pub struct Service {
     journal: Arc<HistoryJournal>,
     /// TODO(markovejnovic): Revisit whether we need to hold this handle. It exists only to service
-    /// the [`GrpcService::shutdown`] request.
+    /// the [`GrpcService::shutdown`] and [`GrpcService::logged_in`] requests.
     daemon_handle: DaemonHandle,
+}
+
+/// Errors returned by [`Service::import_shell_history`].
+#[derive(Debug, thiserror::Error)]
+enum ImportHistoryError {
+    #[error("couldn't run `atuin import {shell}`: {source}")]
+    Spawn {
+        shell: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("`atuin import {shell}` failed: {stderr}")]
+    Failed {
+        shell: String,
+        stderr: String,
+    },
 }
 
 impl Service {
@@ -45,6 +63,44 @@ impl Service {
             journal,
             daemon_handle,
         }
+    }
+
+    /// Import `shell`'s history with the CLI at `exe`, then have search and sync see it.
+    async fn import_shell_history(
+        &self,
+        exe: &std::path::Path,
+        shell: &str,
+        histfile: Option<String>,
+        fish_history: Option<String>,
+    ) -> Result<(), ImportHistoryError> {
+        // The importers are the CLI's.
+        let mut command = tokio::process::Command::new(exe);
+        command.args(["import", shell]).stdin(Stdio::null()).stdout(Stdio::null());
+        // Where the client's history is, not where the daemon's own environment says, which may
+        // be another shell's.
+        for (name, value) in [("HISTFILE", &histfile), ("fish_history", &fish_history)] {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        let output = command.output().await.map_err(|source| ImportHistoryError::Spawn {
+            shell: shell.to_owned(),
+            source,
+        })?;
+        if !output.status.success() {
+            return Err(ImportHistoryError::Failed {
+                shell: shell.to_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+
+        // Search reads its index, which doesn't see rows written by another process.
+        let search = self.daemon_handle.settings().await.search.clone();
+        self.journal.reload_search_index(&search).await;
+        tracing::info!(shell, "imported shell history");
+        self.daemon_handle.request_sync();
+        Ok(())
     }
 }
 
@@ -81,7 +137,16 @@ impl GrpcService for Service {
                 .saturating_duration_since(self.journal.get(req.history_id)?.timestamp),
         };
 
-        let finished_cmd = self.journal.finish(req.history_id, req.exit_code, duration).await?;
+        let journal = self.journal.clone();
+        let (history_id, exit_code) = (req.history_id, req.exit_code);
+        // Spawned so a client disconnect cannot drop the call half-way. Otherwise the entry could
+        // be saved to the history db but never added to the search index.
+        let finished_cmd = tokio::spawn(
+            async move { journal.finish(history_id, exit_code, duration).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("finish did not complete: {e}")))??;
 
         Ok(Response::new(EndHistoryReply {
             record_id: Some(finished_cmd.history_record_id.into()),
@@ -133,7 +198,14 @@ impl GrpcService for Service {
         _request: Request<RebuildHistoryRequest>,
     ) -> Result<Response<RebuildHistoryReply>, Status> {
         let search_settings = self.daemon_handle.settings().await.search.clone();
-        self.journal.rebuild(&search_settings).await?;
+        let journal = self.journal.clone();
+        // The rebuild runs in its own task. That way a client disconnect can't cancel it.
+        tokio::spawn(
+            async move { journal.rebuild(&search_settings).await }
+                .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("rebuild did not complete: {e}")))??;
 
         Ok(Response::new(RebuildHistoryReply {}))
     }
@@ -151,6 +223,38 @@ impl GrpcService for Service {
             .map_err(|e| Status::internal(format!("compact did not complete: {e}")))?;
 
         Ok(Response::new(CompactStoreReply { rewritten }))
+    }
+
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn import_history(
+        &self,
+        request: Request<ImportHistoryRequest>,
+    ) -> Result<Response<ImportHistoryReply>, Status> {
+        let ImportHistoryRequest {
+            shell,
+            histfile,
+            fish_history,
+            wait,
+        } = request.into_inner();
+        let exe = std::env::current_exe().map_err(|e| Status::internal(e.to_string()))?;
+        let service = self.clone();
+        let (done, imported) = tokio::sync::oneshot::channel();
+        // Spawned, so a client that stops waiting doesn't stop the import.
+        tokio::spawn(async move {
+            let result = service.import_shell_history(&exe, &shell, histfile, fish_history).await;
+            if let Err(e) = &result {
+                tracing::error!("{e}");
+            }
+            // Nobody is listening when the client didn't ask to wait, or stopped waiting.
+            let _ = done.send(result);
+        });
+        if wait {
+            imported
+                .await
+                .map_err(|_| Status::internal("the import stopped before it finished"))?
+                .map_err(|e| Status::internal(e.to_string()))?;
+        }
+        Ok(Response::new(ImportHistoryReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
@@ -203,6 +307,17 @@ impl GrpcService for Service {
     ) -> Result<Response<ShutdownReply>, Status> {
         self.daemon_handle.shutdown();
         Ok(Response::new(ShutdownReply { accepted: true }))
+    }
+
+    /// Tells the daemon's parts that `atuin login` saved a session. Has nothing to do with
+    /// history.
+    #[instrument(skip_all, level = Level::TRACE)]
+    async fn logged_in(
+        &self,
+        _request: Request<LoggedInRequest>,
+    ) -> Result<Response<LoggedInReply>, Status> {
+        self.daemon_handle.emit(DaemonEvent::LoggedIn);
+        Ok(Response::new(LoggedInReply {}))
     }
 
     #[instrument(skip_all, level = Level::TRACE)]

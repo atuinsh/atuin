@@ -5,6 +5,7 @@
 //! is sent to the server; full content is loaded on demand via `load_skill`.
 
 mod frontmatter;
+mod interpolate;
 pub mod walker;
 
 use std::path::Path;
@@ -12,8 +13,6 @@ use std::path::Path;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
 use eyre::{Result, eyre};
-
-use crate::user_context::interpolate;
 
 /// Per-skill description truncation limit (before budget calculation).
 const MAX_DESCRIPTION_LEN: usize = 1024;
@@ -300,7 +299,7 @@ mod tests {
         assert_eq!(substitute_arguments(body, args), expected);
     }
 
-    #[test]
+    #[rstest]
     fn budget_packing() {
         let registry = SkillRegistry {
             skills: vec![
@@ -314,7 +313,7 @@ mod tests {
         assert!(overflow.is_none());
     }
 
-    #[test]
+    #[rstest]
     fn budget_overflow() {
         let registry = SkillRegistry {
             skills: vec![
@@ -332,7 +331,7 @@ mod tests {
         assert!(overflow.contains("1 additional"));
     }
 
-    #[test]
+    #[rstest]
     fn disabled_skills_excluded_from_server() {
         let registry = SkillRegistry {
             skills: vec![
@@ -349,7 +348,7 @@ mod tests {
         assert_eq!(registry.all().len(), 2);
     }
 
-    #[test]
+    #[rstest]
     fn has_server_visible_skills() {
         let empty = SkillRegistry::empty();
         assert!(!empty.has_server_visible_skills());
@@ -365,6 +364,7 @@ mod tests {
         assert!(some_visible.has_server_visible_skills());
     }
 
+    #[rstest]
     #[tokio::test]
     async fn end_to_end_discover() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,7 +1,7 @@
 //! `[threads]`: capturing coding agents' threads, and the `atuin threads resume` picker.
 //!
 //! Before `[threads]`, these were `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`,
-//! which are still read for any it doesn't set (see `Settings::with_legacy_threads`).
+//! which are still read for any it doesn't set (see `Settings::with_legacy_keys`).
 //!
 //! Only the picker-specific knobs live here. The look and feel (`style`, `invert`, `show_preview`,
 //! `max_preview_height`, `enter_accept`, `keymap_mode`, `theme`) is read from the top-level
@@ -10,6 +10,7 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ai")]
 use crate::ai_session::HarnessKind;
 
 /// Which threads the picker shows, cycled with ctrl-r in this order (see [`Self::CYCLE`]).
@@ -69,22 +70,34 @@ pub struct AiSessionResume {
     #[serde(alias = "claude-code", alias = "claude_code")]
     pub claude: Option<String>,
     pub codex: Option<String>,
+    #[serde(alias = "grok-build", alias = "grok_build")]
+    pub grok: Option<String>,
     pub opencode: Option<String>,
     pub pi: Option<String>,
     pub omp: Option<String>,
+    pub copilot: Option<String>,
+    pub amp: Option<String>,
+    pub kiro: Option<String>,
+    pub hermes: Option<String>,
 }
 
 impl AiSessionResume {
     /// The configured template for `harness`, if any.
+    #[cfg(feature = "ai")]
     #[must_use]
     pub fn template(&self, harness: HarnessKind) -> Option<&str> {
         match harness {
             HarnessKind::ClaudeCode => self.claude.as_deref(),
             HarnessKind::Codex => self.codex.as_deref(),
+            HarnessKind::Grok => self.grok.as_deref(),
             HarnessKind::Opencode => self.opencode.as_deref(),
             HarnessKind::Pi => self.pi.as_deref(),
             HarnessKind::Omp => self.omp.as_deref(),
-            HarnessKind::Copilot | HarnessKind::Unknown => None,
+            HarnessKind::Copilot => self.copilot.as_deref(),
+            HarnessKind::Amp => self.amp.as_deref(),
+            HarnessKind::Kiro => self.kiro.as_deref(),
+            HarnessKind::Hermes => self.hermes.as_deref(),
+            HarnessKind::Unknown => None,
         }
     }
 }
@@ -177,11 +190,14 @@ mod tests {
         assert_eq!(parsed.inline_height, Some(20));
         assert!(!parsed.resume_chooser);
         assert_eq!(parsed.mouse, Some(false));
-        assert_eq!(
-            parsed.resume.template(HarnessKind::ClaudeCode),
-            Some("claude --resume {id} --permission-mode plan")
-        );
-        assert_eq!(parsed.resume.template(HarnessKind::Codex), None);
-        assert_eq!(parsed.resume.template(HarnessKind::Pi), Some("pi --session {id}"));
+        #[cfg(feature = "ai")]
+        {
+            assert_eq!(
+                parsed.resume.template(HarnessKind::ClaudeCode),
+                Some("claude --resume {id} --permission-mode plan")
+            );
+            assert_eq!(parsed.resume.template(HarnessKind::Codex), None);
+            assert_eq!(parsed.resume.template(HarnessKind::Pi), Some("pi --session {id}"));
+        }
     }
 }

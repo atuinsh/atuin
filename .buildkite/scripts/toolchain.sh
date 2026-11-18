@@ -9,8 +9,8 @@
 #   APT_PACKAGES     extra apt packages on Linux (libssl-dev + pkg-config always)
 #   BREW_PACKAGES    Homebrew packages on macOS
 #
-# Runs on Linux and macOS hosted agents, so it sticks to bash 3.2 (macOS's
-# /bin/bash).
+# Runs on Linux, macOS and Windows (Git Bash) hosted agents, so it sticks to
+# bash 3.2 (macOS's /bin/bash).
 
 # lib.sh is checked on its own; shellcheck only follows sources with -x.
 # shellcheck disable=SC1091
@@ -19,6 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 NEXTEST_VERSION=0.9.146
 NEXTEST_LINUX_SHA256=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428
 NEXTEST_MACOS_SHA256=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8
+NEXTEST_WINDOWS_SHA256=809b01f2c94d031ab6cf5f4d4a4f477c8f51b69c96ab3cb2fe4db7ecb222d0d3
 CARGO_DENY_VERSION=0.20.2
 CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
 # Buildkite Test Engine's client, which splits test steps (nextest-bktec.py).
@@ -45,6 +46,10 @@ case "$(uname -s)" in
     fi
     nextest_asset=universal-apple-darwin nextest_sha256=$NEXTEST_MACOS_SHA256
     bktec_asset=darwin_arm64 bktec_sha256=$BKTEC_MACOS_SHA256
+    ;;
+  MINGW* | MSYS*)
+    # The image ships rustup and Visual Studio's build tools.
+    nextest_asset=x86_64-pc-windows-msvc nextest_sha256=$NEXTEST_WINDOWS_SHA256
     ;;
   *)
     echo "Unsupported OS: $(uname -s)"

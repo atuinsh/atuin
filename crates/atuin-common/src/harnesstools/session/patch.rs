@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::harnesstools::session::ToolCallId;
 
+/// Lines of context a hunk built from two contents keeps around its changes.
+const CONTEXT: u32 = 3;
+
 /// What a tool call changed: the files, in the order its harness listed them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Patch {
@@ -110,6 +113,37 @@ impl FilePatch {
         }
     }
 
+    /// The changes made to a file whose content was `old` (`None`: it didn't exist) and is now
+    /// `new`, as hunks with three lines of context, for a harness that records the contents
+    /// rather than a diff.
+    #[must_use]
+    pub fn between(path: String, old: Option<&str>, new: &str) -> Self {
+        let Some(old) = old else {
+            return Self::added(path, new);
+        };
+        let input = imara_diff::InternedInput::new(old, new);
+        let mut diff = imara_diff::Diff::compute(imara_diff::Algorithm::Histogram, &input);
+        diff.postprocess_lines(&input);
+        // Changes closer than twice the context share a hunk, as in a unified diff.
+        let mut groups: Vec<Vec<imara_diff::Hunk>> = Vec::new();
+        for change in diff.hunks() {
+            match groups.last_mut() {
+                Some(group)
+                    if change.before.start - group[group.len() - 1].before.end <= 2 * CONTEXT =>
+                {
+                    group.push(change);
+                }
+                _ => groups.push(vec![change]),
+            }
+        }
+        Self {
+            path,
+            change: Change::Update,
+            moved_to: None,
+            hunks: groups.iter().map(|group| Hunk::of(group, &input)).collect(),
+        }
+    }
+
     /// A file deleted with `content`, as one hunk of `-` lines.
     #[must_use]
     pub fn deleted(path: String, content: &str) -> Self {
@@ -191,6 +225,57 @@ impl FilePatch {
 impl Hunk {
     /// All of `content` as one hunk of `prefix` lines: added (`+`) or deleted (`-`). `None` for
     /// empty content.
+    /// The hunk of changes `group` (in order, each within twice the context of the last) makes
+    /// to `input`, with the lines around them.
+    fn of(group: &[imara_diff::Hunk], input: &imara_diff::InternedInput<&str>) -> Self {
+        let (first, last) = (&group[0], &group[group.len() - 1]);
+        let lines_in =
+            |tokens: &[imara_diff::Token]| u32::try_from(tokens.len()).unwrap_or(u32::MAX);
+        let start = first.before.start.saturating_sub(CONTEXT);
+        let end = (last.before.end + CONTEXT).min(lines_in(&input.before));
+        let new_start = first.after.start - (first.before.start - start);
+        let mut lines = Vec::new();
+        let mut line = |tokens: &[imara_diff::Token], at: u32, prefix: char| {
+            let text = input.interner[tokens[at as usize]];
+            match text.strip_suffix('\n') {
+                Some(text) => lines.push(format!("{prefix}{text}")),
+                None => {
+                    lines.push(format!("{prefix}{text}"));
+                    lines.push("\\ No newline at end of file".to_owned());
+                }
+            }
+        };
+        let (mut at, mut added) = (start, 0);
+        for change in group {
+            for i in at..change.before.start {
+                line(&input.before, i, ' ');
+            }
+            for i in change.before.clone() {
+                line(&input.before, i, '-');
+            }
+            for i in change.after.clone() {
+                line(&input.after, i, '+');
+            }
+            added += change.after.len();
+            at = change.before.end;
+        }
+        for i in at..end {
+            line(&input.before, i, ' ');
+        }
+        let removed: usize = group.iter().map(|change| change.before.len()).sum();
+        let old_lines = u64::from(end - start);
+        let new_lines = old_lines - removed as u64 + added as u64;
+        // A count of 0 names the line before, as unified diffs do.
+        let first_line = |at: u32, count: u64| u64::from(at) + u64::from(count > 0);
+        Self {
+            old_start: first_line(start, old_lines),
+            old_lines,
+            new_start: first_line(new_start, new_lines),
+            new_lines,
+            lines,
+        }
+    }
+
     fn whole(content: &str, prefix: char) -> Option<Self> {
         if content.is_empty() {
             return None;
@@ -674,5 +759,37 @@ mod tests {
             prop_assert_eq!(FilePatch::from_diff(&file.unified()), vec![file.clone()]);
             prop_assert_eq!(Hunk::parse(&file.hunks_text()), file.hunks);
         }
+    }
+
+    /// Built from the contents before and after, a hunk holds whole lines, with a few around
+    /// them: an edit within a line shows the line before and after it.
+    #[rstest]
+    #[case::within_a_line(
+        Some("a\nb\nlet foo = 1; // keep\nc\n"),
+        "a\nb\nlet bar = 1; // keep\nc\n",
+        &[" a", " b", "-let foo = 1; // keep", "+let bar = 1; // keep", " c"][..],
+        (1, 4, 1, 4)
+    )]
+    #[case::added(None, "one\ntwo\n", &["+one", "+two"][..], (0, 0, 1, 2))]
+    #[case::no_newline_at_the_end(
+        Some("x"),
+        "y",
+        &["-x", "\\ No newline at end of file", "+y", "\\ No newline at end of file"][..],
+        (1, 1, 1, 1)
+    )]
+    fn a_patch_between_two_contents_holds_whole_lines(
+        #[case] old: Option<&str>,
+        #[case] new: &str,
+        #[case] lines: &[&str],
+        #[case] counts: (u64, u64, u64, u64),
+    ) {
+        let patch = FilePatch::between("f".to_owned(), old, new);
+        let [hunk] = patch.hunks.as_slice() else {
+            panic!("{patch:#?}")
+        };
+        assert_eq!(hunk.lines, lines);
+        assert_eq!((hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines), counts);
+        assert_eq!(patch.side('-'), old.unwrap_or_default());
+        assert_eq!(patch.side('+'), new);
     }
 }

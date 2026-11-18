@@ -98,7 +98,6 @@ pub fn create_chat_stream(
     client_ctx: ClientContext,
     send_cwd: bool,
     last_command: Option<History>,
-    user_contexts: Vec<crate::user_context::UserContext>,
     skill_summaries: Vec<crate::skills::SkillSummary>,
     skill_overflow: Option<String>,
     settings: Arc<Settings>,
@@ -119,10 +118,6 @@ pub fn create_chat_stream(
         let mut config = serde_json::json!({
             "capabilities": request.capabilities,
         });
-
-        if !user_contexts.is_empty() {
-            config["user_contexts"] = serde_json::json!(user_contexts);
-        }
 
         if !skill_summaries.is_empty() {
             config["skills"] = serde_json::json!(skill_summaries);

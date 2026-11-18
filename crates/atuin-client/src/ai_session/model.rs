@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
 use atuin_common::harnesstools::pi::Flavour;
-use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
+use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession, parent_order};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
@@ -14,24 +14,39 @@ use time::OffsetDateTime;
 use typed_builder::TypedBuilder;
 use uuid::{Builder, Uuid};
 
+/// Records name the harness (the variant's name), and a name this build doesn't know reads as
+/// [`Self::Unknown`]. A new variant needs no new record version. It does need a sidecar migration
+/// that rebuilds the projection from the record store, as `0006_reproject_for_hermes.sql` does.
+/// Rows projected while the harness was unknown are then projected again under its name.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Enumeration))]
 pub enum HarnessKind {
-    Unknown = 0,
     ClaudeCode = 1,
     Codex = 2,
     Copilot = 3,
     Opencode = 4,
     Pi = 5,
     Omp = 6,
+    Grok = 7,
+    Amp = 8,
+    Kiro = 9,
+    Hermes = 10,
+    /// No harness atuin knows: unstated, or one a newer atuin added, whose records name it.
+    #[serde(other)]
+    Unknown = 0,
 }
 
 impl From<&AnyHarness> for HarnessKind {
     fn from(value: &AnyHarness) -> Self {
         match value {
+            AnyHarness::Amp(_) => Self::Amp,
             AnyHarness::ClaudeCode(_) => Self::ClaudeCode,
             AnyHarness::Codex(_) => Self::Codex,
+            AnyHarness::Copilot(_) => Self::Copilot,
+            AnyHarness::Grok(_) => Self::Grok,
+            AnyHarness::Hermes(_) => Self::Hermes,
+            AnyHarness::Kiro(_) => Self::Kiro,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
@@ -42,18 +57,25 @@ impl From<&AnyHarness> for HarnessKind {
 }
 
 impl HarnessKind {
-    /// The harness tools for this kind. `None` for a kind atuin has none for (Copilot, and
-    /// sessions of no known harness), whose sessions can be viewed but not resumed.
+    /// The harness tools for this kind. `None` for a kind atuin has none for (sessions of no
+    /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{ccode, codex, opencode, pi};
+        use atuin_common::harnesstools::{
+            amp, ccode, codex, copilot, grok, hermes, kiro, opencode, pi,
+        };
         match self {
+            Self::Amp => Some(AnyHarness::Amp(amp::Amp)),
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
+            Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
+            Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
+            Self::Hermes => Some(AnyHarness::Hermes(hermes::Hermes)),
+            Self::Kiro => Some(AnyHarness::Kiro(kiro::Kiro)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
-            Self::Copilot | Self::Unknown => None,
+            Self::Unknown => None,
         }
     }
 }
@@ -376,7 +398,7 @@ impl Session {
             git_branch: self.git_branch.clone(),
             model: self.model.clone(),
             started_at: self.started_at,
-            messages: messages.into_iter().map(RehydrateMessage::from).collect(),
+            messages: parent_order(messages.into_iter().map(RehydrateMessage::from).collect()),
             fork_of: None,
         }
     }
@@ -441,8 +463,7 @@ impl MessageRole {
 ///
 /// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
 /// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
-/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
-/// does not know arrives as [`Content::Other`].
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
 pub struct ContentBlocks(pub i64);
 
@@ -458,6 +479,10 @@ impl ContentBlocks {
     pub const ERROR: i64 = 1 << 7;
     pub const OTHER: i64 = 1 << 8;
     pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// A block of a kind that this build doesn't know, which is a [`Content::Unknown`]. No
+    /// migration gave this bit to rows stored before it. None of those rows could hold such a
+    /// block, because older builds skipped the whole record.
+    pub const UNKNOWN: i64 = 1 << 10;
     /// What tool output holds: anything else makes a message more than tool output.
     pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
 
@@ -475,6 +500,7 @@ impl ContentBlocks {
                 Content::Error(_) => Self::ERROR,
                 Content::Other(_) => Self::OTHER,
                 Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
+                Content::Unknown(_) => Self::UNKNOWN,
             }
         }))
     }
@@ -576,6 +602,7 @@ pub struct MatchedSession {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::harnesstools::session::UnknownBlock;
     use atuin_domain::record::RecordVersion;
     use rstest::rstest;
 
@@ -588,7 +615,9 @@ mod tests {
     #[case::codex(HarnessKind::Codex, true)]
     #[case::opencode(HarnessKind::Opencode, true)]
     #[case::pi(HarnessKind::Pi, true)]
-    #[case::copilot(HarnessKind::Copilot, false)]
+    #[case::copilot(HarnessKind::Copilot, true)]
+    #[case::kiro(HarnessKind::Kiro, true)]
+    #[case::hermes(HarnessKind::Hermes, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,
@@ -650,14 +679,28 @@ mod tests {
         assert!(matches!(err, DecodeError::Retired(RecordVersion::V0)));
     }
 
-    /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, and
-    /// reads back.
+    /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, one v3
+    /// readers can't (naming Grok) as v4, one v4 readers can't (naming Amp, Kiro or Hermes) as v5, and
+    /// each reads back.
     #[rstest]
     #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
     #[case::omp(HarnessKind::Omp, None, None, RecordVersion::V3)]
     #[case::continued_from_omp(HarnessKind::Pi, Some(HarnessKind::Omp), None, RecordVersion::V3)]
     #[case::with_a_provider(HarnessKind::Omp, None, Some("openai-codex"), RecordVersion::V3)]
-    fn omp_messages_are_v3(
+    #[case::grok(HarnessKind::Grok, None, None, RecordVersion::V4)]
+    #[case::continued_from_grok(HarnessKind::Pi, Some(HarnessKind::Grok), None, RecordVersion::V4)]
+    #[case::amp(HarnessKind::Amp, None, None, RecordVersion::V5)]
+    #[case::continued_from_amp(HarnessKind::Pi, Some(HarnessKind::Amp), None, RecordVersion::V5)]
+    #[case::kiro(HarnessKind::Kiro, None, None, RecordVersion::V5)]
+    #[case::continued_from_kiro(HarnessKind::Pi, Some(HarnessKind::Kiro), None, RecordVersion::V5)]
+    #[case::hermes(HarnessKind::Hermes, None, None, RecordVersion::V5)]
+    #[case::grok_continued_from_amp(
+        HarnessKind::Grok,
+        Some(HarnessKind::Amp),
+        None,
+        RecordVersion::V5
+    )]
+    fn newer_harnesses_have_newer_versions(
         #[case] harness: HarnessKind,
         #[case] parent: Option<HarnessKind>,
         #[case] provider: Option<&str>,
@@ -679,10 +722,54 @@ mod tests {
         assert_eq!(read, msg);
     }
 
+    /// A record naming a harness this build doesn't know (one a newer build added) reads as
+    /// [`HarnessKind::Unknown`], rather than failing to decode and being skipped for good.
+    #[rstest]
+    fn an_unknown_harness_reads_as_unknown() {
+        let mut msg = record_message();
+        msg.session.harness = HarnessKind::Amp;
+        let body = rmp_serde::to_vec(&msg).unwrap();
+        // The harness's name, as msgpack writes a short string.
+        let (amp, zed) = (b"\xa3Amp".as_slice(), b"\xa3Zed".as_slice());
+        let at = body.windows(amp.len()).position(|w| w == amp).unwrap();
+        let renamed = [&body[..at], zed, &body[at + amp.len()..]].concat();
+        let read: Message = rmp_serde::from_slice(&renamed).unwrap();
+        assert_eq!(read.session.harness, HarnessKind::Unknown);
+    }
+
+    /// A newer build's v6 record can hold a block of a kind that this build doesn't know. The
+    /// record reads with that block as [`Content::Unknown`], beside the blocks that this build
+    /// knows. Before v6, the record failed to decode and was skipped for good.
+    #[rstest]
+    fn a_block_of_an_unknown_kind_reads_as_unknown() {
+        let mut msg = record_message();
+        msg.content.push(Content::Summary("so far".to_owned()));
+        let body = rmp_serde::to_vec(&msg).unwrap();
+        // The block's kind as msgpack writes a short string. The new name is a kind that this
+        // build doesn't know.
+        let (known, newer) = (b"\xa7Summary".as_slice(), b"\xa7Shelved".as_slice());
+        let at = body.windows(known.len()).position(|w| w == known).unwrap();
+        let renamed = [&body[..at], newer, &body[at + known.len()..]].concat();
+        let mut record = vec![0];
+        record.extend(zstd::bulk::compress(&renamed, 3).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V6).unwrap();
+
+        assert_eq!(read.content[..read.content.len() - 1], msg.content[..msg.content.len() - 1]);
+        assert_eq!(
+            read.content.last(),
+            Some(&Content::Unknown(UnknownBlock {
+                kind: "Shelved".to_owned(),
+                value: Some(serde_json::json!("so far")),
+            }))
+        );
+    }
+
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v4".to_owned());
+        let version = RecordVersion::Other("v7".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }

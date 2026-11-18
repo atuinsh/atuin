@@ -1,70 +1,48 @@
-#[cfg(unix)]
-use std::borrow::Cow;
 use std::num::NonZeroU32;
-#[cfg(unix)]
-use std::path::Path;
 
-use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
-#[cfg(unix)]
-use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
+use atuin_common::userio::log::{Message, SINK};
 use easy_cast::Conv;
 use eyre::Result;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use time::OffsetDateTime;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::Code;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{Level, instrument, span, warn};
 
-use crate::grpc::ai::agent::pb::Session as AiSession;
-use crate::grpc::ai::session::pb::ai_session_client::AiSessionClient as AiSessionServiceClient;
-use crate::grpc::ai::session::pb::{
-    GetSessionEvent, GetSessionRequest, ImportSessionsEvent, ImportSessionsRequest,
-    ListSessionsRequest, ProjectSyncedRequest, RebuildSessionsRequest, SearchSessionsMatch,
-    SearchSessionsRequest, TailSessionsEvent, TailSessionsRequest,
-};
 use crate::grpc::history::pb::history_client::HistoryClient as HistoryServiceClient;
 use crate::grpc::history::pb::{
     AuthorKind, CancelHistoryReply, CancelHistoryRequest, CommandCapture, CommandCaptureMeta,
     CompactStoreReply, CompactStoreRequest, DeleteHistoryReply, DeleteHistoryRequest,
     EndHistoryReply, EndHistoryRequest, GetCommandOutputRequest, GetCommandOutputResponse,
-    RebuildHistoryReply, RebuildHistoryRequest, RegisterCommandOutputRequest, ShutdownRequest,
-    StartHistoryReply, StartHistoryRequest, StatusReply, StatusRequest, TailHistoryReply,
-    TailHistoryRequest,
+    ImportHistoryRequest, LoggedInRequest, RebuildHistoryReply, RebuildHistoryRequest,
+    RegisterCommandOutputRequest, ShutdownRequest, StartHistoryReply, StartHistoryRequest,
+    StatusReply, StatusRequest, TailHistoryReply, TailHistoryRequest,
 };
-use crate::grpc::versioning::{StrictVersionInterceptor, VersionMatchError, VersionedExt as _};
+use crate::grpc::request::ClientInterceptor;
+use crate::grpc::userio::pb::ListenLogsRequest;
+use crate::grpc::userio::pb::user_io_client::UserIoClient;
+use crate::grpc::versioning::{VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, SearchCommandOutputRequest,
-    SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    FilterMode as RpcFilterMode, PrepareIndexRequest, RebuildIndexRequest,
+    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
 
-/// The paths that should be checked when looking for existing daemon sockets.
-///
-/// For the same reasons explained in [`Pidfile::socket_path`][1], when `ATUIN_HOME` is set, this function will
-/// only yield the [preferred socket path][0] instead of also including the legacy paths.
-///
-/// [0]: atuin_client::settings::Daemon::preferred_socket_path
-/// [1]: crate::service::pidfile::Pidfile::socket_path
-#[cfg(unix)]
-pub fn potential_socket_paths(
-    daemon: &DaemonSettings,
-) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
-    if atuin_common::dirs::atuin_home_is_set() {
-        itertools::Either::Left(std::iter::once(daemon.preferred_socket_path()))
-    } else {
-        itertools::Either::Right(daemon.potential_socket_paths())
-    }
-}
+#[cfg(feature = "ai")]
+mod ai;
+#[cfg(feature = "ai")]
+pub use ai::AiClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {
@@ -76,7 +54,7 @@ pub enum FromSettingsError {
 
 /// A connection to the daemon that stamps every request with this client's
 /// [`BUILD_STR`](crate::grpc::versioning::BUILD_STR).
-type DaemonChannel = InterceptedService<Channel, StrictVersionInterceptor>;
+type DaemonChannel = InterceptedService<Channel, ClientInterceptor>;
 
 #[derive(Clone)]
 pub struct HistoryClient {
@@ -127,7 +105,7 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
 impl From<Channel> for HistoryClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: HistoryServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: HistoryServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -217,6 +195,25 @@ impl HistoryClient {
         Ok(self.client.compact_store(CompactStoreRequest {}).await?.into_inner())
     }
 
+    /// Have the daemon import `shell`'s history file, replying straight away unless `wait`, then
+    /// once it's imported.
+    pub async fn import_history(
+        &mut self,
+        shell: &str,
+        histfile: Option<String>,
+        fish_history: Option<String>,
+        wait: bool,
+    ) -> Result<()> {
+        let request = ImportHistoryRequest {
+            shell: shell.to_owned(),
+            histfile,
+            fish_history,
+            wait,
+        };
+        self.client.import_history(request).await?;
+        Ok(())
+    }
+
     pub async fn status(&mut self) -> Result<StatusReply, tonic::Status> {
         Ok(self.client.status(StatusRequest {}).await?.into_inner())
     }
@@ -245,6 +242,12 @@ impl HistoryClient {
     pub async fn shutdown(&mut self) -> Result<bool, tonic::Status> {
         let resp = self.client.shutdown(ShutdownRequest {}).await?.into_inner();
         Ok(resp.accepted)
+    }
+
+    /// Tells the daemon `atuin login` saved a session, so the uploads it holds back for one go now.
+    pub async fn logged_in(&mut self) -> Result<(), tonic::Status> {
+        self.client.logged_in(LoggedInRequest {}).await?;
+        Ok(())
     }
 
     pub async fn register_command_output(
@@ -325,7 +328,7 @@ pub struct SearchClient {
 impl From<Channel> for SearchClient {
     fn from(channel: Channel) -> Self {
         Self {
-            client: SearchServiceClient::with_interceptor(channel, StrictVersionInterceptor),
+            client: SearchServiceClient::with_interceptor(channel, ClientInterceptor),
         }
     }
 }
@@ -393,6 +396,12 @@ impl SearchClient {
         self.client.prepare_index(request).await?;
         Ok(())
     }
+
+    /// Tell the daemon to rebuild the search index from the history DB.
+    pub async fn rebuild_index(&mut self) -> Result<()> {
+        self.client.rebuild_index(RebuildIndexRequest {}).await?;
+        Ok(())
+    }
 }
 
 impl From<FilterMode> for RpcFilterMode {
@@ -415,168 +424,109 @@ impl From<Context> for RpcSearchContext {
             cwd: context.cwd,
             hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
-            git_root: context.git_root.map(|path| path.to_string_lossy().to_string()),
+            vcs_root: context.vcs_root.map(|path| path.to_string_lossy().to_string()),
         }
     }
 }
 
-/// First and longest waits between [`AiClient::wait_for_sessions`] probes.
-const REBUILD_POLL_START: std::time::Duration = std::time::Duration::from_millis(250);
-const REBUILD_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(test)]
+mod search_tests {
+    use std::path::PathBuf;
 
-/// Client for the daemon's `ai.session.AiSession` service. Wraps the generated tonic stub the same
-/// way [`HistoryClient`] and [`SearchClient`] do, returning the raw protobuf messages so callers can
-/// render them however they like.
-pub struct AiClient {
-    client: AiSessionServiceClient<DaemonChannel>,
+    use atuin_domain::record::CmdOrigin;
+    use rstest::rstest;
+
+    use crate::client::{
+        Context, FilterMode, OrFilter, RpcFilterMode, SearchParams, SearchRequest,
+    };
+
+    #[rstest]
+    #[case::no_repository(None)]
+    #[case::repository(Some("/work/repo"))]
+    #[case::unicode_repository(Some("/work/répo"))]
+    fn search_request_preserves_vcs_context(#[case] root: Option<&str>) {
+        let request = SearchRequest::from(SearchParams {
+            query: "cargo build".to_string(),
+            query_id: 42,
+            filter_mode: FilterMode::Workspace,
+            context: Some(Context {
+                session: "session".to_string(),
+                cwd: "/work/repo/sub".to_string(),
+                cmd_origin: CmdOrigin::try_from("host:user").unwrap(),
+                host_id: "host-id".to_string(),
+                vcs_root: root.map(PathBuf::from),
+            }),
+            shells: OrFilter::default(),
+        });
+
+        assert_eq!(request.query, "cargo build");
+        assert_eq!(request.query_id, 42);
+        assert_eq!(request.filter_mode, i32::from(RpcFilterMode::Workspace));
+        assert!(request.shells.is_empty());
+        let context = request.context.unwrap();
+        assert_eq!(context.session_id, "session");
+        assert_eq!(context.cwd, "/work/repo/sub");
+        assert_eq!(context.hostname, "host:user");
+        assert_eq!(context.host_id, "host-id");
+        assert_eq!(context.vcs_root.as_deref(), root);
+    }
 }
 
-impl AiClient {
-    /// The stub over `channel`, taking messages of any size: a message the daemon streams holds
-    /// one captured message, as big as the prompt or reply in it, past tonic's default 4 MiB.
-    /// The daemon is local and trusted (the server encodes any size by default).
-    fn service(channel: Channel) -> AiSessionServiceClient<DaemonChannel> {
-        AiSessionServiceClient::with_interceptor(channel, StrictVersionInterceptor)
-            .max_decoding_message_size(usize::MAX)
-    }
+/// Shows on [`SINK`] what the daemon logs for the user while serving a request, from
+/// [`listen`](Self::listen) until [`finish`](Self::finish).
+pub(crate) struct LogListener {
+    /// Dropped to close this side of the stream, which has the daemon send the messages it has
+    /// left and end it.
+    close: Option<oneshot::Sender<()>>,
+    shown: JoinHandle<()>,
+}
 
-    pub async fn new(address: impl Into<DaemonAddress>) -> Result<Self, ConnectError> {
+impl LogListener {
+    /// Listens to the daemon over `channel` for the request of the current
+    /// [`scope`](crate::grpc::request::scope),
+    /// showing every message it logs for it from when this returns on.
+    pub(crate) async fn listen(channel: Channel) -> Result<Self, tonic::Status> {
+        let (close, closed) = oneshot::channel::<()>();
+        let requests = futures::stream::once(closed)
+            .filter_map(|_| std::future::ready(None::<ListenLogsRequest>));
+        let mut replies = UserIoClient::with_interceptor(channel, ClientInterceptor)
+            .listen_logs(requests)
+            .await?
+            .into_inner();
+
+        // Runs until the daemon ends the stream, which dropping `close` asks for.
+        let shown = tokio::spawn(async move {
+            while let Ok(Some(reply)) = replies.message().await {
+                let Some(message) = reply.message else {
+                    continue;
+                };
+                match Message::try_from(message) {
+                    Ok(message) => SINK.show(message),
+                    Err(err) => warn!(?err, "dropped a message from the daemon"),
+                }
+            }
+        });
+
         Ok(Self {
-            client: Self::service(address.into().channel().await?),
+            close: Some(close),
+            shown,
         })
     }
 
-    pub async fn from_settings(settings: &Settings) -> Result<Self, FromSettingsError> {
-        Ok(Self::new(ActiveService::locate(&settings.daemon)?).await?)
-    }
+    /// Shows the messages the daemon has logged until now, then stops listening.
+    pub(crate) async fn finish(mut self) {
+        /// How long the daemon has to send what it queued for the request.
+        const FINISH_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
-    /// Wait while the daemon is still rebuilding AI sessions after starting: until then every
-    /// session read but a tail is refused rather than answered partially. Calls `on_wait` each
-    /// time it finds the daemon rebuilding, with how far it has got (records replayed, and
-    /// roughly how many there are to replay), and returns at once when it is not. After this the
-    /// daemon serves reads until a store command has it rebuild again (`atuin store rebuild
-    /// ai-session`, a purge or a forced pull), which is rare.
-    pub async fn wait_for_sessions(&mut self, mut on_wait: impl FnMut((u64, u64))) -> Result<()> {
-        let mut delay = REBUILD_POLL_START;
-        while let Some(progress) = self.rebuild_status().await? {
-            on_wait(progress);
-            tokio::time::sleep(delay).await;
-            delay = (delay * 2).min(REBUILD_POLL_MAX);
-        }
-        Ok(())
+        drop(self.close.take());
+        // One that panicked has shown what it could, and one still running is aborted on drop.
+        let _ = tokio::time::timeout(FINISH_WAIT, &mut self.shown).await;
     }
+}
 
-    /// Whether the daemon is rebuilding AI sessions right now (see [`Self::wait_for_sessions`]),
-    /// without waiting for it to finish: `Some` while it is, with how far it has got (records
-    /// replayed, and roughly how many there are to replay); `None` when it serves reads.
-    pub async fn rebuild_status(&mut self) -> Result<Option<(u64, u64)>> {
-        // A listing filtered to the future matches nothing, so the probe costs little beyond the
-        // rebuild check every read makes first.
-        let future = OffsetDateTime::now_utc() + time::Duration::days(365);
-        let filter = SessionFilter {
-            updated_since: Some(future),
-            ..SessionFilter::default()
-        };
-        let probe = ListSessionsRequest {
-            filter: Some((&filter).into()),
-        };
-        match self.client.list_sessions(probe).await {
-            Ok(_) => Ok(None),
-            Err(status) => match crate::grpc::ai::session::rebuild_progress(&status) {
-                Some(progress) => Ok(Some(progress)),
-                None => Err(status.into()),
-            },
-        }
-    }
-
-    /// Stream captured session summaries passing `filter`, newest first. The daemon sends one
-    /// session per message (so a long list never trips the gRPC message-size limit); callers that
-    /// want the whole set collect it with `try_collect`, and ones that only want the newest can
-    /// take the first item without draining the rest.
-    pub async fn list_sessions(
-        &mut self,
-        filter: &SessionFilter,
-    ) -> Result<tonic::Streaming<AiSession>> {
-        let request = ListSessionsRequest {
-            filter: Some(filter.into()),
-        };
-        Ok(self.client.list_sessions(request).await?.into_inner())
-    }
-
-    /// Stream one session: the first event carries the [`AiSession`], each event after it a message.
-    pub async fn get_session(
-        &mut self,
-        session: HarnessSession,
-    ) -> Result<tonic::Streaming<GetSessionEvent>> {
-        let request = GetSessionRequest {
-            session: Some(session.into()),
-        };
-        Ok(self.client.get_session(request).await?.into_inner())
-    }
-
-    /// Follow sessions and messages as they are recorded. `harness` filters to one harness when set.
-    pub async fn tail_sessions(
-        &mut self,
-        harness: Option<HarnessKind>,
-    ) -> Result<tonic::Streaming<TailSessionsEvent>> {
-        let request = TailSessionsRequest {
-            harness: harness.map(|h| h as i32),
-        };
-        Ok(self.client.tail_sessions(request).await?.into_inner())
-    }
-
-    /// Stream the sessions matching `terms` and passing `filter`, most relevant first, at most
-    /// `limit` (0 is unbounded). No terms stream them newest first.
-    ///
-    /// The daemon matches every term as whole words, or with [`SearchTerms::Any`] any term as a
-    /// prefix; a [`SearchTerms::Typed`] line (search as you type) is searched as
-    /// [`SearchTerms::All`] over its words.
-    pub async fn search_sessions(
-        &mut self,
-        terms: SearchTerms,
-        filter: &SessionFilter,
-        limit: u32,
-    ) -> Result<tonic::Streaming<SearchSessionsMatch>> {
-        let (terms, any_term) = match terms {
-            SearchTerms::All(terms) => (terms, false),
-            SearchTerms::Typed(line) => {
-                (line.split_whitespace().map(str::to_owned).collect(), false)
-            }
-            SearchTerms::Any(terms) => (terms, true),
-        };
-        let request = SearchSessionsRequest {
-            terms,
-            limit,
-            any_term,
-            filter: Some(filter.into()),
-        };
-        Ok(self.client.search_sessions(request).await?.into_inner())
-    }
-
-    /// Have the daemon rebuild its sessions from the record store, after records were deleted
-    /// under them. Returns once what they projected is gone; the replay goes on in the
-    /// background, and [`Self::wait_for_sessions`] waits it out.
-    pub async fn rebuild_sessions(&mut self) -> Result<()> {
-        self.client.rebuild_sessions(RebuildSessionsRequest {}).await?;
-        Ok(())
-    }
-
-    /// Have the daemon project the records this process synced into the record store. Returns
-    /// once the projection is over, which goes on if this stops waiting; a failure is only in the
-    /// daemon's log.
-    pub async fn project_synced(&mut self) -> Result<()> {
-        self.client.project_synced(ProjectSyncedRequest {}).await?;
-        Ok(())
-    }
-
-    pub async fn import_sessions(
-        &mut self,
-        harness: Option<HarnessKind>,
-    ) -> Result<tonic::Streaming<ImportSessionsEvent>> {
-        let request = ImportSessionsRequest {
-            harness: harness.map(|h| h as i32),
-        };
-        Ok(self.client.import_sessions(request).await?.into_inner())
+impl Drop for LogListener {
+    fn drop(&mut self) {
+        self.shown.abort();
     }
 }
 
@@ -604,88 +554,5 @@ mod tests {
                 .insert(BUILD_HEADER_KEY, tonic::metadata::MetadataValue::from_static(build));
         }
         assert_eq!(classify_error(&status.into()), expected);
-    }
-}
-
-#[cfg(all(test, unix))]
-mod rebuild_tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
-
-    use rstest::rstest;
-    use tokio::net::UnixListener;
-    use tokio::sync::watch;
-    use tokio_stream::wrappers::UnixListenerStream;
-    use tonic::transport::Server;
-
-    use super::AiClient;
-    use crate::grpc::AiSessionService;
-    use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
-
-    /// A client of an AI-session service over a real socket, in the given recovery state.
-    async fn serve(state: StoreState) -> (AiClient, watch::Sender<StoreState>, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("daemon.sock");
-        let (capture, state) = AiHarnessSessionCapture::with_state(state).await;
-        let service = AiSessionServer::new(AiSessionService::new(Arc::new(capture)));
-        let incoming = UnixListenerStream::new(UnixListener::bind(&path).unwrap());
-        tokio::spawn(Server::builder().add_service(service).serve_with_incoming(incoming));
-        (AiClient::new(path).await.unwrap(), state, dir)
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn waits_out_a_rebuild_over_the_wire() {
-        let (mut client, state, _dir) = serve(StoreState::Recovering).await;
-        let notices = Arc::new(AtomicUsize::new(0));
-        let counter = notices.clone();
-        let wait = tokio::spawn(async move {
-            client
-                .wait_for_sessions(|progress| {
-                    // The test's store replays nothing: the daemon reports that it has none to.
-                    assert_eq!(progress, (0, 0));
-                    counter.fetch_add(1, Ordering::SeqCst);
-                })
-                .await
-        });
-
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        assert!(!wait.is_finished(), "returned while the daemon was rebuilding");
-
-        state.send_replace(StoreState::Ready);
-        tokio::time::timeout(Duration::from_secs(10), wait)
-            .await
-            .expect("returns once the rebuild ends")
-            .unwrap()
-            .unwrap();
-        // Probed at once, then after 250ms: each probe that finds it rebuilding reports.
-        assert!(notices.load(Ordering::SeqCst) >= 2, "each wait reports its progress");
-    }
-
-    #[rstest]
-    #[case::ready(StoreState::Ready)]
-    #[case::failed(StoreState::Unavailable)]
-    #[tokio::test]
-    async fn returns_at_once_when_not_rebuilding(#[case] state: StoreState) {
-        let (mut client, _state, _dir) = serve(state).await;
-
-        let mut announced = false;
-        client.wait_for_sessions(|_| announced = true).await.unwrap();
-
-        assert!(!announced);
-    }
-
-    /// The status a probe reads without waiting: rebuilding (with its progress) until the
-    /// rebuild ends, then not.
-    #[rstest]
-    #[tokio::test]
-    async fn reads_the_rebuild_status_without_waiting() {
-        let (mut client, state, _dir) = serve(StoreState::Recovering).await;
-        // The test's store replays nothing: the daemon reports that it has none to.
-        assert_eq!(client.rebuild_status().await.unwrap(), Some((0, 0)));
-        state.send_replace(StoreState::Ready);
-        assert_eq!(client.rebuild_status().await.unwrap(), None);
     }
 }

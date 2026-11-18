@@ -24,6 +24,7 @@ const SOCKET_NAME: &str = "atuin.sock";
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, history hooks are routed through the daemon.
+    // The field has a config builder default, so `settings::aliases` must list this alias.
     #[serde(alias = "enable")]
     pub enabled: bool,
 
@@ -64,8 +65,8 @@ impl Daemon {
     /// This is the first path in [`Self::potential_socket_paths`] that exists, or if none exist,
     /// the first path.
     ///
-    /// Note: you should almost always use `atuin_daemon::service::pidfile::Pidfile::socket_path` instead of this
-    /// method, as it implements additional logic like checking the pidfile.
+    /// Note: you should almost always use `atuin_daemon::service::address::DaemonAddress::locate`
+    /// instead of this method, as it implements additional logic like checking the pidfile.
     #[must_use]
     pub fn existing_socket_path(&self) -> Cow<'_, Path> {
         self.existing_socket_path_ctx(DefaultSocketCtx)
@@ -85,8 +86,8 @@ impl Daemon {
     /// 5. If `$XDG_DATA_HOME` is unset or empty, `~/.local/share/atuin/atuin.sock` (legacy path).
     /// 6. If `$TMPDIR` is set, `/tmp/atuin-$UID/atuin.sock` (ignoring `$TMPDIR`).
     ///
-    /// Note: you should almost always use `atuin_daemon::client::potential_socket_paths` instead of
-    /// this method, as it implements additional logic.
+    /// Note: the daemon looks for its sockets with additional logic for `ATUIN_HOME`, which this
+    /// method doesn't apply.
     pub fn potential_socket_paths(&self) -> impl Iterator<Item = Cow<'_, Path>> + use<'_> {
         self.potential_socket_paths_ctx(DefaultSocketCtx)
     }
@@ -267,8 +268,7 @@ impl<'a> SocketPath<'a> {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_secure_temp_dir(dir.as_path())?;
-        Ok(())
+        create_secure_temp_dir(dir)
     }
 
     #[must_use]

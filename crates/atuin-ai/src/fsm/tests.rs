@@ -503,6 +503,99 @@ fn stream_error_goes_to_error_state(#[from(new_fsm)] mut fsm: AgentFsm) {
 }
 
 #[rstest]
+#[case::executing(PermissionResponse::Allowed, true)]
+#[case::awaiting_permission(PermissionResponse::Ask, false)]
+fn stream_error_resolves_in_flight_tools(
+    #[from(new_fsm)] mut fsm: AgentFsm,
+    #[case] permission: PermissionResponse,
+    #[case] expect_abort: bool,
+) {
+    let _ = fsm.handle(Event::UserSubmit("read".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    let _ = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: permission,
+    });
+
+    let effects = fsm.handle(Event::StreamError("connection reset".into()));
+
+    assert_eq!(fsm.state, AgentState::Error("connection reset".to_string()));
+    assert_eq!(
+        effects.iter().any(|e| matches!(e, Effect::AbortTool { tool_id } if tool_id == "t1")),
+        expect_abort
+    );
+    assert!(fsm.ctx.tools.pending_ids().is_empty());
+    assert!(fsm.ctx.events.iter().any(|e| matches!(
+        e,
+        ConversationEvent::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1"
+    )));
+
+    // The retry request must carry a tool_result for every tool_use.
+    let effects = fsm.handle(Event::Retry);
+    let Some(Effect::StartStream { messages, .. }) =
+        effects.iter().find(|e| matches!(e, Effect::StartStream { .. }))
+    else {
+        panic!("retry must start a stream");
+    };
+    let request = serde_json::to_string(messages).unwrap();
+    assert!(request.contains("\"tool_use_id\":\"t1\""), "no tool_result for t1 in {request}");
+}
+
+#[rstest]
+fn retry_after_stream_error_ends_turn_with_the_answer(#[from(new_fsm)] mut fsm: AgentFsm) {
+    let _ = fsm.handle(Event::UserSubmit("read".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: json!({"file_path": "/tmp/test.txt"}),
+    });
+    let _ = fsm.handle(Event::PermissionResolved {
+        tool_id: "t1".into(),
+        response: PermissionResponse::Allowed,
+    });
+    let _ = fsm.handle(Event::StreamError("connection reset".into()));
+    let _ = fsm.handle(Event::Retry);
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamChunk("answer".into()));
+
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // The retry request already carried t1's result, so the model's answer
+    // ends the turn rather than prompting it again.
+    assert!(matches!(fsm.state, AgentState::Idle { .. }));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
+}
+
+#[rstest]
+fn stream_error_answers_unfinished_server_tool_call(#[from(new_fsm)] mut fsm: AgentFsm) {
+    let _ = fsm.handle(Event::UserSubmit("hello".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "s1".into(),
+        name: "web_search".into(),
+        input: json!({"query": "atuin"}),
+    });
+    let _ = fsm.handle(Event::StreamError("connection reset".into()));
+
+    let effects = fsm.handle(Event::Retry);
+    let Some(Effect::StartStream { messages, .. }) =
+        effects.iter().find(|e| matches!(e, Effect::StartStream { .. }))
+    else {
+        panic!("retry must start a stream");
+    };
+    let request = serde_json::to_string(messages).unwrap();
+    assert!(request.contains("\"tool_use_id\":\"s1\""), "no tool_result for s1 in {request}");
+}
+
+#[rstest]
 fn retry_from_error_starts_new_stream(#[from(new_fsm)] mut fsm: AgentFsm) {
     let _ = fsm.handle(Event::UserSubmit("hello".into()));
     let _ = fsm.handle(Event::StreamStarted);
@@ -629,6 +722,90 @@ fn unknown_tool_alongside_real_tool_waits_for_both(#[from(new_fsm)] mut fsm: Age
 
     // Both results now ride the same continuation.
     assert!(effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
+}
+
+#[rstest]
+fn server_tool_call_does_not_continue_turn(#[from(new_fsm)] mut fsm: AgentFsm) {
+    let _ = fsm.handle(Event::UserSubmit("hello".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "t1".into(),
+        name: "web_search".into(),
+        input: json!({"query": "atuin"}),
+    });
+    let _ = fsm.handle(Event::StreamServerToolResult {
+        tool_use_id: "t1".into(),
+        content: "results".into(),
+        is_error: false,
+        remote: false,
+        content_length: None,
+    });
+    let _ = fsm.handle(Event::StreamChunk("answer".into()));
+    let effects = fsm.handle(Event::StreamDone {
+        session_id: "".into(),
+    });
+
+    // The server already ran the tool and answered: the only result is the
+    // server's, and the turn ends instead of asking the model again.
+    let results: Vec<_> = fsm
+        .ctx
+        .events
+        .iter()
+        .filter(|e| matches!(e, ConversationEvent::ToolResult { .. }))
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert!(matches!(results[0], ConversationEvent::ToolResult {
+        is_error: false,
+        ..
+    }));
+    assert!(matches!(fsm.state, AgentState::Idle { .. }));
+    assert!(effects.iter().any(|e| matches!(e, Effect::TurnEnded)));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::StartStream { .. })));
+}
+
+#[rstest]
+fn cancel_answers_unfinished_server_tool_call(#[from(new_fsm)] mut fsm: AgentFsm) {
+    let _ = fsm.handle(Event::UserSubmit("hello".into()));
+    let _ = fsm.handle(Event::StreamStarted);
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "done".into(),
+        name: "web_search".into(),
+        input: json!({"query": "atuin"}),
+    });
+    let _ = fsm.handle(Event::StreamServerToolResult {
+        tool_use_id: "done".into(),
+        content: "results".into(),
+        is_error: false,
+        remote: false,
+        content_length: None,
+    });
+    let _ = fsm.handle(Event::StreamToolCall {
+        id: "inflight".into(),
+        name: "web_scrape".into(),
+        input: json!({"url": "https://atuin.sh"}),
+    });
+
+    let _ = fsm.handle(Event::Cancel);
+
+    // Every call is paired with exactly one result, so the next request is
+    // valid; only the unfinished one is marked cancelled.
+    let results_for = |id: &str| -> Vec<String> {
+        fsm.ctx
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                ConversationEvent::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } if tool_use_id == id => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(results_for("done"), ["results"]);
+    assert_eq!(results_for("inflight"), [RESULT_USER_CANCELLED]);
+    assert!(matches!(fsm.state, AgentState::Idle { .. }));
 }
 
 // ============================================================================

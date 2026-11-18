@@ -1,0 +1,32 @@
+// What the daemon would tell the user, for the client whose request it answers to show.
+syntax = "proto3";
+
+package userio;
+
+// How much a message matters to the user.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARN = 2;
+  SEVERITY_ERROR = 3;
+}
+
+// A message for the user, in the daemon's language.
+message Message {
+  Severity severity = 1;
+  string text = 2;
+}
+
+// The client sends none: closing its side of the stream asks for the end of it.
+message ListenLogsRequest {}
+
+message ListenLogsReply {
+  Message message = 1;
+}
+
+service UserIo {
+  // Streams every message the daemon shows for the request named in the `atuin-request` header,
+  // from when it answers on. Once the client closes its side, the daemon sends the messages it
+  // showed until then and ends the stream.
+  rpc ListenLogs(stream ListenLogsRequest) returns (stream ListenLogsReply);
+}

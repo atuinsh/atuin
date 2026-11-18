@@ -1,7 +1,6 @@
-# atuin CI. Replaces the GitHub Actions workflows rust.yml (except
-# Windows, which stays in .github/workflows/windows.yml until Buildkite's
-# hosted Windows agents are generally available), nix.yml, codespell.yml,
-# shellcheck.yml, vale.yml, installer.yml and nightly.yml.
+# atuin CI. Replaces the GitHub Actions workflows rust.yml, windows.yml,
+# nix.yml, codespell.yml, shellcheck.yml, vale.yml, installer.yml and
+# nightly.yml.
 #
 # Each Rust step sources .buildkite/scripts/toolchain.sh (rustup + pinned
 # tools, and the `section` log-group helper). Caching is Buildkite Cache
@@ -20,7 +19,8 @@
 #
 # Queues: light jobs use the cluster's default queue (linux-small, 2 vCPU).
 # Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
-# (12 vCPU), both default queues in every Buildkite cluster.
+# (12 vCPU), both default queues in every Buildkite cluster. Windows jobs
+# use windows-large (8 vCPU), a hosted Windows queue made for this pipeline.
 #
 # Scheduled builds (the nightly schedule, set in the pipeline settings) run
 # everything plus the nightly tests, which also keeps main's cache entries
@@ -29,7 +29,8 @@
 # YAML anchors for what the steps below repeat; Buildkite ignores this key.
 common:
   - &main-only build.branch == pipeline.default_branch
-  - &non-pr build.pull_request.id == null
+  # Not PRs, nor mono's land/* builds of a /merge: main runs these right after.
+  - &non-pr build.pull_request.id == null && build.branch !~ /^land\//
   - &infra-retry
     automatic:
       - exit_status: -1
@@ -60,6 +61,8 @@ common:
     BUILDKITE_TEST_ENGINE_RESULT_PATH: test-results/test-engine.json
   - &macos-large
     queue: macos-large
+  - &windows-large
+    queue: windows-large
 
 env:
   CARGO_TERM_COLOR: always
@@ -114,6 +117,64 @@ steps:
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
       - .buildkite/scripts/run-tests.sh linux
 
+  # The README demos (demos/*.tape), rendered by betamax with the atuin in
+  # the Linux test archive (demos.sh). Runs in mono's CI image, since betamax
+  # needs a newer glibc than the hosted image has. A Wait that times out
+  # fails the step, so the tapes double as smoke tests of the search UI.
+  # Renders the README demos (demos/) only for a release, as the agent demos
+  # spend API tokens: on mono's main, when the commit is the release PR
+  # (chore(release): prepare for release ...). A build started with
+  # RENDER_DEMOS=1 renders them on any branch, for trying a demo change.
+  - label: ":movie_camera: Demos"
+    key: demos
+    if: |
+      pipeline.slug == "mono" && (
+        (build.branch == pipeline.default_branch &&
+          build.message =~ /^chore\(release\): prepare for release/) ||
+        build.env("RENDER_DEMOS") == "1"
+      )
+    depends_on: build-tests
+    timeout_in_minutes: 20
+    retry: *infra-retry
+    # The agent demos' keys. The secrets' policy keeps them to mono.
+    secrets:
+      ANTHROPIC_API_KEY: ANTHROPIC_CI_KEY
+      OPENAI_API_KEY: OPENAI_CI_KEY
+    command: .buildkite/scripts/demos.sh
+    plugins:
+      # Not mono's CI image: betamax's Linux binaries need glibc 2.43, which
+      # Ubuntu 26.04 has. demos.sh installs the rest.
+      - docker#v5.12.0:
+          image: "ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96"
+          mount-buildkite-agent: true
+          environment:
+            - ANTHROPIC_API_KEY
+            - OPENAI_API_KEY
+
+  # Publishes a release's demos to the atuin-demos Cloudflare Pages project
+  # (atuin-demos.pages.dev), which the README links. Never from a branch, even
+  # one started with RENDER_DEMOS=1.
+  - label: ":cloudflare: Publish demos"
+    key: demos-publish
+    if: |
+      pipeline.slug == "mono" && build.branch == pipeline.default_branch &&
+        build.message =~ /^chore\(release\): prepare for release/
+    depends_on: demos
+    image: "ghcr.io/atuinsh/ci:main"
+    concurrency: 1
+    concurrency_group: atuin/demos-publish
+    timeout_in_minutes: 10
+    retry: *infra-retry
+    secrets:
+      CLOUDFLARE_API_TOKEN: CLOUDFLARE_BK_CI_PAGES_TOKEN
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ccd497d5b2f0e6dbcbf964415bd0daf6
+      WRANGLER_SEND_METRICS: "false"
+      # The image's mise has no Node pinned outside web/, so wrangler's
+      # `node` needs one named.
+      MISE_NODE_VERSION: "26.12.1"
+    command: .buildkite/scripts/demos-publish.sh
+
   # Unit and e2e tests; the integration tests need Postgres, which only the
   # Linux agents run.
   - label: ":test_tube: Tests (macOS) %n"
@@ -139,6 +200,16 @@ steps:
       - export ATUIN_E2E_BASH="$$(brew --prefix bash)/bin/bash"
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
       - .buildkite/scripts/run-tests.sh macos
+
+  # Unit tests only, as the GitHub Actions job ran. Windows steps run one
+  # bash script each (windows.sh), since cmd.exe ignores failing lines.
+  - label: ":windows: Tests (Windows)"
+    key: tests-windows
+    agents: *windows-large
+    timeout_in_minutes: 45
+    env:
+      CARGO_TOOLS: nextest
+    command: bash .buildkite/scripts/windows.sh tests
 
   # All features are type-checked by clippy below.
   - label: ":mag: Check (Linux)"
@@ -180,6 +251,12 @@ steps:
       - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
       - *prune
       - *save-target
+
+  - label: ":windows: Check (Windows)"
+    key: check-windows
+    agents: *windows-large
+    timeout_in_minutes: 45
+    command: bash .buildkite/scripts/windows.sh check
 
   - label: ":crab: MSRV (1.95.0)"
     key: msrv
@@ -343,7 +420,7 @@ steps:
 
   - label: ":nix: Nix build"
     key: nix-build-no-push
-    if: build.pull_request.id == null && build.branch != pipeline.default_branch
+    if: build.pull_request.id == null && build.branch != pipeline.default_branch && build.branch !~ /^land\//
     agents: *linux-large
     timeout_in_minutes: 45
     command:

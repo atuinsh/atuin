@@ -10,13 +10,17 @@ pub mod auth;
 #[cfg(feature = "hub")]
 pub mod hub;
 
+#[cfg(feature = "ai")]
 pub mod ai_session;
 pub mod database;
 pub mod distro;
 pub mod history;
+mod i18n;
 pub mod import;
 pub mod logout;
 pub mod logs;
+#[cfg(feature = "octavo")]
+pub mod lua_config;
 pub mod meta;
 pub mod ordering;
 pub mod packfile;

@@ -1,0 +1,2 @@
+172800	{"v":1,"id":"r1","role":"user","time":"TIME","cwd":"CWD","branch":"main","content":[{"type":"text","text":"set up a release workflow that tags and publishes on merge to main"}]}
+172780	{"v":1,"id":"r2","parent":"r1","role":"assistant","time":"TIME","cwd":"CWD","model":"claude-opus-5-5","content":[{"type":"text","text":"Added .github/workflows/release.yml: on push to main it reads the version from Cargo.toml, tags v<version> if the tag is new, and runs cargo publish."}]}

@@ -41,6 +41,7 @@ login-legacy-success = Logged in!
 account-hub-open-url = Open this URL to authenticate with Atuin Hub:
 account-hub-browser-opened = Opened your browser to authenticate with Atuin Hub. If it didn't open, visit:
 account-hub-waiting = Waiting for you to authorize in your browser… (Ctrl-C to cancel)
+account-hub-check-code = Check the page shows the code { $code }.
 login-key-important = IMPORTANT
 login-key-same-everywhere = If you are already logged in on another machine, you must ensure that the key you use here is the same as the key you used there.
 login-key-find = You can find your key by running 'atuin key' on the other machine.
@@ -52,10 +53,11 @@ login-key-file-invalid = The key in existing key file at '{ $path }' is invalid
 login-key-try-again = { $error }. Please try again.
 login-reencrypting = Re-encrypting local store with new key
 login-writing-key = Writing new key
+login-starting-daemon = Starting the daemon with the new key
+login-daemon-start-failed = Restart the Atuin daemon so it uses the new key: { $error }
 login-key-load-failed = could not load encryption key for verification
 login-key-mismatch = The encryption key on this machine does not match the data on the server.
 login-key-find-correct = You can find the correct key by running 'atuin key' on a machine that already syncs successfully.
-login-wrong-key-title = Wrong encryption key
 login-wrong-key-body =
     The encryption key on this machine does not match the data on the server. You have been logged out.
 
@@ -93,6 +95,17 @@ sync-status-last-sync = Last sync: { $time }
 sync-status-remote = [Remote]
 sync-status-address = Address: { $address }
 sync-status-username = Username: { $username }
+store-purge-start = Purging local records that cannot be decrypted
+store-purge-done = Local store purge completed OK
+store-purge-failed = failed to purge local store: { $error }
+cli-category-ai = AI:
+cli-category-sync = Sync & account:
+cli-category-sync-description = *Keep your history in sync across machines*
+cli-category-data = Data:
+cli-category-data-description = *Synced data beyond your shell history*
+cli-category-setup = Setup:
+cli-category-setup-description = *Install, configure, and troubleshoot Atuin*
+cli-category-advanced = Advanced:
 cmd-search = Interactive history search
 cmd-stats = Calculate statistics for your history
 cmd-account = Manage your sync account
@@ -102,14 +115,14 @@ cmd-doctor = Run the doctor to check for common issues
 cmd-update = Update atuin to the latest version on your release channel
 cmd-hook = Manage AI-agent shell hooks
 cmd-mcp = Start an MCP server exposing history search to AI tools (stdio)
-cmd-mcp-install = Connect an AI agent to atuin's MCP server
-arg-mcp-install-agent = Agent to connect (claude-code, codex, opencode or pi)
+cmd-mcp-install = Connect AI agents to atuin's MCP server
+arg-mcp-install-agent = Agent to connect (claude-code, codex, grok, opencode, pi or omp); omit to connect all agents with existing config files
 cmd-wrapped = Show a fun, year-in-review recap of your shell history
 arg-wrapped-year = Year to recap (defaults to last year, or this year in December)
+cmd-trick-or-treat = Dig a forgotten command, or a ghost, out of your history
 cmd-default-config = Print the default atuin configuration (config.toml)
 cmd-info = Information about Atuin data locations and ENV vars
-cmd-daemon = {"*"}Experimental* Manage the background daemon
-cmd-__internal_ = We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise, a user could access it simply by typing `atuin _`. However, Clap has no way to disable `infer_subcommands` for a single command. As a workaround, we define a dummy command with the same name but with an extra understore, which forces `__internal` to be typed out in entirety, since any prefix of the name would be ambiguous
+cmd-daemon = Manage the background daemon
 cmd-account-register = Register a new account
 cmd-account-delete = Delete your account, and all synced data
 cmd-account-change-password = Change your password
@@ -121,16 +134,41 @@ cmd-config-set = Set a configuration value in your config.toml file
 cmd-config-enable = Enable a feature, along with everything it depends on
 cmd-config-disable = Disable a feature, leaving its dependencies enabled
 cmd-config-print = Print all configuration values from your config.toml file in TOML format
-    .long = 
+    .long =
         Print all configuration values from your config.toml file in TOML format
 
         If a key is provided, only print the value of that key and all its children
+cmd-config-check = Check your configuration for settings that Atuin does not recognize
+    .long =
+        Check your configuration for settings that Atuin does not recognize
+
+        Atuin ignores settings it doesn't recognize. This command checks if your config
+        contains any unrecognized settings, and prints them and exits with an error if so.
+cmd-config-types = Print the Luau types of atuin.lua and .atuin.lua config files, for your editor
+    .long =
+        Print the Luau types of atuin.lua and .atuin.lua config files, for your editor. The types
+        are for files that start with `-- atuin:version=1`.
+
+        Save the output, say as ~/.atuin/atuin.d.luau, and list it in luau-lsp's
+        `luau-lsp.types.definitionFiles` setting. The table a config file assigns to
+        `atuin.config` then checks and completes as you write it.
+cmd-workspace = Set up the .atuin.lua config file of a project
+cmd-workspace-init = Create a .atuin.lua workspace config file in the current directory
+    .long =
+        Create a .atuin.lua config file in the current directory.
+
+        Pass --org to name organizations that own this workspace without being asked. It won't
+        replace an atuin.lua or .atuin.lua that's already there.
+arg-workspace-init-org = An organization to share the threads with, by slug. Repeat it to name more than one. Without it, you're asked.
+prompt-workspace-org = An organization that owns this project, by slug:
+workspace-init-created = Created { $path }
 arg-config-get-key = The configuration key to get
 arg-config-get-resolved = Print the value after defaults and overrides are applied
 arg-config-get-verbose = Print both the config file value and the resolved value
 arg-config-set-key = The configuration key to set
 arg-config-set-value = The value to set
 arg-config-set-the-type = Store value as an explicit type
+arg-config-set-force = Set the key even if Atuin does not recognize it
 value-config-set-the-type-auto = Automatically determine the type of the value
 value-config-set-the-type-string = Store value as a string
 value-config-set-the-type-boolean = Store value as a boolean
@@ -140,16 +178,7 @@ arg-config-enable-feature = The feature to enable
 arg-config-disable-feature = The feature to disable
 value-config-feature-daemon = The background daemon and daemon-backed search
 value-config-feature-output-capture = Command output capture, via the daemon and the pty proxy
-value-config-feature-octavo = Use Octavo, once it is enabled for your account on the hub
 value-config-feature-threads = Capture your AI coding agents' threads, to search and resume them
-config-enable-octavo-not-logged-in = You are not logged in to the hub, so it cannot say whether Octavo is enabled for your account. Run 'atuin login' first.
-config-enable-octavo-not-enabled = Octavo is not enabled for your account on { $address }.
-config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history.
-config-enable-octavo-disclaimer = Unlike Atuin Sync, Octavo is not end-to-end encrypted, but your data is encrypted in transit and at rest. It's yours, and you can delete it at any time.
-config-enable-octavo-declined = Octavo was not enabled.
-config-enable-octavo-backfill = Also upload the { $count } entries already in your history, not just new commands.
-config-enable-octavo-backfilled = Queued { $count } history entries for upload.
-config-enable-octavo-backfill-old = { $count } entries recorded before Atuin v14 were left out: Octavo only takes the history ids Atuin has used since.
 
 threads-offer = Enable threads?
 threads-offer-description = Atuin records your coding agents' threads (Claude Code, Codex, opencode and Pi), so you can search them and resume them here or on another machine. They're encrypted and synced like your history.
@@ -242,11 +271,6 @@ value-init-shell-fish = Fish setup
 value-init-shell-nu = Nu setup
 value-init-shell-xonsh = Xonsh setup
 value-init-shell-powershell = PowerShell setup
-cmd-__internal-pty-proxy-active = Check whether the current terminal belongs to a live PTY proxy
-    .long = 
-        Check whether the current terminal belongs to a live PTY proxy.
-
-        Prints `0` or `1` to stdout. This command is used by shell hooks to determine whether the PTY proxy is in use.
 cmd-kv-set = Set a key-value pair
 arg-kv-set-key = Key to set
 arg-kv-set-value = Value to store (reads from stdin if not provided)
@@ -352,9 +376,9 @@ cmd-store-purge = Delete all records in the store that cannot be decrypted with 
 cmd-store-verify = Verify that all records in the store can be decrypted with the current key
 cmd-store-push = Push all records to the remote sync server (one way sync)
 cmd-store-pull = Pull records from the remote sync server (one way sync)
-arg-store-pull-force = Force push records
+arg-store-pull-force = Force pull records
     .long = 
-        Force push records
+        Force pull records
 
         This will first wipe the local store, and then download all records from the remote
 arg-store-pull-page = Page Size
@@ -393,3 +417,180 @@ cmd-atuin = Magical shell history
 arg-password = Your password, or `-` to read it from stdin. Falls back to `ATUIN_PASSWORD`, then a prompt
 login-totp-required = A two-factor code is required. Pass it with --totp-code
 account-password-stdin-failed = failed to read password from stdin
+login-hub-authenticating = Authenticating with Atuin Hub...
+login-hub-saving-session = Authentication complete, saving session token
+login-key-verify-failed = could not verify encryption key against remote: { $error }
+link-hub-open =
+    { $instructions }
+    { $url }
+    Check the page shows the code { $code }.
+daemon-deprecated = `atuin daemon` is deprecated, use `atuin daemon start`
+daemon-indexing-threads = Indexing threads in the background
+daemon-rebuilding-search-index = Rebuilding the daemon's search index in the background
+daemon-not-running = Daemon is not running
+daemon-stopped = Daemon stopped
+daemon-may-be-stopping = Daemon may still be shutting down
+daemon-restarting = Restarting daemon...
+daemon-none-running = No daemon running
+daemon-starting = Starting daemon...
+daemon-replacing-unresponsive = Daemon isn't answering, replacing it...
+daemon-restarted = Daemon restarted
+config-enabled = Enabled.
+config-unknown-keys = { $file } contains unrecognized settings: { $keys }
+config-check-ok = { $file } has no unrecognized settings.
+config-disabled = Disabled.
+config-reload-failed = could not read the new config to restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
+config-restart-daemon-and-shell = Restart the Atuin daemon and your shell for the change to take effect.
+config-daemon-restart-failed = could not restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
+config-managed-daemon-restart-failed = could not restart the Atuin daemon: { $error }
+config-restart-shell = Restart your shell for the change to take effect.
+config-daemon-stop-failed = could not stop the Atuin daemon: { $error }; run `atuin daemon stop` manually
+config-launchd-agent-remove-failed = could not remove the Atuin daemon's launchd agent: { $error }
+import-banner =
+            Atuin         
+    ======================
+              🌍          
+           🐘🐘🐘🐘       
+              🐢          
+    ======================
+import-start = Importing history...
+import-detected-powershell = Detected PowerShell
+import-detect-shell-failed = could not detect the current shell
+import-run-with-shell = Please run atuin import <SHELL>.
+import-list-shells = To view a list of shells, run atuin import.
+import-detected-xonsh = Detected Xonsh
+import-detected-xonsh-sqlite = Detected Xonsh (SQLite backend)
+import-detected-zsh-histdb = Detected Zsh-HistDb, using :{ $path }
+import-detected-zsh = Detected ZSH
+import-detected-fish = Detected Fish
+import-detected-bash = Detected Bash
+import-detected-nu-histdb = Detected Nu-HistDb, using :{ $path }
+import-detected-nushell = Detected Nushell
+import-shell-unsupported = cannot import { $shell } history
+import-from = Importing history from { $name }
+import-complete = Import complete!
+scripts-stdin-send-failed = failed to send input to script: { $error }
+scripts-stdin-read-failed = failed to read from stdin: { $error }
+scripts-exit-code = script exited with code { $code }
+scripts-var-malformed = ignoring malformed variable specification: { $spec }
+scripts-var-format-hint = Variables should be specified as KEY=VALUE
+scripts-var-prompt = This script contains template variables that need values:
+scripts-var-enter = Enter value for '{ $variable }':
+scripts-var-read-failed = failed to read input for variable '{ $variable }'
+scripts-none-found = No scripts found
+scripts-updated = Script '{ $name }' updated successfully!
+scripts-delete-cancelled = Deletion cancelled
+scripts-deleted = Script '{ $name }' deleted successfully
+update-checking = Checking for updates on the { $channel } channel...
+update-run-hint = Run `atuin update` to install it
+update-installing = Updating to atuin v{ $version }...
+update-done = Updated atuin v{ $current } -> v{ $new_version } ({ $tag })
+update-restart-shell = Restart your shell sessions to pick up the new version
+update-up-to-date = atuin v{ $current } is up to date
+doctor-broken-symlink = { $path } (${ $env_var }) is a broken symlink. This may cause issues with Atuin
+doctor-openbsd = [System] OpenBSD is not officially supported.
+doctor-zfs = [Filesystem] ZFS is known to have some issues with SQLite. Atuin uses SQLite heavily. If you are having poor performance, there are some workarounds here: https://github.com/atuinsh/atuin/issues/952
+shadowed-config = { $legacy } is ignored, because { $active } exists and Atuin reads that instead. Move your settings into it, or delete it to go back to the old one
+shadowed-data-dir = { $legacy } is ignored, because { $active } exists and Atuin uses that instead. If your history is in the old one, move the new one somewhere else to go back to it
+doctor-shadowed-config = [Config] { shadowed-config }.
+doctor-shadowed-data-dir = [Data] { shadowed-data-dir }.
+doctor-bash-plugin = [Shell] If you are using Bash, Atuin requires that either bash-preexec or ble.sh (>= 0.4) be installed. An older ble.sh may not be detected. so ignore this if you have ble.sh >= 0.4 set up! Read more here: { $url }
+doctor-blesh-integration = [Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.
+info-shadowed-config = { shadowed-config }
+info-shadowed-data-dir = { shadowed-data-dir }
+hook-installed = Atuin hooks installed for { $harness }. Path: { $path }
+hook-codex-trusted = Trusted them in Codex's config: { $config }
+hook-reload-hint-pi = Reload pi with `/reload` or restart pi.
+hook-reload-hint-omp = Reload omp with `/reload` or restart omp.
+hook-reload-hint-opencode = Restart opencode to load the plugin.
+hook-reload-hint-amp = Restart Amp to load the plugin.
+hook-reload-hint-kiro = Restart any running Kiro: it loads hooks when a session starts.
+hook-already-installed = { $harness }: hooks already installed, skipping
+hook-mcp-hint = To let { $name } search your history too, run `atuin mcp install { $name }`.
+history-output-failed = history output failed with: { $error }
+history-output-write-failed = failed to write history output: { $error }
+history-format-error = format string caused a formatting error
+history-format-error-special-chars = This may be due to an unsupported format string containing special characters.
+history-format-error-check-syntax = Please check your format string syntax and ensure literal braces are properly escaped.
+history-output-error = history output failed with the following error: { $error }
+history-format-parse-failed = history formatting failed with the following error: { $error }
+history-format-json-hint = It looks like you're trying to create JSON output.
+history-format-json-escape = For JSON, you need to escape literal braces by doubling them:
+history-format-json-example = Example: '{"{"}"command":"{"{"}command{"}"}","time":"{"{"}time{"}"}"{"}"}'
+history-format-braces-hint = If your formatting string contains literal curly braces, you need to escape them by doubling:
+history-format-braces-example = Use {"{"}{"{"} for literal {"{"} and {"}"}{"}"} for literal {"}"}
+history-start-daemon-failed = failed to start history via the daemon; saving it locally instead: { $error }
+history-end-daemon-failed = failed to end history via the daemon; ending it locally instead: { $error }
+history-cancel-daemon-failed = failed to drop history via the daemon; dropping it locally instead: { $error }
+history-teams-login-failed = failed to learn which Hub user is logged in, so deletions won't reach Atuin for Teams: { $error }
+history-teams-queue-failed = failed to queue history deletions for Atuin for Teams, so they won't reach it: { $error }
+history-tail-lagged = atuin daemon dropped { $dropped } history events; tail fell behind
+history-prune-none = No entries to prune.
+history-prune-found =
+    { $count ->
+        [one] Found 1 entry to prune.
+       *[other] Found { $count } entries to prune.
+    }
+history-deleting = deleting { $id }
+history-dedup-none = No duplicates to delete.
+history-dedup-found =
+    { $count ->
+        [one] Found 1 duplicate to delete.
+       *[other] Found { $count } duplicates to delete.
+    }
+history-dedup-keep-zero = "--dupkeep 0" would keep 0 copies of duplicate commands and thus delete all of them; use "atuin search --delete ..." if you really want that
+store-pull-force = Forcing local overwrite!
+store-pull-clear = Clearing local store
+store-pull-reset-failed = failed to rebuild threads from what the pull left in the store: { $error }
+store-pull-downloaded = Downloaded { $count } records
+store-verify-start = Verifying local store can be decrypted with the current key
+store-verify-done = Local store encryption verified OK
+store-verify-failed = failed to verify local store encryption: { $error }
+store-rekey-specified-key = Re-encrypting store with specified key
+store-rekey-generated-key = Re-encrypting store with freshly-generated key
+store-rekey-saving-key = Store rewritten. Saving new key
+store-push-force = Forcing remote store overwrite!
+store-push-clear = Clearing remote store
+store-push-uploaded = Uploaded { $count } records
+store-threads-invalidate-failed = failed to schedule a rebuild of the threads index: { $error }
+store-compact-done = Rewrote { $count } records
+store-rebuild-threads = The daemon is rebuilding the threads index
+sync-build-history-failed = failed to build history: { $error }
+sync-build-kv-failed = failed to build kv: { $error }
+sync-build-scripts-failed = failed to build scripts: { $error }
+sync-rebuild-search-index-failed = failed to rebuild the daemon's search index: { $error }
+sync-build-threads-failed = failed to build threads: { $error }
+init-pty-proxy-unsupported-shell = pty_proxy.enabled is set, but atuin pty-proxy does not support this shell
+init-pty-proxy-not-built = pty_proxy.enabled is set, but this build of atuin does not include pty-proxy support
+init-paths-broken = settings paths are broken, so atuin shell hooks are disabled; run `atuin doctor` to diagnose
+wrapped-history-empty =
+    Your history for { $year } is empty!
+    Maybe 'atuin import' could help you import your previous history 🪄
+wrapped-no-commands = No commands found in your { $year } history. Run a command or check your config for commands ignored by stats.ignored_commands.
+stats-witching-hour =
+    { $count ->
+        [one] 🕒 Witching hour: 1 command between 3 and 4am
+       *[other] 🕒 Witching hour: { $count } commands between 3 and 4am
+    }
+trick-or-treat-trick = 🎃 Trick! Here lies a command you used to love:
+trick-or-treat-treat =
+    { $runs ->
+        [1] 🍬 Treat! You ran this once, on { $date } in { $cwd }, and never again:
+       *[other] 🍬 Treat! You ran this twice, last on { $date } in { $cwd }, and never again:
+    }
+trick-or-treat-treat-nowhere =
+    { $runs ->
+        [1] 🍬 Treat! You ran this once, on { $date }, and never again:
+       *[other] 🍬 Treat! You ran this twice, last on { $date }, and never again:
+    }
+trick-or-treat-closed = 🎃 The porch light is off. Come back in the two weeks before Halloween.
+trick-or-treat-empty = 👻 Nothing in your bag yet. Come back once your history has a few skeletons in it.
+trick-or-treat-rip = R.I.P.
+trick-or-treat-runs = { $runs } runs
+setup-settings-updated = Settings updated successfully
+setup-no-changes = No settings changed
+search-keymap-invalid-key = invalid key in keymap config: { $key }: { $error }
+search-keymap-invalid-binding = invalid binding for { $key } in keymap config: { $error }
+mcp-restart-harness = Restart { $harness } to load it.
+mcp-capture-tip = To let agents search command output and agent threads too, run `atuin config enable output-capture` and `atuin config enable threads`.
+client-internal-decoy = this command is not meant to be accessed directly

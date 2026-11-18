@@ -14,6 +14,7 @@ pub enum ConditionAtom {
     NoResults,
     HasResults,
     HasContext,
+    ShellUpKeyBinding,
 }
 
 /// Boolean expression tree over condition atoms.
@@ -55,6 +56,8 @@ pub struct EvalContext {
     pub original_input_empty: bool,
     /// Whether we use a search context of a command from the history.
     pub has_context: bool,
+    /// Whether the shell invoked Atuin from its up-key binding rather than ctrl-r.
+    pub shell_up_key_binding: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +79,7 @@ impl ConditionAtom {
             ConditionAtom::NoResults => ctx.results_len == 0,
             ConditionAtom::HasResults => ctx.results_len > 0,
             ConditionAtom::HasContext => ctx.has_context,
+            ConditionAtom::ShellUpKeyBinding => ctx.shell_up_key_binding,
         }
     }
 
@@ -91,6 +95,7 @@ impl ConditionAtom {
             "no-results" => Ok(ConditionAtom::NoResults),
             "has-results" => Ok(ConditionAtom::HasResults),
             "has-context" => Ok(ConditionAtom::HasContext),
+            "shell-up-key-binding" => Ok(ConditionAtom::ShellUpKeyBinding),
             _ => Err(format!("unknown condition: {s}")),
         }
     }
@@ -107,6 +112,7 @@ impl ConditionAtom {
             ConditionAtom::NoResults => "no-results",
             ConditionAtom::HasResults => "has-results",
             ConditionAtom::HasContext => "has-context",
+            ConditionAtom::ShellUpKeyBinding => "shell-up-key-binding",
         }
     }
 }
@@ -400,6 +406,7 @@ mod tests {
             results_len: len,
             original_input_empty,
             has_context: false,
+            shell_up_key_binding: false,
         }
     }
 
@@ -471,6 +478,14 @@ mod tests {
     }
 
     #[rstest]
+    fn atom_shell_up_key_binding() {
+        let mut context = ctx(0, 0, 0, 0, 0);
+        assert!(!ConditionAtom::ShellUpKeyBinding.evaluate(&context));
+        context.shell_up_key_binding = true;
+        assert!(ConditionAtom::ShellUpKeyBinding.evaluate(&context));
+    }
+
+    #[rstest]
     #[case::cursor_at_start("cursor-at-start")]
     #[case::cursor_at_end("cursor-at-end")]
     #[case::input_empty("input-empty")]
@@ -479,6 +494,8 @@ mod tests {
     #[case::list_at_start("list-at-start")]
     #[case::no_results("no-results")]
     #[case::has_results("has-results")]
+    #[case::has_context("has-context")]
+    #[case::shell_up_key_binding("shell-up-key-binding")]
     fn atom_parse_round_trip(#[case] s: &str) {
         let c = ConditionAtom::from_str(s).unwrap();
         assert_eq!(c.as_str(), s);

@@ -1,6 +1,6 @@
 //! `atuin threads resume`'s picker on a terminal: choosing a session, and where to resume it, runs the
-//! agent on it -- straight from the picker, and through each shell's widget, with and without
-//! `enter_accept`.
+//! agent on it -- straight from the picker, and through each shell's widget, whatever
+//! `enter_accept` says.
 
 #![cfg(all(unix, feature = "daemon", feature = "ai"))]
 
@@ -69,15 +69,19 @@ fn line_for(pty: &PtyShell, agent: Agent) -> char {
     line(&screen).unwrap().chars().find(char::is_ascii_digit).unwrap()
 }
 
-/// With `enter_accept`, the picker runs the agent in place of itself: on the session chosen, in
-/// its own agent, where it ran, or -- chosen by its digit in the chooser -- on a new session
-/// continuing it in another.
+/// Whatever `enter_accept` says, the picker runs the agent in place of itself: on the session
+/// chosen, in its own agent, where it ran, or -- chosen by its digit in the chooser -- on a new
+/// session continuing it in another.
 #[rstest]
 #[case::its_own_agent(None)]
 #[case::another_agent(Some(Agent::Codex))]
-fn the_picker_resumes_the_session_chosen(#[case] into: Option<Agent>) {
+fn the_picker_resumes_the_session_chosen(
+    #[case] into: Option<Agent>,
+    #[values(false, true)] enter_accept: bool,
+) {
     let project = shared_dir();
-    let mut machine = Machine::with_config("enter_accept = true\n", "capture = true\n");
+    let top = format!("enter_accept = {enter_accept}\n");
+    let mut machine = Machine::with_config(&top, "capture = true\n");
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
@@ -101,8 +105,8 @@ fn the_picker_resumes_the_session_chosen(#[case] into: Option<Agent>) {
     pty.wait_for(&ran(into, &format!("resume {id}"), project.path()));
 }
 
-/// Through the shell widget, the session chosen resumes in the shell: run at once with
-/// `enter_accept`, else left on the command line to run.
+/// Through the shell widget, the session chosen runs in the shell at once, whatever
+/// `enter_accept` says.
 #[rstest]
 fn the_shell_widget_resumes_the_session_chosen(
     #[files("tests/shells/*.toml")] setup: PathBuf,
@@ -122,15 +126,5 @@ fn the_shell_widget_resumes_the_session_chosen(
     pty.send(b"\x1d");
     pick(&pty, &turn);
     pty.send_enter();
-
-    let command = format!("claude --resume {}", session.id);
-    if !enter_accept {
-        pty.wait_for_screen("the command on the command line", |s| {
-            !s.contains("esc back")
-                && s.lines().any(|l| l.contains(shell::PROMPT) && l.contains(&command))
-        });
-        assert!(!pty.screen().contains("AGENT-RAN"), "it ran before it was accepted");
-        pty.send_enter();
-    }
     pty.wait_for_line(&ran(Agent::Claude, &format!("--resume {}", session.id), project.path()));
 }

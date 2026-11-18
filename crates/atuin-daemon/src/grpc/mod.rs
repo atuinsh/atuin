@@ -34,10 +34,15 @@ macro_rules! internal_errors {
     };
 }
 
+#[cfg(feature = "ai")]
 pub mod ai;
 pub mod common;
 pub mod history;
+pub mod request;
+pub mod userio;
 pub mod versioning;
 
+#[cfg(feature = "ai")]
 pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;
+pub use userio::Service as UserIoService;

@@ -198,20 +198,59 @@ fn coordinate(dir: &Path) -> std::io::Result<File> {
 /// The rollouts of thread `thread` under `root` (`<yyyy>/<mm>/<dd>/`, or flat in the archive),
 /// oldest first: named for when each was started.
 fn rollouts_of(root: &Path, thread: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut dirs = vec![root.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
-            let path = entry.path();
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                dirs.push(path);
-            } else if thread_of(&path).is_some_and(|(t, _)| t == thread) {
-                found.push(path);
-            }
-        }
-    }
+    let mut found: Vec<_> = files_under(root)
+        .filter(|path| thread_of(path).is_some_and(|(t, _)| t == thread))
+        .collect();
     found.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     found
+}
+
+/// The files under `root`, at any depth.
+fn files_under(root: &Path) -> impl Iterator<Item = PathBuf> + use<> {
+    let mut dirs = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    std::iter::from_fn(move || {
+        loop {
+            if let Some(file) = files.pop() {
+                return Some(file);
+            }
+            let dir = dirs.pop()?;
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().filter_map(Result::ok) {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    dirs.push(entry.path());
+                } else {
+                    files.push(entry.path());
+                }
+            }
+        }
+    })
+}
+
+/// Turn the compressed rollouts (`.jsonl.zst`) of thread `thread` under Codex home `home` back
+/// into plain ones, as Codex does before it appends to one (codex-rs `rollout/compression.rs`),
+/// keeping when each was last written: one whose plain sibling is there is Codex's to finish.
+fn decompress_rollouts(home: &Path, thread: &str) -> Result<(), SyncError> {
+    let compressed: Vec<(PathBuf, PathBuf)> = ["sessions", "archived_sessions"]
+        .into_iter()
+        .flat_map(|root| files_under(&home.join(root)))
+        .filter_map(|path| {
+            let plain = PathBuf::from(path.to_str()?.strip_suffix(".zst")?);
+            let of_thread = thread_of(&plain).is_some_and(|(t, _)| t == thread);
+            (of_thread && !plain.exists()).then_some((path, plain))
+        })
+        .collect();
+    if compressed.is_empty() {
+        return Ok(());
+    }
+    let _lock = WriterLock::acquire(home, thread)?;
+    for (path, plain) in compressed {
+        let mut out = tempfile::NamedTempFile::new_in(plain.parent().unwrap_or(home))?;
+        zstd::stream::copy_decode(File::open(&path)?, &mut out)?;
+        out.as_file().set_modified(std::fs::metadata(&path)?.modified()?)?;
+        out.persist_noclobber(&plain).map_err(|err| err.error)?;
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
 }
 
 /// The thread a rollout file is of, and its own rollout id (the thread's, for its first).
@@ -341,6 +380,7 @@ pub(super) async fn local_tip_in(home: &Path, id: &str) -> Result<Option<LocalTi
     if !is_plain_name(thread) {
         return Ok(None);
     }
+    decompress_rollouts(home, thread)?;
     let Some(path) = rollouts_of(&home.join("sessions"), thread).pop() else {
         return Ok(None);
     };

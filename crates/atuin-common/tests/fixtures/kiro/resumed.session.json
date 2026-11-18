@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataModelVersion": 1,
+  "id": "sess_7c362b91-6e72-4c10-be1f-76a31a8d5f48",
+  "title": "Read README and Run Probe Command",
+  "agentMode": "probe",
+  "workspacePaths": [
+    "/tmp/kiro-play"
+  ],
+  "rootPaths": [
+    "/tmp/kiro-play",
+    "/tmp/elsewhere"
+  ],
+  "createdAt": "2026-10-30T17:55:12.472Z",
+  "lastModifiedAt": "2026-10-30T17:56:59.791Z",
+  "modelId": "auto",
+  "autopilot": true,
+  "workflowLaunch": "when-asked",
+  "contextSnapshotModelDisplay": {
+    "modelId": "auto",
+    "display": "Auto (model selected dynamically on the server)"
+  },
+  "semanticReviewEnabled": true,
+  "disableAutoCompaction": false,
+  "ftaEnabled": false,
+  "workflowsEnabled": false,
+  "specPlanEnabled": false,
+  "specWorkflow": "quick",
+  "specSkipClarificationEnabled": true,
+  "memoryConfig": {
+    "mode": "disabled",
+    "reflection": false
+  },
+  "memoryConfigSource": "explicit",
+  "status": "idle",
+  "_meta": {
+    "kiro": {
+      "settings": {
+        "memory": {
+          "mode": "disabled",
+          "reflection": false
+        },
+        "workflows": {
+          "enabled": false
+        },
+        "goal": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}

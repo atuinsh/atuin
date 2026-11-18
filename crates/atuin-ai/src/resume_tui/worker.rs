@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use super::catchup::{self, CatchUp};
 use super::panel;
 use super::resumer::{
-    Continued, Forked, NotResumable, Restore, Resume, ResumePlan, Resumer, Switched,
+    Continued, Forked, NotResumable, Restore, Restored, Resume, Resumer, Switched,
 };
 use super::source::{SessionFilter, SessionPreview, SessionRow, SessionSource, Transcript};
 
@@ -81,8 +81,8 @@ pub enum Response {
     Transcript(HarnessSession, Result<Transcript, String>),
     Children(HarnessSession, Vec<SessionRow>),
     Plan(HarnessSession, Result<Resume, NotResumable>),
-    /// The session is restored (or couldn't be): the plan that resumes it.
-    Restored(HarnessSession, Result<ResumePlan, NotResumable>),
+    /// The session is restored, or couldn't be: the plan that resumes it, and the status line.
+    Restored(HarnessSession, Result<Restored, NotResumable>),
     /// The copy here is caught up (or catching up needs a choice, or failed).
     CaughtUp(HarnessSession, Result<CatchUp, NotResumable>),
     /// The session's restore or catch-up was dropped before it started, for a newer accepted
@@ -533,7 +533,7 @@ mod tests {
             source: &dyn SessionSource,
             session: &SessionRow,
             restore: &Restore,
-        ) -> Result<ResumePlan, NotResumable> {
+        ) -> Result<Restored, NotResumable> {
             self.inner.restore(source, session, restore).await
         }
 

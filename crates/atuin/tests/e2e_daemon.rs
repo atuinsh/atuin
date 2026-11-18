@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use atuin_common::path::PathBufExt as _;
 use atuin_daemon::client::HistoryClient;
-use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, output, wait_until};
+use common::{FreshEnv, Process, SESSION, TIMEOUT, marker, messages, output, wait_until};
 use rstest::{fixture, rstest};
 
 struct Daemon {
@@ -128,7 +128,7 @@ async fn fresh_daemon_serves_history(
             tokio::time::timeout(TIMEOUT, client.status()).await.unwrap().unwrap().pid,
             status.pid
         );
-        assert!(daemon.env.run(&["daemon", "stop"]).contains("Daemon stopped"));
+        assert!(messages(daemon.env.atuin(&["daemon", "stop"])).contains("Daemon stopped"));
         wait_until("daemon socket removed", || !daemon.env.socket().exists());
     }
 }
@@ -148,7 +148,7 @@ async fn history_end_does_not_autostart_daemon(daemon: Daemon, #[case] exit: i64
     let id = output(start).trim().to_owned();
     assert!(daemon.env.socket().exists(), "history start should autostart the daemon");
 
-    assert!(daemon.env.run(&["daemon", "stop"]).contains("Daemon stopped"));
+    assert!(messages(daemon.env.atuin(&["daemon", "stop"])).contains("Daemon stopped"));
     wait_until("daemon socket removed", || !daemon.env.socket().exists());
 
     let end = daemon.env.atuin(&["history", "end", "--exit", &exit.to_string(), "--", &id]);
@@ -254,8 +254,8 @@ async fn ai_session_rebuild_goes_through_the_daemon(daemon: Daemon) {
     daemon.env.write_config("[daemon]\nenabled = true\nautostart = true\n");
     let index = stale_ai_session_index(&daemon.env).await;
 
-    let out = daemon.env.run(&["store", "rebuild", "ai-session"]);
-    assert!(out.contains("The daemon is rebuilding"), "{out}");
+    let shown = messages(daemon.env.atuin(&["store", "rebuild", "ai-session"]));
+    assert!(shown.contains("The daemon is rebuilding"), "{shown}");
     assert!(daemon.env.socket().exists(), "the daemon was started for it");
     let deadline = Instant::now() + TIMEOUT;
     while indexed_sessions(&index).await != 0 {

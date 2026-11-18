@@ -35,6 +35,10 @@ pub struct RegisterResponse {
     /// Old servers that don't return this field will deserialize as None.
     #[serde(default)]
     pub auth: Option<String>,
+    /// The id of the user the session logs in. Absent from a legacy CLI session, and from hubs
+    /// that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +94,10 @@ pub struct LoginResponse {
     /// Old servers that don't return this field will deserialize as None.
     #[serde(default)]
     pub auth: Option<String>,
+    /// The id of the user the session logs in. Absent from a legacy CLI session, and from hubs
+    /// that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -134,6 +142,13 @@ pub struct PackfileDownloadResponse {
 
 // Hub CLI authentication types
 
+/// Request to `POST /auth/cli/code`. Hubs that predate it ignore it.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CliCodeRequest {
+    /// The machine the CLI runs on, which names the API token the login mints.
+    pub hostname: String,
+}
+
 /// Response from `POST /auth/cli/code` - generates a code for CLI auth
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CliCodeResponse {
@@ -147,6 +162,9 @@ pub struct CliVerifyResponse {
     /// Session token, present only when authorization is complete
     #[serde(serialize_with = "crate::secret::serialize_option")]
     pub token: Option<SecretString>,
+    /// The id of the user the token logs in, beside it. Absent from hubs that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
     pub success: Option<bool>,
     pub error: Option<String>,
 }

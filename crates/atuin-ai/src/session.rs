@@ -31,13 +31,13 @@ pub trait SessionService: Send + Sync {
         &self,
         id: &str,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
     ) -> Result<StoredSession>;
 
     async fn find_resumable(
         &self,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
         window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>>;
 
@@ -97,18 +97,18 @@ impl SessionService for LocalSessionService {
         &self,
         id: &str,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
     ) -> Result<StoredSession> {
-        self.store.create_session(id, directory, git_root).await
+        self.store.create_session(id, directory, vcs_root).await
     }
 
     async fn find_resumable(
         &self,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
         window: Option<NonZeroDuration>,
     ) -> Result<Option<StoredSession>> {
-        self.store.find_resumable_session(directory, git_root, window).await
+        self.store.find_resumable_session(directory, vcs_root, window).await
     }
 
     async fn load_events(&self, session_id: &str) -> Result<Vec<StoredEvent>> {
@@ -177,7 +177,7 @@ pub struct SessionManager {
     head_id: Option<String>,
     /// Stored for creating a new session on `/new`.
     directory: Option<String>,
-    git_root: Option<String>,
+    vcs_root: Option<String>,
     /// Whether the session row has been created in the database. New sessions
     /// are deferred until the first event is persisted, so empty sessions
     /// don't linger and get spuriously resumed.
@@ -190,7 +190,7 @@ impl SessionManager {
     pub fn create_new(
         service: Box<dyn SessionService>,
         directory: Option<&str>,
-        git_root: Option<&str>,
+        vcs_root: Option<&str>,
     ) -> Self {
         let session_id = atuin_common::utils::uuid_v7().to_string();
         let invocation_id = atuin_common::utils::uuid_v7().to_string();
@@ -202,7 +202,7 @@ impl SessionManager {
             persisted_count: 0,
             head_id: None,
             directory: directory.map(String::from),
-            git_root: git_root.map(String::from),
+            vcs_root: vcs_root.map(String::from),
             persisted_to_db: false,
         }
     }
@@ -233,7 +233,7 @@ impl SessionManager {
             persisted_count: events.len(),
             head_id: last_event_id,
             directory: stored.directory.clone(),
-            git_root: stored.git_root.clone(),
+            vcs_root: stored.vcs_root.clone(),
             persisted_to_db: true,
         };
 
@@ -247,7 +247,7 @@ impl SessionManager {
                 .create_session(
                     &self.session_id,
                     self.directory.as_deref(),
-                    self.git_root.as_deref(),
+                    self.vcs_root.as_deref(),
                 )
                 .await?;
             self.persisted_to_db = true;

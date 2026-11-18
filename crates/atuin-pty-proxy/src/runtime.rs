@@ -1,21 +1,29 @@
+use std::ffi::OsString;
+use std::io::IsTerminal as _;
 use std::os::fd::{AsFd as _, OwnedFd};
+use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_common::os::umask::Umask;
 use atuin_common::os::unix::io::{ReadRetryingExt as _, WriteAllExt as _};
 use atuin_common::os::unix::tty::{Access, AsyncTty, TtyId};
+use atuin_common::userio;
 use crossterm::terminal;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use rustix::termios::SpecialCodeIndex;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
-use crate::cwd_updater::{CwdUpdater, pty_parent_fd};
-use crate::debug::{MarkerDebugHighlighter, RESET};
+use crate::debug::RESET;
+use crate::foreground::{ForegroundUpdater, pty_parent_fd};
+use crate::parser::Parser;
 use crate::pty_proxy::RuntimeOptions;
 use crate::screen::{self, Msg, SocketServer};
+use crate::title::TerminalTitle;
 
 /// The current version of the pty-proxy protocol.
 ///
@@ -32,6 +40,13 @@ const PROTOCOL_VERSION: &str = "2";
 const SOCKET_KEEPALIVE_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn main(options: RuntimeOptions) {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        // Don't create a pty if stdin or stdout isn't a tty; just exec the shell.
+        let error = exec_shell(options.shell);
+        eprintln!("atuin pty-proxy: failed to run the shell: {error}");
+        std::process::exit(1);
+    }
+
     // Everything but the emulator waits on I/O, so it all runs on this one thread: a multi-threaded
     // scheduler would start a worker per core in a process that sits under every interactive shell.
     // Only the I/O and timer drivers are enabled, and the blocking pool starts no thread unless a
@@ -56,6 +71,32 @@ pub fn main(options: RuntimeOptions) {
             std::process::exit(1);
         }
     }
+}
+
+/// Replace this process with the shell that the proxy would have spawned, outside any pty.
+///
+/// Returns only if the shell could not be run.
+fn exec_shell(shell: Vec<OsString>) -> std::io::Error {
+    let mut argv = shell.into_iter();
+    let mut cmd = if let Some(program) = argv.next() {
+        let mut cmd = Command::new(&program);
+        cmd.args(argv).env("SHELL", program);
+        cmd
+    } else {
+        // portable-pty runs the default shell as a login shell, which is named with a leading dash.
+        let shell = CommandBuilder::new_default_prog().get_shell();
+        let mut arg0 = OsString::from("-");
+        arg0.push(shell.rsplit('/').next().unwrap_or(&shell));
+        let mut cmd = Command::new(&shell);
+        cmd.arg0(arg0).env("SHELL", shell);
+        cmd
+    };
+
+    // The shell must not inherit Atuin's owner-only umask (#3695).
+    if let Some(mask) = Umask::original() {
+        let _ = mask.install_raw();
+    }
+    cmd.exec()
 }
 
 /// An error that occurred while setting up the PTY server.
@@ -103,14 +144,19 @@ enum Error {
 }
 
 async fn run(options: RuntimeOptions) -> Result<i32, Error> {
-    let (cols, rows) = terminal::size()?;
+    let terminal::WindowSize {
+        rows,
+        columns: cols,
+        width: pixel_width,
+        height: pixel_height,
+    } = terminal::window_size()?;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width,
+            pixel_height,
         })
         .map_err(|e| Error::OpenPty(e.into()))?;
 
@@ -133,16 +179,11 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
             let path = atuin_common::fs::RemoveOnDropPath(socket_path);
             Ok::<_, InitError>((server, path))
         })
-        .map_err(|e| {
-            // If we're unable to initialize the PTY server (e.g., failed to create the socket),
-            // print the error and continue rather than returning it, so the user still gets a
-            // shell.
-            eprintln!("atuin pty-proxy: failed to initialize server: {e}");
-        })
+        .inspect_err(|e| userio::log::error!("pty-proxy-server-init-failed", error = e.to_string()))
         .ok();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>(64);
-    let _parser_handle = screen::spawn_parser(rows, cols, msg_rx, screen::ParserOptions {
+    let _emulator_handle = screen::spawn_emulator(rows, cols, msg_rx, screen::EmulatorOptions {
         command_capture: (options.command_capture)(),
         debug_markers: options.debug_markers,
     })?;
@@ -166,16 +207,14 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
         cmd.env("SHELL", shell);
     }
     set_child_env(&mut cmd, socket_path.as_deref());
-    // Atuin sets a restrictive process-wide umask on startup to protect the
-    // files it creates. The shell must not inherit it (#3695) — restore the
-    // umask the user launched us with. Applied in the child between fork and
-    // exec, so the proxy's own umask stays restrictive.
-    if let Some(mask) = options.child_umask {
+    // The shell must not inherit atuin's owner-only umask (#3695): restore the one the user
+    // launched us with. Applied in the child between fork and exec, so ours stays restrictive.
+    if let Some(mask) = atuin_common::os::umask::Umask::original() {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "mode_t is u16 on macOS and u32 on Linux. nop on linux, narrowing on macOS."
         )]
-        cmd.umask(Some(mask as _));
+        cmd.umask(Some(mask.bits() as _));
     }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| Error::SpawnCommand(e.into()))?;
@@ -199,43 +238,58 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
     let child_pid =
         child.process_id().and_then(|pid| rustix::process::Pid::from_raw(pid.cast_signed()));
     // Update this process's CWD to match the child's CWD. This is necessary to enable programs like
-    // tmux to track the child's CWD.
-    let cwd_updater = CwdUpdater::new(pair.master.as_ref(), child_pid);
+    // tmux to track the child's CWD. Terminals that name the program running in them would
+    // otherwise name the proxy, so the updater also names the child's foreground for the title.
+    let (leaders_tx, mut leaders) = watch::channel(None);
+    let foreground_updater = ForegroundUpdater::new(pair.master.as_ref(), child_pid, leaders_tx);
+    let mut title = TerminalTitle::new();
     let mut sigchld = signal(SignalKind::child())?;
     spawn_resize_handler(pair.master, msg_tx.clone())?;
     terminal::enable_raw_mode()?;
 
     let debug_markers = options.debug_markers;
     let output = tokio::spawn(async move {
-        let mut highlighter = debug_markers.then(MarkerDebugHighlighter::new);
+        // The one parser of the child's output. Everything that follows the output takes what it
+        // found from here.
+        let mut parser = Parser::new();
         let mut buf = [0u8; 8192];
 
         loop {
-            match pty_reader.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let raw_data = &buf[..n];
-                    let highlighted;
-                    let data: &[u8] = if let Some(highlighter) = &mut highlighter {
-                        highlighted = highlighter.render(raw_data);
-                        &highlighted
-                    } else {
-                        raw_data
-                    };
+            tokio::select! {
+                read = pty_reader.read(&mut buf) => match read {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let output = parser.read(buf[..n].to_vec());
+                        let labelled = debug_markers.then(|| output.with_marker_labels());
+                        if stdout.write_all(labelled.as_deref().unwrap_or(output.data())).await.is_err() {
+                            break;
+                        }
+                        // The labels sit between escape codes, so the terminal ends up where
+                        // the output does.
+                        title.track(&output);
 
-                    if stdout.write_all(data).await.is_err() {
+                        // Only after the terminal has the chunk: handing it to the emulator wakes
+                        // the emulator's thread, a syscall that would otherwise delay every echoed
+                        // keystroke.
+                        let _ = msg_tx.send(Msg::Data(output)).await;
+                        foreground_updater.update();
+                    }
+                },
+                Ok(()) = leaders.changed() => {
+                    let sequence = leaders
+                        .borrow_and_update()
+                        .as_ref()
+                        .and_then(|leader| title.retitle(leader));
+                    if let Some(sequence) = sequence
+                        && stdout.write_all(&sequence).await.is_err()
+                    {
                         break;
                     }
-
-                    // Only after the terminal has the chunk: handing it to the parser wakes the
-                    // parser's thread, a syscall that would otherwise delay every echoed keystroke.
-                    let _ = msg_tx.send(Msg::Data(raw_data.to_vec())).await;
-                    cwd_updater.update();
                 }
             }
         }
 
-        if highlighter.is_some() {
+        if debug_markers {
             let _ = stdout.write_all(RESET).await;
         }
     });
@@ -252,8 +306,9 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
                 }
             }
         }
-        // Hand the end of our input on to the shell, so that piped input ends the session. EOF
-        // only counts at the start of a line, hence the newline.
+        // The terminal has hung up. Hand the shell an EOF so that the session ends instead of
+        // waiting for input that will never come. EOF only counts at the start of a line, hence
+        // the newline.
         if let Ok(termios) = rustix::termios::tcgetattr(&pty_writer)
             && let eof = termios.special_codes[SpecialCodeIndex::VEOF]
             && eof != 0
@@ -360,12 +415,18 @@ fn spawn_resize_handler(
 
     tokio::spawn(async move {
         while signals.recv().await.is_some() {
-            if let Ok((cols, rows)) = terminal::size() {
+            if let Ok(terminal::WindowSize {
+                rows,
+                columns: cols,
+                width: pixel_width,
+                height: pixel_height,
+            }) = terminal::window_size()
+            {
                 let _ = master.resize(PtySize {
                     rows,
                     cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    pixel_width,
+                    pixel_height,
                 });
                 let _ = resize_tx.send(Msg::Resize { rows, cols }).await;
             }

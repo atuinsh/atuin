@@ -1,8 +1,18 @@
+use std::num::NonZeroUsize;
+use std::str::FromStr;
+use std::sync::LazyLock;
+
+use argon2::password_hash::SaltString;
+use argon2::{
+    Algorithm, Argon2, Params, PasswordHash, PasswordHasher as _, PasswordVerifier as _, Version,
+};
+use atuin_common::sync::BlockingPool;
 use atuin_domain::record::{
     EncryptedData, Host, HostId, Record, RecordIdx, RecordSeriesKey, RecordTag, RecordVersion,
 };
 use easy_cast::Conv;
-use secrecy::SecretString;
+use rand::rngs::OsRng;
+use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::Row;
 
 #[derive(sqlx::FromRow)]
@@ -10,7 +20,7 @@ pub struct User {
     pub id: i64,
     pub username: String,
     pub email: String,
-    pub password: String,
+    pub password: HashedPassword,
 }
 
 #[derive(sqlx::FromRow)]
@@ -22,9 +32,79 @@ pub struct Session {
 }
 
 pub struct NewUser {
-    pub username: String,
+    pub username: NewUsername,
     pub email: String,
-    pub password: String,
+    pub password: HashedPassword,
+}
+
+/// A name a new account may take: non-empty ASCII letters, digits and hyphens, such as `alice-2`.
+///
+/// Existing accounts keep plain `String` names, since accounts registered before this rule may hold
+/// any name.
+#[derive(Debug, Clone, derive_more::Deref, derive_more::Display)]
+pub struct NewUsername(String);
+
+impl FromStr for NewUsername {
+    type Err = InvalidUsername;
+
+    fn from_str(username: &str) -> Result<Self, Self::Err> {
+        if username.is_empty() || !username.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(InvalidUsername(username.to_owned()));
+        }
+        Ok(Self(username.to_owned()))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0:?} is not a valid username; use only letters, digits and hyphens (-)")]
+pub struct InvalidUsername(String);
+
+// Each Argon2 hash holds 19 MiB, and the blocking pool alone would run up to 512 at once.
+static ARGON2_POOL: LazyLock<BlockingPool> = LazyLock::new(|| {
+    BlockingPool::new(std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN))
+});
+
+/// A user's password as stored: an Argon2id hash in PHC string format.
+#[derive(sqlx::Type)]
+#[sqlx(transparent)]
+pub struct HashedPassword(String);
+
+impl HashedPassword {
+    /// Hash `password` with a fresh salt.
+    pub async fn new(password: SecretString) -> Self {
+        ARGON2_POOL
+            .run(move || {
+                let salt = SaltString::generate(&mut OsRng);
+                let hash = Self::argon2()
+                    .hash_password(password.expose_secret().as_bytes(), &salt)
+                    .expect("Argon2id with default params hashes any password with a fresh salt");
+                Self(hash.to_string())
+            })
+            .await
+            .expect("the blocking pool runs the hash")
+    }
+
+    /// Whether `password` is the one this was hashed from.
+    pub async fn verify(&self, password: SecretString) -> bool {
+        let hash = self.0.clone();
+        ARGON2_POOL
+            .run(move || {
+                let Ok(hash) = PasswordHash::new(&hash) else {
+                    return false;
+                };
+                Self::argon2().verify_password(password.expose_secret().as_bytes(), &hash).is_ok()
+            })
+            .await
+            .expect("the blocking pool runs the check")
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn argon2() -> Argon2<'static> {
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default())
+    }
 }
 
 pub struct NewSession {
@@ -91,3 +171,42 @@ macro_rules! impl_record_series_point_from_row {
 impl_record_series_point_from_row!(sqlx::postgres::PgRow);
 impl_record_series_point_from_row!(sqlx::sqlite::SqliteRow);
 impl_record_series_point_from_row!(sqlx::mysql::MySqlRow);
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{HashedPassword, NewUsername};
+
+    #[rstest]
+    #[case::letters_digits_and_hyphens("Alice-2", true)]
+    #[case::empty("", false)]
+    #[case::space("al ice", false)]
+    #[case::underscore("al_ice", false)]
+    #[case::email("alice@example.com", false)]
+    #[case::non_ascii_letter("ålice", false)]
+    fn new_usernames_are_nonempty_ascii_letters_digits_and_hyphens(
+        #[case] username: &str,
+        #[case] valid: bool,
+    ) {
+        assert_eq!(username.parse::<NewUsername>().is_ok(), valid);
+    }
+
+    #[rstest]
+    #[case::same_password("hunter2", true)]
+    #[case::other_password("hunter3", false)]
+    #[tokio::test]
+    async fn a_hash_verifies_only_the_password_it_was_made_from(
+        #[case] attempt: &str,
+        #[case] verified: bool,
+    ) {
+        let hash = HashedPassword::new("hunter2".into()).await;
+        assert_eq!(hash.verify(attempt.into()).await, verified);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_stored_password_that_is_not_a_hash_never_verifies() {
+        assert!(!HashedPassword("hunter2".to_owned()).verify("hunter2".into()).await);
+    }
+}

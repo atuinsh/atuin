@@ -48,6 +48,8 @@ impl SyncServer {
                 db_password_file: None,
             },
             metrics: atuin_server::settings::Metrics::default(),
+            trusted_proxies: Vec::new(),
+            trusted_proxy_header: atuin_server::Settings::DEFAULT_TRUSTED_PROXY_HEADER,
             fake_version: None,
         };
         let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
@@ -175,9 +177,14 @@ impl Machine {
     /// running: the first's syncing as often as it can, the second's every `sync_frequency`
     /// seconds, or (0) never.
     pub fn pair_syncing(server: &SyncServer, sync_frequency: u32, threads: &str) -> (Self, Self) {
-        let one = Self::syncing(server, None, 1, threads);
+        Self::pair_as(server, sync_frequency, [threads, threads])
+    }
+
+    /// [`Self::pair_syncing`], each machine with its own `[threads]` settings.
+    pub fn pair_as(server: &SyncServer, sync_frequency: u32, threads: [&str; 2]) -> (Self, Self) {
+        let one = Self::syncing(server, None, 1, threads[0]);
         let key = one.run(&["key", "--base64"]).trim().to_owned();
-        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, threads);
+        let two = Self::syncing(server, Some((&one, &key)), sync_frequency, threads[1]);
         (one, two)
     }
 
@@ -263,6 +270,26 @@ impl Machine {
         let socket = self.env.socket();
         wait("the daemon to stop", || !socket.exists());
         drop(daemon);
+    }
+
+    /// The files the daemon has open, by their real paths.
+    pub fn daemon_open_files(&self) -> Vec<PathBuf> {
+        let pid = self.daemon.as_ref().expect("the daemon isn't running").child.id();
+        let fds = PathBuf::from(format!("/proc/{pid}/fd"));
+        if fds.is_dir() {
+            return std::fs::read_dir(fds)
+                .unwrap()
+                .flatten()
+                .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+                .collect();
+        }
+        // No `/proc` (macOS): `lsof` names each open file on a line of its own, after an `n`.
+        let listed = Command::new("lsof").args(["-Fn", "-p", &pid.to_string()]).output().unwrap();
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix('n'))
+            .map(PathBuf::from)
+            .collect()
     }
 
     /// The daemon's log so far, for a failure message.

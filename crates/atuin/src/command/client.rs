@@ -1,16 +1,21 @@
 use std::sync::Arc;
 
 use atuin_client::database::Sqlite;
+use atuin_client::history::store::HistoryStore;
 use atuin_client::logs::FromSettings;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::theme;
+use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::{self, LogConfig};
+use atuin_common::userio;
+use atuin_common::userio::log::{Held, Nop, SINK};
 use clap::Subcommand;
+use clap_couture::Couture;
 use eyre::{Result, WrapErr};
 
 use crate::i18n::fl;
-use crate::logs::LogCtx;
+use crate::logs::{HeldEvents, LogCtx};
 
 #[cfg(feature = "sync")]
 mod sync;
@@ -28,7 +33,9 @@ mod config;
 mod default_config;
 mod doctor;
 mod dotfiles;
+mod halloween;
 mod history;
+#[cfg(feature = "ai")]
 mod hook;
 mod import;
 mod info;
@@ -44,12 +51,16 @@ mod search;
 mod setup;
 mod stats;
 mod store;
+mod trick_or_treat;
 #[cfg(feature = "self-update")]
 mod update;
+#[cfg(feature = "octavo")]
+mod workspace;
 mod wrapped;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Couture)]
 #[command(infer_subcommands = true)]
+#[couture(inherit = ["ai", "sync", "data", "setup", "advanced"])]
 pub enum Cmd {
     // Variant order sets the `--help` command list order, so keep the commands users reach for
     // most (search, sync, stats) at the top and the plumbing/config commands lower down.
@@ -70,6 +81,7 @@ pub enum Cmd {
 
     #[command(about = fl!("cmd-account"))]
     #[cfg(feature = "sync")]
+    #[couture(category = "sync")]
     Account(account::Cmd),
 
     /// Manipulate shell history
@@ -77,57 +89,72 @@ pub enum Cmd {
     History(history::Cmd),
 
     #[command(about = fl!("cmd-setup"))]
-    Setup,
+    #[couture(category = "setup")]
+    Setup(setup::Cmd),
 
     #[command(about = fl!("cmd-init"))]
+    #[couture(category = "setup")]
     Init(init::Cmd),
 
     /// Import shell history from file
     #[command(subcommand)]
+    #[couture(category = "setup")]
     Import(import::Cmd),
 
     #[command(about = fl!("cmd-doctor"))]
+    #[couture(category = "setup")]
     Doctor,
 
     #[cfg(feature = "self-update")]
     #[command(about = fl!("cmd-update"))]
+    #[couture(category = "setup")]
     Update(update::Cmd),
 
     /// Get or set small key-value pairs
     #[command(subcommand)]
+    #[couture(category = "data")]
     Kv(kv::Cmd),
 
     /// Manage the atuin data store
     #[command(subcommand)]
+    #[couture(category = "data")]
     Store(store::Cmd),
 
     /// List legacy synced dotfiles data
     #[command(subcommand)]
+    #[couture(category = "data")]
     Dotfiles(dotfiles::Cmd),
 
     /// Manage your scripts with Atuin
     #[command(subcommand)]
+    #[couture(category = "data")]
     Scripts(scripts::Cmd),
 
+    #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-hook"))]
+    #[couture(category = "advanced")]
     Hook(hook::Cmd),
 
     /// Run the AI assistant
     #[cfg(feature = "ai")]
     #[command(subcommand)]
+    #[couture(category = "ai")]
     Ai(atuin_ai::commands::Command),
 
     /// Search, read and resume your coding agents' captured threads
     #[cfg(feature = "ai")]
     #[command(subcommand)]
+    #[couture(category = "ai")]
     Threads(atuin_ai::commands::ThreadsCmd),
 
     /// Pick a captured coding-agent thread and resume it (short for `atuin threads resume`)
     #[cfg(feature = "ai")]
+    #[couture(category = "ai")]
     Resume(atuin_ai::commands::ResumeCmd),
 
     #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-mcp"))]
+    #[couture(category = "ai")]
     Mcp(mcp::Cmd),
 
     #[command(about = fl!("cmd-wrapped"))]
@@ -136,18 +163,30 @@ pub enum Cmd {
         year: Option<i32>,
     },
 
+    #[command(about = fl!("cmd-trick-or-treat"), hide = true)]
+    TrickOrTreat(trick_or_treat::Cmd),
+
     #[command(about = fl!("cmd-default-config"))]
+    #[couture(category = "advanced")]
     DefaultConfig,
 
     /// Get, set, or print values in your atuin config file
     #[command(subcommand)]
+    #[couture(category = "setup")]
     Config(config::Cmd),
 
+    #[cfg(feature = "octavo")]
+    #[command(subcommand, about = fl!("cmd-workspace"))]
+    #[couture(category = "setup")]
+    Workspace(workspace::Cmd),
+
     #[command(about = fl!("cmd-info"))]
+    #[couture(category = "advanced")]
     Info,
 
     #[cfg(feature = "daemon")]
     #[command(about = fl!("cmd-daemon"))]
+    #[couture(category = "advanced")]
     Daemon(daemon::Cmd),
 
     /// Internal subcommands, not for direct use by users.
@@ -161,14 +200,26 @@ pub enum Cmd {
     )]
     Internal(internal::Cmd),
 
+    /// We want to exclude the `__internal` subcommand from Clap's `infer_subcommands`; otherwise,
+    /// a user could access it simply by typing `atuin _`. However, Clap has no way to disable
+    /// `infer_subcommands` for a single command. As a workaround, we define a dummy command with
+    /// the same name but with an extra understore, which forces `__internal` to be typed out in
+    /// entirety, since any prefix of the name would be ambiguous.
     #[command(
         hide = true,
         name = "__internal_",
         disable_help_flag = true,
-        disable_help_subcommand = true,
-        about = fl!("cmd-__internal_")
+        disable_help_subcommand = true
     )]
     InternalDecoy,
+}
+
+/// Where a command that keeps messages for the user off stderr shows them instead.
+enum Quiet {
+    /// Nowhere.
+    Drop,
+    /// In its TUI, which takes them from the [`Held`] sink.
+    Hold,
 }
 
 impl Cmd {
@@ -192,7 +243,7 @@ impl Cmd {
 
         // Daemonize before creating the async runtime – fork() inside a live
         // tokio runtime corrupts its internal state.
-        #[cfg(all(unix, feature = "daemon"))]
+        #[cfg(feature = "daemon")]
         if let Self::Daemon(ref cmd) = self
             && cmd.should_daemonize()
         {
@@ -237,19 +288,37 @@ impl Cmd {
             None
         };
 
-        let settings = Settings::new().wrap_err("could not load client settings")?;
-        let _logging = self
-            .log_config(&settings)
-            .map(|c| LogCtx::try_enable("atuin", &c))
-            .transpose()
-            .wrap_err("failed to enable logging")?;
+        // Before the settings load, so what loading them tells the user goes there too.
+        let messages = Held::default();
+        let sink = self.quiet().map(|quiet| match quiet {
+            Quiet::Drop => SINK.push(Nop),
+            Quiet::Hold => SINK.push(messages.clone()),
+        });
 
-        Ok(Some(async {
-            if let Some(func) = run_internal {
+        // Logging is set up from the settings, so what loading them logs waits for it.
+        let (settings, held) = HeldEvents::hold(Settings::new);
+        let settings = settings.wrap_err("could not load client settings")?;
+        let logging = self
+            .log_config(&settings)
+            .map_or_else(LogCtx::without_logs, |config| LogCtx::try_enable("atuin", &config))
+            .wrap_err("failed to enable logging")?;
+        held.emit();
+
+        Ok(Some(async move {
+            let result = if let Some(func) = run_internal {
                 func(settings).await
             } else {
-                Box::pin(self.run_async(settings)).await
-            }
+                Box::pin(self.run_async(settings, messages)).await
+            };
+            // Dropping the guard flushes and shuts down the OTEL exporter, so it must outlive the
+            // command rather than this function.
+            #[allow(
+                clippy::drop_non_drop,
+                reason = "LogCtx has drop glue only with OTEL compiled in"
+            )]
+            drop(logging);
+            drop(sink);
+            result
         }))
     }
 
@@ -257,26 +326,29 @@ impl Cmd {
     // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
     // await points.
     #[allow(clippy::future_not_send)]
-    async fn run_async(self, mut settings: Settings) -> Result<()> {
+    async fn run_async(self, mut settings: Settings, messages: Held) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
-        let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
+        let mut theme_manager = theme::ThemeManager::default();
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
         match self {
             Self::History(history) => return history.run(&Arc::new(settings)).await,
+            #[cfg(feature = "ai")]
             Self::Hook(hook) => return hook.run(&Arc::new(settings)).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&Arc::new(settings)).await,
+            #[cfg(feature = "octavo")]
+            Self::Workspace(workspace) => return workspace.run(),
             // Opens the databases itself, once no other daemon can be using them.
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
             Self::InternalDecoy => {
-                eprintln!("error: this command is not meant to be accessed directly");
+                userio::log::error!("client-internal-decoy");
                 std::process::exit(1);
             }
             _ => {}
@@ -289,13 +361,21 @@ impl Cmd {
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
-        let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
+        let theme = theme_manager.load_theme(theme_name.as_str());
 
         match self {
-            Self::Setup => setup::run(&settings).await,
-            Self::Import(import) => import.run(&db).await,
+            Self::Setup(setup) => setup.run(&settings, &db, &sqlite_store).await,
+            Self::Import(import) => {
+                import.run(&db).await?;
+                // Sync sends the record store, and the importers only write the history database.
+                let key = paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
+                let history = HistoryStore::new(sqlite_store, settings.host_id().await?, key);
+                history.init_store(&db, &settings).await
+            }
             Self::Stats(stats) => stats.run(&db, &settings, theme).await,
-            Self::Search(search) => search.run(db, settings, sqlite_store, theme).await,
+            Self::Search(search) => {
+                Box::pin(search.run(db, settings, sqlite_store, theme, &messages)).await
+            }
 
             #[cfg(feature = "daemon")]
             Self::Output(cmd) => cmd.run(&db, &settings, theme).await,
@@ -315,7 +395,7 @@ impl Cmd {
             Self::Scripts(scripts) => scripts.run(&settings, sqlite_store, &db).await,
 
             Self::Info => {
-                info::run(&settings);
+                info::run(&settings).await;
                 Ok(())
             }
 
@@ -326,8 +406,9 @@ impl Cmd {
 
             Self::Wrapped { year } => wrapped::run(year, &db, &settings, sqlite_store, theme).await,
 
+            Self::TrickOrTreat(cmd) => cmd.run(&db, &settings).await,
+
             Self::History(_)
-            | Self::Hook(_)
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
@@ -342,8 +423,11 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(_) => unreachable!(),
 
+            #[cfg(feature = "octavo")]
+            Self::Workspace(_) => unreachable!(),
+
             #[cfg(feature = "ai")]
-            Self::Threads(_) | Self::Resume(_) => unreachable!(),
+            Self::Hook(_) | Self::Threads(_) | Self::Resume(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
@@ -377,11 +461,24 @@ impl Cmd {
                     daemon::ready_client(&settings).await?;
                 }
 
-                atuin_ai::commands::run(cli, settings).await
+                Box::pin(atuin_ai::commands::run(cli, settings)).await
             }
 
             #[cfg(feature = "ai")]
             Self::Mcp(cmd) => cmd.run(&db, settings).await,
+        }
+    }
+
+    /// Where the command shows messages for the user, if not on stderr: a shell hook stays quiet,
+    /// and a widget answers the shell there.
+    fn quiet(&self) -> Option<Quiet> {
+        match self {
+            Self::History(cmd) if cmd.is_hook() => Some(Quiet::Drop),
+            Self::Search(cmd) if cmd.is_interactive() => Some(Quiet::Hold),
+            #[cfg(feature = "ai")]
+            Self::Ai(cmd) if cmd.is_widget() => Some(Quiet::Drop),
+            Self::Internal(_) => Some(Quiet::Drop),
+            _ => None,
         }
     }
 

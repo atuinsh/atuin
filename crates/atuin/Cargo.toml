@@ -39,6 +39,12 @@ buildflags = ["--release"]
 [package.metadata.rpm.targets]
 atuin = { path = "/usr/bin/atuin" }
 
+[package.metadata.wix]
+upgrade-guid = "313BC66B-8878-40FC-9042-45A787D28E7B"
+path-guid = "93A1B211-BC0F-4942-81E4-6F6CAA9C25F1"
+license = "LICENSE"
+eula = false
+
 [features]
 default = [
     "client",
@@ -48,14 +54,17 @@ default = [
     "daemon",
     "ai",
     "pty-proxy",
+    "octavo",
 ]
 client = ["atuin-client"]
 sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon", "atuin-ai?/daemon"]
-ai = ["atuin-ai"]
+ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Not a default feature until Octavo ships; release artifacts build without it.
+# Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
+# `atuin setup --teams` does.
 octavo = [
+    "ai",
     "sync",
     "daemon",
     "atuin-client/octavo",
@@ -86,8 +95,8 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.24.1", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["ai", "db", "os", "unicode"] }
+atuin-client = { path = "../atuin-client", version = "18.24.8", optional = true, default-features = false }
+atuin-common = { workspace = true, features = ["db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
@@ -103,9 +112,11 @@ async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true }
 axoupdater = { workspace = true, optional = true }
 clap = { workspace = true }
+clap-couture = { workspace = true }
 clap_complete = { workspace = true }
 clap_complete_nushell = { workspace = true }
 colored = { workspace = true }
+const_format = { workspace = true }
 crossterm = { workspace = true, features = ["use-dev-tty"] }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
@@ -114,7 +125,6 @@ eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }
 i18n-embed = { workspace = true }
-i18n-embed-fl = { workspace = true }
 indicatif = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
@@ -123,6 +133,7 @@ norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
+rand = { workspace = true }
 ratatui = { workspace = true }
 regex = { workspace = true }
 rpassword = { workspace = true }
@@ -149,6 +160,7 @@ tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 arboard = { workspace = true, optional = true }
@@ -173,18 +185,15 @@ windows-sys = { workspace = true }
 atuin-common = { workspace = true, features = ["test-utils"] }
 # An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
 atuin-server = { workspace = true }
-divan = { workspace = true }
 parking_lot = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 # opencode keeps its sessions in SQLite: the e2e tests write one as it does.
 rusqlite = { workspace = true }
+# Kiro buckets its sessions by a SHA-256 of the working directory: the e2e tests write one as it does.
+sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
-
-[[bench]]
-name = "render_char"
-harness = false
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]

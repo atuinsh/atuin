@@ -5,6 +5,7 @@
 mod common;
 
 use atuin_common::path::PathBufExt as _;
+use atuin_common::test_utils::ReadOnlyTree;
 use common::{FreshEnv, Process, SESSION};
 use rstest::{fixture, rstest};
 
@@ -123,6 +124,34 @@ fn resolved_paths_print_as_opened(
     assert_eq!(stdout(&out).trim(), expected.replace("{atuin_home}", &atuin_home));
 }
 
+/// An Atuin home on a read-only filesystem still lists and searches its history. Regression for
+/// #2999.
+#[rstest]
+#[case::list(&["history", "list", "--cmd-only"])]
+#[case::search(&["search", "--cmd-only", "read-only"])]
+fn history_reads_from_a_read_only_home(env: FreshEnv, #[case] args: &[&str]) {
+    env.record("echo read-only", SESSION, &env.home().join("tmp"));
+    // A clean shutdown leaves each database's main file alone, with no WAL beside it to read
+    // through.
+    for db in ["history.db", "records.db"] {
+        let path = env.data_dir().joined(db);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+        conn.close().map_err(|(_, e)| e).unwrap();
+        assert!(!env.data_dir().joined(format!("{db}-wal")).exists(), "{db} kept its WAL");
+    }
+
+    let Some(_locked) = ReadOnlyTree::lock(&env.atuin_home()) else {
+        return;
+    };
+
+    let mut command = env.atuin(args);
+    command.env("ATUIN_SESSION", SESSION);
+    let out = Process::spawn(command).wait();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout(&out).trim(), "echo read-only");
+}
+
 /// An install from before `$ATUIN_HOME` keeps its XDG data and config where they are.
 #[rstest]
 fn existing_xdg_install_is_used_in_place(env: FreshEnv) {
@@ -208,6 +237,44 @@ fn init_zsh_registers_hooks(env: FreshEnv) {
     let out = Process::spawn(env.atuin(&["init", "zsh"])).wait();
     assert!(out.status.success());
     assert!(stdout(&out).contains("autoload -U add-zsh-hook"));
+}
+
+/// A path setting Atuin can't use as written, or a SQLite URI in a database one, costs at most a
+/// warning when the shell starts, never the shell's integration: `init` still prints it, and the
+/// hooks it installs still record, quietly.
+#[rstest]
+#[case::unset_variable("[kv]\ndb_path = \"$ATUIN_E2E_UNSET/kv.db\"\n", Some("kv.db_path"))]
+#[case::empty_path("[daemon]\npidfile_path = \"\"\n", Some("daemon.pidfile_path"))]
+#[case::sqlite_memory("db_path = \":memory:\"\n", None)]
+#[case::sqlite_uri("record_store_path = \"sqlite::memory:\"\n", None)]
+fn unusual_path_settings_keep_the_shell_integration(
+    env: FreshEnv,
+    #[case] config: &str,
+    #[case] warns_about: Option<&str>,
+) {
+    env.write_config(config);
+
+    let init = Process::spawn(env.atuin(&["init", "zsh"])).wait();
+    let init_stderr = String::from_utf8_lossy(&init.stderr);
+    assert!(init.status.success(), "stderr: {init_stderr}");
+    assert!(stdout(&init).contains("autoload -U add-zsh-hook"));
+    match warns_about {
+        Some(key) => {
+            assert!(init_stderr.contains(key), "expected a warning about {key}: {init_stderr}");
+        }
+        None => assert!(init_stderr.is_empty(), "expected no warning: {init_stderr}"),
+    }
+
+    let mut start = env.atuin(&["history", "start", "--hook", "--", "ls"]);
+    start.env("ATUIN_SESSION", SESSION);
+    let start = Process::spawn(start).wait();
+    assert!(start.status.success(), "stderr: {}", String::from_utf8_lossy(&start.stderr));
+    assert!(!stdout(&start).trim().is_empty(), "the hook printed no history id");
+    assert!(
+        start.stderr.is_empty(),
+        "the hook wasn't quiet: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
 }
 
 #[rstest]

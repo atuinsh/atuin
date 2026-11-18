@@ -4,6 +4,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
+use atuin_common::userio;
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
@@ -61,8 +62,9 @@ pub enum Cmd {
 /// the replay only has to cover it again with the new key. Best effort: the maintenance itself
 /// has already happened.
 pub async fn invalidate_ai_sessions(settings: &Settings) {
+    #[cfg(feature = "ai")]
     if let Err(err) = atuin_client::ai_session::invalidate_sidecar(settings).await {
-        eprintln!("Failed to schedule a rebuild of the threads index: {err}");
+        userio::log::warn!("store-threads-invalidate-failed", error = err.to_string());
     }
 }
 
@@ -75,6 +77,7 @@ pub async fn invalidate_ai_sessions(settings: &Settings) {
 /// dedup gate cannot be trusted. Deleting the file from here could leave a running daemon serving
 /// an empty index, and capture pushing duplicate records. So when the daemon is disabled, or
 /// cannot be reached or asked, this fails and nothing is touched.
+#[cfg(feature = "ai")]
 #[cfg_attr(
     not(feature = "daemon"),
     expect(clippy::unused_async, reason = "only the daemon rebuilds")
@@ -102,6 +105,7 @@ pub async fn reset_ai_sessions(settings: &Settings) -> Result<()> {
 /// [`reset_ai_sessions`] for commands that have already deleted records: a failure says the
 /// index is now stale, and how to fix it. Nothing to do when there is no index yet: the daemon
 /// builds it from the records as they are now.
+#[cfg(feature = "ai")]
 pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
     if !atuin_client::ai_session::sidecar_path(settings).exists() {
         return Ok(());
@@ -110,6 +114,11 @@ pub async fn reset_ai_sessions_after(settings: &Settings) -> Result<()> {
         "the records changed, but the threads index was not rebuilt and still lists what they \
          held: run `atuin store rebuild threads` once the daemon is enabled and running",
     )
+}
+
+#[cfg(not(feature = "ai"))]
+pub async fn reset_ai_sessions_after(_: &Settings) -> Result<()> {
+    Ok(())
 }
 
 impl Cmd {
@@ -136,7 +145,7 @@ impl Cmd {
                 #[cfg(not(feature = "daemon"))]
                 let rewritten = store.compact().await?;
 
-                println!("Rewrote {rewritten} records");
+                userio::log::info!("store-compact-done", count = rewritten);
                 Ok(())
             }
             Self::Verify(verify) => verify.run(settings, store).await,

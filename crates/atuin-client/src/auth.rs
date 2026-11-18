@@ -27,6 +27,8 @@ pub enum AuthResponse {
     Success {
         session: SecretString,
         auth_type: Option<String>,
+        /// The id of the user a hub session logs in, when the hub said.
+        user_id: Option<String>,
     },
     /// Two-factor authentication is required; the caller should prompt for a
     /// TOTP code and retry with it.
@@ -172,6 +174,7 @@ impl AuthClient for LegacyAuthClient {
         Ok(AuthResponse::Success {
             session: resp.session,
             auth_type: resp.auth.or(Some("cli".into())),
+            user_id: None,
         })
     }
 
@@ -192,6 +195,7 @@ impl AuthClient for LegacyAuthClient {
         Ok(AuthResponse::Success {
             session: resp.session,
             auth_type: resp.auth.or(Some("cli".into())),
+            user_id: None,
         })
     }
 
@@ -319,6 +323,7 @@ impl AuthClient for HubAuthClient {
             return Ok(AuthResponse::Success {
                 session: login.session,
                 auth_type: login.auth,
+                user_id: login.user_id,
             });
         }
 
@@ -367,6 +372,7 @@ impl AuthClient for HubAuthClient {
             return Ok(AuthResponse::Success {
                 session: reg.session,
                 auth_type: reg.auth,
+                user_id: reg.user_id,
             });
         }
 

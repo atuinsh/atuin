@@ -13,7 +13,7 @@ pub mod tools;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use effects::{Effect, ExitAction, PermissionTarget, TimeoutKind};
 use events::{Event, PermissionChoice, PermissionResponse};
@@ -34,6 +34,8 @@ use crate::tui::state::ConversationEvent;
 pub const RESULT_USER_CANCELLED: &str = "Error: user cancelled this operation";
 pub const RESULT_DENIED_BY_RULES: &str = "Permission denied on the user's system";
 pub const RESULT_DENIED_BY_USER: &str = "Permission denied by the user";
+pub const RESULT_STREAM_FAILED: &str =
+    "Error: the response stream failed before this tool call finished";
 
 /// The discrete states of the agent FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -526,17 +528,10 @@ impl AgentFsm {
                 },
                 Event::StreamError(e),
             ) => {
-                // Abort any executing tools on stream error
-                let abort_effects: Vec<_> = self
-                    .ctx
-                    .tools
-                    .executing_ids()
-                    .into_iter()
-                    .map(|tool_id| Effect::AbortTool { tool_id })
-                    .collect();
-                self.ctx.tool_timeout_ids.clear();
+                let mut effects = Vec::new();
+                self.resolve_unfinished_tool_calls(RESULT_STREAM_FAILED, &mut effects);
                 self.state = AgentState::Error(e);
-                abort_effects
+                effects
             }
 
             // ================================================================
@@ -619,40 +614,20 @@ impl AgentFsm {
                     effects.push(Effect::AbortStream);
                 }
 
-                // Cancel all pending tools
-                let pending = self.ctx.tools.pending_ids();
-                for id in &pending {
-                    if let Some(tracked) = self.ctx.tools.get_mut(id) {
-                        if tracked.state == ToolState::Executing {
-                            effects.push(Effect::AbortTool {
-                                tool_id: id.clone(),
-                            });
-                        }
-                        tracked.state = ToolState::Completed;
-                    }
-                    self.ctx.events.push(ConversationEvent::ToolResult {
-                        tool_use_id: id.clone(),
-                        content: RESULT_USER_CANCELLED.to_string(),
-                        is_error: true,
-                        remote: false,
-                        content_length: None,
-                    });
-                }
+                let had_unfinished =
+                    self.resolve_unfinished_tool_calls(RESULT_USER_CANCELLED, &mut effects);
 
                 // Commit any partial streaming text
                 self.commit_streaming_text_as_cancelled();
 
                 // Add context so the LLM knows what happened
-                if !pending.is_empty() {
+                if had_unfinished {
                     self.ctx.events.push(ConversationEvent::SystemContext {
                         content: "The user cancelled the previous generation. Tool calls that \
                                   were in progress have been aborted."
                             .to_string(),
                     });
                 }
-
-                // Clear timeout mappings — stale timeouts will be ignored by the guard
-                self.ctx.tool_timeout_ids.clear();
 
                 self.state = AgentState::Idle { confirmation: None };
                 effects.push(Effect::Persist);
@@ -810,6 +785,16 @@ impl AgentFsm {
 
     /// Handle a client-side tool call from the stream.
     fn handle_stream_tool_call(&mut self, id: String, name: String, input: Value) -> Vec<Effect> {
+        // Server-side tools (web search, scrape) are executed by the server,
+        // which streams their results and continues the turn itself. Record
+        // the call for history and rendering, but don't answer or track it:
+        // that would add a spurious error result and trigger a continuation
+        // that makes the model answer a second time.
+        if crate::tools::descriptor::by_name(&name).is_some_and(|d| !d.is_client) {
+            self.ctx.events.push(ConversationEvent::ToolCall { id, name, input });
+            return vec![];
+        }
+
         // Parse the tool call
         let tool = match crate::tools::ClientToolCall::try_from((name.as_str(), &input)) {
             Ok(tool) => tool,
@@ -1226,6 +1211,70 @@ impl AgentFsm {
     fn current_invocation_events(&self) -> impl DoubleEndedIterator<Item = &ConversationEvent> {
         let start = self.ctx.view_start_index.min(self.ctx.events.len());
         self.ctx.events[start..].iter()
+    }
+
+    /// End every tool call the turn left unfinished, for a turn that stops
+    /// early. Executing tools are aborted, and each call without a result
+    /// gets `result` as an error, because the next request is rebuilt from
+    /// the event log and must pair every `tool_use` with a `tool_result`.
+    /// The turn's tool IDs are cleared too, so a Retry's stream ends the turn
+    /// instead of sending these results back again.
+    ///
+    /// Returns whether any call was unfinished.
+    fn resolve_unfinished_tool_calls(&mut self, result: &str, effects: &mut Vec<Effect>) -> bool {
+        let mut unfinished = self.ctx.tools.pending_ids();
+        for id in &unfinished {
+            if let Some(tracked) = self.ctx.tools.get_mut(id) {
+                if tracked.state == ToolState::Executing {
+                    effects.push(Effect::AbortTool {
+                        tool_id: id.clone(),
+                    });
+                }
+                tracked.state = ToolState::Completed;
+            }
+        }
+        // Server-side calls aren't tracked, so find them in the event log.
+        unfinished.extend(self.unanswered_server_tool_calls());
+
+        for id in &unfinished {
+            self.ctx.events.push(ConversationEvent::ToolResult {
+                tool_use_id: id.clone(),
+                content: result.to_string(),
+                is_error: true,
+                remote: false,
+                content_length: None,
+            });
+        }
+
+        self.ctx.current_turn_tool_ids.clear();
+        // Stale timeouts are ignored by the guard once their mapping is gone.
+        self.ctx.tool_timeout_ids.clear();
+
+        !unfinished.is_empty()
+    }
+
+    /// IDs of server-side tool calls in the current invocation that have no
+    /// result yet.
+    fn unanswered_server_tool_calls(&self) -> Vec<String> {
+        let answered: HashSet<&str> = self
+            .current_invocation_events()
+            .filter_map(|e| match e {
+                ConversationEvent::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        self.current_invocation_events()
+            .filter_map(|e| match e {
+                ConversationEvent::ToolCall { id, name, .. }
+                    if !answered.contains(id.as_str())
+                        && crate::tools::descriptor::by_name(name)
+                            .is_some_and(|d| !d.is_client) =>
+                {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Handle a slash command by pushing an OOB event.

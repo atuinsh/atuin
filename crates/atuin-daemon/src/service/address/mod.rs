@@ -1,20 +1,23 @@
-//! Where the daemon listens, and how a client connects to it there.
+//! Where the daemon listens, how a client connects to it there, and what the daemon leaves there.
 //!
-//! The daemon listens on a Unix socket, or on Windows on TCP. Each platform's module defines the
-//! same [`DaemonAddress`], [`DaemonListener`] and [`DaemonStream`].
+//! The daemon listens on a Unix socket, or on Windows on TCP, which has no socket file to keep
+//! fresh or clear. Each platform's module defines the same names.
 
 #[cfg(unix)]
 mod unix;
+#[cfg(unix)]
+use unix as platform;
 #[cfg(not(unix))]
 mod windows;
-
 use hyper_util::rt::TokioIo;
+pub(crate) use platform::SocketFile;
+pub use platform::{
+    DaemonAddress, DaemonListener, DaemonStream, LocateError, PrepareError, RemoveSocketError,
+};
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-#[cfg(unix)]
-pub use unix::{DaemonAddress, DaemonListener, DaemonStream};
 #[cfg(not(unix))]
-pub use windows::{DaemonAddress, DaemonListener, DaemonStream};
+use windows as platform;
 
 impl DaemonAddress {
     /// Open a gRPC channel to the daemon at this address.

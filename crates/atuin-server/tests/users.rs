@@ -1,5 +1,11 @@
+use std::time::Duration;
+
+use atuin_client::api_client;
+use atuin_client::auth::{AuthClient as _, AuthResponse, LegacyAuthClient};
 use atuin_common::utils::uuid_v7;
+use atuin_domain::api::LoginRequest;
 use rstest::{fixture, rstest};
+use secrecy::SecretString;
 
 mod common;
 
@@ -70,6 +76,92 @@ async fn change_password(#[future] server: TestServer) {
     // login with new password yields a working token
     let status = client.me().await.unwrap();
     assert_eq!(status.username, username);
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+/// Deleting an account takes its password as well as a session token, so a leaked token alone
+/// cannot delete the account.
+#[rstest]
+#[case::right_password("correct horse", true)]
+#[case::wrong_password("wrong horse", false)]
+#[tokio::test]
+async fn deleting_an_account_needs_its_password(
+    #[future] server: TestServer,
+    #[case] given: &str,
+    #[case] deleted: bool,
+) {
+    let (address, shutdown, server_task) = server.await;
+
+    let username = uuid_v7().as_simple().to_string();
+    let password = SecretString::from("correct horse");
+    let anonymous = LegacyAuthClient::new(
+        &address,
+        None,
+        Duration::from_secs(5),
+        Duration::from_secs(30),
+        Default::default(),
+    );
+    let AuthResponse::Success { session, .. } =
+        anonymous.register(&username, &format!("{username}@example.com"), &password).await.unwrap()
+    else {
+        unreachable!("the sync server has no two-factor auth");
+    };
+    let client = LegacyAuthClient::new(
+        &address,
+        Some(session),
+        Duration::from_secs(5),
+        Duration::from_secs(30),
+        Default::default(),
+    );
+
+    let result = client.delete_account(&given.into(), None).await;
+    assert_eq!(result.is_ok(), deleted);
+
+    let logs_in = anonymous.login(&username, &password, None).await.is_ok();
+    assert_eq!(logs_in, !deleted);
+
+    shutdown.send(()).unwrap();
+    server_task.await.unwrap();
+}
+
+/// An operator can create a user who can then log in, reset their forgotten password without
+/// logging their machines out, and delete them so they can no longer log in.
+#[rstest]
+#[tokio::test]
+async fn operator_creates_resets_and_deletes_a_user(#[future] server: TestServer) {
+    let (address, shutdown, server_task) = server.await;
+
+    let username = uuid_v7().as_simple().to_string();
+    let email = format!("{username}@example.com");
+    let password = uuid_v7().as_simple().to_string();
+    common::run_server_command(
+        &["admin", "user", "create", "--email", &email, &username],
+        &format!("{password}\n"),
+    )
+    .await;
+    let logged_in = common::login(&address, username.clone(), password).await;
+
+    let new_password = uuid_v7().as_simple().to_string();
+    common::run_server_command(
+        &["admin", "user", "set-password", &username],
+        &format!("{new_password}\n"),
+    )
+    .await;
+
+    let client = common::login(&address, username.clone(), new_password.clone()).await;
+    assert_eq!(client.me().await.unwrap().username, username);
+    assert_eq!(logged_in.me().await.unwrap().username, username);
+
+    common::run_server_command(&["admin", "user", "delete", "--yes", &username], "").await;
+
+    let login = LoginRequest {
+        username,
+        password: new_password.into(),
+        totp_code: None,
+    };
+    assert!(api_client::login(&address, login, &Default::default()).await.is_err());
 
     shutdown.send(()).unwrap();
     server_task.await.unwrap();

@@ -7,7 +7,8 @@ use serde_with::DeserializeFromStr;
 use time::UtcOffset;
 use time::format_description::FormatItem;
 use time::macros::format_description;
-use tracing::warn;
+
+use crate::userio;
 
 /// Extensions to [`UtcOffset`].
 pub trait UtcOffsetExt {
@@ -27,7 +28,7 @@ pub trait UtcOffsetExt {
 impl UtcOffsetExt for UtcOffset {
     fn local_or_utc() -> UtcOffset {
         Self::current_local_offset().unwrap_or_else(|e| {
-            warn!("could not determine local UTC offset, falling back to UTC: {e}");
+            userio::log::warn!("time-local-offset-unknown", error = e.to_string());
             Self::UTC
         })
     }

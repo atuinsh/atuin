@@ -60,15 +60,19 @@ fn split_frontmatter(content: &str) -> Option<(&str, String)> {
     let after_open = trimmed.get(3..)?.trim_start_matches(|c: char| c != '\n');
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
 
-    // Find the closing `---`
-    let close_pos =
-        after_open.lines().enumerate().find(|(_, line)| line.trim() == "---").map(|(i, _)| {
-            after_open
-                .lines()
-                .take(i)
-                .map(|l| l.len() + 1) // +1 for newline
-                .sum::<usize>()
-        })?;
+    // Find the closing `---`. The offsets come from `split_inclusive` because
+    // `str::lines()` also strips the `\r` of a CRLF line ending, so lengths
+    // summed from `lines()` fall short on CRLF files.
+    let mut offset = 0;
+    let mut close_pos = None;
+    for line in after_open.split_inclusive('\n') {
+        if line.trim() == "---" {
+            close_pos = Some(offset);
+            break;
+        }
+        offset += line.len();
+    }
+    let close_pos = close_pos?;
 
     let yaml_str = &after_open[..close_pos];
     let rest = &after_open[close_pos..];
@@ -173,6 +177,21 @@ Body.
         None,
         false,
         None
+    )]
+    #[case::crlf(
+        "---\r\nname: my-skill\r\ndescription: A test skill\r\n---\r\n\r\nBody content here.\r\n",
+        Some("my-skill"),
+        Some("A test skill"),
+        false,
+        Some("Body content here.")
+    )]
+    #[case::crlf_multibyte(
+        "---\r\nname: cafe\r\ndisable-model-invocation: true\r\ndescription: Orders a \
+         café\r\n---\r\n\r\nBody content here.\r\n",
+        Some("cafe"),
+        Some("Orders a café"),
+        true,
+        Some("Body content here.")
     )]
     fn parses_frontmatter_fields(
         #[case] content: &str,

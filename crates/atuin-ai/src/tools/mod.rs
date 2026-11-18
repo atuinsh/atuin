@@ -12,6 +12,7 @@ use atuin_common::time::UtcOffsetExt;
 use easy_cast::Conv;
 use enum_dispatch::enum_dispatch;
 use eyre::Result;
+use serde::Deserialize;
 use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 
 const DEFAULT_FILE_READ_LINES: u64 = 100;
@@ -1028,62 +1029,47 @@ impl From<HistorySearchFilterMode> for FilterMode {
     }
 }
 
+/// `atuin_history`'s arguments as sent. An argument the schema doesn't list is an error rather
+/// than ignored.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryArgs {
+    query: String,
+    filter_modes: Option<Vec<String>>,
+    limit: Option<i64>,
+    only_failed: Option<bool>,
+    authors: Option<Vec<String>>,
+}
+
 impl TryFrom<&serde_json::Value> for AtuinHistoryToolCall {
     type Error = eyre::Error;
 
     fn try_from(value: &serde_json::Value) -> Result<Self, Self::Error> {
-        // Optional; JSON null counts as omitted because models often send
-        // null for optional params. A missing scope means a global search —
-        // evals showed that forcing the model to pick a scope on every call
-        // made it stop calling the tool at all.
-        let filter_modes = match value.get("filter_modes") {
-            None | Some(serde_json::Value::Null) => Vec::new(),
-            Some(v) => v
-                .as_array()
-                .ok_or_else(|| eyre::eyre!("filter_modes must be an array"))?
-                .iter()
-                .map(|v| {
-                    let mode = v.as_str().ok_or_else(|| eyre::eyre!("Invalid filter mode"))?;
-                    mode.parse::<HistorySearchFilterMode>()
-                        .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
-                })
-                .collect::<Result<Vec<HistorySearchFilterMode>>>()?,
-        };
+        // Every field but `query` is optional, and JSON null counts as omitted because models
+        // often send null for optional params. A missing scope means a global search — evals
+        // showed that forcing the model to pick a scope on every call made it stop calling the
+        // tool at all.
+        let args = HistoryArgs::deserialize(value)?;
 
-        let query = value
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("Missing query"))?;
+        let filter_modes = args
+            .filter_modes
+            .unwrap_or_default()
+            .iter()
+            .map(|mode| {
+                mode.parse::<HistorySearchFilterMode>()
+                    .map_err(|_| eyre::eyre!("Invalid filter mode: {mode}"))
+            })
+            .collect::<Result<Vec<HistorySearchFilterMode>>>()?;
 
-        let limit = value
-            .get("limit")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(DEFAULT_HISTORY_RESULTS)
-            .clamp(1, MAX_HISTORY_RESULTS);
-
-        let only_failed = value.get("only_failed").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        let authors = match value.get("authors") {
-            Some(authors) => authors
-                .as_array()
-                .ok_or_else(|| eyre::eyre!("authors must be an array of strings"))?
-                .iter()
-                .map(|v| {
-                    v.as_str()
-                        .map(AuthorPattern::from)
-                        .ok_or_else(|| eyre::eyre!("authors entries must be strings"))
-                })
-                .collect::<Result<Vec<AuthorPattern>>>()?,
-            None => Vec::new(),
-        };
         // An omitted or empty `authors` array means no author filtering.
-        let authors = OrFilter::from_list(authors).unwrap_or_default();
+        let authors = args.authors.unwrap_or_default().into_iter().map(AuthorPattern::from);
+        let authors = OrFilter::from_list(authors.collect::<Vec<_>>()).unwrap_or_default();
 
         Ok(Self {
             filter_modes,
-            query: query.to_string(),
-            limit,
-            only_failed,
+            query: args.query,
+            limit: args.limit.unwrap_or(DEFAULT_HISTORY_RESULTS).clamp(1, MAX_HISTORY_RESULTS),
+            only_failed: args.only_failed.unwrap_or(false),
             authors,
         })
     }
@@ -1380,6 +1366,13 @@ mod tests {
     fn atuin_history_filter_modes_reject_non_arrays() {
         let input = serde_json::json!({ "query": "cargo", "filter_modes": "global" });
         assert!(AtuinHistoryToolCall::try_from(&input).is_err());
+    }
+
+    #[rstest]
+    fn atuin_history_rejects_unknown_arguments() {
+        let input = serde_json::json!({ "query": "cargo", "since": "2h" });
+        let err = AtuinHistoryToolCall::try_from(&input).unwrap_err().to_string();
+        assert!(err.contains("`since`") && err.contains("`only_failed`"), "{err}");
     }
 
     #[rstest]

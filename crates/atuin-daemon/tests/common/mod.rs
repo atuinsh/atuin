@@ -12,6 +12,7 @@ pub mod scale;
 pub mod strategies;
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -29,18 +30,20 @@ use atuin_daemon::grpc::HistoryService;
 use atuin_daemon::grpc::history::pb;
 use atuin_daemon::grpc::history::pb::history_server::HistoryServer;
 use atuin_daemon::grpc::versioning::StrictVersionInterceptor;
-use atuin_daemon::search::{IndexFilterMode, SearchIndex};
+use atuin_daemon::search::{IndexFilterMode, SharedSearchIndex};
 use atuin_daemon::server::STRICT_VERSION_LAYER;
 use atuin_daemon::{
     Daemon, DaemonEvent, DaemonHandle, HistoryJournal, OutputCaptureEngine, SearchComponent,
 };
 use atuin_domain::record::{CmdOrigin, HostId, RecordTag};
+use atuin_kv::database::Database as KvDatabase;
+use atuin_scripts::database::Database as ScriptsDatabase;
 use corpus::{HistoryGen, Seeded};
 use easy_cast::Conv;
 use hyper_util::rt::TokioIo;
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
@@ -129,12 +132,20 @@ impl TestEnvBuilder {
 
         let history_db = Sqlite::new(&settings.db_path, self.db_timeout).await.unwrap();
         let store = SqliteStore::new(&settings.record_store_path, self.db_timeout).await.unwrap();
+        let kv_db = KvDatabase::new(&settings.kv.db_path, self.db_timeout).await.unwrap();
+        let scripts_db =
+            ScriptsDatabase::new(&settings.scripts.db_path, self.db_timeout).await.unwrap();
 
         let output_capture =
             OutputCaptureEngine::open(tmp.path().join("capture"), DiskUsageLimit::Unlimited).await;
-        let search_component = SearchComponent::new();
-        let index = search_component.index();
+        let search_component = SearchComponent::default();
+        let index = search_component.index().clone();
         let search_service = search_component.grpc_service(output_capture.store());
+        // Without the component, nothing would run the index's first load, and the index would
+        // ignore every add. Run that load here, before anything is seeded.
+        if !self.with_search_component {
+            index.fill(&history_db).await.unwrap();
+        }
 
         // Seed before components start so a registered loader sees the rows.
         let mut history_gen = HistoryGen::new(self.seed);
@@ -153,8 +164,11 @@ impl TestEnvBuilder {
             (Seeded::default(), 0)
         };
 
-        let mut builder =
-            Daemon::builder(settings.clone()).store(store.clone()).history_db(history_db.clone());
+        let mut builder = Daemon::builder(settings.clone())
+            .store(store.clone())
+            .history_db(history_db.clone())
+            .kv_db(kv_db)
+            .scripts_db(scripts_db);
         if self.with_search_component {
             builder = builder.component(search_component);
         }
@@ -228,7 +242,7 @@ pub struct TestEnv {
     pub store: SqliteStore,
     pub history_store: HistoryStore,
     pub host_id: HostId,
-    pub index: Arc<RwLock<SearchIndex>>,
+    pub index: Arc<SharedSearchIndex>,
     pub journal: Arc<HistoryJournal>,
     pub handle: DaemonHandle,
     pub socket_path: PathBuf,
@@ -265,6 +279,10 @@ impl TestEnv {
             .set_override("daemon.socket_path", dir.join("test.sock").to_str().unwrap())
             .unwrap()
             .set_override("meta.db_path", dir.join("meta.db").to_str().unwrap())
+            .unwrap()
+            .set_override("kv.db_path", dir.join("kv.db").to_str().unwrap())
+            .unwrap()
+            .set_override("scripts.db_path", dir.join("scripts.db").to_str().unwrap())
             .unwrap()
             // Prevent meta store from migrating files from the real data dir.
             .set_override("data_dir", dir.to_str().unwrap())
@@ -368,12 +386,17 @@ impl TestEnv {
     }
 
     pub async fn active_ids(&self) -> HashSet<HistoryId> {
-        let mut ids = HashSet::new();
+        self.active_histories().await.into_iter().map(|h| h.id).collect()
+    }
+
+    /// Every live row in the history db.
+    pub async fn active_histories(&self) -> Vec<History> {
+        let mut histories = Vec::new();
         let mut pager = self.history_db.all_paged(corpus::SEED_BATCH, false);
         while let Some(page) = pager.next().await.unwrap() {
-            ids.extend(page.into_iter().map(|h| h.id));
+            histories.extend(page);
         }
-        ids
+        histories
     }
 
     /// What the index's `command_count` must be once it is in sync with the history db.
@@ -381,13 +404,36 @@ impl TestEnv {
         corpus::distinct_indexable_commands(&self.history_db).await
     }
 
-    pub async fn index_count(&self) -> usize {
-        self.index.read().await.command_count()
+    /// Save `histories` to the history db and add them to the live index, the way the sync worker
+    /// does.
+    ///
+    /// The entries are registered with the index before they are saved. That way a racing reload
+    /// keeps them.
+    pub async fn save_and_index(&self, histories: &[History]) {
+        corpus::save_and_index(&self.index, Some(&self.history_db), histories).await;
+    }
+
+    /// Add `histories` to the live index only, not the history db.
+    pub async fn index_only(&self, histories: &[History]) {
+        corpus::save_and_index(&self.index, None, histories).await;
+    }
+
+    /// Empty the live index by rebuilding it from an empty db. After that, only a rebuild from the
+    /// history db can fill it again.
+    pub async fn clear_index(&self) {
+        let empty = Sqlite::in_memory(Duration::from_secs(5)).await.unwrap();
+        let cleared =
+            self.index.rebuild(&empty, |settings| Some(settings.latest.clone())).await.unwrap();
+        assert_eq!(cleared.command_count(), 0);
+    }
+
+    pub fn index_count(&self) -> usize {
+        self.index.read().command_count()
     }
 
     /// Ids the live index returns for `query` (global filter, generous limit).
-    pub async fn index_hits(&self, query: &str) -> Vec<HistoryId> {
-        self.index.read().await.search(query, &IndexFilterMode::Global, 200).collect()
+    pub fn index_hits(&self, query: &str) -> Vec<HistoryId> {
+        self.index.read().search(query, &IndexFilterMode::Global, 200).unwrap().collect()
     }
 
     /// Ids the Search RPC returns for `query`, i.e. what the TUI would show.
@@ -449,7 +495,7 @@ impl TestEnv {
     pub async fn wait_for_index_count(&self, count: usize) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
-            let got = self.index_count().await;
+            let got = self.index_count();
             if got == count {
                 return;
             }
@@ -487,12 +533,12 @@ pub struct WriteLock {
 impl WriteLock {
     /// `no_op_write` must be a statement that writes nothing but still needs the writer lock
     /// (sqlx's `query` wants a `'static` string, hence a literal per database).
-    async fn hold(path: impl AsRef<Path>, no_op_write: &'static str) -> Self {
+    async fn hold(path: impl AsRef<OsStr>, no_op_write: &'static str) -> Self {
         let path = path.as_ref().to_owned();
         let (release_tx, release_rx) = oneshot::channel::<()>();
         let (locked_tx, locked_rx) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
-            let db = CommonSqlite::builder(path.as_os_str())
+            let db = CommonSqlite::builder(&path)
                 .timeout(Duration::from_secs(5))
                 .open()
                 .await

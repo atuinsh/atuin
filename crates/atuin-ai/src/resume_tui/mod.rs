@@ -158,9 +158,9 @@ fn current_branch(root: &Path) -> Option<String> {
 /// How the picker ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Resume the session now (enter, with `enter_accept`).
+    /// Resume the session now (enter).
     Resume(ResumePlan),
-    /// Put the command on the command line (tab, or enter without `enter_accept`).
+    /// Put the command on the command line (tab).
     Edit(ResumePlan),
     /// Esc, ctrl-c or ctrl-g: leave the command line as it was.
     Cancelled,
@@ -301,9 +301,11 @@ fn apply_response(state: &mut State, response: Response) {
             state.plans.insert(handle, plan);
             state.settle_chooser();
         }
-        Response::Restored(handle, plan) => {
+        // The status stays with the plan, which a later enter on the session resumes from too.
+        Response::Restored(handle, restored) => {
             state.requested.remove(&(handle.clone(), RESTORE));
-            state.plans.insert(handle, plan.map(Resume::ready));
+            let plan = restored.map(|restored| Resume::noted(restored.plan, Some(restored.status)));
+            state.plans.insert(handle, plan);
         }
         // Dropped for a newer accept's before it started: an enter on the session (or the one
         // still waiting on it) asks for it again.
@@ -367,8 +369,7 @@ fn caught_up(
     };
     match result {
         Ok(CatchUp::Ready { plan, status }) => {
-            state.note = status;
-            state.plans.insert(handle, Ok(Resume::ready(plan)));
+            state.plans.insert(handle, Ok(Resume::noted(plan, status)));
         }
         Ok(CatchUp::Choice(held)) => {
             state.pending = None;
@@ -477,8 +478,14 @@ fn complete(
             state.pending = Some((row, action));
             return None;
         }
-        (Ok(resume), Pending::Resume) => Some(Outcome::Resume(resume.plan)),
-        (Ok(resume), Pending::Edit) => Some(Outcome::Edit(resume.plan)),
+        (Ok(resume), Pending::Resume) => {
+            state.note = resume.note;
+            Some(Outcome::Resume(resume.plan))
+        }
+        (Ok(resume), Pending::Edit) => {
+            state.note = resume.note;
+            Some(Outcome::Edit(resume.plan))
+        }
     };
     state.pending = None;
     outcome
@@ -936,12 +943,7 @@ impl Picker<'_> {
                             None
                         }
                         InputAction::Fork => {
-                            let enter = if settings.enter_accept {
-                                Pending::Resume
-                            } else {
-                                Pending::Edit
-                            };
-                            ask_fork(&mut state, enter, resumer, &requests);
+                            ask_fork(&mut state, Pending::Resume, resumer, &requests);
                             None
                         }
                         InputAction::Pick(picked) => {
@@ -1053,7 +1055,9 @@ impl Picker<'_> {
                 crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
             )?;
         }
-        Ok((outcome, note))
+        // A plan resumed from a key press leaves its note on the state, as one a response
+        // finished does.
+        Ok((outcome, note.or_else(|| state.note.take())))
     }
 }
 

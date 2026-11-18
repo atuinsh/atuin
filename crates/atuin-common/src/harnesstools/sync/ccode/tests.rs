@@ -257,6 +257,36 @@ fn a_fast_forward_resumes_from_the_last_row(dir: TempDir, #[case] local: Vec<u8>
     testing::assert_nothing_new(&synced, read_back(&path).iter().map(String::as_str));
 }
 
+/// Claude Code's TUI ends a turn with a `turn_duration` line hanging from the reply, and a
+/// `last-prompt` naming it. Another machine's copy has no such line, so its next turn goes on
+/// from the reply, and catching up here steps over the line: the rows go on from the reply.
+/// They hang from the `turn_duration` line, as Claude Code would hang its next line, so it
+/// resumes from them and not from the `last-prompt`'s leaf.
+#[rstest]
+fn rows_going_on_from_before_the_trailing_lines_hang_from_them(dir: TempDir) {
+    let mut turn_duration = line("system", "t2", Some("a2"), 5);
+    turn_duration["subtype"] = json!("turn_duration");
+    let path = write(&dir, &jsonl(&with(chain(), [turn_duration, last_prompt(Some("t2"), false)])));
+    let mut base = read_tip(&path).unwrap();
+    assert_eq!(base.tip_source_id.as_deref(), Some("t2"));
+    // As `classify` hands over a copy that stopped on a twig off the head's line.
+    base.tip_source_id = Some("a2".to_owned());
+    let rows = vec![
+        row("u4", "a2", Role::User, 10),
+        row("a4", "u4", Role::Assistant, 11),
+        // The other machine's own `turn_duration` line: nothing to write.
+        row("t4", "a4", Role::System, 12),
+    ];
+
+    let outcome = append_to(SESSION, &base, &rows, None).unwrap();
+
+    assert_eq!(outcome.tip_source_id.as_deref(), Some("a4"));
+    assert_eq!(read_tip(&path).unwrap().tip_source_id.as_deref(), Some("a4"));
+    let bytes = std::fs::read(&path).unwrap();
+    let first = jsonl_lines(&bytes).filter_map(parse).find(|l| l["uuid"] == "u4").unwrap();
+    assert_eq!(first["parentUuid"], "t2");
+}
+
 #[rstest]
 #[case::off_an_older_line(chain(), vec![row("u4", "a1", Role::User, 10)], "Unsupported")]
 #[case::a_root(chain(), vec![RehydrateMessage { parent_source_id: None, ..row("u4", "", Role::User, 10) }], "Unsupported")]

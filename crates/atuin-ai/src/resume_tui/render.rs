@@ -326,10 +326,12 @@ pub fn row_layout(width: u16, shape: RowShape) -> Vec<(Column, u16)> {
 pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
     let meaning = match harness {
         HarnessKind::ClaudeCode => Meaning::AlertWarn,
-        HarnessKind::Codex => Meaning::AlertInfo,
-        HarnessKind::Opencode => Meaning::Guidance,
+        HarnessKind::Codex | HarnessKind::Grok => Meaning::AlertInfo,
+        HarnessKind::Opencode | HarnessKind::Amp => Meaning::Guidance,
         HarnessKind::Pi | HarnessKind::Omp => Meaning::Important,
-        HarnessKind::Copilot | HarnessKind::Unknown => Meaning::Annotation,
+        HarnessKind::Copilot | HarnessKind::Kiro | HarnessKind::Hermes | HarnessKind::Unknown => {
+            Meaning::Annotation
+        }
     };
     style(theme, meaning).add_modifier(Modifier::BOLD)
 }
@@ -1632,12 +1634,8 @@ impl State {
                 actions.push(("↑/↓", "move".to_owned(), 0));
                 actions.push(("c/esc", "collapse".to_owned(), 0));
             } else {
-                if settings.enter_accept {
-                    actions.push(("enter", "resume".to_owned(), 0));
-                    edit(&mut actions);
-                } else {
-                    actions.push(("enter", "edit command".to_owned(), 0));
-                }
+                actions.push(("enter", "resume".to_owned(), 0));
+                edit(&mut actions);
                 actions.push(("ctrl-y", "copy".to_owned(), 3));
                 let forks = self.target().and_then(|r| self.children.get(&r.handle));
                 if forks.is_some_and(|f| !f.is_empty()) {
@@ -1649,10 +1647,8 @@ impl State {
             && let Some(row) = self.selected()
         {
             let agent = harness_label(row.handle.harness);
-            let enter = if !settings.enter_accept {
-                "edit command".to_owned()
-            } else if row.handle.harness.harness().is_none() {
-                // Nothing atuin can resume or continue it in (a Copilot session).
+            let enter = if row.handle.harness.harness().is_none() {
+                // Nothing atuin can resume or continue it in (a session of no known harness).
                 "can't resume here".to_owned()
             } else if settings.threads.resume_chooser {
                 // Enter asks where.
@@ -1667,9 +1663,7 @@ impl State {
                 }
             };
             actions.push(("enter", enter, 0));
-            if settings.enter_accept {
-                edit(&mut actions);
-            }
+            edit(&mut actions);
             actions.push(("ctrl-y", "copy".to_owned(), 3));
             // The only way into Inspect: kept longest.
             actions.push(("ctrl-o", "inspect".to_owned(), 1));

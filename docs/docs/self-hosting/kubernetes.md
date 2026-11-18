@@ -265,6 +265,28 @@ Deploy the Atuin server using `kubectl`:
 
 The sample files above are also in the [k8s folder](https://github.com/atuinsh/atuin/tree/main/k8s) of the `atuin` repository.
 
+## Service links
+
+Kubernetes gives each pod environment variables for every
+[Service](https://kubernetes.io/docs/concepts/services-networking/service/#environment-variables)
+in its namespace. For the Service named `atuin` above, that includes
+`ATUIN_PORT=tcp://<cluster IP>:8888`, which isn't a port number. Since
+`ATUIN_*` variables override `server.toml`, the server ignores an
+`ATUIN_PORT` of that form with a warning, and uses `port` from `server.toml`
+or the default, 8888. The other variables a service link sets, such as
+`ATUIN_SERVICE_HOST`, match no setting.
+
+To choose the port yourself, set `ATUIN_PORT` in the container's `env`, as
+`atuin.yaml` does, which takes precedence over the service link. Or turn
+service links off for the pod:
+
+```yaml
+spec:
+  template:
+    spec:
+      enableServiceLinks: false
+```
+
 ## Creating backups of the Postgres database
 
 Now you're up and running it's a good time to think about backups.
