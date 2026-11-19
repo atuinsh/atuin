@@ -312,7 +312,12 @@ impl Key {
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                 return Err(KeyFileStoringError::AlreadyExists);
             }
-            Err(e) if e.kind() == ErrorKind::Unsupported => {}
+            // Try the racy fallback approach if hardlinks are unsupported. Usually we'll get
+            // `Unsupported` in this case, but we could get `PermissionDenied` on Termux, so match
+            // that too. If `PermissionDenied` was due to an actual permissions error, the fallback
+            // will probably fail too before actually creating or writing anything, but on the off
+            // chance it succeeds, that's fine, as it allows Atuin to continue.
+            Err(e) if matches!(e.kind(), ErrorKind::Unsupported | ErrorKind::PermissionDenied) => {}
             Err(e) => return Err(e.into()),
         }
 
