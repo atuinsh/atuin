@@ -1,0 +1,23 @@
+# The hub's light tokens (web/packages/web-kit/src/tokens.css), as hex.
+background = #ffffff
+foreground = #1a1a1a
+cursor-color = #178250
+cursor-text = #ffffff
+selection-background = #e0e0e0
+selection-foreground = #1a1a1a
+palette = 0=#1a1a1a
+palette = 1=#be0010
+palette = 2=#178250
+palette = 3=#b45309
+palette = 4=#1d63a6
+palette = 5=#8a3fae
+palette = 6=#0f7a6e
+palette = 7=#555555
+palette = 8=#8a8a8a
+palette = 9=#d9474f
+palette = 10=#1f9d62
+palette = 11=#d97706
+palette = 12=#2a7cc7
+palette = 13=#a052c8
+palette = 14=#138f82
+palette = 15=#0a0a0a

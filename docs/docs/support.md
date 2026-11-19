@@ -18,23 +18,22 @@ Feature coverage varies by shell:
 <table>
   <thead>
     <tr>
-      <th class="tier">Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th>
-      <th>Atuin AI</th><th>pty-proxy</th>
+      <th class="tier">Tier</th><th>Shell</th><th>History search</th><th>Inline popup</th><th>pty-proxy</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td rowspan="3" class="tier"><strong>1</strong></td>
-      <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
+      <td>zsh</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
-    <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
+    <tr><td>bash</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
+    <tr><td>fish</td><td class="support-yes">✓</td><td class="support-yes">✓</td><td class="support-yes">✓</td></tr>
     <tr>
       <td rowspan="3" class="tier"><strong>2</strong></td>
-      <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-yes">✓</td>
+      <td>nushell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-yes">✓</td>
     </tr>
-    <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
-    <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
+    <tr><td>xonsh</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
+    <tr><td>PowerShell</td><td class="support-yes">✓</td><td class="support-no">✗</td><td class="support-no">✗</td></tr>
   </tbody>
 </table>
 </div>
@@ -97,7 +96,9 @@ key binding](configuration/advanced-key-binding.md).
 
 Atuin records commands run by AI coding agents through their hook systems. See
 [AI agent hooks](guide/agent-hooks.md) for setup. The supported agents are
-_Claude Code_, _Codex_, _Copilot_, _Kiro_, _opencode_ and _pi_.
+_Claude Code_, _Codex_, _Copilot_, _Grok Build_, _Hermes Agent_, _Kiro_,
+_opencode_, _pi_ and _omp_. For _Amp_, Atuin captures Amp's sessions as
+[threads](ai/threads.md#amp) only.
 
 ## Getting help
 

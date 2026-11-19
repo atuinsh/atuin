@@ -7,11 +7,9 @@ use std::time::Duration;
 
 use atuin_common::logs::LogLevel;
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
-// `AsDuration`/`AsDisableableDuration` are deprecated.
+// `AsDuration` is deprecated.
 #[allow(deprecated)]
-use atuin_common::time::{
-    AsDisableableDuration, AsDuration, Days, Minutes, NonZeroDuration, Seconds,
-};
+use atuin_common::time::{AsDuration, Days, Seconds};
 use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
@@ -19,19 +17,26 @@ use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
+use jiff::{Timestamp, ZonedDateTime};
 use regex::RegexSet;
 use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
-use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use tracing::instrument;
 use url::Url;
 
+use self::aliases::CanonicalAliases;
+pub use self::unknown_keys::UnknownKeys;
+use self::unknown_keys::{Checked, Renamed};
+
 static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 
+mod aliases;
 pub mod daemon;
 mod db_location;
 pub mod disk_usage_limit;
@@ -42,6 +47,7 @@ mod scripts;
 pub mod security;
 pub mod shells;
 pub mod threads;
+mod unknown_keys;
 pub mod watcher;
 
 pub use daemon::Daemon;
@@ -208,7 +214,76 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
-use atuin_common::time::UtcOffsetSpec;
+/// Errors returned by [`Dialect::parse_date`].
+#[derive(Debug, thiserror::Error)]
+pub enum ParseDateError {
+    #[error(transparent)]
+    Unrecognized(#[from] interim::DateError),
+    #[error("the date is out of range")]
+    OutOfRange,
+}
+
+impl Dialect {
+    /// Read an informal date such as `yesterday 3pm` or `2 weeks ago`, relative to `now` and in
+    /// its time zone unless the text carries an explicit offset.
+    ///
+    /// A date or clock time (`2026-07-01`, `yesterday 3pm`) is read in the zone on that date, so
+    /// one across a DST change from today still means its local time. A span (`3 hours ago`) is
+    /// measured exactly from `now`.
+    pub fn parse_date(
+        self,
+        text: &str,
+        now: &ZonedDateTime,
+    ) -> Result<ZonedDateTime, ParseDateError> {
+        // interim works in one fixed offset. It builds a date or clock time from wall-clock
+        // fields at that offset, and a span or an explicit offset by moving the instant. Read at
+        // two offsets a second apart, only a wall-clock result moves, and that one is resolved
+        // in the zone on its own date instead of at today's offset.
+        let offset = now.offset().seconds();
+        let nudged = if offset < Offset::MAX.seconds() {
+            offset + 1
+        } else {
+            offset - 1
+        };
+        let at = self.parse_at(text, now.timestamp(), offset)?;
+        let nudged = self.parse_at(text, now.timestamp(), nudged)?;
+
+        if at.unix_timestamp_nanos() == nudged.unix_timestamp_nanos() {
+            let at = Timestamp::from_nanosecond(at.unix_timestamp_nanos())
+                .map_err(|_| ParseDateError::OutOfRange)?;
+            return Ok(at.to_zoned_datetime(now.time_zone().clone()));
+        }
+
+        let wall = DateTime::new(
+            i16::try_from(at.year()).map_err(|_| ParseDateError::OutOfRange)?,
+            u8::from(at.month()).cast_signed(),
+            at.day().cast_signed(),
+            at.hour().cast_signed(),
+            at.minute().cast_signed(),
+            at.second().cast_signed(),
+            i32::try_from(at.nanosecond()).map_err(|_| ParseDateError::OutOfRange)?,
+        )
+        .map_err(|_| ParseDateError::OutOfRange)?;
+        wall.to_zoned_datetime(now.time_zone().clone()).map_err(|_| ParseDateError::OutOfRange)
+    }
+
+    /// `text` as interim reads it against `now`, at `offset` seconds east of UTC.
+    fn parse_at(
+        self,
+        text: &str,
+        now: Timestamp,
+        offset: i32,
+    ) -> Result<time::OffsetDateTime, ParseDateError> {
+        let offset =
+            time::UtcOffset::from_whole_seconds(offset).map_err(|_| ParseDateError::OutOfRange)?;
+        let now = time::OffsetDateTime::from_unix_timestamp_nanos(now.as_nanosecond())
+            .map_err(|_| ParseDateError::OutOfRange)?
+            .to_offset(offset);
+        Ok(interim::parse_date_string(text, now, self.into())?)
+    }
+}
+
+use atuin_common::time::TimeZoneSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
@@ -491,13 +566,53 @@ pub struct KeyRuleConfig {
 }
 
 /// A keybinding config value: either a simple action string or an ordered list of conditional rules.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum KeyBindingConfig {
     /// Simple unconditional binding: `"ctrl-c" = "return-original"`
     Simple(String),
     /// Conditional binding: `"left" = [{ when = "cursor-at-start", action = "exit" }, { action = "cursor-left" }]`
     Rules(Vec<KeyRuleConfig>),
+}
+
+/// Picks the variant from the value's type: a string is `Simple` and a list is `Rules`.
+///
+/// `#[serde(untagged)]` would copy the value into serde's internal buffer before trying each
+/// variant. Fields that `KeyRuleConfig` skips would then bypass `serde_ignored`, so a misspelled
+/// field in a rule would not appear in the unknown-key warning.
+impl<'de> Deserialize<'de> for KeyBindingConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BindingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BindingVisitor {
+            type Value = KeyBindingConfig;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an action string or a list of keybinding rules")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, action: &str) -> Result<Self::Value, E> {
+                Ok(KeyBindingConfig::Simple(action.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, action: String) -> Result<Self::Value, E> {
+                Ok(KeyBindingConfig::Simple(action))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut rules = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(rule) = seq.next_element()? {
+                    rules.push(rule);
+                }
+                Ok(KeyBindingConfig::Rules(rules))
+            }
+        }
+
+        deserializer.deserialize_any(BindingVisitor)
+    }
 }
 
 /// User-facing keymap configuration. Each mode maps key strings to bindings.
@@ -537,12 +652,6 @@ pub struct Preview {
 pub struct Theme {
     /// Name of desired theme ("default" for base)
     pub name: String,
-
-    /// Whether any available additional theme debug should be shown
-    pub debug: Option<bool>,
-
-    /// How many levels of parenthood will be traversed if needed
-    pub max_depth: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -551,27 +660,75 @@ pub struct PtyProxy {
     /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
     /// is needed in shell config. Supported for bash, zsh, fish and nu on
     /// unix platforms.
+    // The field has a config builder default, so `settings::aliases` must list this alias.
     #[serde(alias = "enable")]
     pub enabled: bool,
 }
 
+/// `[teams]`: Atuin for Teams, which `atuin setup --hub` turns on.
 #[cfg(feature = "octavo")]
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Octavo {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Teams {
     pub enabled: bool,
-    /// Whether captured command output goes to Octavo too, while `enabled` and output capture are
-    /// both on.
+    /// Whether the commands Atuin records go to Atuin for Teams too, while `enabled`. Off unless
+    /// set.
+    pub upload_history: bool,
+    /// Which agent threads go to Atuin for Teams, while `enabled`.
+    pub upload_threads: ThreadUploads,
+    /// Whether captured command output goes to Atuin for Teams too, while `enabled`,
+    /// `upload_history` and output capture are all on.
     pub upload_output: bool,
     #[serde(rename = "__debug__", default, skip_serializing)]
-    pub debug: OctavoDebug,
+    pub debug: TeamsDebug,
 }
 
-/// Settings for pointing Octavo at a hub other than Atuin's, kept out of the docs on purpose.
+#[cfg(feature = "octavo")]
+impl Default for Teams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            upload_history: false,
+            upload_threads: ThreadUploads::All,
+            upload_output: false,
+            debug: TeamsDebug::default(),
+        }
+    }
+}
+
+/// Which agent threads Atuin for Teams uploads while it's on, as `teams.upload_threads` says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadUploads {
+    #[default]
+    All,
+    /// Those started in a workspace: at or under a project's config file, `.atuin.lua` say.
+    Workspaces,
+    Off,
+}
+
+impl ThreadUploads {
+    /// Its value in the config.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Workspaces => "workspaces",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
+/// purpose.
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct OctavoDebug {
-    /// The gRPC address Octavo uploads to, honored only while `sync_address` is a self-hosted hub.
+pub struct TeamsDebug {
+    /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
+    /// self-hosted hub.
     pub address: Option<Url>,
+    /// `atuin mcp` forwards thread tools to this MCP server. It is honored only while
+    /// `sync_address` is a self-hosted hub.
+    pub mcp_address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -674,97 +831,8 @@ pub struct Logs {
     pub ai: LogConfig,
 }
 
-/// Endpoint protocol for Atuin AI.
-///
-/// When set to "auto" (default), the protocol is inferred from `ai.endpoint`:
-/// an unset or official Atuin address is treated as Hub, anything else as an
-/// OSS server. Set explicitly to "hub" to keep Hub behavior with a custom
-/// endpoint (useful for local development against a Hub instance).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum AiEndpointProtocol {
-    /// Atuin Hub: browser-based login flow, stored Hub session, usage reporting.
-    Hub,
-    /// A standalone AI server (e.g. atuin-ai-server): requests go straight to
-    /// the endpoint, authenticated with `ai.api_token` if set.
-    Oss,
-    /// Infer from ai.endpoint (default behavior)
-    #[default]
-    Auto,
-}
-
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ai {
-    /// Whether or not the AI features are enabled.
-    pub enabled: Option<bool>,
-
-    /// The address of the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
-    pub endpoint: Option<Url>,
-
-    /// How to talk to `endpoint`. See [`AiEndpointProtocol`].
-    #[serde(default)]
-    pub endpoint_protocol: AiEndpointProtocol,
-
-    /// The API token for the Atuin AI endpoint. Used for AI features like command generation.
-    /// Only necessary for custom AI endpoints.
-    #[serde(skip_serializing)]
-    pub api_token: Option<SecretString>,
-
-    /// Path to the AI sessions database.
-    #[serde_as(as = "RelativeTo<ConfigDir>")]
-    pub db_path: DbLocation,
-
-    /// The maximum time an AI session can be automatically resumed (a bare number is minutes).
-    /// `0` disables auto-resume.
-    #[serde_as(as = "AsDisableableDuration<Minutes>")]
-    pub session_continue_minutes: Option<NonZeroDuration>,
-
-    /// The AI model to use for AI chats, based on the Atuin AI model alias.
-    pub model: Option<String>,
-
-    /// Whether to enable YOLO mode (skips all permission checks)
-    #[serde(default)]
-    pub yolo: bool,
-
-    /// Deprecated: use opening.send_cwd instead. Kept for backwards compatibility.
-    #[serde(default)]
-    pub send_cwd: Option<bool>,
-
-    /// Configuration for what context is sent in the opening AI request.
-    #[serde(default)]
-    pub opening: AiOpening,
-
-    /// Tool capability flags.
-    #[serde(default)]
-    pub capabilities: AiCapabilities,
-
-    /// Whether the AI TUI surfaces feature tips. `None` = enabled.
-    pub tips: Option<bool>,
-}
-
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiCapabilities {
-    /// Whether the AI can request to search Atuin history. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_history_search: Option<bool>,
-    /// Whether the AI can request to view the stored output, if any, for Atuin history entries. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_history_output: Option<bool>,
-    /// Whether the AI can request to read and write files. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_file_tools: Option<bool>,
-    /// Whether the AI can request to execute bash commands. `None` = unset (defaults to enabled, and the ai will ask for permission).
-    pub enable_command_execution: Option<bool>,
-}
-
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct AiOpening {
-    /// Whether or not to send the current working directory to the AI endpoint.
-    pub send_cwd: Option<bool>,
-
-    /// Whether or not to send the last command as context in the opening AI request.
-    pub send_last_command: Option<bool>,
-}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RetiredAi {}
 
 impl Default for Preview {
     fn default() -> Self {
@@ -778,8 +846,6 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             name: "".to_string(),
-            debug: None::<bool>,
-            max_depth: Some(10),
         }
     }
 }
@@ -1047,7 +1113,7 @@ pub struct Settings {
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub data_dir: AbsPathBuf,
     pub dialect: Dialect,
-    pub timezone: UtcOffsetSpec,
+    pub timezone: TimeZoneSpec,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
@@ -1092,6 +1158,7 @@ pub struct Settings {
     pub max_preview_height: u16,
     pub show_help: bool,
     pub show_tabs: bool,
+    pub show_whats_new: bool,
     pub show_numeric_shortcuts: bool,
     pub auto_hide_height: u16,
     pub exit_mode: ExitMode,
@@ -1157,7 +1224,7 @@ pub struct Settings {
 
     #[cfg(feature = "octavo")]
     #[serde(default)]
-    pub octavo: Octavo,
+    pub teams: Teams,
 
     #[serde(default)]
     pub search: Search,
@@ -1179,7 +1246,9 @@ pub struct Settings {
 
     pub meta: meta::Settings,
 
-    pub ai: Ai,
+    /// Atuin AI's settings, from before it was removed, so that a typo in `[ai]` is still found.
+    #[serde(default)]
+    pub ai: RetiredAi,
 
     #[serde(default)]
     pub threads: Threads,
@@ -1270,7 +1339,7 @@ impl Settings {
         self.meta_store().await?.host_id().await
     }
 
-    pub async fn last_sync(&self) -> Result<OffsetDateTime> {
+    pub async fn last_sync(&self) -> Result<Timestamp> {
         self.meta_store().await?.last_sync().await
     }
 
@@ -1278,7 +1347,7 @@ impl Settings {
         self.meta_store().await?.save_sync_time().await
     }
 
-    pub async fn last_version_check(&self) -> Result<OffsetDateTime> {
+    pub async fn last_version_check(&self) -> Result<Timestamp> {
         self.meta_store().await?.last_version_check().await
     }
 
@@ -1291,8 +1360,8 @@ impl Settings {
             return Ok(false);
         }
 
-        Ok(OffsetDateTime::now_utc() - self.last_sync().await?
-            >= time::Duration::try_from(self.sync_frequency)?)
+        Ok(Timestamp::now() - self.last_sync().await?
+            >= jiff::SignedDuration::try_from(self.sync_frequency)?)
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
@@ -1331,22 +1400,6 @@ impl Settings {
             SyncProtocol::Hub => true,
             SyncProtocol::Legacy => false,
             SyncProtocol::Auto => Self::is_official_address(&self.sync_address),
-        }
-    }
-
-    /// Returns whether the resolved AI endpoint should be treated as an Atuin
-    /// Hub instance (browser login flow, Hub session management, usage
-    /// reporting) rather than a standalone OSS server.
-    ///
-    /// `endpoint` is the resolved AI endpoint — the `--api-endpoint` flag or
-    /// `ai.endpoint` setting, after defaults are applied — which is why it's a
-    /// parameter rather than read from `self.ai.endpoint`.
-    #[must_use]
-    pub fn is_hub_ai_endpoint(&self, endpoint: &Url) -> bool {
-        match self.ai.endpoint_protocol {
-            AiEndpointProtocol::Hub => true,
-            AiEndpointProtocol::Oss => false,
-            AiEndpointProtocol::Auto => Self::is_official_address(endpoint),
         }
     }
 
@@ -1441,10 +1494,10 @@ impl Settings {
     #[cfg(feature = "check-update")]
     async fn needs_update_check(&self) -> Result<bool> {
         let last_check = self.last_version_check().await?;
-        let diff = OffsetDateTime::now_utc() - last_check;
+        let diff = Timestamp::now() - last_check;
 
         // Check a max of once per hour
-        Ok(diff.whole_hours() >= 1)
+        Ok(diff.as_hours() >= 1)
     }
 
     #[cfg(feature = "check-update")]
@@ -1503,14 +1556,14 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn default_filter_mode(&self, git_root: bool) -> FilterMode {
+    pub fn default_filter_mode(&self, has_vcs_root: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
             .or_else(|| {
                 self.search
                     .filters
                     .iter()
-                    .find(|x| match (x, git_root, self.workspaces) {
+                    .find(|x| match (x, has_vcs_root, self.workspaces) {
                         (FilterMode::Workspace, true, true) => true,
                         (FilterMode::Workspace, _, _) => false,
                         (_, _, _) => true,
@@ -1536,7 +1589,7 @@ impl Settings {
     /// The default of each path setting, for `data_dir`, [escaped](ShellExpanded::escape) as
     /// config.toml would write it. An empty value of a path setting falls back to its default
     /// here, so every path setting needs one.
-    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 14] {
+    fn path_defaults(data_dir: &Path) -> [(&'static str, Option<String>); 13] {
         let path = |path: &Path| path.to_str().map(ShellExpanded::escape);
         [
             ("data_dir", path(data_dir)),
@@ -1552,7 +1605,6 @@ impl Settings {
             ("kv.db_path", path(&data_dir.join("kv.db"))),
             ("scripts.db_path", path(&data_dir.join("scripts.db"))),
             ("meta.db_path", path(&data_dir.join("meta.db"))),
-            ("ai.db_path", path(&data_dir.join("ai_sessions.db"))),
         ]
     }
 
@@ -1597,6 +1649,13 @@ impl Settings {
     fn builder_with_data_dir(
         data_dir: &std::path::Path,
     ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
+        Ok(Self::defaults_builder(data_dir)?.add_source(Self::environment()))
+    }
+
+    /// The defaults of every setting, for a data directory of `data_dir`.
+    fn defaults_builder(
+        data_dir: &std::path::Path,
+    ) -> Result<ConfigBuilder<DefaultState>, config::ConfigError> {
         let output = OutputCaptureConfig::default();
 
         let builder = Self::path_defaults(data_dir)
@@ -1623,6 +1682,7 @@ impl Settings {
             .set_default("max_preview_height", 4)?
             .set_default("show_help", true)?
             .set_default("show_tabs", true)?
+            .set_default("show_whats_new", true)?
             .set_default("show_numeric_shortcuts", true)?
             .set_default("auto_hide_height", 8)?
             .set_default("invert", false)?
@@ -1675,10 +1735,6 @@ impl Settings {
             .set_default("search.frequency_score_multiplier", 1.0)?
             .set_default("search.frecency_score_multiplier", 1.0)?
             .set_default("search.shells", "auto")?
-            .set_default("ai.session_continue_minutes", 60)?
-            .set_default("ai.send_cwd", false)?
-            .set_default("ai.opening.send_cwd", false)?
-            .set_default("ai.opening.send_last_command", false)?
             .set_default("ui.syntax_highlight", true)?
             .set_default("search.filters", vec![
                 "global",
@@ -1689,7 +1745,6 @@ impl Settings {
                 "session-preload",
             ])?
             .set_default("theme.name", "default")?
-            .set_default("theme.debug", None::<bool>)?
             .set_default("tmux.enabled", false)?
             .set_default("tmux.width", "80%")?
             .set_default("tmux.height", "60%")?
@@ -1699,12 +1754,8 @@ impl Settings {
             )?
             .set_default("no_mouse", false)?
             .set_default("pty_proxy.enabled", false)?;
-        #[cfg(feature = "octavo")]
-        let builder = builder
-            .set_default("octavo.enabled", false)?
-            .set_default("octavo.upload_output", false)?;
 
-        Ok(builder.add_source(Self::environment()))
+        Ok(builder)
     }
 
     /// The `ATUIN_*` environment variables, as a config source.
@@ -1725,7 +1776,7 @@ impl Settings {
         file: impl config::Source + Send + Sync + 'static,
         env: Environment,
     ) -> ConfigBuilder<DefaultState> {
-        builder.add_source(file).add_source(env)
+        builder.add_source(CanonicalAliases::new(file)).add_source(env)
     }
 
     pub fn get_config_path() -> Result<PathBuf> {
@@ -1739,58 +1790,17 @@ impl Settings {
         Ok(config_file)
     }
 
-    /// Build a merged `Config` from defaults, config file, and environment.
+    /// The user's config file, merged over the defaults and under the environment.
     ///
-    /// This resolves `data_dir`, initializes the data directory on disk,
-    /// and layers defaults → config file → env overrides. Both `new()` and
-    /// `get_config_value()` use this so the resolution logic lives in one place.
-    fn build_config() -> Result<Config> {
+    /// This resolves `data_dir` and creates the data directory. When the config file doesn't
+    /// exist, this writes the example config there but loads only the defaults and environment.
+    fn build_config() -> Result<LoadedConfig> {
         let config_file = Self::get_config_path()?;
 
-        // extract data_dir first so we can use it as the base for other path defaults
-        let effective_data_dir = if config_file.exists() {
-            #[serde_as]
-            #[derive(Deserialize)]
-            struct DataDirOnly {
-                #[serde_as(as = "Option<RelativeTo<ConfigDir>>")]
-                data_dir: Option<AbsPathBuf>,
-            }
-
-            let config_file_str =
+        let file = if config_file.exists() {
+            let path =
                 config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-
-            // A config that doesn't build fails again, with a better error, below.
-            let custom_data_dir = match Config::builder()
-                .add_source(ConfigFile::new(config_file_str, FileFormat::Toml))
-                .add_source(Self::environment())
-                .build()
-            {
-                Ok(partial) => {
-                    Self::with_lenient_paths(partial, [("data_dir", None)])?
-                        .try_deserialize::<DataDirOnly>()?
-                        .data_dir
-                }
-                Err(_) => None,
-            };
-
-            custom_data_dir.map_or_else(atuin_common::dirs::unconfigured_data_dir, PathBuf::from)
-        } else {
-            atuin_common::dirs::unconfigured_data_dir()
-        };
-
-        create_dir_all(&effective_data_dir)
-            .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
-
-        let config_builder = Self::builder_with_data_dir(&effective_data_dir)?;
-
-        let config_builder = if config_file.exists() {
-            let config_file_str =
-                config_file.to_str().ok_or_else(|| eyre!("config file path is not valid UTF-8"))?;
-            Self::add_config_file(
-                config_builder,
-                ConfigFile::new(config_file_str, FileFormat::Toml),
-                Self::environment(),
-            )
+            Some(Config::builder().add_source(ConfigFile::new(path, FileFormat::Toml)).build()?)
         } else {
             // Use `create_new` to avoid overwriting the file if it just got created in between our
             // existence check and now.
@@ -1801,26 +1811,124 @@ impl Settings {
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(err).wrap_err("could not create config file"),
             }
-
-            config_builder
+            None
         };
 
-        // Explicitly set `data_dir` here to ensure it matches the `effective_data_dir` we just
-        // calculated.
-        let config_builder = config_builder
-            .set_override("data_dir", effective_data_dir.to_str().map(ShellExpanded::escape))?;
+        // extract data_dir first so we can use it as the base for other path defaults
+        let effective_data_dir = match &file {
+            Some(file) => {
+                #[serde_as]
+                #[derive(Deserialize)]
+                struct DataDirOnly {
+                    #[serde_as(as = "Option<RelativeTo<ConfigDir>>")]
+                    data_dir: Option<AbsPathBuf>,
+                }
 
-        Ok(Self::with_lenient_paths(
-            Self::with_legacy_threads(config_builder.build()?)?,
-            Self::path_defaults(&effective_data_dir),
-        )?)
+                let partial = Config::builder()
+                    .add_source(file.clone())
+                    .add_source(Self::environment())
+                    .build()?;
+                Self::with_lenient_paths(partial, [("data_dir", None)])?
+                    .try_deserialize::<DataDirOnly>()?
+                    .data_dir
+                    .map_or_else(atuin_common::dirs::unconfigured_data_dir, PathBuf::from)
+            }
+            None => atuin_common::dirs::unconfigured_data_dir(),
+        };
+
+        create_dir_all(&effective_data_dir)
+            .wrap_err_with(|| format!("could not create dir {effective_data_dir:?}"))?;
+
+        let merged = Self::layered_config(&effective_data_dir, file.clone(), Self::environment())?;
+        Ok(LoadedConfig {
+            merged,
+            file: file.map(|file| file.cache),
+        })
     }
 
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`: read them
-    /// as `threads.capture`, `threads.capture_tools` and `threads.*`, for any key `[threads]`
-    /// doesn't set itself. The defaults are set here, under them, so they never hide a legacy
-    /// value.
-    fn with_legacy_threads(config: Config) -> Result<Config, config::ConfigError> {
+    /// The defaults for `data_dir`, overridden by `file` and then by `env`, with renamed and
+    /// empty path settings resolved.
+    fn layered_config(
+        data_dir: &Path,
+        file: Option<Config>,
+        env: Environment,
+    ) -> Result<Config, config::ConfigError> {
+        let builder = Self::defaults_builder(data_dir)?;
+        let builder = match file {
+            Some(file) => Self::add_config_file(builder, file, env),
+            None => builder.add_source(env),
+        };
+
+        // Explicitly set `data_dir` here to ensure it matches the `data_dir` that the caller
+        // calculated.
+        let builder =
+            builder.set_override("data_dir", data_dir.to_str().map(ShellExpanded::escape))?;
+
+        Self::with_lenient_paths(
+            Self::with_legacy_keys(builder.build()?)?,
+            Self::path_defaults(data_dir),
+        )
+    }
+
+    /// The keys of the config file that no setting reads.
+    ///
+    /// Deserializing settings ignores these keys. When a key is misspelled, the setting that the
+    /// user meant to change stays at its default. Keys that only the environment sets are not
+    /// included.
+    pub fn unknown_keys() -> Result<UnknownKeys> {
+        let LoadedConfig { merged, file } = Self::build_config()?;
+        Ok(Self::deserialize_checked(merged, file.as_ref())?.unknown)
+    }
+
+    /// Deserializes `merged`, with the keys of `file` that no setting reads.
+    fn deserialize_checked(merged: Config, file: Option<&config::Value>) -> Result<Checked<Self>> {
+        unknown_keys::deserialize(merged, file, &Self::LEGACY_KEYS, Self::UNCHECKED_KEYS)
+            .map_err(|e| eyre!("failed to deserialize: {}", e))
+    }
+
+    /// The renamed keys that [`Self::with_legacy_keys`] reads under their old names.
+    const LEGACY_KEYS: [Renamed; 4] = [
+        Renamed {
+            old: "ai.capture_sessions",
+            new: "threads.capture",
+        },
+        Renamed {
+            old: "ai.capture_tools",
+            new: "threads.capture_tools",
+        },
+        Renamed {
+            old: "ai.sessions",
+            new: "threads",
+        },
+        Renamed {
+            old: "octavo",
+            new: "teams",
+        },
+    ];
+
+    /// Keys that this build has no setting for, but that a build with other features reads, or
+    /// that Atuin AI read before it was removed.
+    const UNCHECKED_KEYS: &[&str] = &[
+        #[cfg(not(feature = "octavo"))]
+        "teams",
+        "ai.api_token",
+        "ai.capabilities",
+        "ai.db_path",
+        "ai.enabled",
+        "ai.endpoint",
+        "ai.endpoint_protocol",
+        "ai.model",
+        "ai.opening",
+        "ai.send_cwd",
+        "ai.session_continue_minutes",
+        "ai.tips",
+        "ai.yolo",
+    ];
+
+    /// Read renamed keys under their new names, for any key the new name doesn't set itself:
+    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
+    /// was `[octavo]`. The defaults are set here, under them, so they never hide a legacy value.
+    fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
                 config::ValueKind::Table(table) => {
@@ -1833,26 +1941,27 @@ impl Settings {
         }
 
         let mut legacy = Vec::new();
-        for (old, new) in [
-            ("ai.capture_sessions", "threads.capture"),
-            ("ai.capture_tools", "threads.capture_tools"),
-            ("ai.sessions", "threads"),
-        ] {
+        for Renamed { old, new } in Self::LEGACY_KEYS {
             if let Ok(value) = config.get::<config::Value>(old) {
                 leaves(new.to_string(), value, &mut legacy);
             }
         }
         legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
 
+        let defaults = Config::builder()
+            .set_default("threads.capture", false)?
+            .set_default("threads.capture_tools", true)?;
+        #[cfg(feature = "octavo")]
+        let defaults = defaults
+            .set_default("teams.enabled", false)?
+            .set_default("teams.upload_history", false)?
+            .set_default("teams.upload_threads", "all")?
+            .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
-            .try_fold(
-                Config::builder()
-                    .set_default("threads.capture", false)?
-                    .set_default("threads.capture_tools", true)?
-                    .add_source(config),
-                |builder, (key, value)| builder.set_override(key, value),
-            )?
+            .try_fold(defaults.add_source(config), |builder, (key, value)| {
+                builder.set_override(key, value)
+            })?
             .build()
     }
 
@@ -1875,7 +1984,7 @@ impl Settings {
         // Loading `self` warned about its paths already.
         let config = tracing::subscriber::with_default(
             tracing::subscriber::NoSubscriber::default(),
-            Self::build_config,
+            || Self::build_config().map(|loaded| loaded.merged),
         )?;
         let config = self
             .resolved_paths()
@@ -1895,7 +2004,7 @@ impl Settings {
     /// The path settings by key, as deserialization resolved them; the merged [`Config`] holds
     /// them as written, with Atuin's own defaults [escaped](ShellExpanded::escape). A new path
     /// setting belongs here too, or `atuin config get --resolved` shows it as written.
-    fn resolved_paths(&self) -> [(&'static str, &OsStr); 13] {
+    fn resolved_paths(&self) -> [(&'static str, &OsStr); 12] {
         [
             ("data_dir", self.data_dir.as_os_str()),
             ("db_path", self.db_path.as_os_str()),
@@ -1909,7 +2018,6 @@ impl Settings {
             ("kv.db_path", self.kv.db_path.as_os_str()),
             ("scripts.db_path", self.scripts.db_path.as_os_str()),
             ("meta.db_path", self.meta.db_path.as_os_str()),
-            ("ai.db_path", self.ai.db_path.as_os_str()),
         ]
     }
 
@@ -1963,9 +2071,10 @@ impl Settings {
     }
 
     pub fn new() -> Result<Self> {
-        let config = Self::build_config()?;
-        let settings: Self =
-            config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))?;
+        let settings: Self = Self::build_config()?
+            .merged
+            .try_deserialize()
+            .map_err(|e| eyre!("failed to deserialize: {}", e))?;
 
         // Validate UI settings
         settings.ui.validate()?;
@@ -1992,20 +2101,32 @@ impl Settings {
     }
 
     /// Check that a TOML string can be successfully deserialized into a [`Settings`] object.
-    pub fn validate_str(toml: &str) -> Result<(), ValidationError> {
+    ///
+    /// Returns the keys of `toml` that no setting reads.
+    pub fn validate_str(toml: &str) -> Result<UnknownKeys, ValidationError> {
         let data_dir = atuin_common::dirs::unconfigured_data_dir();
+        let file =
+            Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build()?;
         let config = Self::with_lenient_paths(
-            Self::with_legacy_threads(
+            Self::with_legacy_keys(
                 Self::builder_with_data_dir(&data_dir)?
-                    .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
+                    .add_source(CanonicalAliases::new(file.clone()))
                     .build()?,
             )?,
             Self::path_defaults(&data_dir),
         )?;
 
-        let settings: Self = config.try_deserialize()?;
+        let Checked {
+            value: settings,
+            unknown,
+        } = unknown_keys::deserialize::<Self>(
+            config,
+            Some(&file.cache),
+            &Self::LEGACY_KEYS,
+            Self::UNCHECKED_KEYS,
+        )?;
         settings.ui.validate()?;
-        Ok(())
+        Ok(unknown)
     }
 }
 
@@ -2020,6 +2141,13 @@ impl Default for Settings {
             .try_deserialize()
             .expect("Could not deserialize config")
     }
+}
+
+/// The merged configuration that [`Settings::build_config`] loads.
+struct LoadedConfig {
+    merged: Config,
+    /// The config file alone, or `None` when there is no config file.
+    file: Option<config::Value>,
 }
 
 /// Error returned by [`Settings::validate_str`] when validation fails.
@@ -2053,12 +2181,16 @@ mod tests {
     use atuin_common::path::{AbsPathBuf, PathBufExt as _};
     use config::{Config, ValueKind};
     use eyre::Result;
+    use jiff::ZonedDateTime;
     use rstest::{fixture, rstest};
     use url::Url;
 
+    #[cfg(feature = "octavo")]
+    use super::ThreadUploads;
+    use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
-        AiEndpointProtocol, ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode,
-        SearchMode, Settings, UtcOffsetSpec,
+        ConfigFile, DbLocation, Dialect, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
+        Settings, TimeZoneSpec,
     };
 
     #[rstest]
@@ -2081,9 +2213,12 @@ mod tests {
     #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
     fn can_parse_offset_timezone_spec(
         #[case] input: &str,
-        #[case] expected: (i8, i8, i8),
+        #[case] (hours, minutes, seconds): (i32, i32, i32),
     ) -> Result<()> {
-        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
+        assert_eq!(
+            TimeZoneSpec::from_str(input)?.time_zone().to_fixed_offset()?.seconds(),
+            hours * 3600 + minutes * 60 + seconds
+        );
         Ok(())
     }
 
@@ -2092,27 +2227,45 @@ mod tests {
     #[case::bare_hour("5")]
     #[case::bare_hour_minutes("10:30")]
     fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
-        assert!(UtcOffsetSpec::from_str(input).is_err());
+        assert!(TimeZoneSpec::from_str(input).is_err());
     }
 
+    /// Dates and clock times mean their local time on their own date, across a DST change from
+    /// today. Spans and explicit offsets are exact.
     #[rstest]
-    // Auto: official addresses are Hub, anything else is OSS
-    #[case::auto_hub_address(AiEndpointProtocol::Auto, "https://hub.atuin.sh", true)]
-    #[case::auto_api_address(AiEndpointProtocol::Auto, "https://api.atuin.sh", true)]
-    #[case::auto_third_party_address(AiEndpointProtocol::Auto, "https://ai.example.com", false)]
-    #[case::auto_localhost(AiEndpointProtocol::Auto, "http://localhost:4000", false)]
-    // An explicit protocol overrides the address check
-    #[case::explicit_hub_overrides_address(AiEndpointProtocol::Hub, "http://localhost:4000", true)]
-    #[case::explicit_oss_overrides_address(AiEndpointProtocol::Oss, "https://hub.atuin.sh", false)]
-    fn ai_endpoint_protocol_resolution(
-        #[case] protocol: AiEndpointProtocol,
-        #[case] endpoint: &str,
-        #[case] expected: bool,
-    ) {
-        let mut settings = Settings::default();
-        settings.ai.endpoint_protocol = protocol;
-
-        assert_eq!(settings.is_hub_ai_endpoint(&Url::parse(endpoint).unwrap()), expected,);
+    #[case::summer_date_read_in_winter(
+        "2026-01-15T12:00:00+01:00[Europe/Berlin]",
+        "2026-07-01",
+        "2026-07-01T00:00:00+02:00[Europe/Berlin]"
+    )]
+    #[case::clock_time_before_dst_began(
+        "2026-03-29T12:00:00+02:00[Europe/Berlin]",
+        "yesterday 3pm",
+        "2026-03-28T15:00:00+01:00[Europe/Berlin]"
+    )]
+    #[case::span_across_dst_is_exact(
+        "2026-03-29T03:30:00+02:00[Europe/Berlin]",
+        "2 hours ago",
+        "2026-03-29T00:30:00+01:00[Europe/Berlin]"
+    )]
+    #[case::explicit_offset_is_exact(
+        "2026-01-15T12:00:00+01:00[Europe/Berlin]",
+        "2026-07-01T00:00:00Z",
+        "2026-07-01T02:00:00+02:00[Europe/Berlin]"
+    )]
+    #[case::midnight_in_a_dst_gap_is_the_start_of_the_day(
+        "2026-09-10T12:00:00-03:00[America/Santiago]",
+        "2026-09-06",
+        "2026-09-06T01:00:00-03:00[America/Santiago]"
+    )]
+    fn parse_date_reads_dates_in_their_own_offset(
+        #[case] now: &str,
+        #[case] text: &str,
+        #[case] expected: &str,
+    ) -> Result<()> {
+        let now: ZonedDateTime = now.parse()?;
+        assert_eq!(Dialect::Uk.parse_date(text, &now)?, expected.parse::<ZonedDateTime>()?);
+        Ok(())
     }
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather
@@ -2124,12 +2277,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::in_git_context(true, true, FilterMode::Workspace)]
-    #[case::not_in_git_context(true, false, FilterMode::Host)]
+    #[case::in_vcs_repo(true, true, FilterMode::Workspace)]
+    #[case::not_in_vcs_repo(true, false, FilterMode::Host)]
     #[case::workspaces_disabled(false, true, FilterMode::Host)]
     fn workspace_filter_selection(
         #[case] workspaces: bool,
-        #[case] git_root: bool,
+        #[case] has_vcs_root: bool,
         #[case] expected: FilterMode,
     ) {
         let mut settings = super::Settings::default();
@@ -2142,7 +2295,7 @@ mod tests {
         ];
         settings.workspaces = workspaces;
 
-        assert_eq!(settings.default_filter_mode(git_root), expected);
+        assert_eq!(settings.default_filter_mode(has_vcs_root), expected);
     }
 
     /// The example config writes out the headers of tables whose keys are all commented out, so
@@ -2316,7 +2469,6 @@ mod tests {
         s.scripts.db_path.file().unwrap().to_path_buf()
     })]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.file().unwrap().to_path_buf())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.file().unwrap().to_path_buf())]
     fn relative_paths_resolve_next_to_config_toml(
         #[case] key: &str,
         #[case] path: fn(&Settings) -> PathBuf,
@@ -2348,7 +2500,6 @@ mod tests {
     #[case::kv_db_path("kv.db_path", |s: &Settings| s.kv.db_path.clone())]
     #[case::scripts_db_path("scripts.db_path", |s: &Settings| s.scripts.db_path.clone())]
     #[case::meta_db_path("meta.db_path", |s: &Settings| s.meta.db_path.clone())]
-    #[case::ai_db_path("ai.db_path", |s: &Settings| s.ai.db_path.clone())]
     fn database_paths_take_sqlite_urls_as_written(
         #[case] key: &str,
         #[case] location: fn(&Settings) -> DbLocation,
@@ -2407,8 +2558,7 @@ mod tests {
             "logs.ai.file",
             "kv.db_path",
             "scripts.db_path",
-            "meta.db_path",
-            "ai.db_path"
+            "meta.db_path"
         )]
         key: &str,
     ) {
@@ -2432,7 +2582,6 @@ mod tests {
     #[case::kv_db_path("kv.db_path", true)]
     #[case::scripts_db_path("scripts.db_path", true)]
     #[case::meta_db_path("meta.db_path", true)]
-    #[case::ai_db_path("ai.db_path", true)]
     fn a_path_setting_with_an_unset_variable_loads_as_written(
         config_env: MockEnv,
         #[case] key: &str,
@@ -2615,8 +2764,8 @@ mod tests {
             .add_source(ConfigFile::from_str(toml, FileFormat::Toml))
             .build()
             .expect("could not build config");
-        Settings::with_legacy_threads(config)
-            .expect("could not read legacy threads settings")
+        Settings::with_legacy_keys(config)
+            .expect("could not read legacy settings")
             .try_deserialize()
             .expect("could not deserialize config")
     }
@@ -2624,16 +2773,50 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::set(
+        "[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        Some("http://127.0.0.1:50052/")
+    )]
+    #[case::legacy(
         "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
         Some("http://127.0.0.1:50052/")
     )]
     #[case::absent("", None)]
-    fn octavo_debug_address_is_read_from_its_hidden_table(
+    fn teams_debug_address_is_read_from_its_hidden_table(
         #[case] toml: &str,
         #[case] expected: Option<&str>,
     ) {
         let settings = parse_settings(toml);
-        assert_eq!(settings.octavo.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+        assert_eq!(settings.teams.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::unset("", false)]
+    #[case::teams("[teams]\nenabled = true\n", true)]
+    #[case::legacy("[octavo]\nenabled = true\n", true)]
+    #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
+    fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
+        assert_eq!(parse_settings(toml).teams.enabled, enabled);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::unset("", false, ThreadUploads::All)]
+    #[case::legacy("[octavo]\nenabled = true\n", false, ThreadUploads::All)]
+    #[case::history_on("[teams]\nupload_history = true\n", true, ThreadUploads::All)]
+    #[case::workspaces(
+        "[teams]\nupload_threads = \"workspaces\"\n",
+        false,
+        ThreadUploads::Workspaces
+    )]
+    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", false, ThreadUploads::Off)]
+    fn teams_uploads_threads_until_switched_off_and_history_once_switched_on(
+        #[case] toml: &str,
+        #[case] history: bool,
+        #[case] threads: ThreadUploads,
+    ) {
+        let teams = parse_settings(toml).teams;
+        assert_eq!((teams.upload_history, teams.upload_threads), (history, threads));
     }
 
     #[rstest]
@@ -2674,7 +2857,7 @@ mod tests {
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
-        let config = Settings::with_legacy_threads(config::Config::default()).unwrap();
+        let config = Settings::with_legacy_keys(config::Config::default()).unwrap();
         assert!(!config.get_bool("threads.capture").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
@@ -2690,16 +2873,6 @@ mod tests {
         assert_eq!(settings.logs.search.retention, None);
         let overridden = parse_settings("[logs.search]\nretention = 0\n");
         assert_eq!(overridden.logs.search.retention, Some(std::time::Duration::ZERO));
-    }
-
-    #[rstest]
-    fn negative_session_continue_minutes_disables_resume() {
-        // Legacy clamped a negative value to 0 (disabled); it must load, not error.
-        Settings::validate_str("[ai]\nsession_continue_minutes = -5\n")
-            .expect("negative session_continue_minutes must load");
-
-        let settings = parse_settings("[ai]\nsession_continue_minutes = -5\n");
-        assert_eq!(settings.ai.session_continue_minutes, None);
     }
 
     #[rstest]
@@ -2826,5 +2999,351 @@ mod tests {
     ) {
         assert_eq!(requested.effective_mode(), expected);
         assert_eq!(SearchMode::from(requested), expected);
+    }
+
+    /// Loads `toml` as the config file the way [`Settings::new`] does, with `env` as the whole
+    /// environment.
+    fn load_with_env(toml: &str, env: &[(&str, &str)]) -> Result<Checked<Settings>> {
+        let file =
+            Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build()?;
+        let env = Settings::environment().source(Some(
+            env.iter().map(|(key, value)| ((*key).to_owned(), (*value).to_owned())).collect(),
+        ));
+        let merged = Settings::layered_config(
+            Path::new("/tmp/atuin-unknown-config"),
+            Some(file.clone()),
+            env,
+        )?;
+        Settings::deserialize_checked(merged, Some(&file.cache))
+    }
+
+    fn load_file(toml: &str) -> Checked<Settings> {
+        load_with_env(toml, &[]).expect("config should load")
+    }
+
+    #[track_caller]
+    fn assert_unknown(unknown: &UnknownKeys, expected: &[&str]) {
+        assert_eq!(unknown.iter().map(String::as_str).collect::<Vec<_>>(), expected);
+    }
+
+    #[rstest]
+    #[case::unknown_sync_url("sync_url = \"https://typo.example\"\n", &["sync_url"], None)]
+    #[case::known_sync_address(
+        "sync_address = \"https://sync.example.test\"\n",
+        &[],
+        Some("https://sync.example.test")
+    )]
+    fn sync_address_typos_warn_and_valid_values_load(
+        #[case] toml: &str,
+        #[case] expected: &[&str],
+        #[case] sync_address: Option<&str>,
+    ) {
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file(toml);
+        assert_unknown(&unknown, expected);
+        let expected_address = sync_address
+            .map_or_else(|| super::DEFAULT_SYNC_URL.clone(), |url| Url::parse(url).unwrap());
+        assert_eq!(settings.sync_address, expected_address);
+    }
+
+    #[rstest]
+    fn unknown_keys_are_sorted_and_omit_values() {
+        let secret = "SENTINEL_SECRET_VALUE";
+        let toml = format!(
+            "\
+scroll_exits = false
+not_a_table = {{ token = \"{secret}\" }}
+
+[empty_table]
+
+[keys]
+scroll_exists = true
+
+[preview]
+strategy = \"fixed\"
+stratagy = \"auto\"
+
+[daemon]
+enabeld = true # codespell:ignore enabeld
+
+[ui]
+columns = [{{ type = \"command\", not_a_column_field = true }}]
+"
+        );
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file(&toml);
+        let expected = [
+            "daemon.enabeld", // codespell:ignore enabeld
+            "empty_table",
+            "keys.scroll_exists",
+            "not_a_table",
+            "preview.stratagy",
+            "scroll_exits",
+            "ui.columns.0.not_a_column_field",
+        ];
+        assert_unknown(&unknown, &expected);
+        // The root key is ignored, so the real `[keys]` setting keeps its default.
+        assert!(settings.keys.scroll_exits);
+        assert_eq!(settings.preview.strategy, super::PreviewStrategy::Fixed);
+        assert!(!settings.daemon.enabled);
+
+        let listed = unknown.to_string();
+        assert_eq!(listed, expected.join(", "));
+        assert!(!listed.contains(secret));
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::example(Settings::example_config())]
+    #[case::shells("search.shells = \"auto\"\n")]
+    #[case::nested_and_optional(
+        "filter_mode = \"directory\"\nthreads.mouse = false\n[keys]\nscroll_exits = false\n"
+    )]
+    #[case::legacy_keys(
+        "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n"
+    )]
+    #[case::retired_ai_keys(
+        "[ai]\nenabled = false\nmodel = \"m\"\nyolo = true\n\n[ai.opening]\nsend_cwd = true\n"
+    )]
+    fn known_settings_are_not_unknown(#[case] toml: &str) {
+        assert_unknown(&load_file(toml).unknown, &[]);
+    }
+
+    #[rstest]
+    fn known_nested_and_optional_settings_are_honored() {
+        let settings = load_file(
+            "filter_mode = \"directory\"\nthreads.mouse = false\n[keys]\nscroll_exits = false\n",
+        )
+        .value;
+        assert!(!settings.keys.scroll_exits);
+        assert_eq!(settings.filter_mode, Some(FilterMode::Directory));
+        assert_eq!(settings.threads.mouse, Some(false));
+    }
+
+    #[rstest]
+    #[case::under_legacy_sessions(
+        "[ai.sessions]\nmouse_typo = false\n",
+        &["ai.sessions.mouse_typo"]
+    )]
+    #[case::under_ai("[ai]\ncapture_sesions = true\n", &["ai.capture_sesions"])]
+    #[case::under_both_spellings(
+        "[threads]\nmouse_typo = true\n\n[ai.sessions]\nmouse_typo = false\n",
+        &["ai.sessions.mouse_typo", "threads.mouse_typo"]
+    )]
+    #[cfg_attr(
+        feature = "octavo",
+        case::under_legacy_octavo("[octavo]\nenabld = true\n", &["octavo.enabld"])
+    )]
+    #[cfg_attr(
+        feature = "octavo",
+        case::under_both_octavo_spellings(
+            "[teams]\nenabld = true\n\n[octavo]\nenabld = true\n",
+            &["octavo.enabld", "teams.enabld"]
+        )
+    )]
+    fn typos_under_legacy_keys_are_reported_as_written(
+        #[case] toml: &str,
+        #[case] expected: &[&str],
+    ) {
+        assert_unknown(&load_file(toml).unknown, expected);
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    fn legacy_octavo_applies_quietly() {
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file("[octavo]\nenabled = true\n");
+        assert_unknown(&unknown, &[]);
+        assert!(settings.teams.enabled);
+    }
+
+    #[cfg(not(feature = "octavo"))]
+    #[rstest]
+    fn teams_is_not_unknown_without_octavo() {
+        assert_unknown(&load_file("[teams]\nenabled = true\n").unknown, &[]);
+    }
+
+    fn daemon_enabled(settings: &Settings) -> bool {
+        settings.daemon.enabled
+    }
+
+    fn pty_proxy_enabled(settings: &Settings) -> bool {
+        settings.pty_proxy.enabled
+    }
+
+    #[rstest]
+    #[case::daemon("daemon", "ATUIN_DAEMON__ENABLED", daemon_enabled)]
+    #[case::pty_proxy("pty_proxy", "ATUIN_PTY_PROXY__ENABLED", pty_proxy_enabled)]
+    fn environment_overrides_a_file_alias(
+        #[case] table: &str,
+        #[case] var: &str,
+        #[case] enabled: fn(&Settings) -> bool,
+    ) {
+        let toml = format!("[{table}]\nenable = true\n");
+
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_with_env(&toml, &[(var, "false")]).expect("alias with override should load");
+        assert_unknown(&unknown, &[]);
+        assert!(!enabled(&settings), "{var}=false must override `[{table}] enable = true`");
+
+        assert!(enabled(&load_file(&toml).value), "`[{table}] enable = true` must apply alone");
+    }
+
+    #[rstest]
+    fn aliases_headers_and_keybindings_are_not_unknown() {
+        let toml = "\
+extra_headers = { \"X-User-Header\" = \"value\" }
+
+[pty_proxy]
+enable = true
+
+[daemon]
+enable = true
+
+[keymap.emacs]
+\"ctrl-x\" = \"exit\"
+left = [{ when = \"cursor-at-start\", action = \"exit\" }, { action = \"cursor-left\" }]
+";
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file(toml);
+        assert_unknown(&unknown, &[]);
+        assert!(settings.pty_proxy.enabled);
+        assert!(settings.daemon.enabled);
+        assert!(settings.extra_headers.contains_key("X-User-Header"));
+        assert!(matches!(
+            settings.keymap.emacs.get("ctrl-x"),
+            Some(super::KeyBindingConfig::Simple(action)) if action == "exit"
+        ));
+        assert!(matches!(
+            settings.keymap.emacs.get("left"),
+            Some(super::KeyBindingConfig::Rules(rules)) if rules.len() == 2
+        ));
+    }
+
+    #[rstest]
+    fn keybinding_rule_typos_warn() {
+        let toml = "\
+[keymap.emacs]
+\"ctrl-x\" = \"exit\"
+left = [
+    { action = \"exit\", wheen = \"cursor-at-start\" }, # codespell:ignore wheen
+    { action = \"cursor-left\" },
+]
+";
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file(toml);
+        assert_unknown(&unknown, &["keymap.emacs.left.0.wheen"]); // codespell:ignore wheen
+        assert!(matches!(
+            settings.keymap.emacs.get("left"),
+            Some(super::KeyBindingConfig::Rules(rules))
+                if rules.len() == 2 && rules[0].action == "exit" && rules[0].when.is_none()
+        ));
+    }
+
+    #[rstest]
+    fn environment_only_keys_are_not_unknown() {
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_with_env("sync_url = \"https://typo.example\"\n", &[
+            ("ATUIN_SESSION", "session-id"),
+            ("ATUIN_CONFIG_DIR", "/tmp/atuin-config-dir"),
+            ("ATUIN_SYNC_ADDRESS", "https://from-env.example"),
+        ])
+        .expect("file typo should still load");
+
+        assert_unknown(&unknown, &["sync_url"]);
+        assert_eq!(settings.sync_address, Url::parse("https://from-env.example").unwrap());
+    }
+
+    #[rstest]
+    fn nothing_is_unknown_without_a_file() {
+        let merged = Settings::layered_config(
+            Path::new("/tmp/atuin-unknown-config"),
+            None,
+            Settings::environment().source(Some(
+                std::iter::once(("ATUIN_SESSION".to_owned(), "session-id".to_owned())).collect(),
+            )),
+        )
+        .unwrap();
+        let Checked {
+            value: settings,
+            unknown,
+        } = Settings::deserialize_checked(merged, None).unwrap();
+        assert_unknown(&unknown, &[]);
+        assert_eq!(settings.sync_address, super::DEFAULT_SYNC_URL.clone());
+    }
+
+    #[rstest]
+    #[case::malformed_toml("=")]
+    #[case::wrong_type("auto_sync = \"banana\"\nsecret_token = \"SENTINEL_SECRET_VALUE\"\n")]
+    #[case::alias_and_canonical_together("[pty_proxy]\nenable = true\nenabled = false\n")]
+    fn malformed_or_mistyped_config_still_fails(#[case] toml: &str) {
+        let Err(err) = load_with_env(toml, &[]) else {
+            panic!("config should fail");
+        };
+        assert!(!err.to_string().contains("SENTINEL_SECRET_VALUE"), "{err}");
+    }
+
+    #[rstest]
+    fn invalid_ui_still_fails() {
+        let toml = "\
+[ui]
+columns = [{ type = \"duration\", expand = true }, { type = \"command\", expand = true }]
+secret_token = \"SENTINEL_SECRET_VALUE\"
+";
+        let Checked {
+            value: settings,
+            unknown,
+        } = load_file(toml);
+        assert_unknown(&unknown, &["ui.secret_token"]);
+        let err = settings.ui.validate().expect_err("two expanding columns should fail");
+        assert!(err.to_string().contains("expand"), "{err}");
+    }
+
+    #[rstest]
+    #[case::daemon("daemon")]
+    #[case::pty_proxy("pty_proxy")]
+    fn validate_str_accepts_enable_alias(#[case] table: &str) {
+        Settings::validate_str(&format!("auto_sync = false\n[{table}]\nenable = true\n"))
+            .expect("an unrelated config edit must preserve enable aliases");
+    }
+
+    #[rstest]
+    fn quoted_dotted_root_key_warns() {
+        // config-rs expands the quoted key into a `sync` table, so that is the key reported.
+        assert_unknown(&load_file(r#""sync.url" = "https://example.test""#).unknown, &["sync"]);
+    }
+
+    #[rstest]
+    fn validate_str_reports_unknown_keys() {
+        let unknown =
+            Settings::validate_str("sync_url = \"https://typo.example\"\n[nope]\nx = 1\n")
+                .expect("unknown keys stay valid");
+        assert_unknown(&unknown, &["nope", "sync_url"]);
+    }
+
+    #[rstest]
+    #[case::exact("sync_url", true)]
+    #[case::inside_an_unknown_table("nope.x", true)]
+    #[case::known("sync_address", false)]
+    #[case::shared_prefix("sync_url_2", false)]
+    #[case::parent_of_an_unknown_key("keys", false)]
+    fn unknown_keys_cover_keys_inside_them(#[case] key: &str, #[case] covered: bool) {
+        let unknown =
+            load_file("sync_url = \"x\"\n[nope]\nx = 1\n[keys]\nscroll_exists = true\n").unknown;
+        assert_eq!(unknown.covers(key), covered);
     }
 }

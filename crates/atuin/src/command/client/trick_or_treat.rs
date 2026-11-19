@@ -16,9 +16,10 @@ use atuin_common::string::{
 use atuin_history::stats::{interesting_command, split_at_pipe, strip_leading_env_vars};
 use clap::Args;
 use eyre::Result;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 use rand::Rng as _;
 use rand::seq::SliceRandom as _;
-use time::{Duration, OffsetDateTime};
 use unicode_width::UnicodeWidthStr as _;
 
 use super::halloween::HalloweenExt as _;
@@ -29,7 +30,7 @@ pub struct Cmd;
 
 impl Cmd {
     pub async fn run(&self, db: &Sqlite, settings: &Settings) -> Result<()> {
-        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
+        let now = Timestamp::now().to_zoned_datetime(settings.timezone.time_zone());
         if !now.date().is_halloween_season() {
             writeln!(io::stdout(), "{}", fl!("trick-or-treat-closed"))?;
             return Ok(());
@@ -37,8 +38,8 @@ impl Cmd {
 
         // An agent's commands are neither the user's treats nor what keeps the user's ghosts alive.
         let runs = db.command_runs(all_user_author_filter()).await?;
-        let ghosts = Ghost::graveyard(settings, &runs, now);
-        let treats = Treat::bag(&runs, now);
+        let ghosts = Ghost::graveyard(settings, &runs, &now);
+        let treats = Treat::bag(&runs, &now);
 
         let mut rng = rand::thread_rng();
         let mut stdout = io::stdout().lock();
@@ -60,14 +61,16 @@ impl Cmd {
 struct Ghost<'a> {
     name: &'a str,
     runs: u64,
-    first: OffsetDateTime,
-    last: OffsetDateTime,
+    first: Timestamp,
+    last: Timestamp,
+    /// The zone the tombstone reads its years in.
+    tz: TimeZone,
 }
 
 impl<'a> Ghost<'a> {
     const MIN_RUNS: u64 = 20;
-    const MIN_SILENCE: Duration = Duration::weeks(1);
-    const MAX_SILENCE: Duration = Duration::days(365);
+    const MIN_SILENCE: SignedDuration = SignedDuration::from_hours(24 * 7);
+    const MAX_SILENCE: SignedDuration = SignedDuration::from_hours(24 * 365);
     /// Longer names are cut so the tombstone fits a narrow terminal.
     const MAX_NAME_COLUMNS: usize = 24;
 
@@ -78,9 +81,13 @@ impl<'a> Ghost<'a> {
     /// Commands are grouped the way `atuin stats` groups them, so `svn up` and `sudo svn log` are
     /// both `svn`, and one recent `svn log` keeps it alive. Every program in a pipeline counts, so
     /// `cat log | grep error` keeps `grep` alive too.
-    fn graveyard(settings: &Settings, runs: &'a [CommandRuns], now: OffsetDateTime) -> Vec<Self> {
-        let age =
-            runs.iter().map(|run| run.first).min().map_or(Duration::ZERO, |first| now - first);
+    fn graveyard(settings: &Settings, runs: &'a [CommandRuns], now: &ZonedDateTime) -> Vec<Self> {
+        let (now, tz) = (now.timestamp(), now.time_zone());
+        let age = runs
+            .iter()
+            .map(|run| run.first)
+            .min()
+            .map_or(SignedDuration::ZERO, |first| now - first);
         let silence = (age / 3_i32).clamp(Self::MIN_SILENCE, Self::MAX_SILENCE);
 
         let mut ghosts = HashMap::<&str, Self>::new();
@@ -104,6 +111,7 @@ impl<'a> Ghost<'a> {
                     runs: 0,
                     first: run.first,
                     last: run.last,
+                    tz: tz.clone(),
                 });
                 ghost.runs += u64::from(run.runs);
                 ghost.first = ghost.first.min(run.first);
@@ -114,18 +122,14 @@ impl<'a> Ghost<'a> {
         ghosts
             .into_values()
             .filter(|ghost| ghost.runs >= Self::MIN_RUNS && now - ghost.last >= silence)
-            .map(|ghost| Self {
-                first: ghost.first.to_offset(now.offset()),
-                last: ghost.last.to_offset(now.offset()),
-                ..ghost
-            })
             .collect()
     }
 }
 
 impl fmt::Display for Ghost<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (born, died) = (self.first.year(), self.last.year());
+        let (born, died) =
+            (self.tz.to_datetime(self.first).year(), self.tz.to_datetime(self.last).year());
         let name = self.name.escape_non_printable();
         let epitaph = [
             fl!("trick-or-treat-rip"),
@@ -157,7 +161,9 @@ impl fmt::Display for Ghost<'_> {
 struct Treat<'a> {
     command: &'a str,
     runs: u32,
-    last: OffsetDateTime,
+    last: Timestamp,
+    /// The zone the treat reads its date in.
+    tz: TimeZone,
     /// Where it ran, if history knows.
     cwd: Option<&'a str>,
 }
@@ -166,14 +172,18 @@ impl<'a> Treat<'a> {
     const MAX_RUNS: u32 = 2;
     /// Shorter commands are easy enough to remember, or to retype.
     const MIN_CHARS: usize = 40;
-    const MIN_SILENCE: Duration = Duration::days(3);
-    const MAX_SILENCE: Duration = Duration::days(90);
+    const MIN_SILENCE: SignedDuration = SignedDuration::from_hours(24 * 3);
+    const MAX_SILENCE: SignedDuration = SignedDuration::from_hours(24 * 90);
 
     /// The commands in `runs` worth digging up at `now`: quiet for a sixth of the history's age,
     /// kept between [`Self::MIN_SILENCE`] and [`Self::MAX_SILENCE`].
-    fn bag(runs: &'a [CommandRuns], now: OffsetDateTime) -> Vec<Self> {
-        let age =
-            runs.iter().map(|run| run.first).min().map_or(Duration::ZERO, |first| now - first);
+    fn bag(runs: &'a [CommandRuns], now: &ZonedDateTime) -> Vec<Self> {
+        let (now, tz) = (now.timestamp(), now.time_zone());
+        let age = runs
+            .iter()
+            .map(|run| run.first)
+            .min()
+            .map_or(SignedDuration::ZERO, |first| now - first);
         let silence = (age / 6_i32).clamp(Self::MIN_SILENCE, Self::MAX_SILENCE);
 
         runs.iter()
@@ -186,7 +196,8 @@ impl<'a> Treat<'a> {
             .map(|run| Self {
                 command: run.command.trim(),
                 runs: run.runs,
-                last: run.last.to_offset(now.offset()),
+                last: run.last,
+                tz: tz.clone(),
                 cwd: Some(run.cwd.as_str()).filter(|cwd| *cwd != HistoryImported::UNKNOWN_CWD),
             })
             .collect()
@@ -195,7 +206,7 @@ impl<'a> Treat<'a> {
 
 impl fmt::Display for Treat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let date = self.last.date().to_string();
+        let date = self.tz.to_datetime(self.last).date().to_string();
         let heading = match self.cwd {
             Some(cwd) => {
                 let cwd = cwd.escape_non_printable().into_owned();
@@ -212,27 +223,37 @@ impl fmt::Display for Treat<'_> {
 mod tests {
     use atuin_client::history::CommandRuns;
     use atuin_client::settings::Settings;
-    use rstest::rstest;
-    use time::OffsetDateTime;
-    use time::macros::datetime;
+    use jiff::tz::TimeZone;
+    use jiff::{Timestamp, ZonedDateTime};
+    use rstest::{fixture, rstest};
 
     use super::{Ghost, Treat};
 
-    const NOW: OffsetDateTime = datetime!(2026-10-31 12:00 UTC);
-    const LONG_AGO: OffsetDateTime = datetime!(2023-06-01 0:00 UTC);
-    const LAST_WEEK: OffsetDateTime = datetime!(2026-10-24 0:00 UTC);
-    const OCTOBER_10: OffsetDateTime = datetime!(2026-10-10 0:00 UTC);
-    /// Where a young history starts.
-    const AUGUST: OffsetDateTime = datetime!(2026-08-03 0:00 UTC);
+    /// `2026-10-31T12:00:00Z`.
+    const NOW: Timestamp = Timestamp::constant(1_793_448_000, 0);
+    /// `2023-06-01T00:00:00Z`.
+    const LONG_AGO: Timestamp = Timestamp::constant(1_685_577_600, 0);
+    /// `2026-10-24T00:00:00Z`.
+    const LAST_WEEK: Timestamp = Timestamp::constant(1_792_800_000, 0);
+    /// `2026-10-10T00:00:00Z`.
+    const OCTOBER_10: Timestamp = Timestamp::constant(1_791_590_400, 0);
+    /// `2026-08-03T00:00:00Z`, where a young history starts.
+    const AUGUST: Timestamp = Timestamp::constant(1_785_715_200, 0);
     const LONG: &str = "ffmpeg -i in.mov -vf \"fps=10,scale=640:-1\" out.gif";
 
+    /// [`NOW`] in UTC.
+    #[fixture]
+    fn now() -> ZonedDateTime {
+        NOW.to_zoned_datetime(TimeZone::UTC)
+    }
+
     /// `command`, run `runs` times without failing, the last time at `last`.
-    fn ran(command: &str, runs: u32, last: OffsetDateTime) -> CommandRuns {
+    fn ran(command: &str, runs: u32, last: Timestamp) -> CommandRuns {
         CommandRuns {
             command: command.to_owned(),
             runs,
             failures: 0,
-            first: datetime!(2019-03-01 0:00 UTC),
+            first: "2019-03-01T00:00:00Z".parse::<Timestamp>().unwrap(),
             last,
             cwd: "/srv".to_owned(),
         }
@@ -249,7 +270,7 @@ mod tests {
         vec![ran("svn up", 30, LONG_AGO), ran("svn log", 1, LAST_WEEK)],
         &[]
     )]
-    #[case::not_quite_a_year(vec![ran("svn up", 30, datetime!(2025-11-01 0:00 UTC))], &[])]
+    #[case::not_quite_a_year(vec![ran("svn up", 30, "2025-11-01T00:00:00Z".parse::<Timestamp>().unwrap())], &[])]
     #[case::prefix_and_env_dropped(
         vec![ran("sudo svn up", 10, LONG_AGO), ran("LANG=C svn up", 10, LONG_AGO)],
         &["svn"]
@@ -272,20 +293,20 @@ mod tests {
     )]
     #[case::piped_into_itself_counts_once(vec![ran("grep a | grep b", 10, LONG_AGO)], &[])]
     #[case::a_young_history_buries_sooner(
-        vec![CommandRuns { first: AUGUST, ..ran("cargo asm", 31, datetime!(2026-09-15 0:00 UTC)) }],
+        vec![CommandRuns { first: AUGUST, ..ran("cargo asm", 31, "2026-09-15T00:00:00Z".parse::<Timestamp>().unwrap()) }],
         &["cargo asm"]
     )]
     #[case::a_new_history_waits_a_week(
         vec![CommandRuns {
-            first: datetime!(2026-10-24 0:00 UTC),
-            ..ran("cargo asm", 31, datetime!(2026-10-27 0:00 UTC))
+            first: "2026-10-24T00:00:00Z".parse::<Timestamp>().unwrap(),
+            ..ran("cargo asm", 31, "2026-10-27T00:00:00Z".parse::<Timestamp>().unwrap())
         }],
         &[]
     )]
-    fn graveyard(#[case] runs: Vec<CommandRuns>, #[case] expected: &[&str]) {
+    fn graveyard(now: ZonedDateTime, #[case] runs: Vec<CommandRuns>, #[case] expected: &[&str]) {
         let settings = Settings::utc();
         let mut names: Vec<_> =
-            Ghost::graveyard(&settings, &runs, NOW).into_iter().map(|ghost| ghost.name).collect();
+            Ghost::graveyard(&settings, &runs, &now).into_iter().map(|ghost| ghost.name).collect();
         names.sort_unstable();
         assert_eq!(names, expected);
     }
@@ -295,8 +316,9 @@ mod tests {
         let ghost = Ghost {
             name: "svn",
             runs: 412,
-            first: datetime!(2019-03-01 0:00 UTC),
+            first: "2019-03-01T00:00:00Z".parse::<Timestamp>().unwrap(),
             last: LONG_AGO,
+            tz: TimeZone::UTC,
         };
         assert_eq!(
             ghost.to_string(),
@@ -320,7 +342,7 @@ mod tests {
     #[case::twice(vec![ran(LONG, 2, LONG_AGO)], true)]
     #[case::three_times_is_a_habit(vec![ran(LONG, 3, LONG_AGO)], false)]
     #[case::too_short(vec![ran("ls -la", 1, LONG_AGO)], false)]
-    #[case::too_recent(vec![ran(LONG, 1, datetime!(2026-09-01 0:00 UTC))], false)]
+    #[case::too_recent(vec![ran(LONG, 1, "2026-09-01T00:00:00Z".parse::<Timestamp>().unwrap())], false)]
     #[case::failed(vec![CommandRuns { failures: 1, ..ran(LONG, 1, LONG_AGO) }], false)]
     #[case::a_young_history_digs_sooner(
         vec![
@@ -331,16 +353,16 @@ mod tests {
     )]
     #[case::a_new_history_waits_three_days(
         vec![
-            CommandRuns { first: datetime!(2026-10-30 0:00 UTC), ..ran("ls", 100, NOW) },
+            CommandRuns { first: "2026-10-30T00:00:00Z".parse::<Timestamp>().unwrap(), ..ran("ls", 100, NOW) },
             CommandRuns {
-                first: datetime!(2026-10-30 0:00 UTC),
-                ..ran(LONG, 1, datetime!(2026-10-30 0:00 UTC))
+                first: "2026-10-30T00:00:00Z".parse::<Timestamp>().unwrap(),
+                ..ran(LONG, 1, "2026-10-30T00:00:00Z".parse::<Timestamp>().unwrap())
             },
         ],
         false
     )]
-    fn treats(#[case] runs: Vec<CommandRuns>, #[case] treat: bool) {
-        assert_eq!(Treat::bag(&runs, NOW).iter().any(|t| t.command == LONG), treat);
+    fn treats(now: ZonedDateTime, #[case] runs: Vec<CommandRuns>, #[case] treat: bool) {
+        assert_eq!(Treat::bag(&runs, &now).iter().any(|t| t.command == LONG), treat);
     }
 
     #[rstest]
@@ -356,9 +378,13 @@ mod tests {
         CommandRuns { cwd: "unknown".to_owned(), ..ran(LONG, 1, LONG_AGO) },
         "🍬 Treat! You ran this once, on 2023-06-01, and never again:"
     )]
-    fn treat_says_how_often_and_where_it_ran(#[case] runs: CommandRuns, #[case] heading: &str) {
+    fn treat_says_how_often_and_where_it_ran(
+        now: ZonedDateTime,
+        #[case] runs: CommandRuns,
+        #[case] heading: &str,
+    ) {
         let treats: Vec<_> =
-            Treat::bag(std::slice::from_ref(&runs), NOW).iter().map(ToString::to_string).collect();
+            Treat::bag(std::slice::from_ref(&runs), &now).iter().map(ToString::to_string).collect();
         assert_eq!(treats, [format!("{heading}\n\n    {LONG}")]);
     }
 }

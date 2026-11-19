@@ -4,9 +4,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use serde::Deserialize;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -77,6 +76,13 @@ pub(super) fn archive_of(root: &Path) -> Option<PathBuf> {
 
 impl Sessions for CodexSessions {
     type Listener = CodexListener;
+
+    /// The newest rollout under `sessions/` or `archived_sessions/`.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let archived = archive_of(&root).and_then(crate::fs::newest_modified);
+        crate::fs::newest_modified(root).max(archived)
+    }
 
     fn listener(&self) -> Result<CodexListener, RuntimeError> {
         let root = self.resolve_root();
@@ -1390,8 +1396,8 @@ impl Message for CodexMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok())
     }
 
     fn content(&self) -> Vec<Content> {
@@ -1904,6 +1910,35 @@ mod tests {
             .unwrap();
         found.sort();
         assert_eq!(found, [(live.to_owned(), true), (archived.to_owned(), false)]);
+    }
+
+    /// The last use of Codex counts archived threads. A thread that was used recently and then
+    /// archived is newer than any live rollout here.
+    #[rstest]
+    #[case::archived_is_newest(1_000, 2_000)]
+    #[case::live_is_newest(2_000, 1_000)]
+    fn last_active_counts_archived_threads(#[case] live_secs: u64, #[case] archived_secs: u64) {
+        let home = tempfile::tempdir().unwrap();
+        let day = home.path().join("sessions/2026/09/19");
+        let archive = home.path().join("archived_sessions");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        for (path, secs) in
+            [(day.join("a.jsonl"), live_secs), (archive.join("b.jsonl"), archived_secs)]
+        {
+            std::fs::write(&path, "").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at(secs))
+                .unwrap();
+        }
+
+        let sessions =
+            CodexSessions::builder().root(home.path().join("sessions")).pool(pool()).build();
+        assert_eq!(sessions.last_active(), Some(at(live_secs.max(archived_secs))));
     }
 
     /// A rollout Codex compressed (codex-rs `compress_rollout_if_cold_blocking`: zstd level 3,

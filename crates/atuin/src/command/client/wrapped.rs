@@ -8,7 +8,9 @@ use atuin_common::userio;
 use atuin_history::stats::{Stats, compute, split_common_prefix};
 use crossterm::style::{ResetColor, SetAttribute};
 use eyre::Result;
-use time::{Date, Duration, Month, OffsetDateTime, Time};
+use jiff::civil::date;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 use tracing::instrument;
 
 #[derive(Debug)]
@@ -106,11 +108,12 @@ impl WrappedStats {
 
         // Error analysis
         let mut command_errors: HashMap<String, (usize, usize)> = HashMap::new(); // (total_uses, errors)
-        let midyear = history[0].timestamp + Duration::days(182); // Split year in half
+        let midyear = history[0].timestamp + SignedDuration::from_hours(24 * 182); // Split year in half
 
         let mut first_half_commands: HashMap<String, usize> = HashMap::new();
         let mut second_half_commands: HashMap<String, usize> = HashMap::new();
         let mut hours: HashMap<String, usize> = HashMap::new();
+        let local = TimeZone::try_system().unwrap_or_else(|_| settings.timezone.time_zone());
 
         for entry in history {
             let command = entry.command.trim_start();
@@ -138,10 +141,7 @@ impl WrappedStats {
             }
 
             // Track hourly distribution
-            let local_time = entry
-                .timestamp
-                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(settings.timezone.0));
-            let hour = format!("{:02}:00", local_time.time().hour());
+            let hour = format!("{:02}:00", local.to_datetime(entry.timestamp).hour());
             *hours.entry(hour).or_default() += 1;
         }
 
@@ -287,28 +287,23 @@ pub async fn run(
     _store: SqliteStore,
     theme: &Theme,
 ) -> Result<()> {
-    let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
-    let month = now.month();
+    let tz = &settings.timezone.time_zone();
+    let now = tz.to_datetime(Timestamp::now());
 
     // If we're in December, then wrapped is for the current year. If not, it's for the previous year
     let year = year.unwrap_or_else(|| {
-        if month == Month::December {
-            now.year()
+        let year = i32::from(now.year());
+        if now.month() == 12 {
+            year
         } else {
-            now.year() - 1
+            year - 1
         }
     });
 
-    let start = OffsetDateTime::new_in_offset(
-        Date::from_calendar_date(year, Month::January, 1).unwrap(),
-        Time::MIDNIGHT,
-        now.offset(),
-    );
-    let end = OffsetDateTime::new_in_offset(
-        Date::from_calendar_date(year, Month::December, 31).unwrap(),
-        Time::MIDNIGHT + Duration::days(1) - Duration::nanoseconds(1),
-        now.offset(),
-    );
+    let in_range = i16::try_from(year)?;
+    let start = date(in_range, 1, 1).to_zoned_datetime(tz.clone())?.timestamp();
+    let end = date(in_range, 12, 31).at(23, 59, 59, 999_999_999).to_zoned_datetime(tz.clone())?;
+    let end = end.timestamp();
 
     let history = db.range(start, end).await?;
     if history.is_empty() {
@@ -342,7 +337,6 @@ pub async fn run(
 mod tests {
     use atuin_client::history::History;
     use rstest::rstest;
-    use time::macros::datetime;
 
     use super::*;
 
@@ -371,20 +365,17 @@ mod tests {
         if let Some(prefixes) = prefixes {
             settings.stats.common_prefix = prefixes.into_iter().map(str::to_owned).collect();
         }
-        let history: Vec<History> =
-            [datetime!(2024-01-01 0:00 UTC), datetime!(2024-10-01 0:00 UTC)]
-                .into_iter()
-                .flat_map(|timestamp| {
-                    [(command, 0), (expected, 1)].map(|(command, exit)| {
-                        History::import()
-                            .timestamp(timestamp)
-                            .command(command)
-                            .exit(exit)
-                            .build()
-                            .into()
-                    })
-                })
-                .collect();
+        let history: Vec<History> = [
+            "2024-01-01T00:00:00Z".parse::<Timestamp>().unwrap(),
+            "2024-10-01T00:00:00Z".parse::<Timestamp>().unwrap(),
+        ]
+        .into_iter()
+        .flat_map(|timestamp| {
+            [(command, 0), (expected, 1)].map(|(command, exit)| {
+                History::import().timestamp(timestamp).command(command).exit(exit).build().into()
+            })
+        })
+        .collect();
         let stats = Stats {
             total_commands: 4,
             unique_commands: 2,

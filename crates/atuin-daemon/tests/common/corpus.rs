@@ -9,11 +9,10 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::store::{HistoryRecord, HistoryStore};
 use atuin_client::history::{AuthorKind, History, HistoryId, Version};
 use atuin_common::utils::uuid_v7;
-use atuin_daemon::search::SearchIndex;
+use atuin_daemon::search::SharedSearchIndex;
 use atuin_domain::record::{Host, Record, RecordSeriesKey, RecordTag, RecordVersion};
 use easy_cast::Conv;
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 /// How many rows go into one `save_bulk` / `push_batch` transaction while seeding.
@@ -102,7 +101,7 @@ impl Rng {
 pub struct HistoryGen {
     rng: Rng,
     sessions: Vec<String>,
-    base: OffsetDateTime,
+    base: Timestamp,
     produced: u64,
 }
 
@@ -126,7 +125,7 @@ impl HistoryGen {
             rng,
             sessions,
             // ~2022-07-05, one entry every 30s from there.
-            base: OffsetDateTime::from_unix_timestamp(1_657_000_000).unwrap(),
+            base: Timestamp::from_second(1_657_000_000).unwrap(),
             produced: 0,
         }
     }
@@ -165,7 +164,7 @@ impl HistoryGen {
 
         History::from_db()
             .id(HistoryId::from(uuid_v7()))
-            .timestamp(self.base + time::Duration::seconds(i64::conv(ordinal) * 30))
+            .timestamp(self.base + jiff::SignedDuration::from_secs(i64::conv(ordinal) * 30))
             .command(command)
             .cwd(cwd)
             .exit(exit)
@@ -202,11 +201,24 @@ pub struct Seeded {
 
 pub const UNIQUE_SAMPLE: usize = 500;
 
-/// Whether the search index would carry this entry (mirrors `SearchIndex::add_history` with the
-/// default "all shells" filter).
+/// Whether the search index would carry this entry. This mirrors `SearchIndex::add_history_at`
+/// with the default filter, which includes every shell.
 #[must_use]
 pub fn index_eligible(history: &History) -> bool {
-    !history.is_agent() && Uuid::parse_str(&history.session).is_ok()
+    !history.is_agent() && history.deleted_at.is_none() && Uuid::parse_str(&history.session).is_ok()
+}
+
+/// Add `histories` to `index` the way the daemon does. If `db` is given, they are saved to it too.
+///
+/// The entries are registered with the index before they are saved. That way a racing rebuild
+/// keeps each of them exactly once.
+pub async fn save_and_index(index: &SharedSearchIndex, db: Option<&Sqlite>, histories: &[History]) {
+    let permit = index.begin_add().await;
+    permit.register(histories);
+    if let Some(db) = db {
+        db.save_bulk(histories).await.expect("saving history");
+    }
+    permit.add_history(histories);
 }
 
 /// Insert `rows` generated entries into `db` in `SEED_BATCH` transactions, streaming so a 1M-row
@@ -216,16 +228,16 @@ pub async fn seed_history_db(
     db: &Sqlite,
     history_gen: &mut HistoryGen,
     rows: usize,
-    index: Option<&Arc<RwLock<SearchIndex>>>,
+    index: Option<&Arc<SharedSearchIndex>>,
 ) -> Seeded {
     let mut seeded = Seeded::default();
     let mut remaining = rows;
     while remaining > 0 {
         let take = remaining.min(SEED_BATCH);
         let batch: Vec<History> = (0..take).map(|_| history_gen.next()).collect();
-        db.save_bulk(&batch).await.expect("seeding history db");
-        if let Some(index) = index {
-            index.read().await.add_histories(&batch);
+        match index {
+            Some(index) => save_and_index(index, Some(db), &batch).await,
+            None => db.save_bulk(&batch).await.expect("seeding history db"),
         }
         for history in &batch {
             seeded.ids.push(history.id);

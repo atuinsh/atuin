@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::pi::session::{PiMessage, PiSession};
@@ -30,7 +30,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
         .map(|(n, m)| RehydrateMessage {
             source_id: m.id().map_or_else(|| format!("synthetic-{n}"), |id| id.to_string()),
             parent_source_id: m.parent_id().map(|p| p.to_string()),
-            timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            timestamp: m.timestamp().unwrap_or(Timestamp::UNIX_EPOCH),
             role: m.role(),
             content: m.content(),
             model: m.model(),
@@ -52,7 +52,7 @@ fn session(id: &str, cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSe
         original_cwd: Some(PathBuf::from("/home/u/proj")),
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::UNIX_EPOCH,
+        started_at: Timestamp::UNIX_EPOCH,
         messages,
         fork_of: None,
     }
@@ -134,7 +134,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role,
         content,
         model: Some("claude-sonnet-5".to_owned()),
@@ -636,6 +636,14 @@ fn omp_without_a_default_opens_on_the_model_it_last_started_on() {
     at(&older, 1_000);
     at(&newer, 2_000);
     at(&written, 3_000);
+    // A subagent of the newer session ran on a model of its own. Its transcript has no title slot,
+    // and its model is not the one omp started a session on.
+    std::fs::create_dir(dir.join("newer")).unwrap();
+    let scout = dir.join("newer").joined("0-Scout.jsonl");
+    let header = json!({"type": "session", "version": 3, "id": "scout", "cwd": "/src/proj"});
+    let change = json!({"type": "model_change", "id": "3", "model": "cheap/scout"});
+    std::fs::write(&scout, format!("{header}\n{change}\n")).unwrap();
+    at(&scout, 3_500);
     // pi's sessions, newer still, in the same directory: no title slot, and pi's own shape.
     for n in 0..20 {
         let path = dir.join(format!("pi-{n}.jsonl"));

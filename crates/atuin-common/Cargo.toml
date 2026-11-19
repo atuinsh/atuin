@@ -13,9 +13,11 @@ version.workspace = true
 
 [features]
 # Enables `atuin_common::harnesstools`.
-ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:zstd", "sqlite"]
+ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:yaml-rust2", "dep:zstd", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
+# Enables `atuin_common::config`.
+config = ["dep:config"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
 db = ["dep:sqlx"]
 # Enables `atuin_common::fs::tree_watcher`.
@@ -25,7 +27,7 @@ jsonl = ["io"]
 # Enables `atuin_common::io`.
 io = ["os"]
 # Enables `atuin_common::os`.
-os = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-service-management", "dep:rustix", "dep:windows-sys"]
+os = ["dep:libc", "dep:objc2", "dep:objc2-foundation", "dep:objc2-service-management", "dep:windows-sys"]
 # Enables protobuf derives and conversions throughout the crate.
 proto = ["dep:prost"]
 # Enables `atuin_common::db::sqlite`.
@@ -43,6 +45,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
 colored = { workspace = true }
+config = { workspace = true, optional = true }
 crypto_secretbox = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
@@ -58,6 +61,7 @@ i18n-embed = { workspace = true }
 i18n-embed-fl = { workspace = true }
 imara-diff = { workspace = true, optional = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true }
 notify = { workspace = true }
@@ -87,7 +91,6 @@ strum_macros = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }
@@ -101,12 +104,15 @@ url = { workspace = true }
 uuid = { workspace = true }
 # Digests the item a session checkpoint was taken after; xxh3 is stable across versions.
 xxhash-rust = { workspace = true, optional = true }
+yaml-rust2 = { workspace = true, optional = true }
 zeroize = { workspace = true }
 # Codex compresses the rollouts of threads left a week (`.jsonl.zst`).
 zstd = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+# Not optional: `PathExt::is_writable` asks access(2) through it, and tempfile builds it anyway.
+rustix = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true, optional = true }
@@ -119,6 +125,7 @@ windows-sys = { workspace = true, optional = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+rmp-serde = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

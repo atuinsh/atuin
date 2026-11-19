@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::json_hooks::HookStyle;
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
@@ -31,6 +32,18 @@ impl Harness for Copilot {
         "copilot"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Copilot"
+    }
+
+    fn program(&self) -> &'static str {
+        "copilot"
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["COPILOT_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["github-copilot", "copilot-cli"]
     }
@@ -39,10 +52,31 @@ impl Harness for Copilot {
     /// takes Claude Code's entries and sends Claude Code's payload (`hook_event_name`,
     /// `tool_name` `Bash`, `tool_input.command`), so atuin's hook reads it as Claude Code's
     /// (verified against Copilot CLI 1.0.104).
+    ///
+    /// The hook is registered as `exec` and `args` rather than a `command` string: on Windows
+    /// Copilot runs commands through PowerShell, which cannot parse a quoted executable path at
+    /// the start of one.
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         let config_path = copilot_home().joined("hooks").joined("atuin.json");
-        json_hooks::install_in(&config_path, "^Bash$", self.name(), json!({"version": 1})).await?;
+        json_hooks::install_in(
+            &config_path,
+            "^Bash$",
+            self.name(),
+            HookStyle::Exec,
+            json!({"version": 1}),
+        )
+        .await?;
         Ok(config_path)
+    }
+
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&copilot_home().joined("hooks").joined("atuin.json"), self.name()).await
+    }
+
+    /// The file goes with atuin's hooks, unless something else was put in it.
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        let config_path = copilot_home().joined("hooks").joined("atuin.json");
+        json_hooks::uninstall_own(&config_path, self.name(), &json!({"version": 1})).await
     }
 
     /// `copilot --resume=<id>`. Copilot finds the session from anywhere and reopens it in the
@@ -56,7 +90,7 @@ impl Harness for Copilot {
             ));
         }
         let args = [format!("--resume={}", target.id)];
-        Ok(resume::plan(target, CwdRequirement::None, "copilot", args))
+        Ok(resume::plan(target, CwdRequirement::None, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -64,8 +98,8 @@ impl Harness for Copilot {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

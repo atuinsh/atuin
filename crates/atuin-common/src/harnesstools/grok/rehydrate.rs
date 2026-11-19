@@ -20,9 +20,8 @@
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use super::session::{
     ATUIN_PATCH, AtuinSidecar, SIDECAR_FILE, SUMMARY_FILE, TRANSCRIPT_FILE, UPDATES_FILE,
@@ -139,10 +138,8 @@ pub(crate) fn join_jsonl(lines: &[Value]) -> String {
     out
 }
 
-pub(crate) fn timestamp(at: OffsetDateTime) -> String {
-    let format =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z");
-    at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+pub(crate) fn timestamp(at: Timestamp) -> String {
+    jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%.6fZ", at).unwrap_or_default()
 }
 
 /// Build the `summary.json` object Grok Build reads to list and reopen a session.
@@ -296,11 +293,10 @@ struct Piece {
     read_content: Vec<Content>,
 }
 
-fn update_envelope(session_id: &str, at: OffsetDateTime, update: Value) -> Value {
-    let agent_ms = i64::try_from(at.unix_timestamp_nanos() / 1_000_000)
-        .unwrap_or_else(|_| at.unix_timestamp().saturating_mul(1_000));
+fn update_envelope(session_id: &str, at: Timestamp, update: Value) -> Value {
+    let agent_ms = at.as_millisecond();
     let mut envelope = json!({
-        "timestamp": at.unix_timestamp(),
+        "timestamp": at.as_second(),
         "method": "session/update",
         "params": {"sessionId": session_id, "_meta": {"agentTimestampMs": agent_ms}},
     });
@@ -559,7 +555,7 @@ mod tests {
         RehydrateMessage {
             source_id: id.to_owned(),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+            timestamp: Timestamp::from_second(at).unwrap(),
             role,
             content,
             model: None,
@@ -585,7 +581,7 @@ mod tests {
             original_cwd: Some(PathBuf::from("/remote/proj")),
             git_branch: Some("main".to_owned()),
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             messages: vec![
                 sample_msg(
                     "u1",
@@ -662,8 +658,8 @@ mod tests {
             Some(SessionId::from("01a18220-0000-7000-8000-000000000000".to_owned()))
         );
         assert_eq!(before_rewrite[0].parent_kind(), Some(ParentKind::Fork));
-        assert_eq!(before_rewrite[2].timestamp().unwrap().unix_timestamp(), 1_700_000_010);
-        assert_eq!(before_rewrite[5].timestamp().unwrap().unix_timestamp(), 1_700_000_030);
+        assert_eq!(before_rewrite[2].timestamp().unwrap().as_second(), 1_700_000_010);
+        assert_eq!(before_rewrite[5].timestamp().unwrap().as_second(), 1_700_000_030);
 
         let mut rewritten =
             vec![json!({"type": "system", "content": "x".repeat(5059)}).to_string()];
@@ -719,7 +715,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             // Continued from another agent: ids that are no line's content key.
             messages: vec![
                 sample_msg("u1", Role::User, vec![Content::Text("look".to_owned())], 10),
@@ -830,7 +826,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             messages: vec![
                 sample_msg(
                     "u1",
@@ -936,7 +932,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             messages: vec![sample_msg(
                 "u1",
                 Role::User,
@@ -974,7 +970,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             messages: vec![sample_msg(
                 "u1",
                 Role::User,

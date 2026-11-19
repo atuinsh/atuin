@@ -3,6 +3,7 @@ pub mod lock;
 pub mod tree_watcher;
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// A path that is removed when this type is dropped.
 pub struct RemoveOnDropPath<P: AsRef<Path> = PathBuf>(
@@ -186,8 +187,45 @@ fn copy_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     written
 }
 
+/// The newest modification time of any file under `root`. Symlinks are not followed, and entries
+/// that can't be read are skipped. Returns `None` when there are no files.
+#[must_use]
+pub fn newest_modified(root: PathBuf) -> Option<SystemTime> {
+    newest_modified_where(root, |_| true)
+}
+
+/// The newest modification time of the files under `root` that `keep` accepts. Symlinks are not
+/// followed, and entries that can't be read are skipped. Returns `None` when no file is accepted.
+#[must_use]
+pub fn newest_modified_where(
+    root: PathBuf,
+    mut keep: impl FnMut(&std::fs::DirEntry) -> bool,
+) -> Option<SystemTime> {
+    let mut newest = None;
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file() && keep(&entry) {
+                let modified = entry.metadata().and_then(|meta| meta.modified()).ok();
+                newest = newest.max(modified);
+            }
+        }
+    }
+    newest
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use rstest::rstest;
 
     use super::*;
@@ -287,5 +325,34 @@ mod tests {
         let other = dir.path().join("b.jsonl");
         copy_new(&other, b"mine").unwrap();
         assert_eq!(std::fs::read(&other).unwrap(), b"mine");
+    }
+
+    #[rstest]
+    fn newest_modified_finds_the_newest_file_in_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("old.jsonl"), dir.path().join("a/b/new.jsonl"));
+        std::fs::create_dir_all(new.parent().unwrap()).unwrap();
+        std::fs::write(&old, "").unwrap();
+        std::fs::write(&new, "").unwrap();
+        let (then, later) = (
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(2_000),
+        );
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(then).unwrap();
+        std::fs::File::options().write(true).open(&new).unwrap().set_modified(later).unwrap();
+
+        assert_eq!(newest_modified(dir.path().to_path_buf()), Some(later));
+    }
+
+    #[rstest]
+    #[case::missing(false)]
+    #[case::empty(true)]
+    fn newest_modified_is_none_without_files(#[case] exists: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        if exists {
+            std::fs::create_dir_all(root.join("project")).unwrap();
+        }
+        assert_eq!(newest_modified(root), None);
     }
 }

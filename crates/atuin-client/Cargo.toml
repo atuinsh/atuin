@@ -17,7 +17,8 @@ sync = ["reqwest", "dep:reqwest-middleware"]
 hub = ["reqwest"]
 daemon = []
 check-update = []
-octavo = []
+ai = ["atuin-common/ai"]
+octavo = ["ai", "dep:mlua"]
 # Derive the protobuf enum traits on domain enums the daemon and atuin-octavo extern-path into
 # their codegen.
 proto = ["dep:prost"]
@@ -26,7 +27,7 @@ proto = ["dep:prost"]
 vendored-tls = ["reqwest?/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["ai", "os", "sqlite"] }
+atuin-common = { workspace = true, features = ["config", "os", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-vt100 = { workspace = true }
 
@@ -45,9 +46,11 @@ futures = { workspace = true }
 i18n-embed = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 libsqlite3-sys = { workspace = true }
 memchr = { workspace = true }
 minspan = { workspace = true }
+mlua = { workspace = true, optional = true }
 notify = { workspace = true }
 prost = { workspace = true, optional = true }
 rand = { workspace = true }
@@ -57,6 +60,7 @@ rust-embed = { workspace = true }
 secrecy = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
+serde_ignored = { workspace = true }
 serde_json = { workspace = true }
 serde_regex = { workspace = true }
 serde_with = { workspace = true }
@@ -65,7 +69,7 @@ sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 rusqlite = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = ["macros", "formatting", "parsing"] }
+time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use crate::harnesstools::note::{Part, render, tool_note};
 use crate::harnesstools::session::{Content, Role, StopReason, ToolCallId, Usage};
@@ -16,7 +16,7 @@ pub struct RehydrateMessage {
     /// back verbatim so re-capturing the rehydrated transcript dedups against the synced rows.
     pub source_id: String,
     pub parent_source_id: Option<String>,
-    pub timestamp: OffsetDateTime,
+    pub timestamp: Timestamp,
     pub role: Role,
     pub content: Vec<Content>,
     pub model: Option<String>,
@@ -39,7 +39,7 @@ pub struct RehydrateSession {
     pub original_cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
     pub model: Option<String>,
-    pub started_at: OffsetDateTime,
+    pub started_at: Timestamp,
     pub messages: Vec<RehydrateMessage>,
     /// Set on a fork ([`crate::harnesstools::fork`]): the session it was forked from, which the
     /// writer links it to the way its harness links a fork of its own.
@@ -56,6 +56,24 @@ pub struct ForkOf {
     /// Its transcript on this machine: pi names a fork's parent by its file, and a Codex fork
     /// continues the history the original's rollout continues (its `history_base`).
     pub path: Option<PathBuf>,
+}
+
+/// A session written out by [`Harness::rehydrate`](crate::harnesstools::Harness::rehydrate).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rehydrated {
+    /// Where it went, as [`Harness::locate`](crate::harnesstools::Harness::locate) finds it.
+    pub path: PathBuf,
+    /// What the writer had to leave out for the harness to take it, for the user to read beside
+    /// the status line: `trimmed 11 tool outputs to fit Hermes's 5 MiB import limit`.
+    pub note: Option<String>,
+}
+
+impl Rehydrated {
+    /// Written out whole, at `path`.
+    #[must_use]
+    pub const fn at(path: PathBuf) -> Self {
+        Self { path, note: None }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -541,7 +559,9 @@ pub(crate) mod testing {
                 Content::Summary(_) | Content::Error(_) | Content::ReasoningSummary { .. } => {
                     Some(c.clone())
                 }
-                Content::Text(_) | Content::Other(_) | Content::Patch(_) => None,
+                Content::Text(_) | Content::Other(_) | Content::Patch(_) | Content::Unknown(_) => {
+                    None
+                }
             })
             .collect()
     }

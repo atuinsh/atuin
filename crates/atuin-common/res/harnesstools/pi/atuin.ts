@@ -4,7 +4,7 @@
  * Tracks bash commands executed by pi in Atuin history with author `pi`.
  *
  * Install with:
- *   atuin hook install pi
+ *   atuin setup --only --agent-history
  *
  * Then restart pi or run /reload.
  */
@@ -12,6 +12,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const ATUIN_AUTHOR = "pi";
+// Replaced with atuin's absolute path at install: a harness started outside a shell doesn't have
+// the shell's PATH.
+const ATUIN = "atuin";
 const ATUIN_TIMEOUT_MS = 10_000;
 
 async function startHistory(
@@ -21,7 +24,7 @@ async function startHistory(
 ): Promise<string | undefined> {
 	try {
 		const result = await pi.exec(
-			"atuin",
+			ATUIN,
 			[
 				"history",
 				"start",
@@ -52,7 +55,7 @@ async function endHistory(
 ): Promise<void> {
 	try {
 		await pi.exec(
-			"atuin",
+			ATUIN,
 			["history", "end", historyId, "--exit", String(exitCode)],
 			{ cwd, timeout: ATUIN_TIMEOUT_MS },
 		);

@@ -117,6 +117,64 @@ steps:
       - 'section ":shell: Install ble.sh" .buildkite/scripts/install-blesh.sh'
       - .buildkite/scripts/run-tests.sh linux
 
+  # The README demos (demos/*.tape), rendered by betamax with the atuin in
+  # the Linux test archive (demos.sh). Runs in mono's CI image, since betamax
+  # needs a newer glibc than the hosted image has. A Wait that times out
+  # fails the step, so the tapes double as smoke tests of the search UI.
+  # Renders the README demos (demos/) only for a release, as the agent demos
+  # spend API tokens: on mono's main, when the commit is the release PR
+  # (chore(release): prepare for release ...). A build started with
+  # RENDER_DEMOS=1 renders them on any branch, for trying a demo change.
+  - label: ":movie_camera: Demos"
+    key: demos
+    if: |
+      pipeline.slug == "mono" && (
+        (build.branch == pipeline.default_branch &&
+          build.message =~ /^chore\(release\): prepare for release/) ||
+        build.env("RENDER_DEMOS") == "1"
+      )
+    depends_on: build-tests
+    timeout_in_minutes: 20
+    retry: *infra-retry
+    # The agent demos' keys. The secrets' policy keeps them to mono.
+    secrets:
+      ANTHROPIC_API_KEY: ANTHROPIC_CI_KEY
+      OPENAI_API_KEY: OPENAI_CI_KEY
+    command: .buildkite/scripts/demos.sh
+    plugins:
+      # Not mono's CI image: betamax's Linux binaries need glibc 2.43, which
+      # Ubuntu 26.04 has. demos.sh installs the rest.
+      - docker#v5.12.0:
+          image: "ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96"
+          mount-buildkite-agent: true
+          environment:
+            - ANTHROPIC_API_KEY
+            - OPENAI_API_KEY
+
+  # Publishes a release's demos to the atuin-demos Cloudflare Pages project
+  # (atuin-demos.pages.dev), which the README links. Never from a branch, even
+  # one started with RENDER_DEMOS=1.
+  - label: ":cloudflare: Publish demos"
+    key: demos-publish
+    if: |
+      pipeline.slug == "mono" && build.branch == pipeline.default_branch &&
+        build.message =~ /^chore\(release\): prepare for release/
+    depends_on: demos
+    image: "ghcr.io/atuinsh/ci:main"
+    concurrency: 1
+    concurrency_group: atuin/demos-publish
+    timeout_in_minutes: 10
+    retry: *infra-retry
+    secrets:
+      CLOUDFLARE_API_TOKEN: CLOUDFLARE_BK_CI_PAGES_TOKEN
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ccd497d5b2f0e6dbcbf964415bd0daf6
+      WRANGLER_SEND_METRICS: "false"
+      # The image's mise has no Node pinned outside web/, so wrangler's
+      # `node` needs one named.
+      MISE_NODE_VERSION: "26.12.1"
+    command: .buildkite/scripts/demos-publish.sh
+
   # Unit and e2e tests; the integration tests need Postgres, which only the
   # Linux agents run.
   - label: ":test_tube: Tests (macOS) %n"

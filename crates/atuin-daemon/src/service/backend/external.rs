@@ -99,7 +99,8 @@ impl External {
     /// Only if that brings up this client's build: every client of this build would otherwise
     /// restart it again.
     pub(in crate::service) async fn restart(&self) -> Result<(), BackendError> {
-        self.ensure_restarts_as(&atuin_common::os::process::current_exe()).await?;
+        let exe = atuin_common::os::process::current_exe().map_err(BackendError::new)?;
+        self.ensure_restarts_as(&exe).await?;
 
         // A client that gives up waiting leaves the manager's command running, and the restart
         // finishes anyway.

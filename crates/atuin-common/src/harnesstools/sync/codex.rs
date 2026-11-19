@@ -472,7 +472,7 @@ fn extend(
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::now_utc(),
+        started_at: jiff::Timestamp::now(),
         messages: Vec::new(),
         fork_of: None,
     };

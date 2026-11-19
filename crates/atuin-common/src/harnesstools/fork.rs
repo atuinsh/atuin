@@ -28,13 +28,13 @@
 //! database, and `opencode import` skips one that exists already, so its writer gives a fork
 //! fresh ones.
 
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::rehydrate::{ForkOf, RehydrateMessage, RehydrateSession};
 use super::{AnyHarness, continuation};
 
-/// `original`, recorded by `harness`, as a new session of it forked from `of`: its rows up to
-/// `tip` (the row of that source id, it included), or all of them. `None` when no row is `tip`.
+/// `original`, recorded by `harness`, as a new session of it forked from `of`: its rows up to and
+/// including the row whose source id is `tip`, or all of them. `None` when no row is `tip`.
 #[must_use]
 pub fn fork(
     harness: AnyHarness,
@@ -47,7 +47,7 @@ pub fn fork(
         None => original.messages.clone(),
     };
     Some(RehydrateSession {
-        id: continuation::new_session_id(harness, OffsetDateTime::now_utc()),
+        id: continuation::new_session_id(harness, Timestamp::now()),
         messages,
         fork_of: Some(of),
         ..original.clone()

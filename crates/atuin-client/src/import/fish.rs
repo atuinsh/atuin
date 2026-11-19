@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use atuin_common::env;
 use atuin_common::path::PathBufExt as _;
 use eyre::{Result, eyre};
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::{Importer, Loader, unix_byte_lines};
 use crate::history::History;
@@ -59,11 +59,11 @@ impl Importer for Fish {
     }
 
     async fn load(self, loader: &mut impl Loader) -> Result<()> {
-        let now = OffsetDateTime::now_utc();
-        let mut time: Option<OffsetDateTime> = None;
+        let now = Timestamp::now();
+        let mut time: Option<Timestamp> = None;
         let mut cmd: Option<String> = None;
 
-        let mut process_cmd = async |cmd: &mut Option<String>, time: Option<OffsetDateTime>| {
+        let mut process_cmd = async |cmd: &mut Option<String>, time: Option<Timestamp>| {
             let Some(cmd) = cmd.take() else {
                 return Ok(());
             };
@@ -96,11 +96,7 @@ impl Importer for Fish {
                 // ignore the line if it is not an int, or is outside the range we can
                 // represent - keeping the previous entry's timestamp preserves ordering,
                 // and a corrupt entry must not abort the import
-                time = t
-                    .parse::<i64>()
-                    .ok()
-                    .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
-                    .or(time);
+                time = t.parse::<i64>().ok().and_then(|t| Timestamp::from_second(t).ok()).or(time);
             } else {
                 // ... ignore paths lines
             }
@@ -141,9 +137,9 @@ mod test {
         assert_eq!(commands, ["echo before", "echo corrupt", "echo after"]);
 
         // the corrupt entry inherits its predecessor's timestamp, so ordering holds
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
-        assert_eq!(loader.buf[1].timestamp.unix_timestamp(), 1_639_162_832);
-        assert_eq!(loader.buf[2].timestamp.unix_timestamp(), 1_639_162_851);
+        assert_eq!(loader.buf[0].timestamp.as_second(), 1_639_162_832);
+        assert_eq!(loader.buf[1].timestamp.as_second(), 1_639_162_832);
+        assert_eq!(loader.buf[2].timestamp.as_second(), 1_639_162_851);
     }
 
     #[tokio::test]
@@ -195,7 +191,7 @@ ERROR
             ($timestamp:expr_2021, $command:expr_2021) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
-                assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
+                assert_eq!(h.timestamp.as_second(), $timestamp);
             };
         }
 

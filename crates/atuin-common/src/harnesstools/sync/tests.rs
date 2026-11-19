@@ -1,6 +1,6 @@
+use jiff::Timestamp;
 use rstest::rstest;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::AnyHarness;
@@ -11,7 +11,7 @@ fn row(id: &str, parent: Option<&str>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role: Role::User,
         content: Vec::new(),
         model: None,
@@ -141,7 +141,7 @@ fn backups_never_overwrite_each_other() {
     let backups = tempfile::tempdir().unwrap();
     let dir = backups.path().join("claude-code");
     let path = Path::new("/home/me/.claude/projects/-work/5e55.jsonl");
-    let at = time::macros::datetime!(2026-10-05 12:34:56.789 UTC);
+    let at = "2026-10-05T12:34:56.789Z".parse::<Timestamp>().unwrap();
     let first = keep_backup(path, b"first\n", &dir, at).unwrap();
     assert_eq!(first, dir.join("5e55-20261005T123456.789Z.jsonl"));
     let second = keep_backup(path, b"second\n", &dir, at).unwrap();

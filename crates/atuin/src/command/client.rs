@@ -35,6 +35,7 @@ mod doctor;
 mod dotfiles;
 mod halloween;
 mod history;
+#[cfg(feature = "ai")]
 mod hook;
 mod import;
 mod info;
@@ -53,6 +54,8 @@ mod store;
 mod trick_or_treat;
 #[cfg(feature = "self-update")]
 mod update;
+#[cfg(feature = "octavo")]
+mod workspace;
 mod wrapped;
 
 #[derive(Subcommand, Debug, Couture)]
@@ -127,13 +130,14 @@ pub enum Cmd {
     #[couture(category = "data")]
     Scripts(scripts::Cmd),
 
+    #[cfg(feature = "ai")]
     #[command(about = fl!("cmd-hook"))]
     #[couture(category = "advanced")]
     Hook(hook::Cmd),
 
-    /// Run the AI assistant
+    /// `atuin threads`, as it was called before, and what old shell init scripts call.
     #[cfg(feature = "ai")]
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     #[couture(category = "ai")]
     Ai(atuin_ai::commands::Command),
 
@@ -170,6 +174,11 @@ pub enum Cmd {
     #[command(subcommand)]
     #[couture(category = "setup")]
     Config(config::Cmd),
+
+    #[cfg(feature = "octavo")]
+    #[command(subcommand, about = fl!("cmd-workspace"))]
+    #[couture(category = "setup")]
+    Workspace(workspace::Cmd),
 
     #[command(about = fl!("cmd-info"))]
     #[couture(category = "advanced")]
@@ -215,17 +224,12 @@ enum Quiet {
 
 impl Cmd {
     pub fn run(self) -> Result<()> {
-        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do, and
-        // `atuin threads enable` is `atuin config enable threads`.
+        // `atuin threads` and `atuin resume` are `atuin ai`'s, so they run exactly as those do.
         #[cfg(feature = "ai")]
         match self {
-            #[cfg(feature = "daemon")]
-            Self::Threads(atuin_ai::commands::ThreadsCmd::Enable)
-            | Self::Ai(atuin_ai::commands::Command::Threads(
-                atuin_ai::commands::ThreadsCmd::Enable,
-            )) => {
-                let feature = config::Feature::Threads;
-                return Self::Config(config::Cmd::Enable(config::EnableCmd { feature })).run();
+            Self::Ai(atuin_ai::commands::Command::Inline { args }) => {
+                atuin_ai::commands::inline(&args);
+                return Ok(());
             }
             Self::Threads(cmd) => return Self::Ai(cmd.into()).run(),
             Self::Resume(cmd) => return Self::Ai(atuin_ai::commands::Command::Resume(cmd)).run(),
@@ -241,6 +245,7 @@ impl Cmd {
             atuin_daemon::service::Subproc::daemonize()?;
         }
 
+        // The resume picker's search, transcript and detail workers run alongside its UI.
         #[cfg(feature = "ai")]
         let use_multi_thread_runtime = matches!(&self, Self::Ai(_));
         #[cfg(not(feature = "ai"))]
@@ -271,7 +276,7 @@ impl Cmd {
     /// `Ok(Some(future))` where `future` will run the command when awaited. Returns `Err` on error.
     fn run_inner(self) -> Result<Option<impl Future<Output = Result<()>>>> {
         let run_internal = if let Self::Internal(cmd) = &self {
-            match cmd.run() {
+            match cmd.run()? {
                 Some(func) => Some(func),
                 None => return Ok(None),
             }
@@ -314,24 +319,24 @@ impl Cmd {
     }
 
     #[allow(clippy::too_many_lines)]
-    // `atuin_ai::commands::run` is not `Send` because `eye_declare` holds a `StdoutLock` across
-    // await points.
-    #[allow(clippy::future_not_send)]
     async fn run_async(self, mut settings: Settings, messages: Held) -> Result<()> {
         tracing::trace!(command = ?self, "client command");
-        let mut theme_manager = theme::ThemeManager::from_settings(&settings.theme);
+        let mut theme_manager = theme::ThemeManager::default();
 
         // Skip initializing any databases for history
         // This is a pretty hot path, as it runs before and after every single command the user
         // runs
         match self {
             Self::History(history) => return history.run(&Arc::new(settings)).await,
+            #[cfg(feature = "ai")]
             Self::Hook(hook) => return hook.run(&Arc::new(settings)).await,
             Self::Init(init) => return init.run(&settings).await,
             Self::Doctor => return doctor::run(&settings).await,
             #[cfg(feature = "self-update")]
             Self::Update(update) => return update.run(&settings).await,
             Self::Config(config) => return config.run(&Arc::new(settings)).await,
+            #[cfg(feature = "octavo")]
+            Self::Workspace(workspace) => return workspace.run(),
             // Opens the databases itself, once no other daemon can be using them.
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
@@ -349,7 +354,7 @@ impl Cmd {
         let sqlite_store = SqliteStore::new(record_store_path, settings.local_timeout).await?;
 
         let theme_name = settings.theme.name.clone();
-        let theme = theme_manager.load_theme(theme_name.as_str(), settings.theme.max_depth);
+        let theme = theme_manager.load_theme(theme_name.as_str());
 
         match self {
             Self::Setup(setup) => setup.run(&settings, &db, &sqlite_store).await,
@@ -397,7 +402,6 @@ impl Cmd {
             Self::TrickOrTreat(cmd) => cmd.run(&db, &settings).await,
 
             Self::History(_)
-            | Self::Hook(_)
             | Self::Init(_)
             | Self::Doctor
             | Self::Config(_)
@@ -412,8 +416,11 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(_) => unreachable!(),
 
+            #[cfg(feature = "octavo")]
+            Self::Workspace(_) => unreachable!(),
+
             #[cfg(feature = "ai")]
-            Self::Threads(_) | Self::Resume(_) => unreachable!(),
+            Self::Hook(_) | Self::Threads(_) | Self::Resume(_) => unreachable!(),
 
             #[cfg(feature = "ai")]
             Self::Ai(cli) => {
@@ -523,7 +530,6 @@ mod tests {
         case::change_new(&["account", "change-password", "--new-password", SECRET])
     )]
     #[case::rekey(&["store", "rekey", SECRET])]
-    #[cfg_attr(feature = "ai", case::ai_token(&["ai", "inline", "--api-token", SECRET]))]
     fn debug_redacts_argv_secrets(#[case] args: &[&str]) {
         let cli = Cli::try_parse_from(std::iter::once("atuin").chain(args.iter().copied()))
             .expect("the argv parses");

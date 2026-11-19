@@ -1,6 +1,5 @@
 //! `atuin_output`: read the captured output of one command by history ID.
 
-use std::path::Path;
 use std::str::FromStr;
 
 use atuin_client::history::HistoryId;
@@ -9,8 +8,7 @@ use eyre::Result;
 use serde::Deserialize;
 
 use super::{NO_OUTPUT_ADVICE, format_chunked_output_line_views_for_llm};
-use crate::permissions::rule::Rule;
-use crate::tools::{PermissibleToolCall, ToolOutcome};
+use crate::tools::ToolOutcome;
 
 #[derive(Debug, Clone)]
 pub struct AtuinOutputToolCall {
@@ -19,10 +17,6 @@ pub struct AtuinOutputToolCall {
     /// expressed as `[0, -1]` -- where `-1` refers to the element with cursor offset 1 from the end
     /// of the slice.
     pub ranges: Vec<PyStyleIdxRange>,
-    /// The command the history entry ran, resolved from the local history
-    /// db after parsing (`Effect::ResolveOutputCommand`). Display-only:
-    /// `None` until the lookup lands, or when the id isn't known locally.
-    pub command: Option<String>,
 }
 
 /// `atuin_output`'s arguments as sent. An argument the schema doesn't list is an error rather
@@ -50,18 +44,7 @@ impl TryFrom<&serde_json::Value> for AtuinOutputToolCall {
                 .into_iter()
                 .map(|[start, end]| PyStyleIdxRange::new(start, end))
                 .collect(),
-            command: None,
         })
-    }
-}
-
-impl PermissibleToolCall for AtuinOutputToolCall {
-    fn target_dir(&self) -> Option<&Path> {
-        None
-    }
-
-    fn matches_rule(&self, rule: &Rule) -> bool {
-        rule.tool == "AtuinOutput"
     }
 }
 
@@ -69,13 +52,13 @@ impl AtuinOutputToolCall {
     pub(crate) async fn execute(&self) -> ToolOutcome {
         let settings = match atuin_client::settings::Settings::new() {
             Ok(settings) => settings,
-            Err(e) => return ToolOutcome::Error(format!("Failed to load Atuin settings: {e}")),
+            Err(e) => return Err(format!("Failed to load Atuin settings: {e}")),
         };
 
         let mut client = match atuin_daemon::HistoryClient::from_settings(&settings).await {
             Ok(client) => client,
             Err(e) => {
-                return ToolOutcome::Error(format!(
+                return Err(format!(
                     "Captured output is unavailable: could not connect to the Atuin daemon ({e}). \
                      History search still works. {NO_OUTPUT_ADVICE}"
                 ));
@@ -85,7 +68,7 @@ impl AtuinOutputToolCall {
         let history_id = self.history_id;
 
         let not_found = || {
-            ToolOutcome::Success(format!(
+            Ok(format!(
                 "No captured output found for history ID {history_id}. Output is only captured \
                  for commands run in an Atuin-enabled terminal while the daemon was running; \
                  older output may also have been dropped. {NO_OUTPUT_ADVICE}"
@@ -103,12 +86,12 @@ impl AtuinOutputToolCall {
         let response = match client.get_command_output(history_id, ranges).await {
             Ok(Some(response)) => response,
             Ok(None) => return not_found(),
-            Err(e) => return ToolOutcome::Error(format!("Failed to fetch command output: {e}")),
+            Err(e) => return Err(format!("Failed to fetch command output: {e}")),
         };
 
         let body = format_chunked_output_line_views_for_llm(response.lines());
         if body.is_empty() {
-            return ToolOutcome::Success(if self.ranges.is_empty() {
+            return Ok(if self.ranges.is_empty() {
                 format!("Captured output for history ID {history_id} is empty.")
             } else {
                 format!("No lines selected from captured output for history ID {history_id}.")
@@ -123,7 +106,7 @@ impl AtuinOutputToolCall {
             totals
         };
 
-        ToolOutcome::Success(format!(
+        Ok(format!(
             "History ID: {history_id}\nTotal output: {total_output}\nSelected output:\n{body}"
         ))
     }

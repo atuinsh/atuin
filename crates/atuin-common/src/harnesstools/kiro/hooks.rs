@@ -24,7 +24,7 @@ const MATCHER: &str = "execute_bash";
 /// [`InstallHookError::AlreadyInstalled`] when the file already says exactly this, so a rerun
 /// after an upgrade or a moved binary rewrites it and nothing else does.
 pub async fn install(home: &Path, executable: &Path) -> Result<PathBuf, InstallHookError> {
-    let path = home.join("hooks").joined("atuin.json");
+    let path = path(home);
     let wanted = hook_file(&json_hooks::hook_command(executable, HARNESS)?);
 
     match tokio::fs::read_to_string(&path).await {
@@ -43,6 +43,12 @@ pub async fn install(home: &Path, executable: &Path) -> Result<PathBuf, InstallH
     tokio::fs::write(&path, serde_json::to_string_pretty(&wanted)? + "\n").await?;
 
     Ok(path)
+}
+
+/// Atuin's hook file under Kiro home `home`.
+#[must_use]
+pub fn path(home: &Path) -> PathBuf {
+    home.join("hooks").joined("atuin.json")
 }
 
 /// Kiro's "v2 hook file": one entry each for the start and the end of a shell command. There is

@@ -2,13 +2,16 @@ use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::fs::Permissions;
 use std::io;
+use std::io::Write as _;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt as _, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 
 use atuin_client::settings::Daemon as DaemonSettings;
+#[cfg(feature = "ai")]
+use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::os::macos::launchd;
 use atuin_common::os::macos::login_items::LoginItem;
 use atuin_common::os::unix::SecureTempDirError;
@@ -17,7 +20,7 @@ use plist::{Dictionary, Value};
 use rustix::process::Pid;
 use service_manager::{
     LaunchdServiceManager, RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager,
-    ServiceStopCtx, ServiceUninstallCtx,
+    ServiceStatus, ServiceStatusCtx, ServiceStopCtx, ServiceUninstallCtx,
 };
 use tokio::process::Command;
 use tracing::warn;
@@ -32,9 +35,11 @@ use crate::service::socket_holder::{Listening, SocketHolder};
 /// Represents a backend that runs atuin-daemon as a launchd agent in the user's `gui/<uid>`
 /// domain.
 ///
-/// launchd holds the agent's socket, keeps listening on it between agents, and starts the next one
-/// for the next client. The agent publishes the socket in its pidfile, so clients find it as they
-/// find any other daemon.
+/// launchd starts the agent at login and again if it crashes. The agent binds the socket and
+/// publishes it in the pidfile, just like a subprocess-managed daemon. We don't have launchd manage
+/// the socket because this causes it to create the socket's parent directory as root, which causes
+/// issues when that's also the directory where pty-proxy sockets are stored -- pty-proxy requires
+/// the directory to be owned by the current user.
 pub struct Launchd {
     daemon: DaemonSettings,
 }
@@ -51,6 +56,8 @@ pub enum LaunchdError {
     Disabled,
     #[error(transparent)]
     AtuinHome(#[from] atuin_common::dirs::HomeError),
+    #[error(transparent)]
+    Executable(#[from] atuin_common::atuin_exe::LaunchPathError),
     #[error("could not create the daemon's working directory {}: {source}", .path.display())]
     WorkingDir {
         path: PathBuf,
@@ -79,6 +86,11 @@ pub enum LaunchdError {
         path: PathBuf,
         source: io::Error,
     },
+    #[error("could not rewrite the launchd agent's plist {}: {source}", .path.display())]
+    PlistRewrite {
+        path: PathBuf,
+        source: io::Error,
+    },
     #[error("could not install the launchd agent: {0}")]
     Install(io::Error),
     #[error("could not stop the launchd agent: {0}")]
@@ -95,7 +107,8 @@ impl Launchd {
     pub(in crate::service) fn for_client(daemon: &DaemonSettings) -> Option<Self> {
         // The agent that runs is ours to stop from any of the user's sessions, such as over SSH
         // while someone else has the console. Stopped any other way, launchd would start it again
-        // for the next client, and a daemon started in its place couldn't bind launchd's socket.
+        // at the next login (or at the next connection for older agents that have launchd-managed
+        // sockets), and it would take over from a daemon started in its place.
         let ours = Self::runs_the_daemon(daemon)
             // Without `autostart`, something else manages the daemon, such as home-manager. One
             // installed while it was on is still ours to stop, though.
@@ -112,8 +125,8 @@ impl Launchd {
             && pidfile.info().is_some_and(|info| info.run_mode == Some(RunMode::LaunchdAgent))
     }
 
-    /// Whether launchd listens on the agent's socket, as it does for as long as the agent is
-    /// installed.
+    /// Whether launchd may listen on the agent's socket, as it does for older agents that have
+    /// launchd-managed sockets.
     pub(in crate::service) fn holds_socket() -> bool {
         Self::serves_this_profile() && Self::is_installed()
     }
@@ -162,6 +175,9 @@ impl Launchd {
 
     /// Who holds the socket to serve on, if launchd started this process as the agent.
     ///
+    /// The agent binds its own socket, or if there's a launchd-managed socket from an older agent,
+    /// takes the socket and drops it from the agent's plist.
+    ///
     /// Checking in only takes the socket launchd holds, so it may come before the pidfile. An agent
     /// that `daemon.enabled` has since switched off removes itself instead, rather than start again
     /// at every login.
@@ -172,15 +188,16 @@ impl Launchd {
         let holder = match Self::activate_socket() {
             Ok(listener) => {
                 tracing::info!("listening on launchd socket {}", socket_path.display());
+                Self::unpin_socket(daemon);
                 SocketHolder::Launchd(Listening {
                     listener: DaemonListener::from(listener),
                     socket: Some(SocketFile::kept_fresh(socket_path)),
                 })
             }
-            // launchd may not create the socket's directory in `$TMPDIR`, which macOS empties at
-            // boot. The agent binds the socket itself, as a forked daemon does, until it is next
-            // installed, but pinned in the plist, the socket is no default whose directory binding
-            // creates.
+            // On an older agent with a launchd-managed socket: launchd couldn't create the socket's
+            // directory, so the agent binds the socket itself. Because its plist pins the socket in
+            // `ATUIN_DAEMON__SOCKET_PATH`, Atuin sees `daemon.socket_path` as a configured path
+            // rather than a default one, and doesn't create the parent directory.
             Err(launchd::ActivateError::Sandboxed(_)) => {
                 if let Some(dir) = socket_path.parent()
                     && !dir.exists()
@@ -189,6 +206,14 @@ impl Launchd {
                         .map_err(|err| BackendError::new(LaunchdError::SocketDir(err)))?;
                 }
                 tracing::info!("launchd couldn't place its socket {}", socket_path.display());
+                Self::unpin_socket(daemon);
+                SocketHolder::Daemon
+            }
+            // The agent binds its own socket when its plist doesn't tell launchd to manage it.
+            Err(launchd::ActivateError::NotManaged | launchd::ActivateError::NotFound(_))
+                if Self::job_label()
+                    .is_some_and(|label| label == Self::label().to_qualified_name()) =>
+            {
                 SocketHolder::Daemon
             }
             // Started outside launchd, or by a job of someone else's, such as `brew services`.
@@ -205,6 +230,85 @@ impl Launchd {
             return Err(BackendError::new(LaunchdError::Disabled));
         }
         Ok(Some(holder))
+    }
+
+    /// Reconfigure an agent that uses a launchd-managed socket to manage its own socket instead.
+    ///
+    /// Older agents used to have launchd manage their socket. This method undoes that part of the
+    /// configuration.
+    ///
+    /// Takes effect on the next login. Until then, the agent keeps the socket launchd holds.
+    fn unpin_socket(daemon: &DaemonSettings) {
+        // Where the agent binds by default, which is where launchd held the socket unless the
+        // config named a different path.
+        let default_socket = DaemonSettings {
+            socket_path: None,
+            ..daemon.clone()
+        }
+        .socket_path()
+        .into_owned();
+
+        // The default socket path that a client without `TMPDIR` would use -- the same subpath, but
+        // in `/tmp`.
+        let tmpdirless_socket = default_socket
+            .strip_prefix(atuin_common::os::unix::tmp_dir())
+            .ok()
+            .map(|socket| Path::new("/tmp").join(socket));
+
+        let unpinned = || -> Result<bool, LaunchdError> {
+            let path = Self::plist_path().map_err(LaunchdError::PlistPath)?;
+            let mut plist = Value::from_file(&path)?;
+            let Some(dict) = plist.as_dictionary_mut() else {
+                return Ok(false);
+            };
+            if !AgentPlist::unpin_socket(dict, &default_socket, tmpdirless_socket.as_deref()) {
+                return Ok(false);
+            }
+
+            // Written next to it and renamed over it, so that launchd never loads half a plist.
+            let staged = path.with_extension("plist.new");
+            let write = || -> io::Result<()> {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&staged)?;
+                plist.to_writer_xml(&mut file).map_err(io::Error::other)?;
+                file.flush()?;
+                file.sync_all()?;
+                std::fs::rename(&staged, &path)
+            };
+            write().map_err(|source| LaunchdError::PlistRewrite { path, source })?;
+            Ok(true)
+        };
+
+        match unpinned() {
+            Ok(true) => tracing::info!(
+                "removed the socket from the launchd agent's plist: the agent will manage its own \
+                 socket now, starting at next login"
+            ),
+            Ok(false) => {}
+            Err(err) => warn!("could not remove the socket from the launchd agent's plist: {err}"),
+        }
+    }
+
+    /// Whether launchd is running the agent, whether or not it's listening yet.
+    async fn is_running() -> bool {
+        let status = tokio::task::spawn_blocking(|| {
+            LaunchdServiceManager::user().status(ServiceStatusCtx {
+                label: Self::label(),
+            })
+        })
+        .await
+        .expect("asking launchd for the agent's status shouldn't panic");
+        match status {
+            Ok(status) => matches!(status, ServiceStatus::Running),
+            Err(err) => {
+                warn!(%err, "could not ask launchd whether the agent is running");
+                false
+            }
+        }
     }
 
     /// Remove the agent, if it serves this profile, for the launchd job `label`, which runs the
@@ -305,11 +409,8 @@ impl Launchd {
 
     /// Install the agent, replacing any copy of it that is loaded, and so have launchd start it.
     async fn install(&self) -> Result<(), LaunchdError> {
-        let socket = self.daemon.socket_path();
-        // Without its directory, launchd loads the agent but can't place the socket.
-        socket.create_default_dir_if_needed()?;
-
-        let plist = AgentPlist::for_this_client(socket.into_owned())?;
+        let plist =
+            AgentPlist::for_this_client(atuin_common::atuin_exe::launch_path().await?.to_owned())?;
         let ctx = ServiceInstallCtx {
             label: Self::label(),
             contents: Some(plist.to_xml()?),
@@ -354,8 +455,18 @@ impl Launchd {
 }
 
 impl Backend for Launchd {
+    /// Where the agent listens.
+    ///
+    /// If there's a live pidfile, use the socket path in the pidfile; otherwise use the configured
+    /// path. Generally these should match, but using the pidfile adds some robustness to
+    /// configuration mismatches.
     fn address(&self) -> DaemonAddress {
-        DaemonAddress::configured(&self.daemon)
+        let pidfile = Pidfile::new(&self.daemon.pidfile_path);
+        pidfile
+            .is_live()
+            .then(|| pidfile.info()?.socket_path)
+            .flatten()
+            .map_or_else(|| DaemonAddress::configured(&self.daemon), DaemonAddress::from)
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
@@ -364,6 +475,13 @@ impl Backend for Launchd {
             .is_ok_and(|plist| LoginItem::of_legacy_plist(&plist) == LoginItem::SwitchedOff);
         if switched_off {
             return Err(BackendError::new(LaunchdError::SwitchedOff));
+        }
+        // launchd starts the agent at login; a client started immediately after login could access
+        // it before it starts listening. Make sure we simply wait for it rather than reinstall in
+        // this case, since that would cause it to be restarted again.
+        if Self::is_running().await {
+            tracing::debug!("the launchd agent is running, so waiting for it to listen");
+            return Ok(());
         }
         self.install().await.map_err(BackendError::new)
     }
@@ -374,9 +492,9 @@ impl Backend for Launchd {
         // An older client, or `atuin daemon start`, may have started the agent outside launchd.
         service.request_shutdown().await;
 
-        // launchd leaves its socket's file behind, unlike an agent started outside launchd, which
-        // removes it as it exits. Where the agent was found, which the config may have moved the
-        // socket from since.
+        // launchd leaves the file of a socket it held behind, unlike an agent that bound its own,
+        // which removes it as it exits. Where the agent was found, which the config may have moved
+        // the socket from since.
         if let Err(err) = SocketFile::remove_if_stale(service.address().as_ref()) {
             warn!("{err}");
         }
@@ -426,8 +544,6 @@ struct AgentPlist {
     working_dir: PathBuf,
     /// Where the agent's stderr goes, for the errors it exits with: it logs to its own file.
     stderr: PathBuf,
-    /// Where launchd holds the agent's socket.
-    socket: PathBuf,
     /// The variables of this client's environment that the agent inherits.
     environment: Vec<(String, String)>,
 }
@@ -437,14 +553,15 @@ impl AgentPlist {
     /// one that hangs takes.
     const EXIT_TIMEOUT_SECS: i64 = 10;
 
-    /// The variables the agent reads besides atuin's settings and the XDG directories, which
+    /// The variables the agent reads besides atuin's settings, the XDG directories and the
+    /// harnesses' homes ([`home_vars`](atuin_common::harnesstools::Harness::home_vars)), which
     /// launchd doesn't set: it starts the agent with only `HOME`, `USER`, `SHELL`, a `TMPDIR` and
     /// a bare `PATH`.
     // TODO(markovejnovic): Ideally we'd have a richer environment utility that would allow us to
     //                      categorize between "config" env vars and "ephemeral env vars".
-    const INHERITED: [&str; 16] = [
-        // The one this client's `TMPDIR` set.
-        "TMPDIR",
+    ///
+    /// `TMPDIR` isn't included here since we always set it to [`Self::tmpdir_env_pair`].
+    const INHERITED: [&str; 9] = [
         // The programs it runs, such as `git` and `node`.
         "PATH",
         // The proxies sync goes through.
@@ -456,13 +573,6 @@ impl AgentPlist {
         "all_proxy",
         "NO_PROXY",
         "no_proxy",
-        // Where the harnesses whose sessions it captures keep them.
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-        "OPENCODE_DB",
-        "OPENCODE_DISABLE_CHANNEL_DB",
-        "PI_CODING_AGENT_DIR",
-        "PI_CODING_AGENT_SESSION_DIR",
     ];
 
     /// The `ATUIN_` variables that aren't settings: those a shell sets to describe itself and the
@@ -493,9 +603,11 @@ impl AgentPlist {
         "ATUIN_DB_URI",
     ];
 
-    /// The plist for the agent listening at `socket`, running from the atuin home as a daemon this
-    /// client forks does.
-    fn for_this_client(socket: PathBuf) -> Result<Self, LaunchdError> {
+    /// The plist for the agent, running from the atuin home as a daemon this client forks does.
+    ///
+    /// `exe` is the path that launchd runs, which should outlast upgrades: see
+    /// [`launch_path`](atuin_common::atuin_exe::launch_path).
+    fn for_this_client(exe: PathBuf) -> Result<Self, LaunchdError> {
         let working_dir = PathBuf::from(atuin_common::dirs::try_atuin_home()?);
         std::fs::create_dir_all(&working_dir).map_err(|source| LaunchdError::WorkingDir {
             path: working_dir.clone(),
@@ -510,21 +622,34 @@ impl AgentPlist {
         })?;
         let config_variables = Self::config_variables()?;
         Ok(Self {
-            exe: atuin_common::os::process::current_exe(),
-            socket,
+            exe,
             working_dir,
             stderr: logs.joined("daemon.stderr.log"),
             // A plist holds only UTF-8, and `vars` would panic on anything else.
-            environment: std::env::vars_os()
-                .filter_map(|(name, value)| {
-                    let name = name
-                        .into_string()
-                        .ok()
-                        .filter(|name| Self::is_inherited(name, &config_variables))?;
-                    Some((name, value.into_string().ok()?))
-                })
-                .collect(),
+            environment: Self::inherited(
+                std::env::vars_os()
+                    .filter_map(|(name, value)| {
+                        Some((name.into_string().ok()?, value.into_string().ok()?))
+                    })
+                    .collect(),
+                &config_variables,
+            )
+            .into_iter()
+            .chain([Self::tmpdir_env_pair()?])
+            .collect(),
         })
+    }
+
+    /// The `TMPDIR` key-value pair for [`Self::environment`]. The value is the temporary directory
+    /// that this client uses.
+    ///
+    /// The daemon and client use `$TMPDIR` for the default socket path. Setting it explicitly in
+    /// the plist makes sure they match.
+    fn tmpdir_env_pair() -> Result<(String, String), LaunchdError> {
+        let tmp = atuin_common::os::unix::tmp_dir().into_path_buf();
+        let tmp =
+            tmp.into_os_string().into_string().map_err(|tmp| LaunchdError::NotUtf8(tmp.into()))?;
+        Ok(("TMPDIR".to_owned(), tmp))
     }
 
     /// The variables the paths in the config expand, which the agent reads again: without them,
@@ -540,14 +665,46 @@ impl AgentPlist {
         }
     }
 
-    /// Whether the agent inherits the variable `name` from this client's environment, whose config
-    /// expands `config_variables`.
-    fn is_inherited(name: &str, config_variables: &BTreeSet<String>) -> bool {
+    /// The variables of `environment`, this client's, that the agent inherits, when the config's
+    /// paths expand `config_variables`.
+    ///
+    /// A harness's home can name other variables, such as `AGENT_ROOT` in
+    /// `HERMES_HOME='$AGENT_ROOT/hermes'`, which Hermes expands itself. The agent inherits those
+    /// too, rather than the home expanded: only some harnesses expand theirs, and each by its own
+    /// rules.
+    fn inherited(
+        environment: Vec<(String, String)>,
+        config_variables: &BTreeSet<String>,
+    ) -> Vec<(String, String)> {
+        let mut expanded = config_variables.clone();
+        for (name, value) in &environment {
+            if Self::is_harness_home(name) {
+                expanded.extend(ShellExpanded::variables(value));
+            }
+        }
+        environment.into_iter().filter(|(name, _)| Self::is_inherited(name, &expanded)).collect()
+    }
+
+    /// Whether the agent inherits the variable `name` from this client's environment, when the
+    /// config's paths and the harnesses' homes expand `expanded`.
+    fn is_inherited(name: &str, expanded: &BTreeSet<String>) -> bool {
         !Self::NOT_INHERITED.contains(&name)
             && (name.starts_with("ATUIN_")
                 || name.starts_with("XDG_")
                 || Self::INHERITED.contains(&name)
-                || config_variables.contains(name))
+                || Self::is_harness_home(name)
+                || expanded.contains(name))
+    }
+
+    /// Whether `name` says where a harness keeps its sessions or config.
+    #[cfg(feature = "ai")]
+    fn is_harness_home(name: &str) -> bool {
+        AnyHarness::all().iter().any(|harness| harness.home_vars().contains(&name))
+    }
+
+    #[cfg(not(feature = "ai"))]
+    const fn is_harness_home(_name: &str) -> bool {
+        false
     }
 
     fn to_xml(&self) -> Result<String, LaunchdError> {
@@ -561,23 +718,7 @@ impl AgentPlist {
             .environment
             .iter()
             .map(|(name, value)| (name.clone(), Value::from(value.as_str())))
-            // launchd holds the socket the agent was installed with, even once the config moves
-            // it, so the agent publishes that one in its pidfile for clients to find. The agent
-            // expands it as it does the config's paths, so it must expand back to itself.
-            .chain([(
-                "ATUIN_DAEMON__SOCKET_PATH".to_owned(),
-                Value::from(ShellExpanded::escape(utf8(&self.socket)?)),
-            )])
             .collect();
-        let socket = Dictionary::from_iter([
-            ("SockPathName".to_owned(), path(&self.socket)?),
-            // Only the user may connect, as to a socket the daemon binds under its `077` umask.
-            ("SockPathMode".to_owned(), Value::from(0o600_i64)),
-        ]);
-        let sockets = Dictionary::from_iter([(
-            Launchd::SOCKET.to_string_lossy().into_owned(),
-            Value::Dictionary(socket),
-        )]);
         let keep_alive = Dictionary::from_iter([("Crashed".to_owned(), Value::Boolean(true))]);
 
         let plist = Dictionary::from_iter([
@@ -588,7 +729,6 @@ impl AgentPlist {
             ("StandardErrorPath".to_owned(), path(&self.stderr)?),
             // The files the agent creates are the user's alone, as a forked daemon's are.
             ("Umask".to_owned(), Value::from(0o077_i64)),
-            ("Sockets".to_owned(), Value::Dictionary(sockets)),
             ("RunAtLoad".to_owned(), Value::Boolean(true)),
             // Restart an agent that crashed, but not one that exited, as an agent does when it
             // finds another holding the pidfile: launchd would restart that one every
@@ -602,6 +742,47 @@ impl AgentPlist {
         let mut xml = Vec::new();
         Value::Dictionary(plist).to_writer_xml(&mut xml)?;
         Ok(String::from_utf8(xml).expect("a plist's XML is UTF-8"))
+    }
+
+    /// Drop the launchd-managed socket from `plist`, which older agents used to use.
+    ///
+    /// The old plist also put the socket path in the `ATUIN_DAEMON__SOCKET_PATH` environment
+    /// variable. This function removes that when it matches the default socket path, so Atuin will
+    /// see `daemon.socket_path` as a default path and thus create its parent directory.
+    ///
+    /// The socket path is also unpinned when it matches `tmpdirless_socket` and the plist doesn't
+    /// set `TMPDIR`. Such a plist was installed by a client without `TMPDIR`, which would have used
+    /// `tmpdirless_socket` as its default socket path. Additionally, in this case, we set `TMPDIR`
+    /// to `/tmp` (as is done for new plists) so the agent keeps using the same path.
+    fn unpin_socket(
+        plist: &mut Dictionary,
+        default_socket: &Path,
+        tmpdirless_socket: Option<&Path>,
+    ) -> bool {
+        if plist.remove("Sockets").is_none() {
+            return false;
+        }
+
+        let Some(env) = plist.get_mut("EnvironmentVariables").and_then(Value::as_dictionary_mut)
+        else {
+            return true;
+        };
+
+        let pin = env.get("ATUIN_DAEMON__SOCKET_PATH").and_then(Value::as_string);
+        let pins = |socket: Option<&Path>| {
+            pin.is_some()
+                && pin == socket.and_then(Path::to_str).map(ShellExpanded::escape).as_deref()
+        };
+        let pins_default = pins(Some(default_socket));
+        let pins_tmpdirless = !env.contains_key("TMPDIR") && pins(tmpdirless_socket);
+
+        if pins_default || pins_tmpdirless {
+            env.remove("ATUIN_DAEMON__SOCKET_PATH");
+        }
+        if pins_tmpdirless {
+            env.insert("TMPDIR".to_owned(), Value::from("/tmp"));
+        }
+        true
     }
 }
 
@@ -619,7 +800,6 @@ mod tests {
             exe: PathBuf::from("/opt/atuin"),
             working_dir: PathBuf::from("/"),
             stderr: PathBuf::from("/tmp/daemon.stderr.log"),
-            socket: PathBuf::from("/tmp/atuin.sock"),
             environment: Vec::new(),
         }
     }
@@ -633,10 +813,12 @@ mod tests {
     #[case::shell_command("ATUIN_HISTORY_ID", false)]
     #[case::secret("ATUIN_PASSWORD", false)]
     #[case::xdg("XDG_DATA_HOME", true)]
-    #[case::tmpdir("TMPDIR", true)]
+    #[case::tmpdir_set_separately("TMPDIR", false)]
     #[case::path("PATH", true)]
     #[case::proxy("https_proxy", true)]
-    #[case::harness_config("CLAUDE_CONFIG_DIR", true)]
+    #[case::harness_config("CLAUDE_CONFIG_DIR", cfg!(feature = "ai"))]
+    #[case::harness_home("HERMES_HOME", cfg!(feature = "ai"))]
+    #[case::another_harness_home("KIRO_HOME", cfg!(feature = "ai"))]
     #[case::unread("EDITOR", false)]
     #[case::login_session("SSH_AUTH_SOCK", false)]
     #[case::launchd_label("XPC_SERVICE_NAME", false)]
@@ -650,28 +832,145 @@ mod tests {
         assert_eq!(AgentPlist::is_inherited(name, &config_variables), inherited);
     }
 
-    /// The agent reads its pinned socket back through the config's expansion, which must give the
-    /// path the client worked out, `$` and all.
+    /// The variables a harness's home names come along with it, as Hermes expands them; those
+    /// another variable names don't. Without AI, no variable is a harness's home.
     #[rstest]
-    fn pinned_socket_expands_back_to_itself(plist: AgentPlist) {
-        let socket = PathBuf::from("/tmp/atuin-$__atuin_unset.sock");
-        let plist = AgentPlist {
-            socket: socket.clone(),
-            ..plist
+    fn agent_inherits_the_variables_a_harness_home_names() {
+        let environment = [
+            ("HERMES_HOME", "$AGENT_ROOT/hermes"),
+            ("AGENT_ROOT", "/srv/agents"),
+            ("EDITOR", "$VISUAL"),
+            ("VISUAL", "vim"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let inherited = AgentPlist::inherited(environment.to_vec(), &BTreeSet::new());
+        let names: Vec<_> = inherited.iter().map(|(name, _)| name.as_str()).collect();
+        let expected: &[&str] = if cfg!(feature = "ai") {
+            &["HERMES_HOME", "AGENT_ROOT"]
+        } else {
+            &[]
         };
-        let xml = Value::from_reader_xml(plist.to_xml().unwrap().as_bytes()).unwrap();
-        let pinned = xml
-            .as_dictionary()
-            .and_then(|plist| plist.get("EnvironmentVariables")?.as_dictionary())
-            .and_then(|env| env.get("ATUIN_DAEMON__SOCKET_PATH")?.as_string())
-            .unwrap();
+        assert_eq!(names, expected);
+    }
 
-        let expanded: PathBuf =
-            serde_with::As::<ShellExpanded>::deserialize(serde::de::value::StrDeserializer::<
-                serde::de::value::Error,
-            >::new(pinned))
-            .unwrap();
-        assert_eq!(expanded, socket);
+    /// launchd holds no socket for the agent, and so creates no directory for one as root: the
+    /// agent binds its own, where the config says.
+    #[rstest]
+    fn launchd_holds_no_socket_for_the_agent(plist: AgentPlist) {
+        let xml = Value::from_reader_xml(plist.to_xml().unwrap().as_bytes()).unwrap();
+        let xml = xml.as_dictionary().unwrap();
+        assert!(!xml.contains_key("Sockets"));
+        let env = xml.get("EnvironmentVariables").and_then(Value::as_dictionary).unwrap();
+        assert!(!env.contains_key("ATUIN_DAEMON__SOCKET_PATH"));
+    }
+
+    /// An agent's plist from before agents bound their own socket, holding `socket` and pinning
+    /// it in its environment as they did.
+    fn pinned_plist(socket: &str) -> Dictionary {
+        let socket_dict = Dictionary::from_iter([
+            ("SockPathName".to_owned(), Value::from(socket)),
+            ("SockPathMode".to_owned(), Value::from(0o600_i64)),
+        ]);
+        let env = Dictionary::from_iter([
+            ("ATUIN_DAEMON__SOCKET_PATH".to_owned(), Value::from(ShellExpanded::escape(socket))),
+            ("PATH".to_owned(), Value::from("/usr/bin:/bin")),
+        ]);
+        Dictionary::from_iter([
+            ("Label".to_owned(), Value::from("sh.atuin.daemon")),
+            ("EnvironmentVariables".to_owned(), Value::Dictionary(env)),
+            (
+                "Sockets".to_owned(),
+                Value::Dictionary(Dictionary::from_iter([(
+                    "atuin".to_owned(),
+                    Value::Dictionary(socket_dict),
+                )])),
+            ),
+        ])
+    }
+
+    /// Unpinned, an old plist holds no socket. Its pin goes only if it was the default socket,
+    /// which the agent then binds by default, creating its directory; one the config named stays.
+    /// The rest of the plist is left as it was.
+    #[rstest]
+    #[case::default_socket("/var/folders/x/T/atuin-501/atuin.sock", false)]
+    #[case::default_socket_with_dollar("/var/folders/x/T/a$b/atuin-501/atuin.sock", false)]
+    #[case::configured_socket("/Users/me/atuin.sock", true)]
+    fn unpinning_drops_the_socket_and_only_a_default_pin(
+        #[case] socket: &str,
+        #[case] pin_kept: bool,
+    ) {
+        let default_socket = if pin_kept {
+            Path::new("/var/folders/x/T/atuin-501/atuin.sock")
+        } else {
+            Path::new(socket)
+        };
+        let mut plist = pinned_plist(socket);
+
+        assert!(AgentPlist::unpin_socket(&mut plist, default_socket, None));
+
+        assert!(!plist.contains_key("Sockets"));
+        assert_eq!(plist.get("Label").and_then(Value::as_string), Some("sh.atuin.daemon"));
+        let env = plist.get("EnvironmentVariables").and_then(Value::as_dictionary).unwrap();
+        assert_eq!(env.contains_key("ATUIN_DAEMON__SOCKET_PATH"), pin_kept);
+        assert_eq!(env.get("PATH").and_then(Value::as_string), Some("/usr/bin:/bin"));
+    }
+
+    /// A client without `TMPDIR` pinned the socket under `/tmp`. launchd gives the agent a
+    /// `TMPDIR` of its own. Unpinning removes the pin and sets `TMPDIR` to `/tmp` in the plist. The
+    /// agent's default socket is then the one that the pin named.
+    ///
+    /// A plist that set `TMPDIR` came from a client with `TMPDIR`. A pin under `/tmp` in that plist
+    /// is one that the config named, and it stays.
+    #[rstest]
+    #[case::installed_without_tmpdir(None, false, Some("/tmp"))]
+    #[case::installed_with_tmpdir(Some("/Users/me/tmp"), true, Some("/Users/me/tmp"))]
+    fn unpinning_a_tmp_pin_sets_tmpdir_for_a_client_without_one(
+        #[case] tmpdir: Option<&str>,
+        #[case] pin_kept: bool,
+        #[case] tmpdir_after: Option<&str>,
+    ) {
+        let mut plist = pinned_plist("/tmp/atuin-501/atuin.sock");
+        if let Some(tmpdir) = tmpdir {
+            let env = plist.get_mut("EnvironmentVariables").and_then(Value::as_dictionary_mut);
+            env.unwrap().insert("TMPDIR".to_owned(), Value::from(tmpdir));
+        }
+
+        assert!(AgentPlist::unpin_socket(
+            &mut plist,
+            Path::new("/var/folders/x/T/atuin-501/atuin.sock"),
+            Some(Path::new("/tmp/atuin-501/atuin.sock")),
+        ));
+
+        let env = plist.get("EnvironmentVariables").and_then(Value::as_dictionary).unwrap();
+        assert_eq!(env.contains_key("ATUIN_DAEMON__SOCKET_PATH"), pin_kept);
+        assert_eq!(env.get("TMPDIR").and_then(Value::as_string), tmpdir_after);
+    }
+
+    /// The agent runs with the temporary directory that this client uses. That directory is
+    /// `/tmp` when `TMPDIR` is unset or relative.
+    #[rstest]
+    #[case::set(Some("/var/folders/x/T/"), "/var/folders/x/T/")]
+    #[case::unset(None, "/tmp")]
+    #[case::relative(Some("tmp"), "/tmp")]
+    fn the_agent_gets_this_clients_tmpdir(#[case] tmpdir: Option<&str>, #[case] expected: &str) {
+        let env = atuin_common::env::MockEnv::install();
+        match tmpdir {
+            Some(tmpdir) => env.set("TMPDIR", tmpdir),
+            None => env.remove("TMPDIR"),
+        }
+        let (name, value) = AgentPlist::tmpdir_env_pair().unwrap();
+        assert_eq!((name.as_str(), value.as_str()), ("TMPDIR", expected));
+    }
+
+    /// A plist that holds no socket is left alone, and reported unchanged, so it isn't rewritten.
+    #[rstest]
+    fn unpinning_a_plist_without_a_socket_changes_nothing(plist: AgentPlist) {
+        let xml = Value::from_reader_xml(plist.to_xml().unwrap().as_bytes()).unwrap();
+        let mut dict = xml.into_dictionary().unwrap();
+        let before = dict.clone();
+
+        assert!(!AgentPlist::unpin_socket(&mut dict, Path::new("/tmp/atuin-501/atuin.sock"), None));
+        assert_eq!(dict, before);
     }
 
     #[rstest]

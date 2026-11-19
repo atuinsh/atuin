@@ -2,9 +2,10 @@
 
 use std::fmt::Write as _;
 
-use atuin_client::settings::Settings;
+use atuin_client::settings::{Dialect, ParseDateError, Settings};
 use atuin_common::range::Clamped;
-use atuin_common::time::UtcOffsetExt;
+use jiff::ZonedDateTime;
+use jiff::tz::TimeZone;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -42,28 +43,21 @@ pub struct AtuinThreadsListToolCall {
 
 impl AtuinThreadsListToolCall {
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        let mut client = match connect(settings).await {
-            Ok(client) => client,
-            Err(outcome) => return outcome,
-        };
+        let mut client = connect(settings).await?;
         let harness = self.harness.map(Into::into);
-        let root = match resolve_cwd(self.cwd.as_deref()) {
-            Ok(root) => root,
-            Err(outcome) => return outcome,
-        };
+        let root = resolve_cwd(self.cwd.as_deref())?;
         let limit = self.limit.get() as usize;
-        let offset = time::UtcOffset::local_or_utc();
+        let tz = TimeZone::system();
 
         let since = match self.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             None => None,
             Some(since) => {
-                let now = time::OffsetDateTime::now_utc().to_offset(offset);
-                let offset_at = |t| time::UtcOffset::local_offset_at(t).unwrap_or(offset);
+                let now = jiff::Timestamp::now().to_zoned_datetime(tz.clone());
 
-                match parse_since(since, now, settings.dialect.into(), offset_at) {
+                match parse_since(since, &now, settings.dialect) {
                     Ok(parsed) => Some(parsed),
                     Err(e) => {
-                        return ToolOutcome::Error(format!(
+                        return Err(format!(
                             "Could not parse since {since:?} ({e}). Try 'today', '2 days ago' or \
                              a date like '2026-09-01'."
                         ));
@@ -80,7 +74,7 @@ impl AtuinThreadsListToolCall {
         let fetch_since = since.map(|since| since.min(caller.active_since()));
         let all = match super::list_sessions(&mut client, harness, fetch_since).await {
             Ok(all) => all,
-            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
+            Err(e) => return Err(format!("Listing threads failed: {e}")),
         };
         let own = caller.own_in(&all);
         let (mut sessions, elsewhere): (Vec<_>, Vec<_>) = all
@@ -100,10 +94,10 @@ impl AtuinThreadsListToolCall {
         if sessions.is_empty() {
             let mut scope = root.map_or_else(String::new, |r| format!(" under {}", r.display()));
             if let Some(since) = since {
-                let _ = write!(scope, " active since {}", super::timestamp(since, offset));
+                let _ = write!(scope, " active since {}", super::timestamp(since, &tz));
             }
             let note = note.map_or_else(String::new, |n| format!(" {n}"));
-            return ToolOutcome::Success(format!(
+            return Ok(format!(
                 "No captured threads{scope}.{note} Only threads recorded while thread capture was \
                  enabled are available."
             ));
@@ -111,74 +105,70 @@ impl AtuinThreadsListToolCall {
 
         let mut out = String::new();
         for (index, session) in sessions.iter().enumerate() {
-            render_session_summary(&mut out, index + 1, session, offset);
+            render_session_summary(&mut out, index + 1, session, &tz);
         }
         if let Some(note) = note {
             let _ = writeln!(out, "\n{note}");
         }
         let _ = write!(out, "\nRead one with atuin_threads_read and its thread id.");
-        ToolOutcome::Success(out)
+        Ok(out)
     }
 }
 
-/// interim resolves "today" and "yesterday" to now's time of day on that date, but as a lower
-/// bound they mean the whole day. That midnight takes the offset in force then, not now's, so a
-/// DST change since doesn't shift the bound by an hour.
+/// [`Dialect::parse_date`] resolves "today" and "yesterday" to now's time of day on that date,
+/// but as a lower bound they mean the whole day. That day starts at its own midnight in `now`'s
+/// zone, so a DST change since doesn't shift the bound by an hour.
 fn parse_since(
     since: &str,
-    now: time::OffsetDateTime,
-    dialect: interim::Dialect,
-    offset_at: impl Fn(time::OffsetDateTime) -> time::UtcOffset,
-) -> Result<time::OffsetDateTime, interim::DateError> {
-    let parsed = interim::parse_date_string(since, now, dialect)?;
+    now: &ZonedDateTime,
+    dialect: Dialect,
+) -> Result<jiff::Timestamp, ParseDateError> {
+    let parsed = dialect.parse_date(since, now)?;
 
-    if since.eq_ignore_ascii_case("today") || since.eq_ignore_ascii_case("yesterday") {
-        let midnight = parsed.replace_time(time::Time::MIDNIGHT);
-
-        Ok(midnight.replace_offset(offset_at(midnight)))
-    } else {
-        Ok(parsed)
+    if !since.eq_ignore_ascii_case("today") && !since.eq_ignore_ascii_case("yesterday") {
+        return Ok(parsed.timestamp());
     }
+
+    // The date the parse landed on at the offset it worked in, which is `now`'s.
+    let date = now.offset().to_datetime(parsed.timestamp()).date();
+    date.to_zoned_datetime(now.time_zone().clone())
+        .map(|midnight| midnight.timestamp())
+        .map_err(|_| ParseDateError::OutOfRange)
 }
 
 #[cfg(test)]
 mod tests {
+    use jiff::tz::offset;
     use rstest::rstest;
     use serde_json::json;
-    use time::macros::{datetime, offset};
 
     use super::*;
 
     #[rstest]
-    #[case("today", datetime!(2026-09-29 00:00 +1))]
-    #[case("Yesterday", datetime!(2026-09-28 00:00 +1))]
-    #[case("3 hours ago", datetime!(2026-09-29 16:30 +1))]
-    #[case("2026-09-01", datetime!(2026-09-01 00:00 +1))]
-    fn since_bounds(#[case] since: &str, #[case] expected: time::OffsetDateTime) {
-        let now = datetime!(2026-09-29 19:30 +1);
+    #[case("today", "2026-09-29T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
+    #[case("Yesterday", "2026-09-28T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
+    #[case("3 hours ago", "2026-09-29T16:30:00+01:00".parse::<jiff::Timestamp>().unwrap())]
+    #[case("2026-09-01", "2026-09-01T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
+    fn since_bounds(#[case] since: &str, #[case] expected: jiff::Timestamp) {
+        let now = "2026-09-29T19:30:00+01:00"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .to_zoned_datetime(TimeZone::fixed(offset(1)));
 
-        assert_eq!(
-            parse_since(since, now, interim::Dialect::Uk, |_| now.offset()).unwrap(),
-            expected
-        );
+        assert_eq!(parse_since(since, &now, Dialect::Uk).unwrap(), expected);
     }
 
     // US Eastern falls back from -4 to -5 at 06:00 UTC on 2026-11-01.
     #[rstest]
-    #[case("today", datetime!(2026-11-01 00:00 -4))]
-    #[case("yesterday", datetime!(2026-10-31 00:00 -4))]
-    fn since_bounds_across_dst(#[case] since: &str, #[case] expected: time::OffsetDateTime) {
-        let now = datetime!(2026-11-01 19:30 -5);
-        let change = datetime!(2026-11-01 06:00 UTC);
-        let offset_at = |t: time::OffsetDateTime| {
-            if t < change {
-                offset!(-4)
-            } else {
-                offset!(-5)
-            }
-        };
+    #[case("today", "2026-11-01T00:00:00-04:00".parse::<jiff::Timestamp>().unwrap())]
+    #[case("yesterday", "2026-10-31T00:00:00-04:00".parse::<jiff::Timestamp>().unwrap())]
+    fn since_bounds_across_dst(#[case] since: &str, #[case] expected: jiff::Timestamp) {
+        let now = "2026-11-01T19:30:00-05:00"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .to_zoned_datetime(TimeZone::get("America/New_York").unwrap());
 
-        assert_eq!(parse_since(since, now, interim::Dialect::Uk, offset_at).unwrap(), expected);
+        assert_eq!(parse_since(since, &now, Dialect::Uk).unwrap(), expected);
     }
 
     #[rstest]

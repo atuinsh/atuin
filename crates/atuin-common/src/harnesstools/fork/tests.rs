@@ -8,7 +8,7 @@ use super::*;
 use crate::harnesstools::ccode::session::CcodeSession;
 use crate::harnesstools::codex::session::CodexSession;
 use crate::harnesstools::continuation::tests::{
-    CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI, pool, recorded, rows_of,
+    CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, pool, recorded, rows_of,
 };
 use crate::harnesstools::continuation::{fork_marker_text, linked_from_message};
 use crate::harnesstools::copilot::session::CopilotSession;
@@ -16,8 +16,9 @@ use crate::harnesstools::grok::session::GrokSession;
 use crate::harnesstools::kiro::session::KiroSession;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, database, opencode_import};
 use crate::harnesstools::pi::session::PiSession;
+use crate::harnesstools::session::synthetic::SYNTHETIC;
 use crate::harnesstools::session::{Content, Message, ParentKind, Role, Session, SessionId};
-use crate::harnesstools::{ccode, codex, copilot, grok, kiro, opencode, pi};
+use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi};
 
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
@@ -32,7 +33,7 @@ impl Message for Row {
     fn role(&self) -> Role {
         self.0.role.clone()
     }
-    fn timestamp(&self) -> Option<OffsetDateTime> {
+    fn timestamp(&self) -> Option<Timestamp> {
         None
     }
     fn content(&self) -> Vec<Content> {
@@ -61,6 +62,10 @@ async fn written(
     let id = SessionId::from(session.id.clone());
     match harness {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Hermes(_) => {
+            let lines = hermes::rehydrate::tests::written(root, session).await;
+            (rows_of(&lines), links(&session.id, &lines))
+        }
         AnyHarness::Kiro(_) => {
             let path = kiro::rehydrate::rehydrate_into(root, session).unwrap();
             let lines: Vec<_> =
@@ -151,7 +156,7 @@ fn said(rows: &[RehydrateMessage]) -> Vec<(Role, Vec<Content>)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, KIRO, OPENCODE, PI)] harness: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] harness: AnyHarness,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let original = recorded(harness).await;
@@ -186,10 +191,16 @@ async fn a_fork_reads_back_as_the_original_linked_as_its_fork(
         said_rows.remove(at);
         assert!(ids(&rows).is_disjoint(&ids(&restored)));
     } else {
-        // Bar the rows keyed on the session itself (its header, its title).
+        // Bar the rows keyed on the session itself: its header and its title. Hermes's titles
+        // are unique, so a fork's title goes on its lineage, and its title row is keyed on that.
         let (fork, restored) = (ids(&rows), ids(&restored));
-        let session =
-            |id: &&String| *id == &forked.id || *id == &original.id || id.starts_with("atuin-");
+        let hermes_title = |id: &str| {
+            matches!(harness, AnyHarness::Hermes(_))
+                && id.starts_with(&format!("{SYNTHETIC}title-"))
+        };
+        let session = |id: &&String| {
+            *id == &forked.id || *id == &original.id || id.starts_with("atuin-") || hermes_title(id)
+        };
         let differ: Vec<_> =
             fork.symmetric_difference(&restored).filter(|id| !session(id)).collect();
         assert!(differ.is_empty(), "{differ:?}");

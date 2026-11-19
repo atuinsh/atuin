@@ -506,8 +506,8 @@ fn shared_lines(bytes: &[u8], sidecar: &AtuinSidecar, session_id: &str, from: &s
 mod tests {
     use std::path::PathBuf;
 
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::harnesstools::rehydrate::RehydrateSession;
@@ -518,7 +518,7 @@ mod tests {
         RehydrateMessage {
             source_id: id.to_owned(),
             parent_source_id: parent.map(str::to_owned),
-            timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+            timestamp: Timestamp::from_second(at).unwrap(),
             role,
             content: vec![Content::Text(text.to_owned())],
             model: None,
@@ -539,7 +539,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_700_000_000).unwrap(),
             messages,
             fork_of: None,
         };

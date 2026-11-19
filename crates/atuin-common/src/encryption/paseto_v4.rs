@@ -264,11 +264,14 @@ impl Key {
         //
         // 2. Writes the key to the temporary path.
         //
-        // 3. Hardlinks the temporary path to the real key path (`path`). Hardlinking will fail if
-        //    the destination already exists, which is what we want.
-        //
-        // 4. Removes the temporary file.
+        // 3. Moves the temporary path to the real key path (`path`) without replacing an existing
+        //    file, which is what we want: `renameat2(RENAME_NOREPLACE)` where the platform has it,
+        //    else a hard link + removal of the old file (see `tempfile::TempPath::persist_noclobber`).
+        //    A plain hard link is not enough, as Android refuses `link(2)` in app-private storage.
 
+        // Make the path absolute up front, so `TempPath::try_from_path` later can't fail.
+        let abs_path = crate::path::AbsPathBuf::from_current_dir(path)?;
+        let path = abs_path.as_path();
         let dir = path.parent().ok_or(Error::from(ErrorKind::IsADirectory))?;
         let name = path.file_name().ok_or(Error::from(ErrorKind::IsADirectory))?;
 
@@ -288,11 +291,12 @@ impl Key {
             tmp_path.add_extension(i.to_string());
 
             // `tmp_path` is first so it gets dropped after `tmp_file`. `tmp_path` is a
-            // `RemoveOnDropPath` so it will remove the file when dropped, but this will fail on
+            // `tempfile::TempPath` so it will remove the file when dropped, but this will fail on
             // Windows if the file is still open.
             let (tmp_path, mut tmp_file) = match key_file_options().create_new(true).open(&tmp_path)
             {
-                Ok(file) => (crate::fs::RemoveOnDropPath(tmp_path), file),
+                // `try_from_path` can't actually fail here since `tmp_path` is absolute.
+                Ok(file) => (tempfile::TempPath::try_from_path(tmp_path)?, file),
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                     // This error will essentially never happen in practice. It requires
                     // `/path/to/.key.atuin-tmp.{i}` to exist for *every* `i` up to
@@ -306,7 +310,7 @@ impl Key {
             tmp_file.write_all(self.encode().dangerously_leak_secret().as_bytes())?;
             tmp_file.sync_all()?;
             drop(tmp_file);
-            break std::fs::hard_link(&tmp_path, path);
+            break tmp_path.persist_noclobber(path).map_err(|e| e.error);
         } {
             Ok(()) => return Ok(()),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {

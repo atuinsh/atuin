@@ -7,17 +7,19 @@ use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::time::OffsetDateTimeTuple;
 use atuin_domain::record::{HostId, RecordId};
 use derive_more::{AsRef, Display, From, Into};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use serde_with::serde_as;
 use typed_builder::TypedBuilder;
 use uuid::{Builder, Uuid};
 
 /// Records name the harness (the variant's name), and a name this build doesn't know reads as
-/// [`Self::Unknown`]. A new variant needs no new record version, but does need a sidecar migration
-/// that bumps `projection_state.generation`, so rows projected as unknown before are projected
-/// again under it.
+/// [`Self::Unknown`]. A new variant needs no new record version. It does need a sidecar migration
+/// that rebuilds the projection from the record store, as `0006_reproject_for_hermes.sql` does.
+/// Rows projected while the harness was unknown are then projected again under its name.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "proto", derive(prost::Enumeration))]
@@ -31,6 +33,7 @@ pub enum HarnessKind {
     Grok = 7,
     Amp = 8,
     Kiro = 9,
+    Hermes = 10,
     /// No harness atuin knows: unstated, or one a newer atuin added, whose records name it.
     #[serde(other)]
     Unknown = 0,
@@ -44,6 +47,7 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::Codex(_) => Self::Codex,
             AnyHarness::Copilot(_) => Self::Copilot,
             AnyHarness::Grok(_) => Self::Grok,
+            AnyHarness::Hermes(_) => Self::Hermes,
             AnyHarness::Kiro(_) => Self::Kiro,
             AnyHarness::Opencode(_) => Self::Opencode,
             AnyHarness::Pi(pi) => match pi.flavour() {
@@ -59,13 +63,16 @@ impl HarnessKind {
     /// known harness), whose sessions can be viewed but not resumed.
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
-        use atuin_common::harnesstools::{amp, ccode, codex, copilot, grok, kiro, opencode, pi};
+        use atuin_common::harnesstools::{
+            amp, ccode, codex, copilot, grok, hermes, kiro, opencode, pi,
+        };
         match self {
             Self::Amp => Some(AnyHarness::Amp(amp::Amp)),
             Self::ClaudeCode => Some(AnyHarness::ClaudeCode(ccode::Ccode)),
             Self::Codex => Some(AnyHarness::Codex(codex::Codex)),
             Self::Copilot => Some(AnyHarness::Copilot(copilot::Copilot)),
             Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
+            Self::Hermes => Some(AnyHarness::Hermes(hermes::Hermes)),
             Self::Kiro => Some(AnyHarness::Kiro(kiro::Kiro)),
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
@@ -115,8 +122,8 @@ pub struct AtuinSessionId(Uuid);
 impl AtuinSessionId {
     /// A random UUIDv7 at `started_at`.
     #[must_use]
-    pub fn mint(started_at: OffsetDateTime) -> Self {
-        let millis = u64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+    pub fn mint(started_at: Timestamp) -> Self {
+        let millis = u64::try_from(started_at.as_millisecond()).unwrap_or(0);
         Self(Builder::from_unix_timestamp_millis(millis, &rand::random()).into_uuid())
     }
 
@@ -185,6 +192,7 @@ impl std::str::FromStr for AtuinSessionId {
 
 /// Records encode these fields by position: adding, removing or reordering one needs a new
 /// [record version](super::AiSessionRecord::VERSION).
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Message {
     pub id: RecordId,
@@ -200,7 +208,8 @@ pub struct Message {
     pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
-    pub timestamp: OffsetDateTime,
+    #[serde_as(as = "OffsetDateTimeTuple")]
+    pub timestamp: Timestamp,
     pub role: Role,
     pub content: Vec<Content>,
     #[builder(default)]
@@ -258,11 +267,15 @@ pub struct Message {
 
 impl Message {
     /// The earliest and latest [`Self::timestamp`] stored: a day inside the years
-    /// [`OffsetDateTime`] can name, so either is still a date in any offset. A harness line can
-    /// name an instant past them (Claude Code's `9999-12-31T23:59:59-23:59` is in year 10000 in
-    /// UTC), which capture and the sidecar hold to these.
-    pub const EARLIEST: OffsetDateTime = time::macros::datetime!(-9999-01-02 0:00 UTC);
-    pub const LATEST: OffsetDateTime = time::macros::datetime!(9999-12-30 0:00 UTC);
+    /// [`Timestamp`] can name, so either is still a date in any offset. A harness line can
+    /// name an instant just past them (`9999-12-30T23:00:00Z` is past [`Self::LATEST`]), which
+    /// capture and the sidecar hold to these.
+    pub const EARLIEST: Timestamp = Timestamp::constant(Self::EARLIEST_SECOND, 0);
+    pub const LATEST: Timestamp = Timestamp::constant(Self::LATEST_SECOND, 0);
+    /// `-009999-01-03T00:00:00Z`, [`Self::EARLIEST`] in seconds since the Unix epoch.
+    pub(crate) const EARLIEST_SECOND: i64 = -377_704_944_000;
+    /// `9999-12-30T00:00:00Z`, [`Self::LATEST`] in seconds since the Unix epoch.
+    pub(crate) const LATEST_SECOND: i64 = 253_402_128_000;
 }
 
 /// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
@@ -315,8 +328,8 @@ pub struct Session {
     pub git_branch: Option<String>,
     #[builder(default)]
     pub model: Option<String>,
-    pub started_at: OffsetDateTime,
-    pub updated_at: OffsetDateTime,
+    pub started_at: Timestamp,
+    pub updated_at: Timestamp,
     #[builder(default)]
     pub message_count: u64,
     /// Usage attributed to this session: each model call counted once across every session
@@ -357,7 +370,7 @@ pub struct Session {
     /// The newest `updated_at` across this session and the sessions grouped under it, which is
     /// what roots-only queries order by. Only set by roots-only queries.
     #[builder(default)]
-    pub group_updated_at: Option<OffsetDateTime>,
+    pub group_updated_at: Option<Timestamp>,
     #[builder(default)]
     pub atuin_id: AtuinSessionId,
     /// The atuin id of [`Self::parent`], resolved when read: `None` while the parent is not
@@ -458,8 +471,7 @@ impl MessageRole {
 ///
 /// The bits are stored, so never renumber or reuse one: a new kind of block takes the next free
 /// bit (there are 63), and needs a sidecar migration that rebuilds the projection, as
-/// `0002_message_blocks.sql` does, so rows stored before it get the bit too. A block this build
-/// does not know arrives as [`Content::Other`].
+/// `0002_message_blocks.sql` does, so rows stored before it get the bit too.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, From, Into)]
 pub struct ContentBlocks(pub i64);
 
@@ -475,6 +487,10 @@ impl ContentBlocks {
     pub const ERROR: i64 = 1 << 7;
     pub const OTHER: i64 = 1 << 8;
     pub const REASONING_SUMMARY: i64 = 1 << 9;
+    /// A block of a kind that this build doesn't know, which is a [`Content::Unknown`]. No
+    /// migration gave this bit to rows stored before it. None of those rows could hold such a
+    /// block, because older builds skipped the whole record.
+    pub const UNKNOWN: i64 = 1 << 10;
     /// What tool output holds: anything else makes a message more than tool output.
     pub const TOOL_OUTPUT: i64 = Self::TOOL_RESULT | Self::TOOL_ERROR | Self::PATCH;
 
@@ -492,6 +508,7 @@ impl ContentBlocks {
                 Content::Error(_) => Self::ERROR,
                 Content::Other(_) => Self::OTHER,
                 Content::ReasoningSummary { .. } => Self::REASONING_SUMMARY,
+                Content::Unknown(_) => Self::UNKNOWN,
             }
         }))
     }
@@ -536,7 +553,7 @@ pub struct SessionFilter {
     /// such messages match.
     pub roles: Vec<MessageRole>,
     /// Active at or after this time (its `updated_at`).
-    pub updated_since: Option<OffsetDateTime>,
+    pub updated_since: Option<Timestamp>,
 }
 
 /// What a search looks for, and how it matches a message.
@@ -593,6 +610,7 @@ pub struct MatchedSession {
 
 #[cfg(test)]
 mod tests {
+    use atuin_common::harnesstools::session::UnknownBlock;
     use atuin_domain::record::RecordVersion;
     use rstest::rstest;
 
@@ -607,6 +625,7 @@ mod tests {
     #[case::pi(HarnessKind::Pi, true)]
     #[case::copilot(HarnessKind::Copilot, true)]
     #[case::kiro(HarnessKind::Kiro, true)]
+    #[case::hermes(HarnessKind::Hermes, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,
@@ -627,7 +646,7 @@ mod tests {
                 session: NativeSessionId::from("s".to_owned()),
             })
             .source_id(SourceId::from("x".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hi".to_owned())])
             .turn_id(Some("t".to_owned()))
@@ -669,7 +688,7 @@ mod tests {
     }
 
     /// A message v2 readers can't decode (naming omp, or with a provider) is written as v3, one v3
-    /// readers can't (naming Grok) as v4, one v4 readers can't (naming Amp, or Kiro) as v5, and
+    /// readers can't (naming Grok) as v4, one v4 readers can't (naming Amp, Kiro or Hermes) as v5, and
     /// each reads back.
     #[rstest]
     #[case::pi(HarnessKind::Pi, None, None, RecordVersion::V2)]
@@ -682,6 +701,7 @@ mod tests {
     #[case::continued_from_amp(HarnessKind::Pi, Some(HarnessKind::Amp), None, RecordVersion::V5)]
     #[case::kiro(HarnessKind::Kiro, None, None, RecordVersion::V5)]
     #[case::continued_from_kiro(HarnessKind::Pi, Some(HarnessKind::Kiro), None, RecordVersion::V5)]
+    #[case::hermes(HarnessKind::Hermes, None, None, RecordVersion::V5)]
     #[case::grok_continued_from_amp(
         HarnessKind::Grok,
         Some(HarnessKind::Amp),
@@ -725,10 +745,39 @@ mod tests {
         assert_eq!(read.session.harness, HarnessKind::Unknown);
     }
 
+    /// A newer build's v6 record can hold a block of a kind that this build doesn't know. The
+    /// record reads with that block as [`Content::Unknown`], beside the blocks that this build
+    /// knows. Before v6, the record failed to decode and was skipped for good.
+    #[rstest]
+    fn a_block_of_an_unknown_kind_reads_as_unknown() {
+        let mut msg = record_message();
+        msg.content.push(Content::Summary("so far".to_owned()));
+        let body = rmp_serde::to_vec(&msg).unwrap();
+        // The block's kind as msgpack writes a short string. The new name is a kind that this
+        // build doesn't know.
+        let (known, newer) = (b"\xa7Summary".as_slice(), b"\xa7Shelved".as_slice());
+        let at = body.windows(known.len()).position(|w| w == known).unwrap();
+        let renamed = [&body[..at], newer, &body[at + known.len()..]].concat();
+        let mut record = vec![0];
+        record.extend(zstd::bulk::compress(&renamed, 3).unwrap());
+
+        let AiSessionRecord::Message(read) =
+            AiSessionRecord::deserialize(&record, &RecordVersion::V6).unwrap();
+
+        assert_eq!(read.content[..read.content.len() - 1], msg.content[..msg.content.len() - 1]);
+        assert_eq!(
+            read.content.last(),
+            Some(&Content::Unknown(UnknownBlock {
+                kind: "Shelved".to_owned(),
+                value: Some(serde_json::json!("so far")),
+            }))
+        );
+    }
+
     #[rstest]
     fn an_unknown_version_is_refused() {
         let record = AiSessionRecord::Message(record_message()).serialize();
-        let version = RecordVersion::Other("v6".to_owned());
+        let version = RecordVersion::Other("v7".to_owned());
         let err = AiSessionRecord::deserialize(&record, &version).unwrap_err();
         assert!(matches!(err, DecodeError::UnknownVersion(v) if v == version));
     }
@@ -752,7 +801,7 @@ mod tests {
             .source_id(SourceId::from("x".to_owned()))
             .parent(Some(session))
             .parent_kind(kind)
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![])
             .build()
@@ -810,8 +859,8 @@ mod tests {
             .handle(handle(id))
             .parent(Some(handle("parent")))
             .parent_kind(Some(kind))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
         assert_eq!(session.inferred_parent_kind(), Some(kind));
@@ -827,8 +876,8 @@ mod tests {
         let session = Session::builder()
             .handle(handle("copy"))
             .copy_of(Some(handle("original")))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
         assert_eq!(session.inferred_parent_kind(), Some(ParentKind::Fork));
@@ -841,8 +890,8 @@ mod tests {
         }
     }
 
-    fn at(millis: i64) -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).unwrap()
+    fn at(millis: i64) -> Timestamp {
+        Timestamp::from_millisecond(millis).unwrap()
     }
 
     fn millis_of(id: AtuinSessionId) -> i64 {

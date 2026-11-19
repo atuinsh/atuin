@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use atuin_client::history::HistoryStats;
 use atuin_common::time::DurationExt as _;
+use jiff::civil::Date;
 use ratatui::Frame;
 use ratatui::backend::FromCrossterm as _;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Bar, BarChart, BarGroup, Block, BorderType, Borders, Padding, Paragraph};
-use time::macros::format_description;
 
 use super::super::theme::{Meaning, Theme};
 
@@ -53,13 +53,11 @@ fn success_rate(stats: &HistoryStats) -> String {
     format!("{}.{:01}%", tenths / 10, tenths % 10)
 }
 
-fn monthly_durations(durations: &[(String, i64)]) -> Vec<(time::Date, i64)> {
+fn monthly_durations(durations: &[(String, i64)]) -> Vec<(Date, i64)> {
     let mut durations: Vec<_> = durations
         .iter()
         .filter_map(|(date, duration)| {
-            time::Date::parse(date, format_description!("[day]-[month]-[year]"))
-                .ok()
-                .map(|date| (date, *duration))
+            Date::strptime("%d-%m-%Y", date).ok().map(|date| (date, *duration))
         })
         .collect();
     durations.sort_by_key(|(date, _)| *date);
@@ -126,7 +124,7 @@ impl From<HistoryStats> for Stats {
             .into_iter()
             .map(|(date, duration)| {
                 Bar::default()
-                    .label(date.format(format_description!("[month]/[year]")).unwrap_or_default())
+                    .label(date.strftime("%m/%Y").to_string())
                     .value(u64::try_from(duration).unwrap_or(0))
                     .text_value(
                         Duration::saturating_from_nanos_i64(duration)

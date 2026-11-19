@@ -75,7 +75,7 @@ pub fn author() -> impl Strategy<Value = String> {
 /// and the record store a u64 one, so every non-negative value up to `i64::MAX` round-trips through
 /// all three; there is no unstorable value left to probe.
 pub fn timestamp_nanos() -> impl Strategy<Value = i64> {
-    let now = i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap();
+    let now = i64::try_from(jiff::Timestamp::now().as_nanosecond()).unwrap();
     prop_oneof![
         4 => now - 86_400_000_000_000..now + 86_400_000_000_000,
         1 => Just(0i64),
@@ -134,7 +134,7 @@ pub fn valid_history() -> impl Strategy<Value = History> {
     (command(), cwd(), session(), "[a-z0-9.-]{1,24}:[a-z_][a-z0-9_-]{0,15}", shell()).prop_map(
         |(command, cwd, session, origin, shell)| {
             History::daemon()
-                .timestamp(time::OffsetDateTime::now_utc())
+                .timestamp(jiff::Timestamp::now())
                 .command(command)
                 .cwd(cwd)
                 .session(session)

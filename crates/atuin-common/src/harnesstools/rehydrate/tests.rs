@@ -8,7 +8,7 @@ fn row(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role,
         content,
         model: None,

@@ -2,8 +2,7 @@
 
 Atuin can store what each command printed next to its history entry. You can
 then read it back in the inspector UI, search across it with `atuin output
-search`, and let [Atuin AI](../ai/command-output.md) or other AI tools read
-what a command actually did.
+search`, and let AI tools read what a command actually did.
 
 Output capture is off by default. It needs
 [pty-proxy](../reference/pty-proxy.md), which sees what your terminal displays,
@@ -12,28 +11,17 @@ and the [daemon](../reference/daemon.md), which stores it.
 ## Setting it up
 
 ```shell
-atuin config enable output-capture
+atuin setup --only --output-capture --daemon
 ```
 
 This turns on the daemon (with `autostart`) if it isn't on already, enables
-pty-proxy and `[output]`, and restarts the daemon. Open a new shell afterward.
-
-To do the same by hand, add to your config file:
-
-```toml
-[daemon]
-enabled = true
-autostart = true
-
-[pty_proxy]
-enabled = true
-
-[output]
-enabled = true
-```
+pty-proxy and `[output]`, and restarts the daemon. Setup writes these as
+`daemon.enabled`, `daemon.autostart`, `pty_proxy.enabled` and `output.enabled`
+in your config file. Output capture also needs Atuin to capture your shell
+history, which `--shell-history` turns on. Open a new shell afterward.
 
 If you manage the daemon yourself (systemd, `launchd`), restart it after
-changing `[output]`. See
+running setup. See
 [`[pty_proxy]`](../reference/pty-proxy.md#initialization) for other ways to
 start pty-proxy.
 
@@ -56,8 +44,6 @@ atuin output search connection refused
 
 ### From AI tools
 
-- [Atuin AI](../ai/command-output.md) reads a command's output when you ask it
-  why something failed.
 - Claude Code, Cursor, and other agents can read and search it through Atuin's
   [MCP server](../ai/mcp.md).
 
@@ -111,9 +97,6 @@ recording that it's missing.
   [Keeping secrets out](excluding-commands.md#a-commands-output-command_filter).
 - Captured output stays on your machine. **It isn't synced**, even with
   [sync](sync.md) set up. We're actively working on supporting this.
-- Atuin AI only sends output to the LLM when it asks for a specific command's
-  output, and asks your permission first by default. See [Reading Command
-  Output](../ai/command-output.md#permissions).
 
 ## Storage and retention
 
@@ -128,8 +111,9 @@ restarts. Don't edit that directory by hand.
 - **Deleting history deletes output.** Deleting an entry from the search UI,
   with `atuin search --delete`, `atuin history prune`, or `atuin history dedup`
   also deletes its output.
-- **Turning it off.** Set `[output] enabled = false`. The daemon stops storing
-  output right away; open a new shell so pty-proxy stops capturing it too.
+- **Turning it off.** Run `atuin setup --only --no-output-capture`, which sets
+  `output.enabled = false`. The daemon stops storing output right away; open a
+  new shell so pty-proxy stops capturing it too.
   Output already stored stays on disk; to remove it, stop the daemon and delete
   the `output-capture` directory.
 

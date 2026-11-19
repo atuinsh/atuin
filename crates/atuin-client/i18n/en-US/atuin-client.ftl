@@ -1,6 +1,5 @@
 hub-linked = Successfully linked CLI account to Hub
 theme-color-invalid = tried to load string as a color unsuccessfully: ({ $name }={ $color }) { $error }
-theme-name-mismatch = your theme config name is not the name of your loaded theme { $name } != { $config_name }
 theme-load-failed = could not load theme { $name }: { $error }
 logout-done = You have logged out!
 logout-not-logged-in = You are not logged in

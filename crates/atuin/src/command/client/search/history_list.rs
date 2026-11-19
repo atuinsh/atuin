@@ -6,16 +6,17 @@ use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::align::Alignment;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, EscapeNonPrintablePosixExt as _, Measure};
-use atuin_common::time::{DurationExt, OffsetDateTimeExt};
+use atuin_common::time::{DateTimeExt, DurationExt, TimestampExt};
 use easy_cast::Conv;
 use itertools::Itertools;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use ratatui::backend::FromCrossterm;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::style;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
-use time::{OffsetDateTime, UtcOffset};
 
 use super::engines::{AnySearchEngine, SearchEngine};
 use super::syntax;
@@ -38,9 +39,9 @@ pub struct HistoryList<'a> {
     inverted: bool,
     /// Apply an alternative highlighting to the selected row
     alternate_highlight: bool,
-    now: &'a dyn Fn() -> OffsetDateTime,
-    /// Offset absolute timestamps are rendered in
-    tz: UtcOffset,
+    now: &'a dyn Fn() -> Timestamp,
+    /// Time zone absolute timestamps are rendered in
+    tz: &'a TimeZone,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
@@ -128,8 +129,8 @@ impl<'a> HistoryList<'a> {
         history: &'a [History],
         inverted: bool,
         alternate_highlight: bool,
-        now: &'a dyn Fn() -> OffsetDateTime,
-        tz: UtcOffset,
+        now: &'a dyn Fn() -> Timestamp,
+        tz: &'a TimeZone,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
@@ -182,9 +183,9 @@ struct DrawState<'a> {
     state: &'a ListState,
     inverted: bool,
     alternate_highlight: bool,
-    now: &'a dyn Fn() -> OffsetDateTime,
-    /// Offset absolute timestamps are rendered in
-    tz: UtcOffset,
+    now: &'a dyn Fn() -> Timestamp,
+    /// Time zone absolute timestamps are rendered in
+    tz: &'a TimeZone,
     indicator: &'a str,
     theme: &'a Theme,
     history_highlighter: HistoryHighlighter<'a>,
@@ -359,7 +360,7 @@ impl DrawState<'_> {
     /// Render the absolute datetime column (e.g., "2025-01-22 14:35")
     fn datetime(&mut self, h: &History, width: u16) {
         let style = self.theme.as_style(Meaning::Annotation);
-        let formatted = h.timestamp.to_offset(self.tz).display().ymd_hm().to_string();
+        let formatted = self.tz.to_datetime(h.timestamp).display().ymd_hm().to_string();
         let w = usize::conv(width);
         let display = formatted.pad_ellipsize(
             Measure::Columns(w),

@@ -78,12 +78,10 @@ use uuid::Uuid;
 use self::models::{NewSession, NewUser, Session, User};
 use crate::db::models::{DbRecord, RecordSeriesPoint};
 
-#[derive(Debug, derive_more::Display, derive_more::Error, derive_more::From)]
+#[derive(Debug, derive_more::Display, derive_more::Error)]
 #[display("{self:?}")]
 pub enum DbError {
-    #[from(skip)]
     NotFound,
-    #[from(time::error::ComponentRange, time::error::Error)]
     Other(eyre::Report),
 }
 

@@ -404,6 +404,7 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     }
 
     info.atuin.setting_paths.verify();
+    super::config::warn_about_unknown_keys();
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {
         let active = atuin_common::dirs::config_path("config.toml");

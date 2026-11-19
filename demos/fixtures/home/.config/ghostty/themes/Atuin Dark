@@ -1,0 +1,23 @@
+# The hub's dark tokens (web/packages/web-kit/src/tokens.css), as hex.
+background = #101318
+foreground = #d1d9e0
+cursor-color = #25d985
+cursor-text = #101318
+selection-background = #303540
+selection-foreground = #d1d9e0
+palette = 0=#191c24
+palette = 1=#ff8482
+palette = 2=#25d985
+palette = 3=#fbbf24
+palette = 4=#7cb7f5
+palette = 5=#c8a2f0
+palette = 6=#5fd4c0
+palette = 7=#8e9aa6
+palette = 8=#5d6774
+palette = 9=#ffa3a1
+palette = 10=#6ee7a8
+palette = 11=#fcd34d
+palette = 12=#a3cdf8
+palette = 13=#dcc2f5
+palette = 14=#8fe6d6
+palette = 15=#d1d9e0

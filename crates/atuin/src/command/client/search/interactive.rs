@@ -17,6 +17,8 @@ use atuin_common::userio::log::{Held, Message, Severity};
 use easy_cast::Conv;
 use eyre::Result;
 use futures_util::FutureExt;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use ratatui::backend::{CrosstermBackend, FromCrossterm};
 use ratatui::crossterm::cursor::SetCursorStyle;
 use ratatui::crossterm::event::{self, Event, KeyEvent, MouseEvent};
@@ -32,7 +34,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use semver::Version;
-use time::{OffsetDateTime, UtcOffset};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(windows)]
 use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
@@ -43,6 +44,7 @@ use super::history_list::{HistoryList, ListState};
 use super::inspector::Stats as InspectorStats;
 use super::inspector::bindings::Bindings;
 use super::inspector::browser::{Browser, View as InspectorView};
+use super::whats_new::{self, WhatsNew};
 use crate::VERSION;
 use crate::command::client::halloween::HalloweenExt as _;
 use crate::command::client::search::engines;
@@ -162,6 +164,7 @@ pub struct State {
     /// Total history count; None until the background count query finishes.
     history_count: Option<i64>,
     update_needed: Option<Version>,
+    whats_new: Option<WhatsNew>,
     results_state: ListState,
     switched_search_mode: bool,
     search_mode_state: SearchModeState,
@@ -182,7 +185,7 @@ pub struct State {
     keymaps: KeymapSet,
     search: SearchState,
     engine: AnySearchEngine,
-    now: Box<dyn Fn() -> OffsetDateTime + Send>,
+    now: Box<dyn Fn() -> Timestamp + Send>,
     /// Messages for the user, shown with the warnings until the next key.
     messages: Vec<Message>,
 }
@@ -246,6 +249,9 @@ impl State {
 
     #[must_use]
     fn handle_input(&mut self, settings: &Arc<Settings>, input: &Event) -> InputAction {
+        if whats_new::dismisses(input) {
+            self.whats_new = None;
+        }
         match input {
             Event::Key(k) => self.handle_key_input(settings, k),
             Event::Mouse(m) => self.handle_mouse_input(*m, settings),
@@ -950,6 +956,9 @@ impl State {
             f.render_widget(Clear, area);
         }
         self.draw_inner(f, area, results, stats, inspecting, settings, theme);
+        if let Some(whats_new) = &mut self.whats_new {
+            whats_new.draw(f, area, theme);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1148,12 +1157,13 @@ impl State {
                     engine: &self.engine,
                     search_input: self.search.input.as_str(),
                 };
+                let tz = settings.timezone.time_zone();
                 let results_list = Self::build_results_list(
                     style,
                     results,
                     self.keymap_mode,
                     &self.now,
-                    settings.timezone.0,
+                    &tz,
                     indicator.as_str(),
                     theme,
                     history_highlighter,
@@ -1274,8 +1284,8 @@ impl State {
     }
 
     fn build_title(&self, settings: &Settings, theme: &Theme) -> Line<'static> {
-        let today = (self.now)().to_offset(settings.timezone.0);
-        let pumpkin = if today.date().is_halloween_season() {
+        let today = settings.timezone.time_zone().to_datetime((self.now)()).date();
+        let pumpkin = if today.is_halloween_season() {
             " 🎃"
         } else {
             ""
@@ -1394,8 +1404,8 @@ impl State {
         style: StyleState,
         results: &'a [History],
         keymap_mode: KeymapMode,
-        now: &'a dyn Fn() -> OffsetDateTime,
-        tz: UtcOffset,
+        now: &'a dyn Fn() -> Timestamp,
+        tz: &'a TimeZone,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
@@ -1969,7 +1979,15 @@ pub async fn history(
     input.end();
 
     let settings2 = Arc::clone(settings);
-    let update_needed = tokio::spawn(async move { settings2.needs_update().await }).fuse();
+    let (whats_new_tx, whats_new) = tokio::sync::oneshot::channel();
+    let mut whats_new = whats_new.fuse();
+    let update_needed = tokio::spawn(async move {
+        // The update check records when it last ran. What's new reads that record to tell a fresh
+        // install from an upgrade, so it has to load first.
+        let _ = whats_new_tx.send(WhatsNew::load(&settings2).await);
+        settings2.needs_update().await
+    })
+    .fuse();
     tokio::pin!(update_needed);
 
     // Counting history is a full table scan, which can take a while on a large,
@@ -1983,12 +2001,13 @@ pub async fn history(
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
-        .unwrap_or_else(|| settings.default_filter_mode(initial_context.git_root.is_some()));
+        .unwrap_or_else(|| settings.default_filter_mode(initial_context.vcs_root.is_some()));
 
     let mut app = State {
         history_count: None,
         results_state: ListState::default(),
         update_needed: None,
+        whats_new: None,
         switched_search_mode: false,
         tab_index: 0,
         inspecting_state: InspectingState::default(),
@@ -2011,10 +2030,10 @@ pub async fn history(
         },
         current_cursor: None,
         now: if settings.prefers_reduced_motion {
-            let now = OffsetDateTime::now_utc();
+            let now = Timestamp::now();
             Box::new(move || now)
         } else {
-            Box::new(OffsetDateTime::now_utc)
+            Box::new(Timestamp::now)
         },
         prefix: false,
         pending_vim_key: None,
@@ -2043,6 +2062,8 @@ pub async fn history(
     let mut stats_for: Option<String> = None;
     let mut inspecting: Option<History> = None;
     let accept;
+    let mut had_input = false;
+    let mut seen_write = None;
     let result = 'render: loop {
         if app.tab_index == 1 {
             let context = app.eval_context();
@@ -2059,6 +2080,12 @@ pub async fn history(
             app.draw(f, &results, stats.as_ref(), inspecting.as_ref(), settings, theme, popup_mode);
         })?;
 
+        if let Some(whats_new) = &mut app.whats_new
+            && let Some(write) = whats_new.record_if_drawn(settings)
+        {
+            seen_write = Some(write);
+        }
+
         let initial_input = app.search.input.as_str().to_owned();
         let initial_filter_mode = app.search.filter_mode;
         let initial_search_mode = app.search_mode();
@@ -2070,7 +2097,9 @@ pub async fn history(
             event_ready = event_ready => {
                 if event_ready?? {
                     loop {
-                        match app.handle_input(settings, &event::read()?) {
+                        let event = event::read()?;
+                        had_input |= whats_new::dismisses(&event);
+                        match app.handle_input(settings, &event) {
                             InputAction::Continue => {},
                             InputAction::DeleteInspecting => {
                                 if let Some(id) = app.inspecting_state.current {
@@ -2181,6 +2210,14 @@ pub async fn history(
                     }
                 }
             }
+            loaded = &mut whats_new => {
+                // Notes that arrive after the first input would pop up mid-search, so they wait.
+                match loaded {
+                    Ok(Ok(loaded)) if !had_input => app.whats_new = loaded,
+                    Ok(Err(e)) => tracing::warn!("failed to load what's new: {e:#}"),
+                    _ => {}
+                }
+            }
             update_needed = &mut update_needed => {
                 // Don't fail interactive search if update check fails
                 // The update check is a nice-to-have feature, not critical
@@ -2252,6 +2289,11 @@ pub async fn history(
             None
         };
     };
+
+    // The runtime stops when search returns, so finish saving the notes as seen first.
+    if let Some(write) = seen_write {
+        let _ = tokio::time::timeout(Duration::from_millis(500), write).await;
+    }
 
     app.finalize_keymap_cursor(settings);
 
@@ -2425,15 +2467,13 @@ mod tests {
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
-    use atuin_client::theme::ThemeManagerOptions;
+    use atuin_client::theme::ThemeManager;
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
-    use atuin_common::time::UtcOffsetSpec;
     use atuin_common::userio::log::{Message, Severity};
+    use jiff::Timestamp;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::{fixture, rstest};
-    use time::macros::{datetime, offset};
-    use time::{OffsetDateTime, UtcOffset};
 
     use super::{
         Compactness, InputAction, InspectingState, InspectorView, KeymapSet, SearchModeState,
@@ -2461,6 +2501,7 @@ mod tests {
         let mut state = State {
             history_count: Some(i64::try_from(results_len).unwrap()),
             update_needed: None,
+            whats_new: None,
             results_state: ListState::default(),
             switched_search_mode: false,
             search_mode_state: SearchModeState {
@@ -2487,13 +2528,13 @@ mod tests {
                     cwd: String::new(),
                     cmd_origin: atuin_domain::record::CmdOrigin::default(),
                     host_id: String::new(),
-                    git_root: None,
+                    vcs_root: None,
                 },
                 custom_context: None,
                 shells: Shells::all(),
             },
             engine: engines::engine(SearchMode::Fuzzy, &Arc::new(Settings::utc())),
-            now: Box::new(OffsetDateTime::now_utc),
+            now: Box::new(Timestamp::now),
             messages: Vec::new(),
         };
         state.results_state.select(selected);
@@ -2502,12 +2543,8 @@ mod tests {
 
     #[rstest]
     fn a_message_for_the_user_shows_until_the_next_key(mut state: State, settings: Arc<Settings>) {
-        let mut themes = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("default", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
         state.messages.push(Message {
             severity: Severity::Warn,
             text: "invalid key in keymap config".to_owned(),
@@ -2526,26 +2563,22 @@ mod tests {
 
     /// The title wears a pumpkin through the Halloween season by the user's clock, not UTC's.
     #[rstest]
-    #[case::halloween(datetime!(2026-10-31 12:00 UTC), offset!(UTC), true)]
-    #[case::season_opens(datetime!(2026-10-17 12:00 UTC), offset!(UTC), true)]
-    #[case::day_before_the_season(datetime!(2026-10-16 12:00 UTC), offset!(UTC), false)]
-    #[case::already_the_season_east_of_utc(datetime!(2026-10-16 20:00 UTC), offset!(+9), true)]
-    #[case::still_the_season_west_of_utc(datetime!(2026-11-02 02:00 UTC), offset!(-5), true)]
-    #[case::already_over_east_of_utc(datetime!(2026-11-01 20:00 UTC), offset!(+9), false)]
+    #[case::halloween("2026-10-31T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", true)]
+    #[case::season_opens("2026-10-17T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", true)]
+    #[case::day_before_the_season("2026-10-16T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", false)]
+    #[case::already_the_season_east_of_utc("2026-10-16T20:00:00Z".parse::<Timestamp>().unwrap(), "+9", true)]
+    #[case::still_the_season_west_of_utc("2026-11-02T02:00:00Z".parse::<Timestamp>().unwrap(), "-5", true)]
+    #[case::already_over_east_of_utc("2026-11-01T20:00:00Z".parse::<Timestamp>().unwrap(), "+9", false)]
     fn title_wears_a_pumpkin_in_the_halloween_season(
         mut state: State,
-        #[case] now: OffsetDateTime,
-        #[case] offset: UtcOffset,
+        #[case] now: Timestamp,
+        #[case] tz: &str,
         #[case] pumpkin: bool,
     ) {
         let mut settings = Settings::utc();
-        settings.timezone = UtcOffsetSpec(offset);
-        let mut themes = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("default", None);
+        settings.timezone = tz.parse().unwrap();
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
         state.now = Box::new(move || now);
 
         assert_eq!(state.build_title(&settings, theme).to_string().ends_with('🎃'), pumpkin);
@@ -2557,14 +2590,14 @@ mod tests {
     #[once]
     fn preview_corpus() -> Vec<History> {
         let cmd_60: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("for i in $(seq -w 10); do echo \"item number $i - abcd\"; done")
             .cwd("/")
             .build()
             .into();
 
         let cmd_124: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(
                 "echo 'Aurea prima sata est aetas, quae vindice nullo, sponte sua, sine lege \
                  fidem rectumque colebat. Poena metusque aberant'",
@@ -2574,7 +2607,7 @@ mod tests {
             .into();
 
         let cmd_200: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(
                 "CREATE USER atuin WITH ENCRYPTED PASSWORD 'supersecretpassword'; CREATE DATABASE \
                  atuin WITH OWNER = atuin; \\c atuin; REVOKE ALL PRIVILEGES ON SCHEMA public FROM \
@@ -2926,7 +2959,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let entry: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hi")
             .cwd(on_host(cwd))
             .build()
@@ -3314,8 +3347,8 @@ mod tests {
         for i in 0..count {
             let mut entry: History = History::capture()
                 .timestamp(
-                    OffsetDateTime::UNIX_EPOCH
-                        + time::Duration::seconds(if tied {
+                    Timestamp::UNIX_EPOCH
+                        + jiff::SignedDuration::from_secs(if tied {
                             0
                         } else {
                             i64::try_from(i).unwrap()
@@ -3363,7 +3396,7 @@ mod tests {
         let mut third = entries[2].clone();
         third.id = atuin_client::history::HistoryId::new(atuin_common::utils::uuid_v7());
         third.command = "echo THIRD".into();
-        third.timestamp += time::Duration::seconds(1);
+        third.timestamp += jiff::SignedDuration::from_secs(1);
         db.save(&third).await.unwrap();
         state.tab_index = 1;
         state.inspecting_state.current = Some(entries[0].id);
@@ -3533,7 +3566,7 @@ mod tests {
         state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
         let mut db = Sqlite::in_memory(std::time::Duration::from_secs(2)).await.unwrap();
         let history: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo query match")
             .cwd("/tmp")
             .build()

@@ -3,7 +3,7 @@ unrecognized-subcommand =
 cmd-contributors = List the people who have contributed to Atuin
 arg-gen-completions-shell = Set the shell for generating completions
 arg-gen-completions-out-dir = Set the output directory
-output-search-disabled = output capture is disabled. run `atuin config enable output-capture` to enable
+output-search-disabled = output capture is disabled. run `atuin setup --only --output-capture --daemon` to enable
 output-search-empty-query = blank query provided. please run 'atuin output search --help'
 hook-malformed-json = hook payload is not valid JSON at line { $line }, column { $column }
 output-search-connect-failed = could not connect to the daemon
@@ -113,10 +113,8 @@ cmd-setup = Setup Atuin features
 cmd-init = Print Atuin's shell init script
 cmd-doctor = Run the doctor to check for common issues
 cmd-update = Update atuin to the latest version on your release channel
-cmd-hook = Manage AI-agent shell hooks
+cmd-hook = Record the commands an AI agent runs, from its hooks
 cmd-mcp = Start an MCP server exposing history search to AI tools (stdio)
-cmd-mcp-install = Connect AI agents to atuin's MCP server
-arg-mcp-install-agent = Agent to connect (claude-code, codex, grok, opencode, pi or omp); omit to connect all agents with existing config files
 cmd-wrapped = Show a fun, year-in-review recap of your shell history
 arg-wrapped-year = Year to recap (defaults to last year, or this year in December)
 cmd-trick-or-treat = Dig a forgotten command, or a ghost, out of your history
@@ -131,40 +129,47 @@ arg-account-login-key = The encryption key for your account. Falls back to `ATUI
 arg-totp-code = The two-factor authentication code for your account, if any
 cmd-config-get = Get a configuration value from your config.toml file or after defaults and overrides are applied
 cmd-config-set = Set a configuration value in your config.toml file
-cmd-config-enable = Enable a feature, along with everything it depends on
-cmd-config-disable = Disable a feature, leaving its dependencies enabled
 cmd-config-print = Print all configuration values from your config.toml file in TOML format
-    .long = 
+    .long =
         Print all configuration values from your config.toml file in TOML format
 
         If a key is provided, only print the value of that key and all its children
+cmd-config-check = Check your configuration for settings that Atuin does not recognize
+    .long =
+        Check your configuration for settings that Atuin does not recognize
+
+        Atuin ignores settings it doesn't recognize. This command checks if your config
+        contains any unrecognized settings, and prints them and exits with an error if so.
+cmd-config-types = Print the Luau types of atuin.lua and .atuin.lua config files, for your editor
+    .long =
+        Print the Luau types of atuin.lua and .atuin.lua config files, for your editor. The types
+        are for files that start with `-- atuin:version=1`.
+
+        Save the output, say as ~/.atuin/atuin.d.luau, and list it in luau-lsp's
+        `luau-lsp.types.definitionFiles` setting. The table a config file assigns to
+        `atuin.config` then checks and completes as you write it.
+cmd-workspace = Set up the .atuin.lua config file of a project
+cmd-workspace-init = Create a .atuin.lua workspace config file in the current directory
+    .long =
+        Create a .atuin.lua config file in the current directory.
+
+        Pass --org to name organizations that own this workspace without being asked. It won't
+        replace an atuin.lua or .atuin.lua that's already there.
+arg-workspace-init-org = An organization to share the threads with, by slug. Repeat it to name more than one. Without it, you're asked.
+prompt-workspace-org = An organization that owns this project, by slug:
+workspace-init-created = Created { $path }
 arg-config-get-key = The configuration key to get
 arg-config-get-resolved = Print the value after defaults and overrides are applied
 arg-config-get-verbose = Print both the config file value and the resolved value
 arg-config-set-key = The configuration key to set
 arg-config-set-value = The value to set
 arg-config-set-the-type = Store value as an explicit type
+arg-config-set-force = Set the key even if Atuin does not recognize it
 value-config-set-the-type-auto = Automatically determine the type of the value
 value-config-set-the-type-string = Store value as a string
 value-config-set-the-type-boolean = Store value as a boolean
 value-config-set-the-type-integer = Store value as an integer
 value-config-set-the-type-float = Store the value as a float
-arg-config-enable-feature = The feature to enable
-arg-config-disable-feature = The feature to disable
-value-config-feature-daemon = The background daemon and daemon-backed search
-value-config-feature-output-capture = Command output capture, via the daemon and the pty proxy
-value-config-feature-octavo = Use Octavo, once it is enabled for your account on the hub
-value-config-feature-threads = Capture your AI coding agents' threads, to search and resume them
-config-enable-octavo-not-logged-in = You are not logged in to the hub, so it cannot say whether Octavo is enabled for your account. Run 'atuin login' first.
-config-enable-octavo-not-enabled = Octavo is not enabled for your account on { $address }.
-config-enable-octavo-description = Octavo is Atuin's sync for sharing and searching your history, and the threads Atuin captures from your coding agents.
-config-enable-octavo-disclaimer = Unlike Atuin Sync, Octavo is not end-to-end encrypted, but your data is encrypted in transit and at rest. It's yours, and you can delete it at any time.
-config-enable-octavo-declined = Octavo was not enabled.
-config-enable-octavo-backfill = Also upload the { $count } entries already in your history, not just new commands.
-config-enable-octavo-backfilled = Queued { $count } history entries for upload.
-config-enable-octavo-backfill-old = { $count } entries recorded before Atuin v14 were left out: Octavo only takes the history ids Atuin has used since.
-config-enable-octavo-threads-backfill = Also upload the { $count } thread messages Atuin has already captured, not just new ones.
-config-enable-octavo-threads-backfilled = Queued { $count } thread messages for upload.
 
 threads-offer = Enable threads?
 threads-offer-description = Atuin records your coding agents' threads (Claude Code, Codex, opencode and Pi), so you can search them and resume them here or on another machine. They're encrypted and synced like your history.
@@ -221,6 +226,7 @@ arg-history-timezone = Display the command time in another timezone other than t
         This option takes one of the following kinds of values:
 
         - the special value "local" (or "l") which refers to the system time zone
+        - a time zone name (e.g. "Europe/Berlin")
         - an offset from UTC (e.g. "+9", "-2:30")
 arg-history-list-format = Available variables: {"{"}command{"}"}, {"{"}directory{"}"}, {"{"}duration{"}"}, {"{"}user{"}"}, {"{"}host{"}"}, {"{"}author{"}"}, {"{"}intent{"}"}, {"{"}exit{"}"}, {"{"}time{"}"}, {"{"}session{"}"}, and {"{"}uuid{"}"}
     .long = 
@@ -238,8 +244,6 @@ arg-history-dry-run = List matching history lines without performing the actual 
 cmd-history-dedup = Delete duplicate history entries (that have the same command, cwd and hostname)
 arg-history-dedup-before = Only delete results added before this date, read in the configured timezone unless it carries an explicit offset
 arg-history-dedup-dupkeep = How many recent duplicates to keep
-cmd-hook-install = Install hooks for an AI agent to capture commands in atuin history
-arg-hook-install-agent = Agent to install hooks for (e.g., "claude-code")
 arg-hook-agent = Which agent's hook format to parse (e.g., "claude-code")
 cmd-import-auto = Import history for the current shell
 cmd-import-shell = Import history from the { $shell } history file
@@ -249,7 +253,6 @@ cmd-import-xonsh = Import history from xonsh json files
 cmd-import-xonsh-sqlite = Import history from xonsh sqlite db
 arg-init-disable-ctrl-r = Disable the binding of CTRL-R to atuin
 arg-init-disable-up-arrow = Disable the binding of the Up Arrow key to atuin
-arg-init-disable-ai = Disable the binding of ? to Atuin AI
 arg-init-bind-ai-resume = Bind CTRL-] to atuin threads resume (zsh, bash and fish; off by default: it replaces the shell's own binding)
 value-init-shell-zsh = Zsh setup
 value-init-shell-bash = Bash setup
@@ -328,6 +331,7 @@ arg-search-timezone =
         This option takes one of the following kinds of values:
 
         - the special value "local" (or "l") which refers to the system time zone
+        - a time zone name (e.g. "Europe/Berlin")
         - an offset from UTC (e.g. "+9", "-2:30")
 arg-search-format = Available variables: {"{"}command{"}"}, {"{"}directory{"}"}, {"{"}duration{"}"}, {"{"}user{"}"}, {"{"}host{"}"}, {"{"}time{"}"}, {"{"}exit{"}"} and {"{"}relativetime{"}"}
     .long = 
@@ -421,15 +425,9 @@ daemon-none-running = No daemon running
 daemon-starting = Starting daemon...
 daemon-replacing-unresponsive = Daemon isn't answering, replacing it...
 daemon-restarted = Daemon restarted
-config-enabled = Enabled.
-config-disabled = Disabled.
-config-reload-failed = could not read the new config to restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
-config-restart-daemon-and-shell = Restart the Atuin daemon and your shell for the change to take effect.
-config-daemon-restart-failed = could not restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
+config-unknown-keys = { $file } contains unrecognized settings: { $keys }
+config-check-ok = { $file } has no unrecognized settings.
 config-managed-daemon-restart-failed = could not restart the Atuin daemon: { $error }
-config-restart-shell = Restart your shell for the change to take effect.
-config-daemon-stop-failed = could not stop the Atuin daemon: { $error }; run `atuin daemon stop` manually
-config-launchd-agent-remove-failed = could not remove the Atuin daemon's launchd agent: { $error }
 import-banner =
             Atuin         
     ======================
@@ -482,15 +480,6 @@ doctor-bash-plugin = [Shell] If you are using Bash, Atuin requires that either b
 doctor-blesh-integration = [Shell] Atuin and ble.sh seem to be loaded in the session, but the integration does not seem to be working. Please check the setup in .bashrc.
 info-shadowed-config = { shadowed-config }
 info-shadowed-data-dir = { shadowed-data-dir }
-hook-installed = Atuin hooks installed for { $harness }. Path: { $path }
-hook-codex-trusted = Trusted them in Codex's config: { $config }
-hook-reload-hint-pi = Reload pi with `/reload` or restart pi.
-hook-reload-hint-omp = Reload omp with `/reload` or restart omp.
-hook-reload-hint-opencode = Restart opencode to load the plugin.
-hook-reload-hint-amp = Restart Amp to load the plugin.
-hook-reload-hint-kiro = Restart any running Kiro: it loads hooks when a session starts.
-hook-already-installed = { $harness }: hooks already installed, skipping
-hook-mcp-hint = To let { $name } search your history too, run `atuin mcp install { $name }`.
 history-output-failed = history output failed with: { $error }
 history-output-write-failed = failed to write history output: { $error }
 history-format-error = format string caused a formatting error
@@ -505,8 +494,9 @@ history-format-braces-hint = If your formatting string contains literal curly br
 history-format-braces-example = Use {"{"}{"{"} for literal {"{"} and {"}"}{"}"} for literal {"}"}
 history-start-daemon-failed = failed to start history via the daemon; saving it locally instead: { $error }
 history-end-daemon-failed = failed to end history via the daemon; ending it locally instead: { $error }
-history-octavo-login-failed = failed to learn which Hub user is logged in, so deletions won't reach Octavo: { $error }
-history-octavo-queue-failed = failed to queue history deletions for Octavo, so they won't reach it: { $error }
+history-cancel-daemon-failed = failed to drop history via the daemon; dropping it locally instead: { $error }
+history-teams-login-failed = failed to learn which Hub user is logged in, so deletions won't reach Atuin for Teams: { $error }
+history-teams-queue-failed = failed to queue history deletions for Atuin for Teams, so they won't reach it: { $error }
 history-tail-lagged = atuin daemon dropped { $dropped } history events; tail fell behind
 history-prune-none = No entries to prune.
 history-prune-found =
@@ -574,6 +564,4 @@ setup-settings-updated = Settings updated successfully
 setup-no-changes = No settings changed
 search-keymap-invalid-key = invalid key in keymap config: { $key }: { $error }
 search-keymap-invalid-binding = invalid binding for { $key } in keymap config: { $error }
-mcp-restart-harness = Restart { $harness } to load it.
-mcp-capture-tip = To let agents search command output and agent threads too, run `atuin config enable output-capture` and `atuin config enable threads`.
 client-internal-decoy = this command is not meant to be accessed directly

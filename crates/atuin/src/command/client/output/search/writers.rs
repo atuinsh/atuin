@@ -6,12 +6,12 @@ use std::time::Duration;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::time::{DurationExt as _, OffsetDateTimeExt as _};
+use atuin_common::time::{DurationExt as _, TimestampExt as _};
 use atuin_daemon::{OutputLine, OutputMatch};
 use colored::Colorize;
 use futures_util::{Stream, StreamExt as _};
+use jiff::Timestamp;
 use serde::Serialize;
-use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr as _;
 
 /// A search match from the daemon paired with the [`History`] loaded for it locally. Owned, so a
@@ -23,7 +23,7 @@ pub(super) struct HistoryMatch {
 
 /// Rendering context shared by every match in a run, since it does not vary between them.
 pub(super) struct RenderCtx<'a> {
-    pub now: OffsetDateTime,
+    pub now: Timestamp,
     pub width: usize,
     pub theme: &'a Theme,
 }
@@ -237,7 +237,7 @@ impl MatchRenderer for JsonWriter {
                 .join("\n");
             let record = JsonRecord {
                 id: &history.id,
-                timestamp_unix_ns: history.timestamp.unix_timestamp_nanos(),
+                timestamp_unix_ns: history.timestamp.as_nanosecond(),
                 command: &history.command,
                 cwd: &history.cwd,
                 session: &history.session,
@@ -337,7 +337,7 @@ impl std::fmt::Display for PrettyLine<'_> {
 mod tests {
     use std::borrow::Cow;
 
-    use atuin_client::theme::ThemeManagerOptions;
+    use atuin_client::theme::ThemeManager;
     use atuin_common::string::highlighted::{HighlightedString, TextHighlighter};
     use rstest::rstest;
 
@@ -345,7 +345,7 @@ mod tests {
 
     fn hist(command: &str, duration_nanos: i64, exit: i64) -> History {
         let mut h: History = History::capture()
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .command(command)
             .cwd("/")
             .build()
@@ -433,7 +433,7 @@ mod tests {
 
     fn ctx(theme: &Theme) -> RenderCtx<'_> {
         RenderCtx {
-            now: OffsetDateTime::UNIX_EPOCH,
+            now: Timestamp::UNIX_EPOCH,
             width: 0,
             theme,
         }
@@ -452,12 +452,8 @@ mod tests {
     #[case::multi_line("ls", "one\ntwo\nthree", "ls\none\ntwo\nthree\n")]
     #[tokio::test]
     async fn plain_renders(#[case] command: &str, #[case] output: &str, #[case] expected: &str) {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let out = render(&Writer::Plain(PlainWriter), theme, vec![hm(command, output)]).await;
         assert_eq!(out, expected);
     }
@@ -470,12 +466,8 @@ mod tests {
     )]
     #[tokio::test]
     async fn plain_marks_gaps(#[case] lines: &[(i64, &str)], #[case] expected: &str) {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let rows = vec![match_lines(hist("ls", 0, 0), numbered(lines))];
         assert_eq!(render(&Writer::Plain(PlainWriter), theme, rows).await, expected);
     }
@@ -483,12 +475,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn pretty_centers_a_gap_marker() {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let rows = vec![match_lines(hist("cmd", 0, 0), numbered(&[(0, "«a»"), (7, "«b»")]))];
         let mut buf = Vec::new();
         let ctx = RenderCtx {
@@ -506,12 +494,8 @@ mod tests {
     }
 
     async fn body(output: &str, ranges: &[(usize, usize)]) -> String {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let rows = vec![match_of(hist("cmd", 0, 0), &highlighted(output, ranges))];
         let full = render(&Writer::Pretty(PrettyWriter), theme, rows).await;
         full.split_once('\n').map(|(_, body)| body.to_string()).unwrap_or(full)
@@ -548,13 +532,9 @@ mod tests {
         #[case] width: usize,
     ) {
         let (age_secs, duration_nanos) = timing;
-        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(age_secs);
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(age_secs);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let m = match_of(hist(command, duration_nanos, exit), &highlighted("", &[]));
         let ctx = RenderCtx { now, width, theme };
         let hit = Hit { m: &m, ctx: &ctx };
@@ -572,12 +552,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn ndjson_record_has_expected_fields() {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let match_ =
             match_of(hist("cargo build", 1_234, 2), &highlighted("compiling\nerror here", &[]));
         let id = match_.history.id.to_string();
@@ -602,12 +578,8 @@ mod tests {
     #[case::plain("plain")]
     #[tokio::test]
     async fn command_is_emitted_raw(#[case] command: &str) {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let out =
             render(&Writer::Json(JsonWriter { array: false }), theme, vec![hm(command, "")]).await;
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();
@@ -617,12 +589,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn json_array_frames_records() {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let rows = vec![hm("first", "out a"), hm("second", "out b")];
         let out = render(&Writer::Json(JsonWriter { array: true }), theme, rows).await;
 
@@ -637,12 +605,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn ndjson_frames_records() {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let rows = vec![hm("first", "out a"), hm("second", "out b")];
         let out = render(&Writer::Json(JsonWriter { array: false }), theme, rows).await;
 
@@ -660,12 +624,8 @@ mod tests {
     #[case::ndjson(false, "")]
     #[tokio::test]
     async fn empty_result_framing(#[case] array: bool, #[case] expected: &str) {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let out = render(&Writer::Json(JsonWriter { array }), theme, Vec::new()).await;
         assert_eq!(out, expected);
     }
@@ -679,12 +639,8 @@ mod tests {
     #[case::tab("tab\tafter")]
     #[tokio::test]
     async fn output_control_characters_are_escaped(#[case] raw: &str) {
-        let mut manager = ThemeManagerOptions {
-            debug: false,
-            builtin_only: true,
-        }
-        .build();
-        let theme = manager.load_theme("default", None);
+        let mut manager = ThemeManager::builtin_only();
+        let theme = manager.load_theme("default");
         let out =
             render(&Writer::Json(JsonWriter { array: false }), theme, vec![hm("cmd", raw)]).await;
         let record: serde_json::Value = serde_json::from_str(out.trim_end()).unwrap();

@@ -5,6 +5,7 @@
 mod common;
 
 use atuin_common::path::PathBufExt as _;
+use atuin_common::test_utils::ReadOnlyTree;
 use common::{FreshEnv, Process, SESSION};
 use rstest::{fixture, rstest};
 
@@ -121,6 +122,34 @@ fn resolved_paths_print_as_opened(
     let out = Process::spawn(command).wait();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(stdout(&out).trim(), expected.replace("{atuin_home}", &atuin_home));
+}
+
+/// An Atuin home on a read-only filesystem still lists and searches its history. Regression for
+/// #2999.
+#[rstest]
+#[case::list(&["history", "list", "--cmd-only"])]
+#[case::search(&["search", "--cmd-only", "read-only"])]
+fn history_reads_from_a_read_only_home(env: FreshEnv, #[case] args: &[&str]) {
+    env.record("echo read-only", SESSION, &env.home().join("tmp"));
+    // A clean shutdown leaves each database's main file alone, with no WAL beside it to read
+    // through.
+    for db in ["history.db", "records.db"] {
+        let path = env.data_dir().joined(db);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+        conn.close().map_err(|(_, e)| e).unwrap();
+        assert!(!env.data_dir().joined(format!("{db}-wal")).exists(), "{db} kept its WAL");
+    }
+
+    let Some(_locked) = ReadOnlyTree::lock(&env.atuin_home()) else {
+        return;
+    };
+
+    let mut command = env.atuin(args);
+    command.env("ATUIN_SESSION", SESSION);
+    let out = Process::spawn(command).wait();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout(&out).trim(), "echo read-only");
 }
 
 /// An install from before `$ATUIN_HOME` keeps its XDG data and config where they are.

@@ -24,6 +24,7 @@ const SOCKET_NAME: &str = "atuin.sock";
 pub struct Daemon {
     /// Use the daemon to sync
     /// If enabled, history hooks are routed through the daemon.
+    // The field has a config builder default, so `settings::aliases` must list this alias.
     #[serde(alias = "enable")]
     pub enabled: bool,
 
@@ -267,8 +268,7 @@ impl<'a> SocketPath<'a> {
             return Ok(());
         };
         let dir = path.parent().expect("default socket path always has a parent");
-        create_secure_temp_dir(dir.as_path())?;
-        Ok(())
+        create_secure_temp_dir(dir)
     }
 
     #[must_use]

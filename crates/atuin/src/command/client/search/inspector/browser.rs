@@ -5,7 +5,7 @@ use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::time::DurationExt as _;
+use atuin_common::time::{DateTimeExt as _, DurationExt as _};
 use ratatui::Frame;
 use ratatui::backend::FromCrossterm as _;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -14,7 +14,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Padding, Paragraph, Row, Table, TableState, Tabs, Wrap,
 };
-use time::macros::format_description;
 use unicode_width::UnicodeWidthStr as _;
 
 use super::bindings::Bindings;
@@ -416,11 +415,7 @@ fn panel<'a>(title: impl Into<Line<'a>>, styles: Styles) -> Block<'a> {
 }
 
 fn timestamp(entry: &History, settings: &Settings) -> String {
-    entry
-        .timestamp
-        .to_offset(settings.timezone.0)
-        .format(format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"))
-        .unwrap_or_default()
+    settings.timezone.time_zone().to_datetime(entry.timestamp).display().ymd_hms().to_string()
 }
 
 fn origin(entry: &History) -> String {
@@ -609,11 +604,11 @@ pub fn draw_views(
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::theme::ThemeManagerOptions;
+    use atuin_client::theme::ThemeManager;
+    use jiff::Timestamp;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use rstest::{fixture, rstest};
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::command::client::search::keybindings::EvalContext;
@@ -637,7 +632,7 @@ mod tests {
     #[fixture]
     fn history() -> History {
         History::capture()
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .command("echo hello")
             .cwd("/tmp")
             .build()
@@ -652,12 +647,12 @@ mod tests {
         db.save(&history).await.unwrap();
         let mut other_run = history.clone();
         other_run.id = HistoryId::new(atuin_common::utils::uuid_v7());
-        other_run.timestamp += time::Duration::seconds(1);
+        other_run.timestamp += jiff::SignedDuration::from_secs(1);
         other_run.session = "second".into();
         db.save(&other_run).await.unwrap();
         let mut neighbor = other_run.clone();
         neighbor.id = HistoryId::new(atuin_common::utils::uuid_v7());
-        neighbor.timestamp += time::Duration::seconds(1);
+        neighbor.timestamp += jiff::SignedDuration::from_secs(1);
         neighbor.command = "pwd".into();
         db.save(&neighbor).await.unwrap();
         let mut browser = Browser::default();
@@ -697,12 +692,8 @@ mod tests {
         #[case] rows: u16,
     ) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("(none)", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("(none)");
         let mut browser = Browser::default();
         browser.prepare(&history, &Settings::utc(), theme);
         history.id = HistoryId::new(atuin_common::utils::uuid_v7());
@@ -726,12 +717,8 @@ mod tests {
         #[case] highlight: bool,
     ) {
         history.command = "echo héllo\0\ncat '\x1b[31m世界'".into();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("(none)", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("(none)");
         let text = command_text(&history, highlight, theme);
         assert_eq!(text.to_string(), "echo héllo^@\ncat '^[[31m世界'");
         if highlight {
@@ -797,12 +784,8 @@ mod tests {
     ) {
         use ratatui::style::Color;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut themes = ThemeManagerOptions {
-            debug: true,
-            builtin_only: true,
-        }
-        .build();
-        let theme = themes.load_theme("(none)", None);
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("(none)");
         let mut browser = Browser {
             view: View::Output,
             output: Capture::from_text(

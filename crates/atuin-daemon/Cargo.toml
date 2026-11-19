@@ -12,12 +12,13 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-octavo = ["dep:atuin-octavo", "atuin-client/octavo"]
+ai = ["atuin-client/ai", "atuin-common/ai"]
+octavo = ["ai", "dep:atuin-octavo", "atuin-client/octavo"]
 
 [dependencies]
 async-stream = { workspace = true }
 atuin-client = { workspace = true, features = ["proto"] }
-atuin-common = { workspace = true, features = ["ai", "os", "proto", "sqlite"] }
+atuin-common = { workspace = true, features = ["os", "proto", "sqlite"] }
 atuin-domain = { workspace = true }
 atuin-history = { workspace = true }
 atuin-kv = { workspace = true }
@@ -27,6 +28,7 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+jiff = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 eyre = { workspace = true }
@@ -50,9 +52,9 @@ serde_json = { workspace = true }
 serde_with = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 tower = { workspace = true }

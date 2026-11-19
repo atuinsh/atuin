@@ -20,6 +20,7 @@ eyre = { workspace = true }
 futures = { workspace = true }
 hyper-tls = { workspace = true }
 hyper-util = { workspace = true, features = ["client-legacy", "tokio"] }
+jiff = { workspace = true }
 native-tls = { workspace = true, features = ["alpn"] }
 prost = { workspace = true }
 prost-types = { workspace = true }
@@ -32,6 +33,8 @@ tonic = { workspace = true }
 tonic-prost = { workspace = true }
 # Reads the `google.rpc.ErrorInfo` a refusal carries, which tells an account without Octavo apart.
 tonic-types = { workspace = true }
+# Looks config files up on a blocking thread, as a hung network mount hangs the lookup.
+tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -40,7 +43,6 @@ xxhash-rust = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 
 [build-dependencies]

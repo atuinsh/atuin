@@ -2,12 +2,17 @@
 
 #[cfg(feature = "ansi")]
 pub mod ansi;
+#[cfg(feature = "os")]
+pub mod atuin_exe;
+#[cfg(feature = "config")]
+pub mod config;
 #[cfg(feature = "db")]
 pub mod db;
 pub mod dirs;
 pub mod docs;
 pub mod encryption;
 pub mod env;
+pub mod executable;
 pub mod filter;
 pub mod fs;
 pub mod futures;
@@ -29,7 +34,7 @@ pub mod shell;
 pub mod slice;
 pub mod string;
 pub mod sync;
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 pub mod time;
 pub mod units;

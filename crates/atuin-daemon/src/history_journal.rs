@@ -84,7 +84,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::database::Sqlite as HistoryDatabase;
+use atuin_client::database::{DeletedLiveRows, Sqlite as HistoryDatabase};
 use atuin_client::history::store::HistoryStore;
 use atuin_client::history::{CommandCapture, History, HistoryId};
 use atuin_client::packfile;
@@ -102,7 +102,7 @@ use tracing::{Instrument, Span};
 #[cfg(feature = "octavo")]
 use crate::octavo::Octavo;
 use crate::output_capture::{CaptureError, GetOutputError, OutputCaptureEngine};
-use crate::search::SearchIndex;
+use crate::search::{FrecencyMultipliers, RebuildSettings, SearchIndexSettings, SharedSearchIndex};
 
 /// History-db rows removed per transaction by [`HistoryJournal::delete`]; matches the chunking of
 /// `HistoryStore::build_all`, which this path used to go through.
@@ -230,7 +230,7 @@ pub struct HistoryJournal {
     unsaved_cmds: DashMap<HistoryId, (String, String)>,
 
     /// We hold a reference to the search index which allows us to add a new history record into it.
-    search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+    search_index: Arc<SharedSearchIndex>,
 
     /// Channel used to broadcast command events to other threads. See [`CmdEvent`] and
     /// [`Self::subscribe`].
@@ -272,6 +272,35 @@ pub enum CmdDeleteError {
     HistoryDbFailed(eyre::Report),
 }
 
+/// The `settings` callback of a search index rebuild that applies `search_settings`. See
+/// [`SharedSearchIndex::rebuild`].
+fn index_settings(
+    search_settings: &Search,
+) -> impl Fn(RebuildSettings<'_>) -> Option<SearchIndexSettings> {
+    let frecency_multipliers = FrecencyMultipliers::from(search_settings);
+    move |settings| {
+        Some(SearchIndexSettings {
+            frecency_multipliers,
+            ..settings.latest.clone()
+        })
+    }
+}
+
+/// What [`HistoryJournal::delete`] did in the record store, before it removes rows from the
+/// history db.
+struct TombstonedEntries {
+    /// How many entries Atuin forgot. That includes started commands that were cancelled. Those
+    /// were never in the record store, so this can be more than `to_delete.len()`.
+    forgotten: usize,
+
+    /// The ids that got a tombstone. Their rows must be removed from the history db.
+    to_delete: Vec<HistoryId>,
+
+    /// The entries of `to_delete` that are in the search index but whose save to the history db
+    /// failed.
+    unsaved: DeletedLiveRows,
+}
+
 /// Errors returned by [`HistoryJournal::rebuild`].
 #[derive(Debug, thiserror::Error)]
 pub enum CmdRebuildError {
@@ -310,7 +339,7 @@ impl HistoryJournal {
         caps: Arc<CapClient>,
         history_store: HistoryStore,
         history_db: HistoryDatabase,
-        search_index: Arc<tokio::sync::RwLock<SearchIndex>>,
+        search_index: Arc<SharedSearchIndex>,
         output_capture: OutputCaptureEngine,
     ) -> Self {
         const DEFAULT_LIFECYCLE_SHARDS: NonZeroUsize = NonZeroUsize::new(64).unwrap();
@@ -381,6 +410,10 @@ impl HistoryJournal {
     ///
     /// `duration` is the measured runtime of the command; callers that don't have one can derive it
     /// from the start timestamp via [`HistoryJournal::get`].
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "false positive: the index permit is consumed by add_history right after the save"
+    )]
     pub async fn finish(
         &self,
         history_id: HistoryId,
@@ -427,6 +460,12 @@ impl HistoryJournal {
             unsaved: Some((history.command.clone(), history.cwd.clone())),
         };
 
+        // The entry is registered with any search index rebuild in progress before the row is
+        // saved. The rebuilt index then has the entry even if the rebuild's load doesn't read it.
+        // See `AddPermit`.
+        let index_permit = self.search_index.begin_add().await;
+        index_permit.register([&history]);
+
         // Not an error for the caller: a retry would push a second record. The row comes back the
         // next time history.db is rebuilt from the store.
         match self.history_db.save(&history).instrument(span.clone()).await {
@@ -436,6 +475,9 @@ impl HistoryJournal {
                  `atuin store rebuild history` to restore it: {e}"
             ),
         }
+
+        // The entry is indexed even if the save failed, because the record store has it.
+        index_permit.add_history([&history]);
 
         drop(recorded);
         drop(lock);
@@ -453,10 +495,6 @@ impl HistoryJournal {
             tracing::warn!("packing failed: {e}");
         }
 
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        self.search_index.read().await.add_history(&history);
         #[cfg(feature = "octavo")]
         self.octavo.push_history(&history, history_record_id).await;
 
@@ -506,8 +544,11 @@ impl HistoryJournal {
     /// Delete the given history entries from Atuin's memory completely, including any captured
     /// output they have, and refuse output for them from then on.
     ///
-    /// `search_settings` is needed to rebuild the search index's frecency map after the deletion,
-    /// so the swapped-in index has correct rankings immediately rather than after the next refresh.
+    /// The search index rebuilds just the commands that lost a run. It reloads whole when it can't:
+    /// when the delete touches too many commands or runs, when the index is being rebuilt, or when
+    /// an entry's row was already gone. `search_settings` is needed to rebuild the index's frecency
+    /// after the deletion. The index then has correct rankings immediately rather than after the
+    /// next refresh.
     ///
     /// Returns how many history entries Atuin forgot.
     ///
@@ -534,17 +575,7 @@ impl HistoryJournal {
             );
         }
 
-        // Append delete tombstones to the record store.
-        //
-        // This returns a tuple where the first element is the total number of history elements that
-        // were erased from Atuin's memory, and the second element is the ids that must be
-        // subsequently removed from the history database.
-        //
-        // Note that `.0 != .1.len()`, because there may very well be history entries that atuin has
-        // forgotten about that were never in the record store.
-        //
-        // This happens as a result of the fact that [`HistoryJournal`] might be tracking started,
-        // but not finished commands. These get cancelled via [`HistoryJournal::cancel`].
+        // Append delete tombstones to the record store. See `TombstonedEntries`.
         //
         // The tombstones go into the store as one batch: per-record pushes cost three sqlite
         // round-trips each, which made large deletes take minutes.
@@ -578,14 +609,27 @@ impl HistoryJournal {
                 .await
                 .map_err(CmdDeleteError::HistoryStoreFailed)?;
             deleted += to_delete.len();
+            // These entries are in the search index but not in the history db. Their commands are
+            // kept, so the index update below finds them.
+            let mut unsaved = DeletedLiveRows::default();
             for id in &to_delete {
-                self.unsaved_cmds.remove(id);
+                if let Some((id, (command, _cwd))) = self.unsaved_cmds.remove(id) {
+                    unsaved.add_unsaved(id, command);
+                }
             }
 
-            Ok((deleted, to_delete))
+            Ok(TombstonedEntries {
+                forgotten: deleted,
+                to_delete,
+                unsaved,
+            })
         };
 
-        let (deleted, to_delete) = delete_records().await?;
+        let TombstonedEntries {
+            forgotten: deleted,
+            to_delete,
+            unsaved: mut removed,
+        } = delete_records().await?;
         if to_delete.is_empty() {
             return Ok(deleted);
         }
@@ -599,16 +643,42 @@ impl HistoryJournal {
         // Chunked like `build_all` is: one transaction over the whole set would hold the history
         // db's write lock for seconds at 100k+ ids, past the busy timeout a concurrent
         // `finish()` is willing to wait.
+        let mut result = Ok(deleted);
+        let mut attempted = 0;
         for chunk in to_delete.chunks(DELETE_ROWS_BATCH_SIZE) {
-            self.history_db
-                .delete_rows(chunk.iter().copied())
-                .await
-                .map_err(|e| CmdDeleteError::HistoryDbFailed(e.into()))?;
+            match self.history_db.delete_rows(chunk.iter().copied()).await {
+                Ok(chunk_removed) => {
+                    removed.extend(chunk_removed);
+                    attempted += chunk.len();
+                }
+                Err(e) => {
+                    result = Err(CmdDeleteError::HistoryDbFailed(e.into()));
+                    break;
+                }
+            }
         }
 
-        self.reload_search_index(search_settings).await;
+        // The index is updated even if a chunk failed. The chunks before it removed their rows, and
+        // a retry can't learn their commands any more. The failed chunk and the chunks after it
+        // removed nothing. Only the ids of the chunks that ran are checked for rows that were
+        // already gone.
+        let missing = to_delete[..attempted].iter().filter(|&&id| !removed.contains(id)).count();
+        if missing > 0 {
+            // Some rows were already gone from the history db, but their commands may still be in
+            // the index. Only a reload can drop them. An unknown id costs a reload too.
+            tracing::info!(
+                "{missing} deleted ids had no live row in the history db, reloading the whole \
+                 search index"
+            );
+            self.reload_search_index(search_settings).await;
+        } else if !removed.is_empty() {
+            let settings = index_settings(search_settings);
+            self.search_index
+                .sync_deleted(&self.history_db, removed.into_commands(), settings)
+                .await;
+        }
 
-        Ok(deleted)
+        result
     }
 
     /// Rebuild the history db from the record store, then reload the search index from it.
@@ -625,29 +695,19 @@ impl HistoryJournal {
 
     /// Reload the search index from the history database.
     pub async fn reload_search_index(&self, search_settings: &Search) {
-        // Clone the shell filter and drop the read guard before the (full) reload, so the scan
-        // doesn't hold the search-index lock across the database load.
-        //
-        // TODO(#4052): This is inherently racy -- any add_history operations added between this
-        //              .read() and the subsequent .write() are completely discarded from the new
-        //              index.
-        let shells = self.search_index.read().await.shells.clone();
-        let rebuilt = SearchIndex::from_db(shells, &self.history_db, search_settings).await;
-        match rebuilt {
-            Ok(new_index) => *self.search_index.write().await = new_index,
-            Err(e) => {
-                // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
-                //                      index is almost certainly wrong, however, is the legacy
-                //                      behavior we had.
-                //
-                //                      Arguably, we could completely delete the index/crash the
-                //                      daemon, since at this point, Atuin is as good as useless.
-                //
-                //                      We could also just mark the index as hot garbo and have the
-                //                      next request attempt to rebuild it. Not sure why the next
-                //                      request would succeed but a retry is always good.
-                tracing::error!("failed to reload search index; keeping previous index: {e}");
-            }
+        let rebuilt = self.search_index.rebuild(&self.history_db, index_settings(search_settings));
+        if let Err(e) = rebuilt.await {
+            // TODO(markovejnovic): This is obviously incorrect behavior, keeping the previous
+            //                      index is almost certainly wrong, however, is the legacy
+            //                      behavior we had.
+            //
+            //                      Arguably, we could completely delete the index/crash the
+            //                      daemon, since at this point, Atuin is as good as useless.
+            //
+            //                      We could also just mark the index as hot garbo and have the
+            //                      next request attempt to rebuild it. Not sure why the next
+            //                      request would succeed but a retry is always good.
+            tracing::error!("failed to reload search index; keeping previous index: {e}");
         }
     }
 
@@ -750,12 +810,12 @@ impl HistoryJournal {
 mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4;
-    use atuin_common::filter::OrFilter;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{CmdOrigin, HostId};
-    use tokio::sync::RwLock;
+    use rstest::{fixture, rstest};
 
     use super::*;
+    use crate::search::SearchIndex;
 
     /// A journal wired to real temp stores, so `finish`/`delete` run for real against a
     /// caller-chosen output-capture backend. The returned `TempDir` must outlive the journal.
@@ -766,7 +826,7 @@ mod tests {
             HistoryDatabase::new(tmp.path().join("history.db"), timeout).await.unwrap();
         let store = SqliteStore::new(tmp.path().join("records.db"), timeout).await.unwrap();
         let history_store = HistoryStore::new(store, HostId(uuid_v7()), paseto_v4::Key::generate());
-        let search_index = Arc::new(RwLock::new(SearchIndex::new(OrFilter::all())));
+        let search_index = Arc::new(SearchIndex::default().into());
         let caps = CapClient::new("http://127.0.0.1:1".parse().unwrap(), reqwest::Client::new());
         let journal =
             HistoryJournal::new(caps, history_store, history_db, search_index, output_capture);
@@ -775,7 +835,7 @@ mod tests {
 
     fn entry(cmd: &str) -> History {
         History::daemon()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(cmd)
             .cwd("/tmp")
             .session(uuid_v7().as_simple().to_string())
@@ -788,6 +848,7 @@ mod tests {
 
     /// A broken output store must not sink a deletion: the entry the user asked to forget is still
     /// removed rather than the whole delete being refused.
+    #[rstest]
     #[tokio::test]
     async fn delete_survives_a_broken_output_store() {
         let (journal, _tmp) = journal(OutputCaptureEngine::failing()).await;
@@ -800,5 +861,186 @@ mod tests {
             .expect("a failed output removal must not fail the whole delete");
         assert_eq!(deleted, 1);
         assert!(journal.history_db.load(id).await.unwrap().is_none());
+    }
+
+    /// Run `sql` against the history db in `tmp`.
+    async fn exec_on_history_db(tmp: &tempfile::TempDir, sql: &'static str) {
+        let mut conn = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new().filename(tmp.path().join("history.db")),
+        )
+        .await
+        .unwrap();
+        atuin_common::db::query(sql).execute(&mut conn).await.unwrap();
+        sqlx::Connection::close(conn).await.unwrap();
+    }
+
+    /// Make every save to the history db in `tmp` fail.
+    async fn fail_saves(tmp: &tempfile::TempDir) {
+        exec_on_history_db(
+            tmp,
+            "create trigger fail_saves before insert on history begin select raise(abort, 'no'); \
+             end",
+        )
+        .await;
+    }
+
+    /// Undo [`fail_saves`].
+    async fn allow_saves(tmp: &tempfile::TempDir) {
+        exec_on_history_db(tmp, "drop trigger fail_saves").await;
+    }
+
+    /// A journal whose history db fails every save.
+    struct FailingSaves {
+        journal: HistoryJournal,
+        tmp: tempfile::TempDir,
+    }
+
+    #[fixture]
+    async fn failing_saves() -> FailingSaves {
+        let (journal, tmp) = journal(OutputCaptureEngine::failing()).await;
+        fail_saves(&tmp).await;
+        FailingSaves { journal, tmp }
+    }
+
+    /// Deleting an entry whose history.db save failed updates the search index in place. The
+    /// entry has no row, but it isn't mistaken for a row that is already gone, which would reload
+    /// the whole index. Saved runs of the same command stay.
+    #[rstest]
+    #[case::only_run(0)]
+    #[case::other_runs_saved(2)]
+    #[tokio::test]
+    async fn delete_of_an_unsaved_entry_syncs_the_index(#[case] saved_runs: u32) {
+        let (journal, tmp) = journal(OutputCaptureEngine::failing()).await;
+        for _ in 0..saved_runs {
+            let id = journal.start_cmd(entry("echo x"));
+            journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+        }
+        // Only the index has this entry. A reload of the index would drop it.
+        let sentinel = entry("index-only sentinel");
+        {
+            let permit = journal.search_index.begin_add().await;
+            permit.register([&sentinel]);
+            permit.add_history([&sentinel]);
+        }
+        fail_saves(&tmp).await;
+
+        let unsaved = journal.start_cmd(entry("echo x"));
+        journal.finish(unsaved, 0, Duration::from_millis(1)).await.unwrap();
+        assert!(journal.history_db.load(unsaved).await.unwrap().is_none(), "the save failed");
+        assert_eq!(journal.search_index.read().invocations("echo x"), saved_runs + 1);
+
+        journal.delete(&[unsaved], &Search::default()).await.unwrap();
+
+        let index = journal.search_index.read();
+        assert_eq!(index.invocations("echo x"), saved_runs);
+        assert_eq!(index.invocations("index-only sentinel"), 1, "the index wasn't reloaded");
+    }
+
+    /// A delete that names an id twice reports it twice, as every id that it processed counts.
+    /// But it updates the index in place, because no row is missing.
+    #[rstest]
+    #[tokio::test]
+    async fn delete_of_a_repeated_id_updates_the_index_in_place() {
+        let (journal, _tmp) = journal(OutputCaptureEngine::failing()).await;
+        let id = journal.start_cmd(entry("echo twice"));
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+        // Only the index has this entry. A reload of the index would drop it.
+        let sentinel = entry("index-only sentinel");
+        {
+            let permit = journal.search_index.begin_add().await;
+            permit.register([&sentinel]);
+            permit.add_history([&sentinel]);
+        }
+
+        let deleted = journal.delete(&[id, id], &Search::default()).await.unwrap();
+
+        assert_eq!(deleted, 2);
+        let index = journal.search_index.read();
+        assert_eq!(index.invocations("echo twice"), 0);
+        assert_eq!(index.invocations("index-only sentinel"), 1, "the index wasn't reloaded");
+    }
+
+    /// An entry whose save failed and whose row came back later counts once in a delete. So it
+    /// can't hide another deleted id whose row was already gone. That id's command is only dropped
+    /// from the index by a reload.
+    #[rstest]
+    #[tokio::test]
+    async fn an_unsaved_entry_with_a_row_counts_once(
+        #[future(awt)]
+        #[from(failing_saves)]
+        saves: FailingSaves,
+    ) {
+        let FailingSaves { journal, tmp } = saves;
+        let unsaved = entry("echo unsaved");
+        let id = journal.start_cmd(unsaved.clone());
+        journal.finish(id, 0, Duration::from_millis(1)).await.unwrap();
+        assert!(journal.history_db.load(id).await.unwrap().is_none(), "the save failed");
+        // A rebuild of the history db from the store brings the row back.
+        allow_saves(&tmp).await;
+        journal.history_db.save(&unsaved).await.unwrap();
+
+        // An earlier delete removed this row but not its command from the index.
+        let gone_id = journal.start_cmd(entry("echo gone"));
+        journal.finish(gone_id, 0, Duration::from_millis(1)).await.unwrap();
+        journal.history_db.delete_rows([gone_id]).await.unwrap();
+        assert_eq!(journal.search_index.read().invocations("echo gone"), 1);
+
+        journal.delete(&[id, gone_id], &Search::default()).await.unwrap();
+
+        let index = journal.search_index.read();
+        assert_eq!(index.invocations("echo gone"), 0, "the index was reloaded");
+        assert_eq!(index.invocations("echo unsaved"), 0);
+    }
+
+    /// The state of the history db row of the entry in a delete's first chunk.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum FirstRow {
+        Live,
+        AlreadyGone,
+    }
+
+    /// A delete whose second chunk fails still updates the index for the first chunk. A row in the
+    /// first chunk that was already gone reloads the whole index, as it does after a delete that
+    /// succeeds.
+    #[rstest]
+    #[case::row_already_gone(FirstRow::AlreadyGone, 0)]
+    #[case::all_rows_live(FirstRow::Live, 1)]
+    #[tokio::test]
+    async fn delete_with_a_failed_chunk_updates_the_index(
+        #[case] first_row: FirstRow,
+        #[case] sentinels_left: u32,
+    ) {
+        let (journal, tmp) = journal(OutputCaptureEngine::failing()).await;
+        let first = journal.start_cmd(entry("echo first"));
+        journal.finish(first, 0, Duration::from_millis(1)).await.unwrap();
+        let poison = journal.start_cmd(entry("echo poison"));
+        journal.finish(poison, 0, Duration::from_millis(1)).await.unwrap();
+        // Only the index has this entry. A reload of the index would drop it.
+        let sentinel = entry("index-only sentinel");
+        {
+            let permit = journal.search_index.begin_add().await;
+            permit.register([&sentinel]);
+            permit.add_history([&sentinel]);
+        }
+        if first_row == FirstRow::AlreadyGone {
+            // An earlier delete removed this row but not its command from the index.
+            journal.history_db.delete_rows([first]).await.unwrap();
+        }
+        exec_on_history_db(
+            &tmp,
+            "create trigger fail_poison before delete on history when old.command = 'echo poison' \
+             begin select raise(abort, 'no'); end",
+        )
+        .await;
+        // The repeats fill the first chunk, so `poison` lands in the second one.
+        let mut ids = vec![first; DELETE_ROWS_BATCH_SIZE];
+        ids.push(poison);
+
+        journal.delete(&ids, &Search::default()).await.expect_err("the second chunk fails");
+
+        let index = journal.search_index.read();
+        assert_eq!(index.invocations("echo first"), 0);
+        assert_eq!(index.invocations("echo poison"), 1, "the failed chunk removed nothing");
+        assert_eq!(index.invocations("index-only sentinel"), sentinels_left);
     }
 }

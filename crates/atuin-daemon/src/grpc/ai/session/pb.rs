@@ -13,10 +13,10 @@ use atuin_client::ai_session::{
     MessageRole as DomainMessageRole, Session, SessionFilter as DomainSessionFilter, SessionMatch,
 };
 use atuin_common::string::highlighted::{HighlightedString, HighlightedTextProto};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_domain::record::HostId;
 pub use codegen::*;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use crate::grpc::ai::agent::pb as agent;
 use crate::grpc::ai::agent::pb::ParseError;
@@ -50,7 +50,7 @@ impl From<&DomainSessionFilter> for SessionFilter {
             roots_only: value.roots_only,
             exclude_subagents: value.exclude_subagents,
             roles: value.roles.iter().map(|r| MessageRole::from(*r) as i32).collect(),
-            updated_since: value.updated_since.map(timestamp),
+            updated_since: value.updated_since.map(agent::timestamp),
         }
     }
 }
@@ -76,15 +76,8 @@ fn role(value: i32) -> Result<DomainMessageRole, ParseError> {
     }
 }
 
-fn timestamp(ts: OffsetDateTime) -> prost_types::Timestamp {
-    prost_types::Timestamp {
-        seconds: ts.unix_timestamp(),
-        nanos: ts.nanosecond().cast_signed(),
-    }
-}
-
-fn from_timestamp(ts: prost_types::Timestamp) -> Result<OffsetDateTime, ParseError> {
-    Ok(OffsetDateTime::from_timespec(ts.seconds.into(), ts.nanos.into())?)
+fn from_timestamp(ts: prost_types::Timestamp) -> Result<Timestamp, ParseError> {
+    Ok(Timestamp::from_timespec(ts.seconds.into(), ts.nanos.into())?)
 }
 
 impl TryFrom<SessionFilter> for DomainSessionFilter {
@@ -187,8 +180,8 @@ mod tests {
     use atuin_client::ai_session::NativeSessionId;
     use atuin_common::harnesstools::session::Usage;
     use atuin_common::string::highlighted::TextHighlighter;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
 
@@ -200,8 +193,8 @@ mod tests {
                     harness: HarnessKind::Codex,
                     session: NativeSessionId::from("abc".to_owned()),
                 })
-                .started_at(OffsetDateTime::UNIX_EPOCH)
-                .updated_at(OffsetDateTime::UNIX_EPOCH)
+                .started_at(Timestamp::UNIX_EPOCH)
+                .updated_at(Timestamp::UNIX_EPOCH)
                 .usage(Usage::default())
                 .build(),
             title: highlighter.as_highlighted("the \u{E000}build\u{E001}".to_owned()),
@@ -255,7 +248,7 @@ mod tests {
             roots_only: true,
             exclude_subagents: true,
             roles: vec![DomainMessageRole::User, DomainMessageRole::Tool],
-            updated_since: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(90)),
+            updated_since: Some(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(90)),
         };
         let decoded = DomainSessionFilter::try_from(SessionFilter::from(&original)).unwrap();
         assert_eq!(decoded, original);

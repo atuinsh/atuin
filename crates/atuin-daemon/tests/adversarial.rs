@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use atuin_client::history::{AuthorKind, HistoryId};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_common::utils::normalize_optional_string;
 use atuin_daemon::grpc::common::pb::Uuid as WireUuid;
 use atuin_daemon::grpc::history::pb::{
@@ -23,7 +23,7 @@ use tonic::Code;
 
 fn tame_request() -> StartHistoryRequest {
     StartHistoryRequest {
-        timestamp: i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap(),
+        timestamp: i64::try_from(jiff::Timestamp::now().as_nanosecond()).unwrap(),
         command: "echo tame".into(),
         cwd: "/tmp".into(),
         session: uuid::Uuid::now_v7().as_simple().to_string(),
@@ -94,7 +94,7 @@ proptest! {
             prop_assert_eq!(&row.session, &req.session);
             prop_assert_eq!(row.cmd_origin.as_str(), req.hostname.as_str());
             prop_assert_eq!(row.exit, exit);
-            prop_assert_eq!(row.timestamp, time::OffsetDateTime::from_unix_nanos_i64(req.timestamp));
+            prop_assert_eq!(row.timestamp, jiff::Timestamp::from_unix_nanos_i64(req.timestamp));
             // `History::new` falls back to `ATUIN_HISTORY_AUTHOR`/`ATUIN_HISTORY_INTENT` when the
             // wire field is unset, so a developer shell exporting either must not fail this test.
             let expected_intent = normalize_optional_string(Some(req.intent.clone()))
@@ -202,9 +202,9 @@ proptest! {
             let stored = env.history_db.load(id).await.unwrap().expect("row persisted");
             prop_assert_eq!(&stored.command, &h.command);
             let eligible = common::corpus::index_eligible(&h);
-            prop_assert_eq!(env.index_count().await, usize::from(eligible));
+            prop_assert_eq!(env.index_count(), usize::from(eligible));
             let query = if command_is_dsl_safe(&h.command) { h.command.as_str() } else { "" };
-            let hits = env.index_hits(query).await;
+            let hits = env.index_hits(query);
             let expected = if eligible { vec![id] } else { vec![] };
             prop_assert_eq!(hits, expected, "command {:?}, query {:?}", h.command, query);
             Ok(())

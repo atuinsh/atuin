@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value, json};
 
 use super::{
-    Turn, is_failure, is_session_row, join_results, millis, mint, step_tokens, title_of, turn_base,
+    Turn, is_failure, is_session_row, join_results, mint, step_tokens, title_of, turn_base,
 };
 use crate::harnesstools::opencode::session::SOURCE;
 use crate::harnesstools::rehydrate::{
@@ -84,7 +84,7 @@ struct Draft {
 
 impl Draft {
     fn new(kind: Kind, row: &RehydrateMessage) -> Self {
-        let at = millis(row.timestamp);
+        let at = row.timestamp.as_millisecond();
         Self {
             kind,
             id: own_id(row),
@@ -186,7 +186,7 @@ pub fn export(session: &RehydrateSession) -> Value {
             drafts.push(Draft::new(kind, row));
         }
         let draft = drafts.last_mut().expect("a draft was just ensured");
-        draft.completed = draft.completed.max(millis(row.timestamp));
+        draft.completed = draft.completed.max(row.timestamp.as_millisecond());
         if draft.model.is_none() {
             draft.model.clone_from(&row.model);
         }
@@ -249,7 +249,7 @@ pub fn export(session: &RehydrateSession) -> Value {
         let created = messages
             .first()
             .and_then(|m| m["time"]["created"].as_i64())
-            .unwrap_or_else(|| millis(session.started_at));
+            .unwrap_or_else(|| session.started_at.as_millisecond());
         messages.insert(
             0,
             json!({
@@ -266,8 +266,9 @@ pub fn export(session: &RehydrateSession) -> Value {
         Some(draft) if draft.kind == Kind::Idle => draft.outcome,
         _ => "succeeded",
     };
-    let started = millis(session.started_at);
-    let updated = session.messages.iter().map(|m| millis(m.timestamp)).max().unwrap_or(started);
+    let started = session.started_at.as_millisecond();
+    let updated =
+        session.messages.iter().map(|m| m.timestamp.as_millisecond()).max().unwrap_or(started);
     let updated = updated.max(started);
     json!({
         "info": {
@@ -292,7 +293,7 @@ fn zero_tokens() -> Value {
 
 /// Add what `row` says to the message `draft` stands for.
 fn add(draft: &mut Draft, row: &RehydrateMessage) {
-    let at = millis(row.timestamp);
+    let at = row.timestamp.as_millisecond();
     for content in &row.content {
         match content {
             Content::Text(text) if draft.kind == Kind::Assistant => {
@@ -460,13 +461,25 @@ fn error(why: &str, stop: Option<&StopReason>) -> Value {
 /// keeps the diff in (`files[]`, `{file, patch, status}`).
 fn tool(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: i64) -> Value {
     // opencode's tool input is always an object.
-    let input = match &call.input {
+    let mut input = match &call.input {
         Value::Object(_) => call.input.clone(),
         other => Value::Object(Map::from_iter([("input".to_owned(), other.clone())])),
     };
+    // opencode 1.x's tools (a continuation's calls, a 1.x session's) as opencode 2's: its `bash`
+    // is `shell`, and its file tools name their file `path`, not `filePath`.
+    let name = if call.name == "bash" {
+        "shell"
+    } else {
+        call.name.as_str()
+    };
+    if matches!(name, "read" | "write" | "edit")
+        && let Some(file) = input.as_object_mut().and_then(|input| input.remove("filePath"))
+    {
+        input["path"] = file;
+    }
     let state = match result {
         // a command opencode 2 ran that failed: completed, its exit code in the metadata
-        Some(result) if result.error && call.name == "shell" && result.output.is_array() => json!({
+        Some(result) if result.error && name == "shell" && result.output.is_array() => json!({
             "status": "completed",
             "input": input,
             "content": content_of(&result.output),
@@ -497,7 +510,7 @@ fn tool(call: &ToolUse, result: Option<&ToolResult>, patch: Option<&Patch>, at: 
     json!({
         "type": "tool",
         "id": call.id.as_ref(),
-        "name": call.name,
+        "name": name,
         "state": state,
         "time": {"created": at, "ran": at, "completed": at},
     })

@@ -93,9 +93,8 @@ use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 use uuid::Uuid;
 
 use super::kiro_home;
@@ -208,13 +207,13 @@ pub(crate) fn workspace_hash(cwd: &Path) -> String {
 /// Append the session's `add` line to `session-index/<bucket>.jsonl` beside the sessions
 /// directory, as Kiro does on creating a session: its lookup by id reads these before scanning
 /// every bucket.
-fn index_add(home: &Path, bucket: &str, id: &str, at: OffsetDateTime) -> std::io::Result<()> {
+fn index_add(home: &Path, bucket: &str, id: &str, at: Timestamp) -> std::io::Result<()> {
     let index = home.join("session-index");
     std::fs::create_dir_all(&index)?;
     let line = json!({
         "op": "add",
         "sessionPath": format!("{bucket}/{id}"),
-        "at": i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or_default(),
+        "at": at.as_millisecond(),
     });
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -283,10 +282,8 @@ pub(crate) fn log(session: &RehydrateSession) -> String {
 }
 
 /// A timestamp as Kiro writes one: UTC, to the millisecond.
-pub(crate) fn timestamp(at: OffsetDateTime) -> String {
-    let format =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
-    at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+pub(crate) fn timestamp(at: Timestamp) -> String {
+    jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%.3fZ", at).unwrap_or_default()
 }
 
 /// The rows for `session`'s messages, calls captured without their input flattened into notes
@@ -375,7 +372,7 @@ impl Writer {
     }
 
     /// Write `payload` as the row `id`, stamped `at`.
-    fn row(&mut self, id: String, at: OffsetDateTime, payload: Value) {
+    fn row(&mut self, id: String, at: Timestamp, payload: Value) {
         if self.first.is_none() && conversation(&payload) {
             self.first = Some(id.clone());
         }
@@ -419,7 +416,7 @@ impl Writer {
     }
 
     /// Close the turn being written, if any, as the turn's last reply ended it.
-    fn end_turn(&mut self, at: OffsetDateTime) {
+    fn end_turn(&mut self, at: Timestamp) {
         let Some(turn) = self.turn.take() else {
             return;
         };
@@ -442,10 +439,8 @@ impl Writer {
             .lines
             .last()
             .and_then(|l| l["timestamp"].as_str())
-            .and_then(|s| {
-                OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
-            })
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+            .and_then(|s| s.parse::<Timestamp>().ok())
+            .unwrap_or(Timestamp::UNIX_EPOCH);
         self.end_turn(at);
     }
 

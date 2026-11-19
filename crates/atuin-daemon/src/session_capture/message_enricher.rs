@@ -10,7 +10,7 @@ use atuin_common::harnesstools::session::{
     AnyMessage, Content, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 /// Builds the canonical [`Message`] rows for one harness's lines, carrying the per-session
 /// bookkeeping (title, timestamps, parent, synthetic id ordinals) that a single line cannot
@@ -54,6 +54,23 @@ impl MessageEnricher {
     /// Forget a session's bookkeeping: its transcript is about to be read from the beginning.
     pub fn restart(&mut self, session: &SessionId) {
         self.sessions.remove(session.as_ref());
+    }
+
+    /// Set a session up for a transcript about to be read from its start. Every line replays, so
+    /// nothing of an earlier read carries over but the parent the session's stored `row` names,
+    /// which counts as one the harness named: a continuation's marker the lines carry can't
+    /// replace it. A restored fork written without its link (pi's) holds no parent of its own,
+    /// but its first prompt opens with the marker of the continuation it was forked from; the
+    /// parent sync stored for it is the fork's. A parent the lines name still replaces the stored
+    /// one, and with none stored a marker links the session as it did.
+    pub fn begin(&mut self, session: &SessionId, row: Option<&Session>) {
+        let parent = row.and_then(|r| r.parent.clone());
+        self.sessions.insert(session.to_string(), SessionState {
+            native_parent: parent.is_some(),
+            parent,
+            parent_kind: row.and_then(|r| r.parent_kind),
+            ..SessionState::default()
+        });
     }
 
     /// Warm a session's bookkeeping from what the sidecar holds, for a transcript about to be
@@ -183,7 +200,7 @@ impl MessageEnricher {
         let Some(state) = self.sessions.get_mut(session.as_ref()) else {
             return Vec::new();
         };
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let mut rows = std::mem::take(&mut state.untimed);
         for row in &mut rows {
             row.timestamp = now;
@@ -281,7 +298,7 @@ fn build(
             .parent_kind(state.parent_kind)
             .parent_source_id(parent_source_id)
             .turn_id(m.turn_id())
-            .timestamp(state.last_ts.unwrap_or(OffsetDateTime::UNIX_EPOCH))
+            .timestamp(state.last_ts.unwrap_or(Timestamp::UNIX_EPOCH))
             .role(m.role())
             .content(content)
             .model(model)
@@ -318,7 +335,8 @@ fn parse_synthetic(id: &SourceId) -> Option<(u64, u32)> {
 ///
 /// Warm for any session whose lines have all streamed past this run. A session resumed past its
 /// start (the engine's checkpoints) is warmed from the sidecar first, via
-/// [`MessageEnricher::resume`], or titles and synthetic ids would silently break after a restart.
+/// [`MessageEnricher::resume`], or titles and synthetic ids would silently break after a restart;
+/// one read from its start keeps only its stored parent ([`MessageEnricher::begin`]).
 #[derive(Default)]
 struct SessionState {
     /// The newest title from each source. The highest-ranked is stamped onto each captured
@@ -326,7 +344,7 @@ struct SessionState {
     titles: BTreeMap<TitleSource, String>,
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
-    last_ts: Option<OffsetDateTime>,
+    last_ts: Option<Timestamp>,
     /// Session this one was spawned from, when it has one (subagents, forks), or continues
     /// (maybe another harness's).
     parent: Option<HarnessSession>,
@@ -499,7 +517,7 @@ mod tests {
 
     #[rstest]
     fn title_lines_keep_a_row_stamped_with_the_given_timestamp() {
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let m = ccode(&serde_json::json!({
             "type": "ai-title", "aiTitle": "Fix it", "timestamp": "2023-11-14T22:13:20Z",
         }));
@@ -524,7 +542,7 @@ mod tests {
         assert!(n.capture(&session(), &title("first")).is_empty(), "waits for a timestamp");
         let flushed = n.capture(&session(), &at("2020-01-01T00:00:00Z"));
         let later = n.capture(&session(), &title("second"));
-        let expected = OffsetDateTime::from_unix_timestamp(1_577_836_800).unwrap();
+        let expected = Timestamp::from_second(1_577_836_800).unwrap();
         assert_eq!(flushed.iter().map(|m| m.timestamp).collect::<Vec<_>>(), vec![
             expected, expected
         ]);
@@ -676,7 +694,7 @@ mod tests {
     #[rstest]
     fn a_resumed_capture_keeps_the_stored_titles_rank() {
         let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let row = Session::builder()
             .handle(n.handle(&session()))
             .title(Some("Mine".to_owned()))
@@ -759,7 +777,7 @@ mod tests {
     #[rstest]
     fn resumed_state_carries_over_a_restart() {
         let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let parent = HarnessSession {
             harness: HarnessKind::ClaudeCode,
             session: NativeSessionId::from("p".to_owned()),
@@ -1216,6 +1234,89 @@ mod parser_contract {
             assert_eq!(row.parent.as_ref(), Some(&parent), "{row:?}");
             assert_eq!(row.parent_kind, Some(ParentKind::Fork), "{row:?}");
         }
+    }
+
+    /// A pi fork as a restore without its link writes it: a header naming no parent, then the
+    /// first prompt it copied, opening with the marker of the continuation it was forked from.
+    /// With `parent_session`, the header names that session's file as pi's `/fork` does.
+    fn restored_pi_fork(parent_session: Option<&str>) -> Vec<AnyMessage> {
+        let mut header = serde_json::json!({"type": "session", "version": 3, "id": "fork",
+            "timestamp": "2026-09-27T10:00:00Z", "cwd": "/w"});
+        if let Some(parent) = parent_session {
+            header["parentSession"] = serde_json::json!(format!(
+                "/home/u/.pi/agent/sessions/--w--/2026-09-27T09-00-00-000Z_{parent}.jsonl"
+            ));
+        }
+        vec![
+            pi(&header),
+            pi(&serde_json::json!({"type": "message", "id": "a1", "parentId": null,
+                "timestamp": "2026-09-27T10:00:01Z",
+                "message": {"role": "user", "content": [
+                    {"type": "text", "text": marker()}, {"type": "text", "text": "go on"}]}})),
+        ]
+    }
+
+    /// A transcript read from its start keeps the parent stored for its session, as one the
+    /// harness named: the marker its first prompt carries doesn't replace it, so a fork restored
+    /// from sync stays the fork it was, and a continuation read again stays one. A parent the
+    /// lines name replaces it. With no stored row, or one naming no parent (a continuation's first
+    /// read), the marker links the session.
+    #[rstest]
+    #[case::restored_fork(Some(("0199cccc", ParentKind::Fork)), None, Some(("0199cccc", ParentKind::Fork)))]
+    #[case::continuation_read_again(
+        Some((ORIGINAL, ParentKind::Continuation)),
+        None,
+        Some((ORIGINAL, ParentKind::Continuation)),
+    )]
+    #[case::no_stored_row(None, None, Some((ORIGINAL, ParentKind::Continuation)))]
+    #[case::stored_without_a_parent(Some(("", ParentKind::Fork)), None, Some((ORIGINAL, ParentKind::Continuation)))]
+    #[case::the_lines_name_another(
+        Some(("0199cccc", ParentKind::Fork)),
+        Some("0199dddd"),
+        Some(("0199dddd", ParentKind::Fork)),
+    )]
+    fn a_read_from_the_start_keeps_the_stored_parent(
+        #[case] stored: Option<(&str, ParentKind)>,
+        #[case] named: Option<&str>,
+        #[case] want: Option<(&str, ParentKind)>,
+    ) {
+        let fork = SessionId::from("fork".to_owned());
+        let mut n = MessageEnricher::new(HarnessKind::Pi);
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
+        let harness_of = |id: &str| {
+            if id == ORIGINAL {
+                HarnessKind::Codex
+            } else {
+                HarnessKind::Pi
+            }
+        };
+        let row = stored.map(|(parent, kind)| {
+            Session::builder()
+                .handle(n.handle(&fork))
+                .parent((!parent.is_empty()).then(|| HarnessSession {
+                    harness: harness_of(parent),
+                    session: NativeSessionId::from(parent.to_owned()),
+                }))
+                .parent_kind((!parent.is_empty()).then_some(kind))
+                .started_at(ts)
+                .updated_at(ts)
+                .usage(atuin_common::harnesstools::session::Usage::default())
+                .build()
+        });
+        n.begin(&fork, row.as_ref());
+
+        let rows: Vec<Message> =
+            restored_pi_fork(named).iter().flat_map(|m| n.capture(&fork, m)).collect();
+        let prompt = rows.last().unwrap();
+        assert_eq!(prompt.role, Role::User);
+        let want = want.map(|(parent, kind)| {
+            let parent = HarnessSession {
+                harness: harness_of(parent),
+                session: NativeSessionId::from(parent.to_owned()),
+            };
+            (parent, kind)
+        });
+        assert_eq!(prompt.parent.clone().zip(prompt.parent_kind), want);
     }
 
     /// How many lines lead up to the marker (Pi's header).

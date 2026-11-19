@@ -6,7 +6,7 @@ use atuin_common::path::PathBufExt as _;
 use atuin_common::userio;
 use eyre::{Result, eyre};
 use itertools::Itertools;
-use time::{Duration, OffsetDateTime};
+use jiff::{SignedDuration, Timestamp};
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
@@ -54,19 +54,19 @@ impl Importer for Bash {
                 _ => None,
             })
             // if no known timestamps, use now as base
-            .unwrap_or_else(|| (lines.len(), OffsetDateTime::now_utc()));
+            .unwrap_or_else(|| (lines.len(), Timestamp::now()));
 
         // if no timestamp is recorded, then use this increment to set an arbitrary timestamp
         // to preserve ordering
         // this increment is deliberately very small to prevent particularly fast fingers
         // causing ordering issues; it also helps in handling the "here document" syntax,
         // where several lines are recorded in succession without individual timestamps
-        let timestamp_increment = Duration::milliseconds(1);
+        let timestamp_increment = SignedDuration::from_millis(1);
 
         // make sure there is a minimum amount of time before the first known timestamp
         // to fit all commands, given the default increment
         let backfill = timestamp_increment
-            * u32::try_from(commands_before_first_timestamp).unwrap_or(u32::MAX);
+            * i32::try_from(commands_before_first_timestamp).unwrap_or(i32::MAX);
         // a timestamp near the start of the representable range would underflow
         let mut next_timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
@@ -103,7 +103,7 @@ enum LineType<'a> {
     Empty,
     /// A timestamp line start with a '#', followed immediately by an integer
     /// that represents seconds since UNIX epoch.
-    Timestamp(OffsetDateTime),
+    Timestamp(Timestamp),
     /// Anything else.
     Command(&'a str),
 }
@@ -123,9 +123,9 @@ impl<'a> From<&'a [u8]> for LineType<'a> {
     }
 }
 
-fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
+fn try_parse_line_as_timestamp(line: &str) -> Option<Timestamp> {
     let seconds = line.strip_prefix('#')?.parse().ok()?;
-    OffsetDateTime::from_unix_timestamp(seconds).ok()
+    Timestamp::from_second(seconds).ok()
 }
 
 #[cfg(test)]
@@ -195,7 +195,7 @@ cd ../
             "git clean -dxf",
             "cd ../",
         ]);
-        assert_equal(loader.buf.iter().map(|h| h.timestamp.unix_timestamp()), [
+        assert_equal(loader.buf.iter().map(|h| h.timestamp.as_second()), [
             1_672_918_999,
             1_672_919_006,
             1_672_919_020,
@@ -217,7 +217,7 @@ cd ../
         // first timestamp is near the minimum representable instant, preceded by an
         // untimestamped command; backfilling before it must not underflow
         let bytes = b"cargo install atuin
-#-377705116800
+#-377705023201
 cargo update
 "
         .to_vec();
@@ -237,12 +237,12 @@ cargo update
     #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
-        // first timestamp is the maximum representable instant (253402300799 is the
-        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // first timestamp is the maximum representable instant (253402207200 is the
+        // last second `Timestamp` can represent, i.e. 9999-12-30 22:00:00 UTC).
         // 1000 untimestamped commands walk the 1ms increment past .999 and off the
         // end of the representable range.
         let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
-        let bytes = format!("#253402300799\n{}\n", commands.join("\n")).into_bytes();
+        let bytes = format!("#253402207200\n{}\n", commands.join("\n")).into_bytes();
 
         let mut bash = Bash { bytes };
         assert_eq!(bash.entries().await.unwrap(), commands.len());
@@ -257,6 +257,6 @@ cargo update
 
         // the increment saturates at the maximum representable instant rather than
         // wrapping or resetting to the epoch
-        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
+        assert_eq!(loader.buf.last().unwrap().timestamp.as_second(), 253_402_207_200);
     }
 }

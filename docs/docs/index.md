@@ -19,18 +19,12 @@ Restart your shell, then press ++ctrl+r++ or the ++up++ arrow to search. Type a
 query, press enter to run the selected command, or tab to put it on your command
 line for editing.
 
-To bring your existing history with you:
+The install script runs `atuin setup`, which imports your existing history and
+offers to sync it across machines. Sync is optional, and covered in
+[Setting up sync](guide/sync.md). If you skipped sync, sign in later with:
 
 ```bash
-atuin import auto
-```
-
-To sync it across machines — optional, and covered in
-[Setting up sync](guide/sync.md):
-
-```bash
-atuin register -u <USERNAME> -e <EMAIL>
-atuin sync
+atuin setup --sync cloud
 ```
 
 If you'd rather take it one step at a time, [Getting Started](guide/getting-started.md)

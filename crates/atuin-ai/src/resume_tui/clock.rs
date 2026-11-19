@@ -6,10 +6,12 @@
 //! a weekday within the week (`Mon 09:40`), `Sep 27` within the year, and `2025-09-27` before
 //! that. Days are the local ones, in `timezone`.
 
-use time::{Date, Duration, OffsetDateTime, UtcOffset};
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp};
 
 /// Newer than this is said relatively (`12m`, `3h`).
-const RELATIVE: Duration = Duration::hours(6);
+const RELATIVE: SignedDuration = SignedDuration::from_hours(6);
 
 /// The widest [`When::short`] ever is (`yest 09:40`, `2025-09-27`): the time column's width.
 pub const WIDTH: usize = 10;
@@ -27,30 +29,30 @@ pub enum When {
 
 impl When {
     /// `ts` as seen at `now`, with days in `tz`.
-    pub fn of(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> Self {
+    pub fn of(now: Timestamp, ts: Timestamp, tz: &TimeZone) -> Self {
         let ago = now - ts;
-        if ago < Duration::minutes(1) {
+        if ago < SignedDuration::from_mins(1) {
             return Self::Now;
         }
-        if ago < Duration::hours(1) {
-            return Self::Ago(format!("{}m", ago.whole_minutes()));
+        if ago < SignedDuration::from_hours(1) {
+            return Self::Ago(format!("{}m", ago.as_mins()));
         }
         if ago < RELATIVE {
-            return Self::Ago(format!("{}h", ago.whole_hours()));
+            return Self::Ago(format!("{}h", ago.as_hours()));
         }
-        let (today, ts) = (now.to_offset(tz).date(), ts.to_offset(tz));
+        let (today, ts) = (day(now, tz), tz.to_datetime(ts));
         let clock = format!("{:02}:{:02}", ts.hour(), ts.minute());
         let day = ts.date();
         Self::At(if day == today {
             clock
-        } else if Some(day) == today.previous_day() {
+        } else if Some(day) == today.yesterday().ok() {
             format!("yest {clock}")
         } else if within_week(day, today) {
-            format!("{} {clock}", short(day.weekday()))
+            format!("{} {clock}", day.strftime("%a"))
         } else if day.year() == today.year() {
-            format!("{} {}", short(day.month()), day.day())
+            format!("{} {}", day.strftime("%b"), day.day())
         } else {
-            format!("{}-{:02}-{:02}", day.year(), u8::from(day.month()), day.day())
+            format!("{}-{:02}-{:02}", day.year(), day.month(), day.day())
         })
     }
 
@@ -74,59 +76,59 @@ impl When {
 
 /// Beside a full date and time, what it doesn't already say: `12m ago` while recent, else
 /// `today`, `yesterday` or a weekday within the week; `None` for anything older.
-pub fn beside_date(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> Option<String> {
+pub fn beside_date(now: Timestamp, ts: Timestamp, tz: &TimeZone) -> Option<String> {
     let when = When::of(now, ts, tz);
     if !matches!(when, When::At(_)) {
         return Some(when.phrase());
     }
-    let (today, day) = (now.to_offset(tz).date(), ts.to_offset(tz).date());
+    let (today, day) = (day(now, tz), day(ts, tz));
     if day == today {
         Some("today".to_owned())
-    } else if Some(day) == today.previous_day() {
+    } else if Some(day) == today.yesterday().ok() {
         Some("yesterday".to_owned())
     } else if within_week(day, today) {
-        Some(day.weekday().to_string())
+        Some(day.strftime("%A").to_string())
     } else {
         None
     }
 }
 
 /// The local day `ts` falls on, in `tz`.
-pub fn day(ts: OffsetDateTime, tz: UtcOffset) -> Date {
-    ts.to_offset(tz).date()
+pub fn day(ts: Timestamp, tz: &TimeZone) -> Date {
+    tz.to_datetime(ts).date()
 }
 
 /// The day the list groups a session last active at `ts` under: its local day, but never past
 /// today (another host's clock may be ahead), so those join today's.
-pub fn list_day(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> Date {
+pub fn list_day(now: Timestamp, ts: Timestamp, tz: &TimeZone) -> Date {
     day(ts, tz).min(day(now, tz))
 }
 
 /// A heading for the sessions of `day`: `Today`, `Yesterday`, a weekday within the week
 /// (`Monday`), `Sep 27` within the year, and `2025-09-27` before that.
-pub fn day_heading(now: OffsetDateTime, day: Date, tz: UtcOffset) -> String {
-    let today = now.to_offset(tz).date();
+pub fn day_heading(now: Timestamp, day: Date, tz: &TimeZone) -> String {
+    let today = self::day(now, tz);
     if day >= today {
         "Today".to_owned()
-    } else if Some(day) == today.previous_day() {
+    } else if Some(day) == today.yesterday().ok() {
         "Yesterday".to_owned()
     } else if within_week(day, today) {
-        day.weekday().to_string()
+        day.strftime("%A").to_string()
     } else if day.year() == today.year() {
-        format!("{} {}", short(day.month()), day.day())
+        format!("{} {}", day.strftime("%b"), day.day())
     } else {
-        format!("{}-{:02}-{:02}", day.year(), u8::from(day.month()), day.day())
+        format!("{}-{:02}-{:02}", day.year(), day.month(), day.day())
     }
 }
 
 /// When `ts` happened within its day, under that day's heading: `now`, `12m` or `3h` while
 /// recent, else the clock time, `14:02`.
-pub fn time_in_day(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> String {
+pub fn time_in_day(now: Timestamp, ts: Timestamp, tz: &TimeZone) -> String {
     match When::of(now, ts, tz) {
         When::Now => "now".to_owned(),
         When::Ago(s) => s,
         When::At(_) => {
-            let ts = ts.to_offset(tz);
+            let ts = tz.to_datetime(ts);
             format!("{:02}:{:02}", ts.hour(), ts.minute())
         }
     }
@@ -134,60 +136,54 @@ pub fn time_in_day(now: OffsetDateTime, ts: OffsetDateTime, tz: UtcOffset) -> St
 
 /// `day` is one of the six days before `today`, so its weekday names it unambiguously.
 fn within_week(day: Date, today: Date) -> bool {
-    day < today && (today - day) < Duration::days(7)
-}
-
-/// The first three letters of a weekday's or month's name: `Mon`, `Sep`.
-fn short(name: impl std::fmt::Display) -> String {
-    name.to_string().chars().take(3).collect()
+    day < today && (today - day).get_days() < 7
 }
 
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use time::macros::{datetime, offset};
 
     use super::*;
 
-    /// A Monday afternoon.
-    const NOW: OffsetDateTime = datetime!(2026-09-28 15:30:00 UTC);
+    /// `2026-09-28T15:30:00Z`, a Monday afternoon.
+    const NOW: Timestamp = Timestamp::constant(1_790_609_400, 0);
 
     #[rstest]
-    #[case::today(datetime!(2026-09-28 01:00:00 UTC), "Today")]
-    #[case::yesterday(datetime!(2026-09-27 23:00:00 UTC), "Yesterday")]
-    #[case::this_week(datetime!(2026-09-23 12:00:00 UTC), "Wednesday")]
-    #[case::this_year(datetime!(2026-09-21 12:00:00 UTC), "Sep 21")]
-    #[case::last_year(datetime!(2025-09-27 12:00:00 UTC), "2025-09-27")]
-    fn day_headings(#[case] ts: OffsetDateTime, #[case] want: &str) {
-        assert_eq!(day_heading(NOW, day(ts, UtcOffset::UTC), UtcOffset::UTC), want);
+    #[case::today("2026-09-28T01:00:00Z".parse::<Timestamp>().unwrap(), "Today")]
+    #[case::yesterday("2026-09-27T23:00:00Z".parse::<Timestamp>().unwrap(), "Yesterday")]
+    #[case::this_week("2026-09-23T12:00:00Z".parse::<Timestamp>().unwrap(), "Wednesday")]
+    #[case::this_year("2026-09-21T12:00:00Z".parse::<Timestamp>().unwrap(), "Sep 21")]
+    #[case::last_year("2025-09-27T12:00:00Z".parse::<Timestamp>().unwrap(), "2025-09-27")]
+    fn day_headings(#[case] ts: Timestamp, #[case] want: &str) {
+        assert_eq!(day_heading(NOW, day(ts, &TimeZone::UTC), &TimeZone::UTC), want);
     }
 
     #[rstest]
-    #[case::recent(datetime!(2026-09-28 15:18:00 UTC), "12m")]
-    #[case::earlier_today(datetime!(2026-09-28 08:05:00 UTC), "08:05")]
-    #[case::another_day(datetime!(2026-09-21 23:59:00 UTC), "23:59")]
-    fn times_within_a_day(#[case] ts: OffsetDateTime, #[case] want: &str) {
-        assert_eq!(time_in_day(NOW, ts, UtcOffset::UTC), want);
+    #[case::recent("2026-09-28T15:18:00Z".parse::<Timestamp>().unwrap(), "12m")]
+    #[case::earlier_today("2026-09-28T08:05:00Z".parse::<Timestamp>().unwrap(), "08:05")]
+    #[case::another_day("2026-09-21T23:59:00Z".parse::<Timestamp>().unwrap(), "23:59")]
+    fn times_within_a_day(#[case] ts: Timestamp, #[case] want: &str) {
+        assert_eq!(time_in_day(NOW, ts, &TimeZone::UTC), want);
     }
 
     #[rstest]
-    #[case::just_now(datetime!(2026-09-28 15:29:31 UTC), "now")]
-    #[case::future(datetime!(2026-09-28 15:40:00 UTC), "now")]
-    #[case::a_minute(datetime!(2026-09-28 15:29:00 UTC), "1m")]
-    #[case::minutes(datetime!(2026-09-28 15:18:00 UTC), "12m")]
-    #[case::an_hour(datetime!(2026-09-28 14:30:00 UTC), "1h")]
-    #[case::hours(datetime!(2026-09-28 09:31:00 UTC), "5h")]
-    #[case::today(datetime!(2026-09-28 09:30:00 UTC), "09:30")]
-    #[case::early_today(datetime!(2026-09-28 00:05:00 UTC), "00:05")]
-    #[case::yesterday(datetime!(2026-09-27 23:59:00 UTC), "yest 23:59")]
-    #[case::yesterday_morning(datetime!(2026-09-27 09:40:00 UTC), "yest 09:40")]
-    #[case::this_week(datetime!(2026-09-24 14:02:00 UTC), "Thu 14:02")]
-    #[case::six_days(datetime!(2026-09-22 08:00:00 UTC), "Tue 08:00")]
-    #[case::a_week(datetime!(2026-09-21 23:00:00 UTC), "Sep 21")]
-    #[case::this_year(datetime!(2026-01-02 12:00:00 UTC), "Jan 2")]
-    #[case::last_year(datetime!(2025-09-27 12:00:00 UTC), "2025-09-27")]
-    fn short(#[case] ts: OffsetDateTime, #[case] want: &str) {
-        let when = When::of(NOW, ts, UtcOffset::UTC);
+    #[case::just_now("2026-09-28T15:29:31Z".parse::<Timestamp>().unwrap(), "now")]
+    #[case::future("2026-09-28T15:40:00Z".parse::<Timestamp>().unwrap(), "now")]
+    #[case::a_minute("2026-09-28T15:29:00Z".parse::<Timestamp>().unwrap(), "1m")]
+    #[case::minutes("2026-09-28T15:18:00Z".parse::<Timestamp>().unwrap(), "12m")]
+    #[case::an_hour("2026-09-28T14:30:00Z".parse::<Timestamp>().unwrap(), "1h")]
+    #[case::hours("2026-09-28T09:31:00Z".parse::<Timestamp>().unwrap(), "5h")]
+    #[case::today("2026-09-28T09:30:00Z".parse::<Timestamp>().unwrap(), "09:30")]
+    #[case::early_today("2026-09-28T00:05:00Z".parse::<Timestamp>().unwrap(), "00:05")]
+    #[case::yesterday("2026-09-27T23:59:00Z".parse::<Timestamp>().unwrap(), "yest 23:59")]
+    #[case::yesterday_morning("2026-09-27T09:40:00Z".parse::<Timestamp>().unwrap(), "yest 09:40")]
+    #[case::this_week("2026-09-24T14:02:00Z".parse::<Timestamp>().unwrap(), "Thu 14:02")]
+    #[case::six_days("2026-09-22T08:00:00Z".parse::<Timestamp>().unwrap(), "Tue 08:00")]
+    #[case::a_week("2026-09-21T23:00:00Z".parse::<Timestamp>().unwrap(), "Sep 21")]
+    #[case::this_year("2026-01-02T12:00:00Z".parse::<Timestamp>().unwrap(), "Jan 2")]
+    #[case::last_year("2025-09-27T12:00:00Z".parse::<Timestamp>().unwrap(), "2025-09-27")]
+    fn short(#[case] ts: Timestamp, #[case] want: &str) {
+        let when = When::of(NOW, ts, &TimeZone::UTC);
         assert_eq!(when.short(), want);
         assert!(when.short().len() <= WIDTH);
     }
@@ -195,28 +191,28 @@ mod tests {
     /// Days are local: 23:30 UTC on Sunday is Monday morning in Sydney.
     #[rstest]
     fn days_are_local() {
-        let sydney = offset!(+10);
-        let now = datetime!(2026-09-28 05:00:00 UTC);
-        let ts = datetime!(2026-09-27 21:30:00 UTC);
-        assert_eq!(When::of(now, ts, sydney).short(), "07:30");
-        assert_eq!(When::of(now, ts, UtcOffset::UTC).short(), "yest 21:30");
+        let sydney = TimeZone::fixed(jiff::tz::offset(10));
+        let now = "2026-09-28T05:00:00Z".parse::<Timestamp>().unwrap();
+        let ts = "2026-09-27T21:30:00Z".parse::<Timestamp>().unwrap();
+        assert_eq!(When::of(now, ts, &sydney).short(), "07:30");
+        assert_eq!(When::of(now, ts, &TimeZone::UTC).short(), "yest 21:30");
     }
 
     #[rstest]
-    #[case(datetime!(2026-09-28 15:30:00 UTC), "just now")]
-    #[case(datetime!(2026-09-28 15:18:00 UTC), "12m ago")]
-    #[case(datetime!(2026-09-27 09:40:00 UTC), "yest 09:40")]
-    fn phrase(#[case] ts: OffsetDateTime, #[case] want: &str) {
-        assert_eq!(When::of(NOW, ts, UtcOffset::UTC).phrase(), want);
+    #[case("2026-09-28T15:30:00Z".parse::<Timestamp>().unwrap(), "just now")]
+    #[case("2026-09-28T15:18:00Z".parse::<Timestamp>().unwrap(), "12m ago")]
+    #[case("2026-09-27T09:40:00Z".parse::<Timestamp>().unwrap(), "yest 09:40")]
+    fn phrase(#[case] ts: Timestamp, #[case] want: &str) {
+        assert_eq!(When::of(NOW, ts, &TimeZone::UTC).phrase(), want);
     }
 
     #[rstest]
-    #[case(datetime!(2026-09-28 15:18:00 UTC), Some("12m ago"))]
-    #[case(datetime!(2026-09-28 08:00:00 UTC), Some("today"))]
-    #[case(datetime!(2026-09-27 08:00:00 UTC), Some("yesterday"))]
-    #[case(datetime!(2026-09-24 08:00:00 UTC), Some("Thursday"))]
-    #[case(datetime!(2026-09-02 08:00:00 UTC), None)]
-    fn beside_a_date(#[case] ts: OffsetDateTime, #[case] want: Option<&str>) {
-        assert_eq!(beside_date(NOW, ts, UtcOffset::UTC).as_deref(), want);
+    #[case("2026-09-28T15:18:00Z".parse::<Timestamp>().unwrap(), Some("12m ago"))]
+    #[case("2026-09-28T08:00:00Z".parse::<Timestamp>().unwrap(), Some("today"))]
+    #[case("2026-09-27T08:00:00Z".parse::<Timestamp>().unwrap(), Some("yesterday"))]
+    #[case("2026-09-24T08:00:00Z".parse::<Timestamp>().unwrap(), Some("Thursday"))]
+    #[case("2026-09-02T08:00:00Z".parse::<Timestamp>().unwrap(), None)]
+    fn beside_a_date(#[case] ts: Timestamp, #[case] want: Option<&str>) {
+        assert_eq!(beside_date(NOW, ts, &TimeZone::UTC).as_deref(), want);
     }
 }

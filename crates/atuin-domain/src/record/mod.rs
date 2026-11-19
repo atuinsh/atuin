@@ -102,7 +102,7 @@ pub struct Record<Data> {
     pub host: Host,
 
     /// The creation time in nanoseconds since unix epoch
-    #[builder(default = u64::conv(time::OffsetDateTime::now_utc().unix_timestamp_nanos()))]
+    #[builder(default = u64::conv(jiff::Timestamp::now().as_nanosecond()))]
     pub timestamp: u64,
 
     /// The version the data in the entry conforms to

@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
-use super::{Harness, InstallHookError};
+use super::{Harness, InstallHookError, TS_ATUIN_LINE, plugin_with_executable};
+use crate::atuin_exe::launch_path;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
@@ -48,10 +49,31 @@ impl Harness for Opencode {
         "opencode"
     }
 
+    fn display_name(&self) -> &'static str {
+        "opencode"
+    }
+
+    /// No, and it can't: opencode keeps no fork link of its own (`opencode import` writes none),
+    /// and atuin's, the fork's marker, is a row whose text capture doesn't keep, so sync never
+    /// carries it. Written again on a restore, the marker would need a part id of its own: a row
+    /// the other machine lacks, which capture would push as new.
+    fn restores_fork_links(&self) -> bool {
+        false
+    }
+
+    fn program(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_DB", "OPENCODE_DISABLE_CHANNEL_DB"]
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";
         let plugin = plugin_for(rehydrate::major_version(Path::new("opencode")).await.ok());
+        let plugin = plugin_with_executable(plugin, TS_ATUIN_LINE, launch_path().await?)?;
 
         let plugins_dir = config_dir().joined("plugins");
 
@@ -72,21 +94,29 @@ impl Harness for Opencode {
         Ok(extension_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&config_dir().joined("plugins").joined("atuin.ts")).await
+    }
+
     /// `opencode --session <id>`. opencode looks the id up in its one global database and serves
     /// the session from the directory recorded for it, but the TUI starts in the directory it is
     /// run from (its project's session list, config and the new sessions it creates), so the
     /// session's own is the one to be in.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let args = ["--session".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "opencode", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
         session::locate(&session::default_db()?, id).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

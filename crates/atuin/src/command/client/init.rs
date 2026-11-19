@@ -24,14 +24,15 @@ pub struct Cmd {
     #[clap(long, help = fl!("arg-init-disable-up-arrow"))]
     disable_up_arrow: bool,
 
-    #[clap(long, help = fl!("arg-init-disable-ai"))]
-    disable_ai: bool,
+    /// No longer does anything: `?` isn't bound any more. Kept so old init lines still work.
+    #[clap(long = "disable-ai", hide = true)]
+    _disable_ai: bool,
 
     #[clap(long, help = fl!("arg-init-bind-ai-resume"))]
     bind_ai_resume: bool,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 #[allow(clippy::enum_variant_names, clippy::doc_markdown)]
 pub enum Shell {
@@ -49,12 +50,24 @@ pub enum Shell {
     PowerShell,
 }
 
+impl Shell {
+    /// The name `atuin init` takes it by.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+            Self::Nu => "nu",
+            Self::Xonsh => "xonsh",
+            Self::PowerShell => "powershell",
+        }
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
-    #[cfg_attr(not(feature = "ai"), allow(dead_code))]
-    pub enable_ai: bool,
     /// Bind ctrl-] to `atuin threads resume`. Off unless asked for: it replaces the shell's own
     /// binding (character search). The widgets are defined either way.
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
@@ -95,8 +108,7 @@ impl Cmd {
         StaticInitOptions {
             enable_up_arrow: !self.disable_up_arrow && settings.bind_up_arrow,
             enable_ctrl_r: !self.disable_ctrl_r && settings.bind_ctrl_r,
-            enable_ai: !self.disable_ai && settings.ai.enabled.unwrap_or(true),
-            enable_ai_resume: self.bind_ai_resume && settings.ai.enabled.unwrap_or(true),
+            enable_ai_resume: self.bind_ai_resume,
             prepare_search_index: settings.search_mode() == SearchMode::DaemonFuzzy,
             tmux: &settings.tmux,
         }

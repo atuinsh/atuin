@@ -2,12 +2,12 @@
 //! it is live, already in the caller's context, and otherwise tops every recency-ordered result.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId, Session};
 use atuin_common::env;
 use atuin_daemon::AiClient;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 /// How long before the server started a session may begin and still be the caller's. A harness
 /// writes its session within a second or two of spawning MCP servers (Codex just before, opencode
@@ -17,14 +17,14 @@ const START_SLACK: Duration = Duration::from_secs(10);
 
 /// Per-server state: when and where the server started.
 pub struct OwnSession {
-    started: SystemTime,
+    started: Timestamp,
     cwd: Option<PathBuf>,
 }
 
 impl Default for OwnSession {
     fn default() -> Self {
         Self {
-            started: SystemTime::now(),
+            started: Timestamp::now(),
             cwd: std::env::current_dir().ok(),
         }
     }
@@ -68,13 +68,13 @@ impl Caller<'_> {
             return Some(own);
         }
         // Only a session active since the server started can be the caller's; don't fetch the rest.
-        let since = Some(OffsetDateTime::from(self.own.started));
+        let since = Some(self.own.started);
         self.pick(&super::list_sessions(client, Some(self.harness()?), since).await.ok()?)
     }
 
     /// The earliest activity a listing needs for [`Self::own_in`] to find the caller's session.
-    pub fn active_since(&self) -> OffsetDateTime {
-        OffsetDateTime::from(self.own.started)
+    pub fn active_since(&self) -> Timestamp {
+        self.own.started
     }
 
     /// [`Self::own_session`] for a caller that already holds the session list.
@@ -82,7 +82,8 @@ impl Caller<'_> {
         self.env_session().or_else(|| self.pick(sessions))
     }
 
-    fn env_session(&self) -> Option<HarnessSession> {
+    /// The caller's session, when the harness names it in the server's environment.
+    pub fn env_session(&self) -> Option<HarnessSession> {
         let harness = self.harness()?;
         let var = match harness {
             HarnessKind::ClaudeCode => "CLAUDE_CODE_SESSION_ID",
@@ -99,8 +100,8 @@ impl Caller<'_> {
     fn pick(&self, sessions: &[Session]) -> Option<HarnessSession> {
         let harness = self.harness()?;
         let cwd = self.own.cwd.as_deref()?;
-        let started = OffsetDateTime::from(self.own.started);
-        let earliest = OffsetDateTime::from(self.own.started.checked_sub(START_SLACK)?);
+        let started = self.own.started;
+        let earliest = self.own.started.checked_sub(START_SLACK).ok()?;
         // Still active since this server started: a run that finished just before it (the
         // previous session, which a "continue" is looking for) started in the window too, but
         // recorded nothing after.
@@ -126,8 +127,8 @@ mod tests {
 
     use super::*;
 
-    fn session(id: &str, cwd: &str, started: SystemTime) -> Session {
-        let mut s = super::super::fixtures::session(id, Some(cwd), OffsetDateTime::from(started));
+    fn session(id: &str, cwd: &str, started: Timestamp) -> Session {
+        let mut s = super::super::fixtures::session(id, Some(cwd), started);
         s.handle.harness = HarnessKind::Codex;
         s
     }
@@ -136,7 +137,7 @@ mod tests {
         own.session.to_string()
     }
 
-    fn server(started: SystemTime) -> OwnSession {
+    fn server(started: Timestamp) -> OwnSession {
         OwnSession {
             started,
             cwd: Some(PathBuf::from("/work/p")),
@@ -145,7 +146,7 @@ mod tests {
 
     #[rstest]
     fn picks_the_single_session_started_with_the_server_in_its_directory() {
-        let now = SystemTime::now();
+        let now = Timestamp::now();
         let own = server(now);
         let caller = Caller {
             client: Some("codex-mcp-client"),
@@ -162,7 +163,7 @@ mod tests {
 
     #[rstest]
     fn a_run_just_before_this_one_is_not_a_candidate() {
-        let now = SystemTime::now();
+        let now = Timestamp::now();
         let own = server(now);
         let caller = Caller {
             client: Some("codex-mcp-client"),
@@ -177,7 +178,7 @@ mod tests {
 
     #[rstest]
     fn a_lone_other_session_stops_being_hidden_once_the_callers_own_appears() {
-        let now = SystemTime::now();
+        let now = Timestamp::now();
         let own = server(now);
         let caller = Caller {
             client: Some("codex-mcp-client"),
@@ -196,14 +197,14 @@ mod tests {
 
     #[rstest]
     fn a_run_that_finished_just_before_the_server_started_is_not_the_callers() {
-        let now = SystemTime::now();
+        let now = Timestamp::now();
         let own = server(now);
         let caller = Caller {
             client: Some("codex-mcp-client"),
             own: &own,
         };
         let mut previous = session("previous", "/work/p", now - Duration::from_secs(5));
-        previous.updated_at = OffsetDateTime::from(now - Duration::from_secs(2));
+        previous.updated_at = now - Duration::from_secs(2);
         // The caller's own session is not captured yet: nothing is its, so nothing is hidden.
         assert_eq!(caller.pick(std::slice::from_ref(&previous)), None);
         let mine = session("mine", "/work/p", now + Duration::from_secs(1));
@@ -212,7 +213,7 @@ mod tests {
 
     #[rstest]
     fn ambiguity_hides_nothing() {
-        let now = SystemTime::now();
+        let now = Timestamp::now();
         let own = server(now);
         let caller = Caller {
             client: Some("codex-mcp-client"),
@@ -249,7 +250,7 @@ mod tests {
         #[case] id: &str,
         #[case] own: bool,
     ) {
-        let mine = session("mine", "/work/p", SystemTime::now());
+        let mine = session("mine", "/work/p", Timestamp::now());
         let candidate = HarnessSession {
             harness,
             session: NativeSessionId::from(id.to_owned()),

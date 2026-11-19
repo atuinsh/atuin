@@ -66,8 +66,9 @@ impl ServiceClaim {
 
     /// Lock the pidfile `daemon` names for this process, which `info` describes.
     ///
-    /// Atuin's agent takes it from a daemon a client forked, rather than exit and leave clients to
-    /// wait on launchd's socket, with no daemon behind it, for as long as that one runs.
+    /// Atuin's agent takes it from a daemon a client forked, rather than exit and leave the daemon
+    /// to one that nothing restarts, or, for an agent that launchd holds a socket for, leave
+    /// clients to wait on that socket, with no daemon behind it, for as long as that one runs.
     async fn take_pidfile(
         daemon: &DaemonSettings,
         info: &PidfileInfo,

@@ -1,21 +1,25 @@
+use std::collections::HashSet;
 use std::env;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::time::Duration;
 
-use atuin_common::db::sqlite::{Sqlite as CommonSqlite, SqliteBuilder};
+use atuin_common::db::sqlite::{Access, Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
-use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
+use atuin_common::path::DisplayRichExt;
+use atuin_common::time::{TimeZoneSpec, TimestampExt};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
+use futures::stream::BoxStream;
+use futures::{TryStreamExt as _, future};
 use itertools::Itertools;
+use jiff::Timestamp;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
 use thiserror::Error;
-use time::OffsetDateTime;
 use tracing::instrument;
 
 use super::history::History;
@@ -32,17 +36,10 @@ pub struct Context {
     pub cwd: String,
     pub cmd_origin: CmdOrigin,
     pub host_id: String,
-    pub git_root: Option<PathBuf>,
+    pub vcs_root: Option<PathBuf>,
 }
 
-impl Context {
-    fn git_root_str(&self) -> &str {
-        // Existing behavior: fall back to `self.cwd` if there's no Git root.
-        self.git_root.as_deref().and_then(Path::to_str).unwrap_or(&self.cwd)
-    }
-}
-
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct OptFilters<'a> {
     /// Include any of these exit codes. An empty slice means no restriction.
     pub exit: &'a [i64],
@@ -64,10 +61,10 @@ pub struct OptFilters<'a> {
     pub authors: OrFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
     pub shells: OrFilter<&'a [String]>,
-    /// Offset that `before`/`after` strings without an explicit offset are interpreted in, and
-    /// that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
+    /// Time zone that `before`/`after` strings without an explicit offset are interpreted in,
+    /// and that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
     /// `Default` is UTC.
-    pub timezone: UtcOffsetSpec,
+    pub timezone: TimeZoneSpec,
     /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
     pub dialect: Dialect,
 }
@@ -83,13 +80,13 @@ pub async fn query_context(settings: &Settings) -> eyre::Result<Context> {
     let cmd_origin = CmdOrigin::probe_current();
     let cwd = utils::get_current_dir();
     let host_id = settings.host_id().await?;
-    let git_root = utils::in_git_repo(&cwd);
+    let vcs_root = utils::in_vcs_repo(&cwd);
 
     Ok(Context {
         session,
         cmd_origin,
         cwd: cwd.to_string_lossy().into(),
-        git_root,
+        vcs_root,
         host_id: host_id.0.as_simple().to_string(),
     })
 }
@@ -114,7 +111,15 @@ impl Context {
             cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
-            git_root: utils::in_git_repo(entry.cwd.as_ref()),
+            vcs_root: utils::in_vcs_repo(entry.cwd.as_ref()),
+        }
+    }
+
+    /// The [`FilterMode::Workspace`] prefix: repo root when there is one, cwd otherwise.
+    fn workspace_root(&self) -> String {
+        match &self.vcs_root {
+            Some(vcs_root) => vcs_root.to_string_lossy().into_owned(),
+            None => self.cwd.clone(),
         }
     }
 }
@@ -197,6 +202,26 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
+/// SQL predicate and bound values for [`FilterMode::Workspace`]: `cwd` is `root` or below it.
+fn workspace_sql_filter(root: &str) -> (&'static str, [String; 2]) {
+    const WORKSPACE_SQL_FILTER: &str = "(cwd = ?1 or cwd like ?2 escape '\\')";
+
+    // Bare `cwd LIKE 'root%'` also matches a sibling with that same prefix.
+    // The trailing separator ensures that won't happen.
+    let prefix = Path::new(root).display_rich().trailing_slash(true).to_string();
+
+    // Keep filesystem roots intact, including Windows drive and UNC roots.
+    let exact = if Path::new(root).parent().is_none() {
+        root
+    } else {
+        prefix.strip_suffix(MAIN_SEPARATOR).unwrap_or(&prefix)
+    };
+
+    // The escape character goes first, or the later arms escape the backslashes it adds.
+    let escaped = prefix.replace('\\', r"\\").replace('%', r"\%").replace('_', r"\_");
+    (WORKSPACE_SQL_FILTER, [exact.to_owned(), format!("{escaped}%")])
+}
+
 /// SQL predicate to match for a [`CmdOrigin`].
 fn origin_sql_filter(origin: &CmdOrigin) -> String {
     // This helper implements logic to support host-only matching against a combined host:user pair.
@@ -270,6 +295,73 @@ impl SearchMode {
 pub const HISTORY_COLUMNS: &str = "id, timestamp, duration, exit, command, cwd, session, \
                                    hostname, deleted_at, author, intent, shell, author_kind";
 
+/// The live entries that a delete removed.
+///
+/// Only [`Sqlite::delete_rows`] records a deleted row. Other code can only add an entry that was
+/// never saved, with [`Self::add_unsaved`].
+#[derive(Debug, Default)]
+pub struct DeletedLiveRows {
+    ids: HashSet<HistoryId>,
+    commands: HashSet<String>,
+}
+
+impl DeletedLiveRows {
+    /// How many distinct live entries were deleted.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether no live entry was deleted.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// Whether the entry `id` was deleted.
+    #[must_use]
+    pub fn contains(&self, id: HistoryId) -> bool {
+        self.ids.contains(&id)
+    }
+
+    /// The distinct commands of the deleted entries.
+    #[must_use]
+    pub const fn commands(&self) -> &HashSet<String> {
+        &self.commands
+    }
+
+    /// Take the distinct commands of the deleted entries.
+    #[must_use]
+    pub fn into_commands(self) -> HashSet<String> {
+        self.commands
+    }
+
+    /// Record that the entry `id` of `command` was deleted, when that entry's save to the database
+    /// failed. If the entry has a row after all, it still counts once.
+    pub fn add_unsaved(&mut self, id: HistoryId, command: String) {
+        self.add(id, command);
+    }
+
+    /// Merge the result of another chunk of a delete into this one.
+    pub fn extend(&mut self, other: Self) {
+        self.ids.extend(other.ids);
+        self.commands.extend(other.commands);
+    }
+
+    fn add(&mut self, id: HistoryId, command: String) {
+        self.ids.insert(id);
+        self.commands.insert(command);
+    }
+}
+
+/// A row that [`Sqlite::delete_rows`] removed.
+#[derive(sqlx::FromRow)]
+struct RemovedRow {
+    id: HistoryId,
+    command: String,
+    live: bool,
+}
+
 // Intended for use on a developer machine and not a sync server.
 // TODO: implement IntoIterator
 #[derive(Debug, Clone)]
@@ -301,7 +393,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
 
         Ok(Self::from_db()
             .id(row.try_get("id")?)
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.try_get("timestamp")?))
+            .timestamp(Timestamp::from_unix_nanos_i64(row.try_get("timestamp")?))
             .duration(row.try_get("duration")?)
             .exit(row.try_get("exit")?)
             .command(row.try_get("command")?)
@@ -310,7 +402,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             .hostname(hostname)
             .author(author)
             .intent(intent)
-            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
+            .deleted_at(deleted_at.map(Timestamp::from_unix_nanos_i64))
             .shell(shell)
             .author_kind(author_kind)
             .build()
@@ -367,7 +459,8 @@ impl Sqlite {
         let path = path.as_ref();
         debug!("opening sqlite database at {path:?}");
 
-        Self::from_builder(CommonSqlite::builder(path), timeout).await
+        Self::from_builder(CommonSqlite::builder(path).access(Access::PreferReadWrite), timeout)
+            .await
     }
 
     pub async fn in_memory(timeout: Duration) -> eyre::Result<Self> {
@@ -411,7 +504,7 @@ impl Sqlite {
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(h.id)
-        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(h.timestamp.as_nanosecond()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -420,7 +513,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+        .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
@@ -464,7 +557,7 @@ impl Sqlite {
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
                 b.push_bind(h.id)
-                    .push_bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+                    .push_bind(i64::conv(h.timestamp.as_nanosecond()))
                     .push_bind(h.duration)
                     .push_bind(h.exit)
                     .push_bind(h.command.as_str())
@@ -473,7 +566,7 @@ impl Sqlite {
                     .push_bind(h.cmd_origin.as_str())
                     .push_bind(h.author.as_str())
                     .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+                    .push_bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
                     .push_bind(h.shell.as_deref())
                     .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
             });
@@ -568,7 +661,7 @@ impl Sqlite {
                 where id = ?1",
         )
         .bind(h.id)
-        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(h.timestamp.as_nanosecond()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -577,7 +670,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+        .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(self.sqlite.pool())
         .await?;
@@ -594,7 +687,7 @@ impl Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
-        range: Option<(OffsetDateTime, OffsetDateTime)>,
+        range: Option<(Timestamp, Timestamp)>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -604,7 +697,7 @@ impl Sqlite {
             query.and_where_is_null("deleted_at");
         }
 
-        let git_root = context.git_root_str();
+        let mut workspace_values = None;
         let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
         for filter in filters {
@@ -620,7 +713,11 @@ impl Sqlite {
                     &mut query
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
-                FilterMode::Workspace => query.and_where_like_left("cwd", git_root),
+                FilterMode::Workspace => {
+                    let (filter, values) = workspace_sql_filter(&context.workspace_root());
+                    workspace_values = Some(values);
+                    query.and_where(filter)
+                }
             };
         }
 
@@ -635,29 +732,31 @@ impl Sqlite {
         // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
         // command recorded exactly on a period boundary (e.g. at midnight).
         if let Some((from, to)) = range {
-            query.and_where_ge("timestamp", i64::conv(from.unix_timestamp_nanos()));
-            query.and_where_le("timestamp", i64::conv(to.unix_timestamp_nanos()));
+            query.and_where_ge("timestamp", i64::conv(from.as_nanosecond()));
+            query.and_where_le("timestamp", i64::conv(to.as_nanosecond()));
         }
 
         let query = query.sql().expect("bug in list query. please report");
 
-        let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
-            .fetch_all(self.sqlite.pool())
-            .await?;
+        let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(query));
+        for value in workspace_values.into_iter().flatten() {
+            query = query.bind(value);
+        }
+        let res = query.fetch_all(self.sqlite.pool()).await?;
 
         Ok(res)
     }
 
     #[instrument(level = "trace", skip_all, fields(from = ?from, to = ?to), err)]
-    pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
+    pub async fn range(&self, from: Timestamp, to: Timestamp) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where timestamp >= ?1 and timestamp <= ?2 \
              order by timestamp asc"
         )))
-        .bind(i64::conv(from.unix_timestamp_nanos()))
-        .bind(i64::conv(to.unix_timestamp_nanos()))
+        .bind(i64::conv(from.as_nanosecond()))
+        .bind(i64::conv(to.as_nanosecond()))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -677,12 +776,12 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(count), err)]
-    pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
+    pub async fn before(&self, timestamp: Timestamp, count: i64) -> Result<Vec<History>> {
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where timestamp < ?1 order by timestamp desc \
              limit ?2"
         )))
-        .bind(i64::conv(timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(timestamp.as_nanosecond()))
         .bind(count)
         .fetch_all(self.sqlite.pool())
         .await?;
@@ -718,7 +817,7 @@ impl Sqlite {
         let mut sql = SqlBuilder::select_from("history");
         sql.field(HISTORY_COLUMNS);
 
-        let git_root = context.git_root_str();
+        let mut workspace_values = None;
         let session_start = ShellSession::parse(&context.session).map(|s| s.start_unix_nanos());
 
         match filter {
@@ -733,7 +832,11 @@ impl Sqlite {
                 &mut sql
             }
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
-            FilterMode::Workspace => sql.and_where_like_left("cwd", git_root),
+            FilterMode::Workspace => {
+                let (filter, values) = workspace_sql_filter(&context.workspace_root());
+                workspace_values = Some(values);
+                sql.and_where(filter)
+            }
         };
 
         let orig_query = query;
@@ -812,21 +915,21 @@ impl Sqlite {
 
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
-        let dialect = filter_options.dialect.into();
+        let now = Timestamp::now().to_zoned_datetime(filter_options.timezone.time_zone());
+        let dialect = filter_options.dialect;
 
         if let Some(before) = filter_options.before {
-            let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
+            let parsed = dialect.parse_date(before, &now).map_err(|e| {
                 sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
             })?;
-            sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
+            sql.and_where_lt("timestamp", quote(i64::conv(parsed.timestamp().as_nanosecond())));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed = interim::parse_date_string(after, now, dialect).map_err(|e| {
+            let parsed = dialect.parse_date(after, &now).map_err(|e| {
                 sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
             })?;
-            sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
+            sql.and_where_gt("timestamp", quote(i64::conv(parsed.timestamp().as_nanosecond())));
         }
 
         apply_author_filter(&mut sql, filter_options.authors);
@@ -870,52 +973,58 @@ impl Sqlite {
             )
         };
 
-        let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
-            .fetch_all(self.sqlite.pool())
-            .await?;
+        let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(query));
+        for value in workspace_values.into_iter().flatten() {
+            query = query.bind(value);
+        }
+        let res = query.fetch_all(self.sqlite.pool()).await?;
 
         Ok(ordering::reorder_fuzzy(search_mode, &ranking_query(orig_query), res))
     }
 
-    /// Get all unique user-run commands that have only been run since `start` (no invocations
-    /// before that).
+    /// Get each distinct user-run command that was run at or after `since` and was also run before
+    /// `before`.
     ///
     /// Only considers user-run commands that match the given shell filter. Returns a vector of
     /// command strings.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn commands_only_since(
+    pub async fn commands_run_since_and_before(
         &self,
-        start: OffsetDateTime,
+        since: Timestamp,
+        before: Timestamp,
         shells: OrFilter<&[String]>,
     ) -> Result<Vec<String>> {
-        let Ok(start) = i64::try_from(start.unix_timestamp_nanos()) else {
+        let (Ok(since), Ok(before)) =
+            (i64::try_from(since.as_nanosecond()), i64::try_from(before.as_nanosecond()))
+        else {
             return Ok(Vec::new());
         };
 
-        // Subquery to check if some command `h` that occurs after `start` *also* has an invocation
-        // before `start`.
+        // This subquery checks whether a command `h` that was run at or after `since` was also run
+        // before `before`.
         let mut earlier = SqlBuilder::select_from("history");
         earlier
             .field("1")
             .and_where("command = h.command")
-            .and_where_lt("timestamp", start)
+            .and_where_lt("timestamp", before)
             .and_where_is_null("deleted_at");
         apply_author_filter(&mut earlier, all_user_author_filter());
         apply_shell_filter(&mut earlier, shells);
-        let earlier = earlier.sql().expect("bug in commands_only_since query. please report");
+        let earlier =
+            earlier.sql().expect("bug in commands_run_since_and_before query. please report");
         let earlier = earlier.trim().trim_end_matches(';');
 
-        // `INDEXED BY` forces SQLite to only access the rows since `start`, which is expected to be
-        // much smaller than the whole DB.
+        // `INDEXED BY` forces SQLite to read only the rows since `since`. We expect those rows to be
+        // a small part of the whole DB.
         let mut sql = SqlBuilder::select_from("history h INDEXED BY idx_history_active_timestamp");
         sql.distinct()
             .field("command")
-            .and_where_ge("timestamp", start)
+            .and_where_ge("timestamp", since)
             .and_where_is_null("deleted_at")
-            .and_where(format!("NOT EXISTS ({earlier})"));
+            .and_where(format!("EXISTS ({earlier})"));
         apply_author_filter(&mut sql, all_user_author_filter());
         apply_shell_filter(&mut sql, shells);
-        let sql = sql.sql().expect("bug in commands_only_since query. please report");
+        let sql = sql.sql().expect("bug in commands_run_since_and_before query. please report");
 
         db::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql)).fetch_all(self.sqlite.pool()).await
     }
@@ -947,7 +1056,7 @@ impl Sqlite {
         );
         db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
             .bind(&history.command)
-            .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
+            .bind(i64::conv(history.timestamp.as_nanosecond()))
             .bind(history.id)
             .fetch_all(self.sqlite.pool())
             .await
@@ -974,10 +1083,26 @@ impl Sqlite {
         );
         db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
             .bind(&history.session)
-            .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
+            .bind(i64::conv(history.timestamp.as_nanosecond()))
             .bind(history.id)
             .fetch_all(self.sqlite.pool())
             .await
+    }
+
+    /// Stream every live entry of this exact command, in no particular order.
+    ///
+    /// The entries come straight from the command's index as they are read, so a command that was
+    /// run a million times is never held in memory at once.
+    #[must_use = "the stream reads nothing until polled"]
+    pub fn history_of_command<'a>(&'a self, command: &'a str) -> BoxStream<'a, Result<History>> {
+        // An `order by` would make SQLite sort all of the command's rows before it returns the
+        // first one.
+        let query = format!(
+            "select {HISTORY_COLUMNS} from history where command = ?1 and deleted_at is null"
+        );
+        db::query_as::<_, History>(sqlx::AssertSqlSafe(query))
+            .bind(command)
+            .fetch(self.sqlite.pool())
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -1045,8 +1170,8 @@ impl Sqlite {
                 command,
                 runs,
                 failures,
-                first: OffsetDateTime::from_unix_nanos_i64(first),
-                last: OffsetDateTime::from_unix_nanos_i64(last),
+                first: Timestamp::from_unix_nanos_i64(first),
+                last: Timestamp::from_unix_nanos_i64(last),
                 cwd,
             })
             .collect())
@@ -1064,14 +1189,58 @@ impl Sqlite {
     // deleted_at is still read to keep tombstones from older versions working.
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn delete(&self, h: History) -> Result<()> {
-        self.delete_rows([h.id]).await
+        self.delete_rows([h.id]).await?;
+        Ok(())
     }
 
+    /// Find which of `ids` have a row in the history table. A tombstone from an older version
+    /// counts as a row.
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn delete_rows(&self, ids: impl IntoIterator<Item = HistoryId>) -> Result<()> {
+    pub async fn existing_ids(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<HashSet<HistoryId>> {
         let mut ids = ids.into_iter().peekable();
+        let mut existing = HashSet::new();
         if ids.peek().is_none() {
-            return Ok(());
+            return Ok(existing);
+        }
+
+        let ids_per_select = self.sqlite.info().await.variable_number_limit().max(1);
+        while ids.peek().is_some() {
+            let mut builder = sqlx::QueryBuilder::new("select id from history where id in (");
+            let mut list = builder.separated(", ");
+            for id in ids.by_ref().take(ids_per_select) {
+                list.push_bind(id);
+            }
+            builder.push(")");
+
+            builder
+                .build_query_scalar::<HistoryId>()
+                .fetch(self.sqlite.pool())
+                .try_for_each(|id| {
+                    existing.insert(id);
+                    future::ready(Ok(()))
+                })
+                .await?;
+        }
+
+        Ok(existing)
+    }
+
+    /// Delete the rows with these ids in one transaction.
+    ///
+    /// Returns the live rows that were deleted. A tombstone from an older version is not a live
+    /// row. Ids that have no row are ignored.
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn delete_rows(
+        &self,
+        ids: impl IntoIterator<Item = HistoryId>,
+    ) -> Result<DeletedLiveRows> {
+        let mut ids = ids.into_iter().peekable();
+        let mut deleted = DeletedLiveRows::default();
+        if ids.peek().is_none() {
+            return Ok(deleted);
         }
 
         // One `in (...)` statement per chunk that fits the bind-parameter limit, not one
@@ -1086,14 +1255,23 @@ impl Sqlite {
             for id in ids.by_ref().take(ids_per_delete) {
                 list.push_bind(id);
             }
-            builder.push(")");
+            builder.push(") returning id, command, deleted_at is null as live");
 
-            builder.build().execute(&mut *tx).await?;
+            builder
+                .build_query_as::<RemovedRow>()
+                .fetch(&mut *tx)
+                .try_for_each(|row| {
+                    if row.live {
+                        deleted.add(row.id, row.command);
+                    }
+                    future::ready(Ok(()))
+                })
+                .await?;
         }
 
         tx.commit().await?;
 
-        Ok(())
+        Ok(deleted)
     }
 
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
@@ -1409,11 +1587,12 @@ impl<'a> Iterator for QueryTokenizer<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::path::MAIN_SEPARATOR_STR;
     use std::time::{Duration, Instant};
 
+    use atuin_common::path::PathBufExt as _;
+    use futures::TryStreamExt;
     use rstest::{fixture, rstest};
-    use time::format_description::well_known::Rfc3339;
-    use time::macros::datetime;
 
     use super::*;
     use crate::history::all_user_author_filter;
@@ -1425,7 +1604,7 @@ mod test {
             session: "beepboopiamasession".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
-            git_root: None,
+            vcs_root: None,
         }
     }
 
@@ -1434,15 +1613,25 @@ mod test {
         Sqlite::in_memory(test_local_timeout()).await.unwrap()
     }
 
-    /// Only commands with no counting run before `start` are returned: an agent's run, a run in
-    /// another shell, or a deleted run doesn't count, but any user run before `start` does.
+    /// A command is returned only if it has a counting run at or after `since`. It must also have a
+    /// counting run before `before`. A single run between the two bounds counts for both. Runs by
+    /// an agent, runs in another shell, and deleted runs don't count.
     #[rstest]
+    #[case::same_bound(0, &["before_and_after"])]
+    #[case::since_earlier(30, &["before_and_after", "between"])]
     #[tokio::test]
-    async fn commands_only_since_excludes_commands_run_before(#[future] empty_db: Sqlite) {
+    async fn commands_run_since_and_before_needs_a_counting_run_on_each_side(
+        #[case] since_secs_before: u64,
+        #[case] expected: &[&str],
+        #[future] empty_db: Sqlite,
+    ) {
         let db = empty_db.await;
-        let start = datetime!(2024-01-01 12:00 UTC);
-        let (before, after) = (start - Duration::from_secs(60), start);
+        let start = "2024-01-01T12:00:00Z".parse::<Timestamp>().unwrap();
+        let since = start - Duration::from_secs(since_secs_before);
+        let (before, between, after) =
+            (start - Duration::from_secs(60), start - Duration::from_secs(10), start);
         for (command, timestamp, author_kind, shell, deleted) in [
+            ("between", between, AuthorKind::User, "zsh", false),
             ("only_after", after, AuthorKind::User, "zsh", false),
             ("before_and_after", before, AuthorKind::User, "zsh", false),
             ("before_and_after", after, AuthorKind::User, "zsh", false),
@@ -1469,14 +1658,10 @@ mod test {
         }
 
         let shells = OrFilter::from_list(vec!["zsh".to_string()]).unwrap();
-        let mut commands = db.commands_only_since(start, shells.as_slice_filter()).await.unwrap();
+        let mut commands =
+            db.commands_run_since_and_before(since, start, shells.as_slice_filter()).await.unwrap();
         commands.sort_unstable();
-        assert_eq!(commands, [
-            "agent_before",
-            "deleted_before",
-            "only_after",
-            "other_shell_before"
-        ]);
+        assert_eq!(commands, expected);
     }
 
     #[rstest]
@@ -1494,7 +1679,7 @@ mod test {
             ("another import", "", false),
         ] {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH)
+                .timestamp(Timestamp::UNIX_EPOCH)
                 .command(command)
                 .cwd("/tmp")
                 .build()
@@ -1502,7 +1687,7 @@ mod test {
             entry.session = session.into();
             entry.cwd = format!("/tmp/{}", entries.len());
             if deleted {
-                entry.deleted_at = Some(OffsetDateTime::UNIX_EPOCH);
+                entry.deleted_at = Some(Timestamp::UNIX_EPOCH);
             }
             db.save(&entry).await.unwrap();
             entries.push(entry);
@@ -1534,7 +1719,7 @@ mod test {
         .enumerate()
         {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(i64::conv(i)))
+                .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(i64::conv(i)))
                 .command("echo stats")
                 .cwd("/tmp")
                 .build()
@@ -1542,7 +1727,7 @@ mod test {
             entry.duration = duration;
             entry.exit = exit;
             if deleted {
-                entry.deleted_at = Some(OffsetDateTime::UNIX_EPOCH);
+                entry.deleted_at = Some(Timestamp::UNIX_EPOCH);
             }
             db.save(&entry).await.unwrap();
             if selected.is_none() {
@@ -1564,7 +1749,7 @@ mod test {
         let mut entries = Vec::new();
         for second in 0..250 {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(second))
+                .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(second))
                 .command("ls")
                 .cwd("/tmp")
                 .build()
@@ -1620,10 +1805,10 @@ mod test {
     async fn new_history_item_at(
         db: &Sqlite,
         cmd: &str,
-        timestamp: Option<OffsetDateTime>,
+        timestamp: Option<Timestamp>,
     ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(timestamp.unwrap_or_else(OffsetDateTime::now_utc))
+            .timestamp(timestamp.unwrap_or_else(Timestamp::now))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1642,7 +1827,7 @@ mod test {
 
     async fn save_history_item(db: &Sqlite, cmd: &str) -> History {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1676,11 +1861,11 @@ mod test {
             session: "beep boop".to_string(),
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
-            git_root: None,
+            vcs_root: None,
         };
 
         // One item at a fixed instant, one at `now` (far outside the window below).
-        let at = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let at = Timestamp::from_second(1_708_330_400).unwrap();
         let mut past: History = History::capture()
             .timestamp(at)
             .command("ls /home/ellie")
@@ -1747,22 +1932,22 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let run = |command: &str, timestamp: OffsetDateTime, exit: i64| -> History {
+        let run = |command: &str, timestamp: Timestamp, exit: i64| -> History {
             let mut history: History =
                 History::capture().timestamp(timestamp).command(command).cwd("/srv").build().into();
             history.exit = exit;
             history
         };
-        let mut deleted = run("svn up", datetime!(2019-01-01 0:00 UTC), 0);
-        deleted.deleted_at = Some(datetime!(2019-01-02 0:00 UTC));
-        let mut by_agent = run("svn up", datetime!(2025-01-01 0:00 UTC), 0);
+        let mut deleted = run("svn up", "2019-01-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0);
+        deleted.deleted_at = Some("2019-01-02T00:00:00Z".parse::<Timestamp>().unwrap());
+        let mut by_agent = run("svn up", "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0);
         by_agent.author_kind = Some(AuthorKind::Agent);
         db.save_bulk([
             &deleted,
             &by_agent,
-            &run("svn up", datetime!(2020-03-01 0:00 UTC), 0),
-            &run("svn up", datetime!(2023-06-01 0:00 UTC), 1),
-            &run("ls", datetime!(2026-10-29 0:00 UTC), -1),
+            &run("svn up", "2020-03-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0),
+            &run("svn up", "2023-06-01T00:00:00Z".parse::<Timestamp>().unwrap(), 1),
+            &run("ls", "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(), -1),
         ])
         .await
         .unwrap();
@@ -1775,19 +1960,42 @@ mod test {
                 command: "ls".to_owned(),
                 runs: 1,
                 failures: 0,
-                first: datetime!(2026-10-29 0:00 UTC),
-                last: datetime!(2026-10-29 0:00 UTC),
+                first: "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(),
+                last: "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(),
                 cwd: "/srv".to_owned(),
             },
             CommandRuns {
                 command: "svn up".to_owned(),
                 runs: 2,
                 failures: 1,
-                first: datetime!(2020-03-01 0:00 UTC),
-                last: datetime!(2023-06-01 0:00 UTC),
+                first: "2020-03-01T00:00:00Z".parse::<Timestamp>().unwrap(),
+                last: "2023-06-01T00:00:00Z".parse::<Timestamp>().unwrap(),
                 cwd: "/srv".to_owned(),
             },
         ]);
+    }
+
+    /// `delete_rows` removes both live rows and tombstones from older versions. It reports only the
+    /// live rows that it removed, and their commands. It ignores ids that have no row.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_rows_counts_only_live_rows(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        let live = save_history_item(&db, "echo live").await;
+        let mut tombstone = save_history_item(&db, "echo tombstone").await;
+        tombstone.deleted_at = Some(Timestamp::now());
+        db.update(&tombstone).await.unwrap();
+        let missing = HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap());
+
+        assert!(db.delete_rows([tombstone.id, missing]).await.unwrap().is_empty());
+        let deleted = db.delete_rows([live.id, missing]).await.unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted.commands(), &HashSet::from(["echo live".to_owned()]));
+        assert!(db.all_paged(10, true).next().await.unwrap().is_none());
+        assert!(db.delete_rows([live.id]).await.unwrap().is_empty(), "already deleted");
     }
 
     #[rstest]
@@ -1800,7 +2008,7 @@ mod test {
         let mut alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
 
-        alpha.deleted_at = Some(OffsetDateTime::now_utc());
+        alpha.deleted_at = Some(Timestamp::now());
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
@@ -1900,7 +2108,7 @@ mod test {
             ..Default::default()
         };
         let results = exit_db
-            .search(mode, FilterMode::Global, &new_context(), "cargo", filters)
+            .search(mode, FilterMode::Global, &new_context(), "cargo", filters.clone())
             .await
             .unwrap();
         let mut actual: Vec<_> = results.iter().map(|h| h.exit).collect();
@@ -1908,7 +2116,7 @@ mod test {
         assert_eq!(actual, expected);
 
         let results = exit_db
-            .search(mode, FilterMode::Global, &new_context(), "unmatched", filters)
+            .search(mode, FilterMode::Global, &new_context(), "unmatched", filters.clone())
             .await
             .unwrap();
         assert!(results.is_empty());
@@ -1931,7 +2139,7 @@ mod test {
         let mut matching_ids = Vec::new();
         for (timestamp, exit) in [(1, 1), (2, 2), (3, 0)] {
             let mut entry = save_history_item(&empty_db, "cargo test").await;
-            entry.timestamp = OffsetDateTime::from_unix_timestamp(timestamp).unwrap();
+            entry.timestamp = Timestamp::from_second(timestamp).unwrap();
             entry.exit = exit;
             empty_db.update(&entry).await.unwrap();
             if exit != 0 {
@@ -1966,7 +2174,13 @@ mod test {
         let mut deleted = Vec::new();
         for _ in 0..3 {
             let results = exit_db
-                .search(DbSearchMode::FullText, FilterMode::Global, &new_context(), "", filters)
+                .search(
+                    DbSearchMode::FullText,
+                    FilterMode::Global,
+                    &new_context(),
+                    "",
+                    filters.clone(),
+                )
                 .await
                 .unwrap();
             if results.is_empty() {
@@ -2007,7 +2221,7 @@ mod test {
         #[case] expected: usize,
         #[case] expect_ellie_match: bool,
     ) {
-        let t = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let t = Timestamp::from_second(1_708_330_400).unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();
@@ -2015,7 +2229,7 @@ mod test {
 
         let context = new_context();
 
-        let stamp = |seconds: i64| (t + time::Duration::seconds(seconds)).format(&Rfc3339).unwrap();
+        let stamp = |seconds: i64| (t + jiff::SignedDuration::from_secs(seconds)).to_string();
         let (after, before) = match offsets {
             Some((after, before)) => (Some(stamp(after)), Some(stamp(before))),
             None => (None, None),
@@ -2044,7 +2258,7 @@ mod test {
     #[case::bare_string_uses_configured_offset("2026-01-12T11:00:00", "2026-01-12T12:00:00")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_timezone_before_after(#[case] after: &str, #[case] before: &str) {
-        let item_time = OffsetDateTime::parse("2026-01-12T11:30:05-04:00", &Rfc3339).unwrap();
+        let item_time = "2026-01-12T11:30:05-04:00".parse::<Timestamp>().unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
@@ -2244,8 +2458,10 @@ mod test {
 
         // "corburl" is strictly newer, so an unranked query would return it first and the assertion
         // below would fail.
-        let now = OffsetDateTime::now_utc();
-        new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
+        let now = Timestamp::now();
+        new_history_item_at(&db, "curl", Some(now - jiff::SignedDuration::from_secs(10)))
+            .await
+            .unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
         assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
@@ -2263,22 +2479,30 @@ mod test {
     async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let irssi = "screen irssi";
         let ls_l = "ls -l secrets/rendered";
         let ls_ld = "ls -ld secrets/rendered";
         let screen_r = "screen -r";
 
-        new_history_item_at(&db, irssi, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&db, ls_l, Some(now - time::Duration::days(4))).await.unwrap();
+        new_history_item_at(&db, irssi, Some(now - jiff::SignedDuration::from_hours(24 * 5)))
+            .await
+            .unwrap();
+        new_history_item_at(&db, ls_l, Some(now - jiff::SignedDuration::from_hours(24 * 4)))
+            .await
+            .unwrap();
         new_history_item_at(
             &db,
             ls_ld,
-            Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
+            Some(
+                now - jiff::SignedDuration::from_hours(24 * 4) + jiff::SignedDuration::from_secs(1),
+            ),
         )
         .await
         .unwrap();
-        new_history_item_at(&db, screen_r, Some(now - time::Duration::hours(1))).await.unwrap();
+        new_history_item_at(&db, screen_r, Some(now - jiff::SignedDuration::from_hours(1)))
+            .await
+            .unwrap();
 
         let results =
             assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4).await.unwrap();
@@ -2309,9 +2533,13 @@ mod test {
     ) {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
-        let now = OffsetDateTime::now_utc();
-        new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
+        let now = Timestamp::now();
+        new_history_item_at(&db, close, Some(now - jiff::SignedDuration::from_hours(24 * 5)))
+            .await
+            .unwrap();
+        new_history_item_at(&db, far, Some(now - jiff::SignedDuration::from_hours(1)))
+            .await
+            .unwrap();
 
         assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
             close, far,
@@ -2384,6 +2612,32 @@ mod test {
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_history_of_command(
+        #[future(awt)]
+        #[from(empty_db)]
+        db: Sqlite,
+    ) {
+        for cmd in ["cargo build", "cargo test", "cargo build", "cargo build"] {
+            new_history_item(&db, cmd).await.unwrap();
+        }
+
+        let runs: Vec<_> = db.history_of_command("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|h| h.command == "cargo build"));
+
+        let prefix: Vec<_> = db.history_of_command("cargo").try_collect().await.unwrap();
+        assert!(prefix.is_empty(), "exact match only");
+
+        // Tombstones that older versions wrote aren't runs.
+        let mut legacy = runs[0].clone();
+        legacy.deleted_at = Some(Timestamp::now());
+        db.update(&legacy).await.unwrap();
+        let runs: Vec<_> = db.history_of_command("cargo build").try_collect().await.unwrap();
+        assert_eq!(runs.len(), 2);
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_paged_include_deleted(
         #[future(awt)]
         #[from(empty_db)]
@@ -2404,7 +2658,7 @@ mod test {
                     session: "".to_string(),
                     cwd: "".to_string(),
                     host_id: "".to_string(),
-                    git_root: None,
+                    vcs_root: None,
                 },
                 None,
                 false,
@@ -2428,7 +2682,7 @@ mod test {
 
         // Tombstones written by older versions are still filtered by include_deleted
         let mut legacy = all.iter().find(|h| h.command == "keep1").unwrap().clone();
-        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        legacy.deleted_at = Some(Timestamp::now());
         db.update(&legacy).await.unwrap();
 
         let mut paged = db.all_paged(10, false);
@@ -2487,7 +2741,7 @@ mod test {
             ("echo zsh2", Some("zsh")),
         ] {
             let history = History::capture()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .shell_opt(shell.map(str::to_owned))
@@ -2502,7 +2756,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
 
         let shells = OrFilter::from_list(shells.map(str::to_owned).to_vec()).unwrap_or_default();
@@ -2519,6 +2773,228 @@ mod test {
         assert_eq!(results.len(), expected_count, "{results:?}");
     }
 
+    #[cfg(windows)]
+    const DRIVE: &str = "C:";
+    #[cfg(not(windows))]
+    const DRIVE: &str = "";
+
+    /// An absolute path, matching the `cwd` as recorded by the shell hooks.
+    fn abs(parts: &[&str]) -> String {
+        let mut out = String::from(DRIVE);
+
+        for part in parts {
+            out.push(MAIN_SEPARATOR);
+            out.push_str(part);
+        }
+
+        out
+    }
+
+    #[rstest]
+    #[case::nothing_to_escape("/src/atuin", "/src/atuin")]
+    #[case::underscore("/src/my_project", r"/src/my\_project")]
+    #[case::percent("/src/100%", r"/src/100\%")]
+    #[case::the_escape_character_itself(r"C:\src", r"C:\\src")]
+    #[case::all_three(r"a\b_c%d", r"a\\b\_c\%d")]
+    fn workspace_filter_escapes_every_metacharacter(#[case] input: &str, #[case] expected: &str) {
+        let (_, [_, prefix]) = workspace_sql_filter(input);
+        let separator = if cfg!(windows) {
+            r"\\"
+        } else {
+            "/"
+        };
+        assert_eq!(prefix, format!("{expected}{separator}%"));
+    }
+
+    /// Filesystem roots must retain their separator in the exact match.
+    #[rstest]
+    #[case::separator(MAIN_SEPARATOR_STR.to_owned())]
+    #[case::absolute(abs(&[""]))]
+    #[tokio::test]
+    async fn workspace_filter_keeps_a_filesystem_root(#[case] root: String) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let (filter, [exact, prefix]) = workspace_sql_filter(&root);
+        let sql = format!("SELECT {filter} FROM (SELECT ?3 AS cwd)");
+        let found: bool = db::query_scalar(sqlx::AssertSqlSafe(sql))
+            .bind(exact)
+            .bind(prefix)
+            .bind(&root)
+            .fetch_one(db.sqlite.pool())
+            .await
+            .unwrap();
+        assert!(found, "root: {root:?}");
+    }
+
+    /// A name prefix or an unescaped `LIKE` wildcard can leak a sibling into the filter.
+    #[rstest]
+    #[case::name_prefix(&["src", "atuin"], &["src", "atuin-server"])]
+    #[case::underscore_wildcard(&["src", "my_project"], &["src", "myXproject", "sub"])]
+    #[case::percent_wildcard(&["src", "100%"], &["src", "100pct", "sub"])]
+    #[case::apostrophe(&["src", "O'Brien"], &["src", "OBrien"])]
+    #[case::star_token(&["src", "\t*\t"], &["src", "outside"])]
+    #[case::alter_token(&["src", " ALTER "], &["src", "outside"])]
+    #[case::predicate_injection(&["src", "x') OR 1=1 --"], &["src", "outside"])]
+    #[case::statement_injection(&["src", "x'); DROP TABLE history; --"], &["src", "outside"])]
+    #[case::backslash(&["src", r"back\slash%_"], &["src", "backslashXY"])]
+    #[case::unicode(&["src", "café 日本語"], &["src", "cafe\u{301} 日本語"])]
+    #[case::whitespace(&["src", "line\n tab\t trailing "], &["src", "line tab trailing"])]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_filter_excludes_sibling_directories(
+        #[case] root_parts: &[&str],
+        #[case] sibling_parts: &[&str],
+        #[values(false, true)] has_vcs_root: bool,
+        #[values(false, true)] include_duplicates: bool,
+    ) {
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+
+        let root = abs(root_parts);
+        let nested = format!("{root}{MAIN_SEPARATOR}crates");
+        let sibling = abs(sibling_parts);
+
+        for cwd in [&root, &nested, &sibling] {
+            let history: History = History::import()
+                .timestamp(Timestamp::now())
+                .command(format!("echo {cwd}"))
+                .cwd(cwd)
+                .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+                .build()
+                .into();
+            db.save(&history).await.unwrap();
+        }
+
+        let context = Context {
+            cmd_origin: CmdOrigin::try_from("mac:ellie".to_owned()).unwrap(),
+            session: "session".to_string(),
+            cwd: root.clone(),
+            host_id: "test-host".to_string(),
+            vcs_root: has_vcs_root.then(|| PathBuf::from(&root)),
+        };
+
+        let sorted_cwds = |found: Vec<History>| {
+            let mut cwds: Vec<String> = found.into_iter().map(|h| h.cwd).collect();
+            cwds.sort();
+            cwds
+        };
+
+        let expected = [root.clone(), nested.clone()];
+
+        let searched = db
+            .search(DbSearchMode::FullText, FilterMode::Workspace, &context, "echo", OptFilters {
+                include_duplicates,
+                ..OptFilters::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(sorted_cwds(searched), expected);
+
+        let listed =
+            db.list([FilterMode::Workspace; 2], &context, None, false, false, None).await.unwrap();
+        assert_eq!(sorted_cwds(listed), expected);
+
+        let all = db.list([FilterMode::Global], &context, None, false, false, None).await.unwrap();
+        let mut original = vec![root, nested, sibling];
+        original.sort();
+        assert_eq!(sorted_cwds(all), original);
+    }
+
+    #[rstest]
+    fn workspace_filter_treats_generated_paths_as_data() {
+        use proptest::prelude::*;
+
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let db = runtime.block_on(Sqlite::new("sqlite::memory:", test_local_timeout())).unwrap();
+        let component = prop::collection::vec(
+            any::<char>().prop_filter("exclude NUL and separators", |c| {
+                *c != '\0' && *c != '/' && *c != '\\'
+            }),
+            1..40,
+        );
+
+        proptest!(|(chars in component)| {
+            let name: String = chars.into_iter().collect();
+            let root = abs(&["src", &name]);
+            let (filter, [exact, prefix]) = workspace_sql_filter(&root);
+            let sql = format!("SELECT {filter} FROM (SELECT ?3 AS cwd)");
+            for (cwd, expected) in [
+                (root.clone(), true),
+                (format!("{root}{MAIN_SEPARATOR}child"), true),
+                (format!("{root}-sibling{MAIN_SEPARATOR}child"), false),
+                (abs(&["outside"]), false),
+            ] {
+                let found: bool = runtime.block_on(
+                    db::query_scalar(sqlx::AssertSqlSafe(sql.as_str()))
+                        .bind(&exact)
+                        .bind(&prefix)
+                        .bind(&cwd)
+                        .fetch_one(db.sqlite.pool()),
+                ).unwrap();
+                prop_assert_eq!(found, expected, "root: {:?}, cwd: {:?}", root, cwd);
+            }
+        });
+    }
+
+    /// A secondary jj workspace searches its own tree, so the main workspace's commands stay
+    /// out. A git worktree still shares the main repo's scope, see
+    /// `atuin_common::utils::in_vcs_repo`.
+    #[cfg(not(windows))]
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_filter_uses_the_active_jj_workspace(#[values(false, true)] colocated: bool) {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(main.join(".jj").joined("repo")).unwrap();
+
+        let workspace = tmp.path().join("workspace");
+        let workspace_cwd = workspace.join("src");
+        std::fs::create_dir_all(&workspace_cwd).unwrap();
+        std::fs::create_dir_all(workspace.join(".jj")).unwrap();
+        std::fs::write(workspace.join(".jj").joined("repo"), "../../main/.jj/repo").unwrap();
+        if colocated {
+            let git_dir = main.join(".git").joined("worktrees").joined("workspace");
+            std::fs::create_dir_all(&git_dir).unwrap();
+            std::fs::write(workspace.join(".git"), format!("gitdir: {}", git_dir.display()))
+                .unwrap();
+        }
+
+        let main_cwd = main.join("src");
+        std::fs::create_dir_all(&main_cwd).unwrap();
+
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        let history = |cwd: &Path| -> History {
+            History::import()
+                .timestamp(Timestamp::now())
+                .command(format!("echo {}", cwd.display()))
+                .cwd(cwd.to_string_lossy().into_owned())
+                .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+                .build()
+                .into()
+        };
+        let workspace_history = history(&workspace_cwd);
+        db.save(&workspace_history).await.unwrap();
+        db.save(&history(&main_cwd)).await.unwrap();
+
+        let context = Context::from_history(&workspace_history);
+        assert_eq!(context.vcs_root, Some(workspace));
+
+        let found =
+            db.list([FilterMode::Workspace], &context, None, false, false, None).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].cwd, workspace_cwd.to_string_lossy().into_owned());
+
+        let found = db
+            .search(
+                DbSearchMode::FullText,
+                FilterMode::Workspace,
+                &context,
+                "echo",
+                OptFilters::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].cwd, workspace_cwd.to_string_lossy().into_owned());
+    }
+
     /// An author_kind value this version doesn't recognise (written by a newer one) must fall
     /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_repr`] returning `None`
     /// does in [`History::is_agent`] — otherwise the two classifiers disagree on the same row.
@@ -2528,7 +3004,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
@@ -2551,7 +3027,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
 
         for (pattern, expected) in [(AuthorPattern::AllAgent, 1), (AuthorPattern::AllUser, 0)] {
@@ -2577,7 +3053,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .author("pi")
@@ -2596,7 +3072,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
         for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
             let authors = OrFilter::from_list(vec![pattern]).unwrap();
@@ -2618,7 +3094,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .cmd_origin(CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap())
@@ -2635,7 +3111,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
         for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
             let authors = OrFilter::from_list(vec![pattern]).unwrap();
@@ -2670,7 +3146,7 @@ mod test {
             ("echo claude", "claude-code", None),
         ] {
             let history = History::import()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
@@ -2686,7 +3162,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
 
         let authors =
@@ -2729,7 +3205,7 @@ mod test {
             ("echo bob1", "bob"),
         ] {
             let history = History::capture()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .author(author)
@@ -2744,7 +3220,7 @@ mod test {
             session: "session".into(),
             cwd: "/tmp".into(),
             host_id: "host".into(),
-            git_root: None,
+            vcs_root: None,
         };
 
         let authors =
@@ -2785,5 +3261,39 @@ mod test {
 
         assert!(matches!(error, DbSetupError::Migrate(_)));
         assert_eq!(error.to_string(), raw);
+    }
+
+    /// History on storage that refuses writes, as a read-only filesystem does, opens and lists.
+    /// Only a write fails. Regression for #2999.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn history_on_read_only_storage_opens_for_reading() {
+        const SQLITE_READONLY: u32 = 8;
+
+        let dir = tempfile::tempdir().unwrap();
+        let written = dir.path().join("written.db");
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let path = data.join("history.db");
+
+        let writer = Sqlite::new(&written, test_local_timeout()).await.unwrap();
+        new_history_item(&writer, "ls").await.unwrap();
+        // A clean shutdown leaves the main file alone, with no WAL beside it to read through.
+        db::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(writer.sqlite.pool()).await.unwrap();
+        std::fs::copy(&written, &path).unwrap();
+
+        let Some(_locked) = atuin_common::test_utils::ReadOnlyTree::lock(&data) else {
+            return;
+        };
+
+        let db = Sqlite::new(&path, test_local_timeout()).await.unwrap();
+        let listed =
+            db.list([FilterMode::Global], &new_context(), None, false, false, None).await.unwrap();
+        assert_eq!(listed.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), ["ls"]);
+
+        let err = new_history_item(&db, "pwd").await.expect_err("read-only history took a write");
+        let code = err.as_database_error().and_then(|e| e.code()).expect("a database error");
+        assert_eq!(code.parse::<u32>().unwrap() & 0xff, SQLITE_READONLY, "{err}");
     }
 }

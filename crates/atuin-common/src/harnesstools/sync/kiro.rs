@@ -186,7 +186,7 @@ fn touch_header(log: &Path) {
     let Ok(mut header) = serde_json::from_slice::<Value>(&text) else {
         return;
     };
-    header["lastModifiedAt"] = Value::String(rehydrate::timestamp(time::OffsetDateTime::now_utc()));
+    header["lastModifiedAt"] = Value::String(rehydrate::timestamp(jiff::Timestamp::now()));
     let Ok(bytes) = serde_json::to_vec_pretty(&header) else {
         return;
     };
@@ -213,7 +213,7 @@ fn extend(
         original_cwd: lines.iter().find_map(|m| m.cwd.clone()),
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::now_utc(),
+        started_at: jiff::Timestamp::now(),
         messages: lines.to_vec(),
         fork_of: None,
     };
@@ -375,8 +375,8 @@ fn liveness(dir: &Path, id: &str, cwd: Option<&Path>, procs: &Processes) -> Live
 mod tests {
     use std::path::PathBuf;
 
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::harnesstools::session::{Content, Role};
@@ -393,7 +393,7 @@ mod tests {
         RehydrateMessage {
             source_id: id.to_owned(),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000 + at).unwrap(),
+            timestamp: Timestamp::from_second(1_790_000_000 + at).unwrap(),
             role,
             content: vec![Content::Text(format!("said {id}"))],
             model: Some("auto".to_owned()),
@@ -433,7 +433,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_790_000_000).unwrap(),
             messages: rows,
             fork_of: None,
         };
@@ -550,7 +550,7 @@ mod tests {
         let base = read_tip(&path).unwrap();
         let mut branch = rows(&["u1", "a1"], None);
         branch.extend(rows(&["u3", "a3"], Some("a1")).into_iter().map(|mut r| {
-            r.timestamp += time::Duration::seconds(10);
+            r.timestamp += jiff::SignedDuration::from_secs(10);
             r
         }));
         let backups = home.path().join("backups");
@@ -590,7 +590,7 @@ mod tests {
         summary.parent_source_id = Some("a1".to_owned());
         original.push(summary);
         original.extend(rows(&["u2", "a2"], Some("s1")).into_iter().map(|mut r| {
-            r.timestamp += time::Duration::seconds(5);
+            r.timestamp += jiff::SignedDuration::from_secs(5);
             r
         }));
         let path = written(home.path(), original);
@@ -598,7 +598,7 @@ mod tests {
         let base = read_tip(&path).unwrap();
         let mut branch = rows(&["u1", "a1"], None);
         branch.extend(rows(&["u3", "a3"], Some("a1")).into_iter().map(|mut r| {
-            r.timestamp += time::Duration::seconds(10);
+            r.timestamp += jiff::SignedDuration::from_secs(10);
             r
         }));
         let backups = home.path().join("backups");

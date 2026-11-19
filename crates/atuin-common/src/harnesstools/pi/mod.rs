@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
-use super::{Harness, InstallHookError};
+use super::{Harness, InstallHookError, TS_ATUIN_LINE, plugin_with_executable};
+use crate::atuin_exe::launch_path;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
+use crate::string::StringExt as _;
 
 pub mod rehydrate;
 pub mod session;
@@ -79,6 +81,21 @@ impl Harness for Pi {
         self.flavour.binary()
     }
 
+    fn display_name(&self) -> &'static str {
+        match self.flavour {
+            Flavour::Pi => "Pi",
+            Flavour::Omp => "omp",
+        }
+    }
+
+    fn program(&self) -> &'static str {
+        self.flavour.binary()
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]
+    }
+
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/pi/atuin.ts");
@@ -90,10 +107,12 @@ impl Harness for Pi {
 
         let extension_path = extensions_dir.joined(PLUGIN_NAME);
         // Commands are recorded with the harness's own name as their author.
-        let source = PLUGIN_SOURCE.replace(
-            r#"const ATUIN_AUTHOR = "pi";"#,
-            &format!(r#"const ATUIN_AUTHOR = "{}";"#, self.flavour.binary()),
-        );
+        let mut source =
+            plugin_with_executable(PLUGIN_SOURCE, TS_ATUIN_LINE, launch_path().await?)?;
+        let author = r#"const ATUIN_AUTHOR = "pi";"#;
+        source
+            .replace_within(author, "pi", self.flavour.binary())
+            .expect("the plugin has the author line");
 
         let already_installed = tokio::fs::read_to_string(&extension_path)
             .await
@@ -108,6 +127,16 @@ impl Harness for Pi {
         Ok(extension_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&self.flavour.agent_dir().joined("extensions").joined("atuin.ts"))
+            .await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&self.flavour.agent_dir().joined("extensions").joined("atuin.ts"))
+            .await
+    }
+
     /// `pi --session <file>` when the session's file is known: pi opens a file in place from
     /// anywhere, and works in the directory its header names. Otherwise `pi --session <id>`,
     /// which pi resolves in the current directory's sessions first; one it only finds in another
@@ -117,7 +146,7 @@ impl Harness for Pi {
             Some(path) => (CwdRequirement::Preferred, resume::path_arg(path)?),
             None => (CwdRequirement::Required, target.id.clone()),
         };
-        Ok(resume::plan(target, cwd, self.flavour.binary(), ["--session".to_owned(), session]))
+        Ok(resume::plan(target, cwd, self.program(), ["--session".to_owned(), session]))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -125,7 +154,7 @@ impl Harness for Pi {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(self.flavour, session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(self.flavour, session).await.map(Rehydrated::at)
     }
 }

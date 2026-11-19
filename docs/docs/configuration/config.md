@@ -50,50 +50,16 @@ SQLite opens as written.
     mkdir -p ~/.atuin
     ```
 
-    Check whether you have any AI-related files in `~/.atuin`:
-
-    ```sh
-    ls ~/.atuin | grep -Fxe permissions.ai.toml -e skills
-    ```
-
-    If you do, please expand and follow this section:
-
-    ??? note "Migrating home-scoped AI config"
-
-        In older installations, `permissions.ai.toml` and `skills` in
-        `~/.atuin` are scoped to your home directory, whereas in newer
-        installations, they are applied *globally*. The existence of
-        `~/.atuin/config.toml` is what determines whether the new or old
-        behavior is used; if `~/.atuin/config.toml` exists, these items are
-        interpreted as global.
-
-        Before you move your `config.toml` to `~/.atuin`, review the existing
-        AI files in `~/.atuin`, especially `permissions.ai.toml`. Anything
-        you're ok with being made global can be left as-is (global is likely
-        not too different from applying to your entire home directory anyway);
-        anything else should be deleted or moved to subdirectories (meaning
-        moving it into `~/subdir/.atuin/` for each subdirectory).
-
-        After you've confirmed that the AI items in `~/.atuin` can be
-        interpreted as global, check whether any AI items appear in both
-        `~/.atuin` and `~/.config/atuin`:
-
-        ```sh
-        ls ~/.atuin ~/.config/atuin | grep -Fxe permissions.ai.toml -e skills | \
-            sort | uniq -d
-        ```
-
-        If there are any such items, you must merge the items in
-        `~/.config/atuin` into the configuration at `~/.atuin` if you still
-        want them to take effect; otherwise, the items in `~/.config/atuin`
-        will be shadowed by those in `~/.atuin`.
-
     Next, move your config items:
 
     ```sh
     cd ~/.config/atuin && mv -n $(ls | grep -Fxe config.toml -e server.toml \
-        -e themes -e skills -e permissions.ai.toml) ~/.atuin/
+        -e themes) ~/.atuin/
     ```
+
+    If you have `permissions.ai.toml` or `skills`, they were for Atuin AI,
+    which is gone. Nothing reads them now, so you can leave them where they
+    are.
 
     Then, move your data:
 
@@ -150,11 +116,30 @@ up, Atuin makes no network requests of its own.
 update_check = true/false
 ```
 
+### `show_whats_new`
+
+Default: `true`
+
+Configures whether search shows a short note about new features after you
+upgrade. The note appears once, over the search results. Your first key closes
+it, and that key still does what it normally does.
+
+Set to `false` to never show it.
+
+```toml
+show_whats_new = true/false
+```
+
 ### `sync_address`
 
 Default: `https://api.atuin.sh`
 
 The address of the server to sync with!
+
+`atuin setup --only --sync <URL>` sets this to the address of your own server.
+For example, run `atuin setup --only --sync https://atuin.example.com`. Then run
+`atuin register` to create an account on that server, or `atuin login` to sign
+in to an account you already have there.
 
 ```toml
 sync_address = "https://api.atuin.sh"
@@ -194,7 +179,9 @@ search_mode = "fuzzy"
 
     The "daemon-fuzzy" mode is new as of Atuin 18.13. This search mode uses an in-memory index, stored in the daemon, to perform fast and customizable searches.
 
-    To use the new `"daemon-fuzzy"` mode, enable the daemon, set autostart to true (unless you manage its lifecycle yourself), and set the search mode:
+    To use the new `"daemon-fuzzy"` mode, run `atuin setup --only --daemon`. Setup turns on the daemon with autostart, and sets the search mode to `"daemon-fuzzy"`.
+
+    To do it by hand, or if the daemon is on already, enable the daemon and set the search mode. Set autostart to true unless you manage the daemon's lifecycle yourself:
 
     ```toml
     search_mode = "daemon-fuzzy"
@@ -254,6 +241,8 @@ Default: `true`
 
 Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
 
+`atuin setup --only --no-ctrl-r` sets `bind_ctrl_r = false`, and `atuin setup --only --no-up-arrow` sets `bind_up_arrow = false`. `--ctrl-r` and `--up-arrow` set them back to `true`.
+
 ```toml
 bind_up_arrow = false
 ```
@@ -303,10 +292,12 @@ inline_height_shell_up_key_binding = 10
 Default: `true`
 
 This flag enables a pseudo filter-mode named "workspace": the filter is automatically
-activated when you're in a git repository.
+activated when you're in a Git or Jujutsu repository.
 
-With workspace filtering enabled, Atuin will filter for commands executed in any directory
-within a git repository tree.
+With workspace filtering enabled, Atuin filters commands executed in any directory
+within the repository tree. A plain Git worktree searches history under the main
+repository root. A Jujutsu workspace searches history under its own root, even when
+colocated with a Git worktree.
 
 Filter modes can still be toggled via ctrl-r.
 
@@ -716,7 +707,7 @@ prefers_reduced_motion = false
 
 ### `filters`
 
-The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a git repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
+The list of filter modes available in interactive search, in the order they cycle through when you press ctrl-r. By default, all modes are enabled. Removing a mode from this list disables it entirely. The `workspace` mode is skipped when not in a repository or when `workspaces = false`. See [Filter mode](../guide/advanced-usage.md#filter-mode) for a description of each mode.
 
 The `filter_mode` setting selects the initial mode from this list. If `filter_mode` is set to a mode not in the list, the first available mode is used instead.
 
@@ -1057,9 +1048,11 @@ height = "60%"
 
 Default: `false`
 
-Enable the background daemon
+Enable the background daemon.
 
-Add the new section to the bottom of your config file
+`atuin setup --only --daemon` turns this on, along with
+[`autostart`](#autostart) and the `daemon-fuzzy` [search mode](#search_mode).
+To turn it on by hand, add the new section to the bottom of your config file:
 
 ```toml
 [daemon]
@@ -1071,6 +1064,7 @@ enabled = true
 Default: `false`
 
 Automatically start and manage the daemon when needed.
+`atuin setup --only --daemon` turns this on along with the daemon.
 This isn't compatible with `systemd_socket = true`.
 If a legacy experimental daemon is already running, restart it manually once
 before using autostart.
@@ -1083,13 +1077,14 @@ The agent is listed as `atuin` in System Settings, under General > Login Items.
 Switched off there, Atuin leaves it off and works without the daemon until you
 switch it back on. If the agent won't start, `daemon.stderr.log` in Atuin's
 logs directory says why. The agent gets the environment variables your
-config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`,
-with the values they had when Atuin installed it. After you add one, run
-`atuin daemon restart`.
+config's paths use, such as `HISTDIR` for `db_path = "$HISTDIR/history.db"`.
+It also gets the ones that say where your coding agents keep their sessions,
+such as `CODEX_HOME` or `HERMES_HOME`. It keeps the values they had when Atuin
+installed it, so after you add or change one, run `atuin daemon restart`.
 
 `atuin daemon stop` stops the agent, but with `autostart` on, the next command
-that needs the daemon starts it again. `atuin config disable daemon` turns the
-daemon off and removes the agent.
+that needs the daemon starts it again. `atuin setup --only --no-daemon` turns
+the daemon off and removes the agent.
 
 ```toml
 autostart = false
@@ -1185,8 +1180,8 @@ Default: `false`
 Capture and store the output of the commands you run. When `false`, nothing is
 captured and the other keys in this section are ignored. Turning it off stops
 the daemon storing output right away; turning it on takes a daemon restart and
-a new shell, or run `atuin config enable output-capture`, which also sets up
-the daemon and pty-proxy.
+a new shell, or run `atuin setup --only --output-capture --daemon`, which also
+sets up the daemon and pty-proxy.
 
 ```toml
 [output]
@@ -1451,8 +1446,6 @@ The theme to use for showing the terminal interface.
 ```toml
 [theme]
 name = "default"
-debug = false
-max_depth = 10
 ```
 
 ### `name`
@@ -1464,29 +1457,6 @@ else `autumn` or `marine`), or found in `~/.atuin/themes/`, with the suffix `.to
 
 ```toml
 name = "my-theme"
-```
-
-### `debug`
-
-Default: `false`
-
-Output information about why a theme won't load. Independent from other log
-levels as it can cause data from the theme file to be printed unfiltered to the
-terminal.
-
-```toml
-debug = false
-```
-
-### `max_depth`
-
-Default: 10
-
-Number of levels of "parenthood" that will be traversed for a theme. This shouldn't
-need to be added in or changed in normal usage.
-
-```toml
-max_depth = 10
 ```
 
 ## `ui`
@@ -1567,6 +1537,3 @@ so commands are shown unhighlighted there.
 syntax_highlight = false
 ```
 
-## ai
-
-The settings for Atuin AI are listed in [a separate section](../ai/settings.md).

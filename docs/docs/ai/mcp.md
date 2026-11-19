@@ -1,31 +1,48 @@
 # MCP Server
 
-Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](../guide/output-capture.md) set up — read what they printed, or search that output for something it remembers seeing.
+Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Hermes Agent, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](../guide/output-capture.md) set up — read what they printed, or search that output for something it remembers seeing.
 
-The server exposes the same history tools that [Atuin AI](./introduction.md) uses, plus output search and search over your agent [threads](./threads.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
+The server exposes history search, command output and output search, and search over your agent [threads](./threads.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
 ## Quick start
 
-Connect all your configured agents with one command:
+Connect your agents with one command:
 
 ```shell
-atuin mcp install
+atuin setup --only --mcp
 ```
 
-Atuin checks for existing user config files for Claude Code, Codex, Grok Build (`grok`), Kiro CLI, opencode, pi and oh-my-pi (`omp`), lists the agents it found and asks once before registering the MCP server with all of them. Agents without a config file are skipped. You can also target one directly with `atuin mcp install claude-code` (or `codex`, `grok`, `kiro`, `opencode`, `pi`, `omp`), including when its config file doesn't exist yet.
+This registers the MCP server with every coding agent that setup finds on this machine, such as Amp, Claude Code, Codex, GitHub Copilot CLI (`copilot`), Grok Build (`grok`), Hermes Agent (`hermes`), Kiro CLI, opencode, pi and oh-my-pi (`omp`). An agent counts when its program is on your `PATH` or it has sessions here. To connect only some, name them with `--agents`, as `atuin setup --only --mcp --agents claude-code`.
 
 Then restart the agents you connected. They can now search your shell history.
 
-To let it read and search what your commands printed, and your past [threads](./threads.md) with other agents, turn those on too (each also sets up the [daemon](../reference/daemon.md) they need):
+To let them read and search what your commands printed, and your past [threads](./threads.md) with other agents, turn those on too, along with the [daemon](../reference/daemon.md) they need:
 
 ```shell
-atuin config enable output-capture
-atuin config enable threads
+atuin setup --only --output-capture --threads --daemon
 ```
 
 To check it worked, ask the agent *"What's the last command I ran that failed?"*
 
-`atuin mcp install` registers the server for your user, so it works in every project, and it uses the full path to `atuin`, so the agent doesn't need it on its `PATH`. Running it again is safe, and updates the path if `atuin` has moved.
+Setup registers the server for your user, so it works in every project, and it uses the full path to `atuin`, so the agent doesn't need it on its `PATH`. Running it again is safe, and updates the path if `atuin` has moved.
+
+To disconnect your agents, run `atuin setup --only --no-mcp`, or clear them under Connected agents on the setup screen. Setup takes the server out of Hermes with `hermes config unset mcp_servers.atuin`. If `hermes` isn't on your `PATH`, or is too old to have `config unset`, setup tells you to remove `mcp_servers.atuin` from Hermes's `config.yaml` yourself.
+
+### Hermes Agent
+
+Setup adds the server to the `config.yaml` of the Hermes home that `hermes` uses. By default, that's `~/.hermes/config.yaml`, or the active profile's. A running Hermes gateway picks the server up within about a minute, with no restart. Check it with `hermes mcp list`. Hermes names the tools `mcp__atuin__atuin_history` and so on.
+
+Each profile has its own `config.yaml`. To add the server to another profile, run setup with `HERMES_HOME` set to the profile's directory:
+
+```shell
+HERMES_HOME=~/.hermes/profiles/work atuin setup --only --mcp --agents hermes
+```
+
+Hermes gives an MCP server only a few of its environment variables (`PATH`, `HOME`, `XDG_*` and some others), never `ATUIN_*` ones. To make up for that, setup copies the `ATUIN_*` settings in your shell that say where Atuin's config and data are into the server's `env`: those ending in `_HOME`, `_DIR` or `_PATH`, such as `ATUIN_HOME`, `ATUIN_CONFIG_DIR` or `ATUIN_DB_PATH`. It copies nothing else, so no secret reaches Hermes's config. Run `atuin setup --only --mcp` again after you change one. If your config's paths use other variables, such as `$HISTDIR`, add them to its `env` yourself, or it reads the default Atuin data:
+
+```shell
+hermes config set mcp_servers.atuin.env '{"ATUIN_CONFIG_DIR": "/path/to/config"}'
+```
 
 ## Setting it up by hand
 
@@ -35,96 +52,9 @@ The server runs over stdio: your agent starts it when it needs it, so there's no
 atuin mcp
 ```
 
+Setup registers this command with the coding agents listed in [Quick start](#quick-start). To connect one of them, name it with `--agents`. For example, `atuin setup --only --mcp --agents codex` connects Codex. Add the server to the editors and desktop apps below yourself.
+
 Editors and desktop apps often don't get your shell's `PATH`. If one can't find `atuin`, replace `atuin` below with the full path that `which atuin` prints.
-
-### Claude Code
-
-```shell
-claude mcp add --scope user atuin -- atuin mcp
-```
-
-Check it with `claude mcp list`, or `/mcp` inside Claude Code.
-
-### Codex
-
-```shell
-codex mcp add atuin -- atuin mcp
-```
-
-Or add it to `~/.codex/config.toml` yourself:
-
-```toml
-[mcp_servers.atuin]
-command = "atuin"
-args = ["mcp"]
-```
-
-### Grok Build
-
-```shell
-grok mcp add atuin -- atuin mcp
-```
-
-Or add it to `~/.grok/config.toml` yourself:
-
-```toml
-[mcp_servers.atuin]
-command = "atuin"
-args = ["mcp"]
-```
-
-### Kiro CLI
-
-```shell
-kiro-cli mcp add --name atuin --command atuin --args mcp --scope global
-```
-
-This adds it to `~/.kiro/settings/mcp.json` (under `$KIRO_HOME` if you have set it), which every session loads; `atuin mcp install kiro` writes the same file without going through `kiro-cli`. Check it with `kiro-cli mcp list`. Kiro doesn't run the server with your shell's `PATH`, so if it can't find `atuin`, use the full path from `which atuin`:
-
-```json
-{
-  "mcpServers": {
-    "atuin": {
-      "command": "/full/path/to/atuin",
-      "args": ["mcp"],
-      "env": {}
-    }
-  }
-}
-```
-
-### opencode
-
-Add it to `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "atuin": {
-      "type": "local",
-      "command": ["atuin", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
-
-Check it with `opencode mcp list`.
-
-!!! note "opencode 2"
-
-    Use the config above on opencode 2 as well. opencode 2.0's own `opencode mcp add` writes the server under `mcp.servers`, which opencode 2.0 doesn't load.
-
-### pi
-
-pi 1.0 and later:
-
-```shell
-pi mcp add atuin -- atuin mcp
-```
-
-This adds it to `~/.pi/agent/mcp.json`. Check it with `pi mcp list`.
 
 ### Cursor
 
@@ -234,9 +164,9 @@ Like `atuin_output`, this needs output capture set up and the daemon running.
 
 ### `atuin_threads_search`, `atuin_threads_list` and `atuin_threads_read`
 
-Search, list and read your [threads](./threads.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Kiro CLI, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
+Search, list and read your [threads](./threads.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro CLI, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
 
-These need thread capture turned on with `atuin config enable threads`.
+These need thread capture, which `atuin setup --only --threads --daemon` turns on.
 
 !!! note "Session scope"
 

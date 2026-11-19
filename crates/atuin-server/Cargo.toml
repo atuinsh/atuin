@@ -44,6 +44,7 @@ eyre = { workspace = true }
 fs-err = { workspace = true }
 i18n-embed = { workspace = true }
 ipnet = { workspace = true }
+jiff = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
@@ -54,7 +55,6 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
@@ -68,7 +68,7 @@ uuid = { workspace = true }
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = { path = "../atuin-client", version = "18.24.5", default-features = false, features = ["sync"] }
+atuin-client = { path = "../atuin-client", version = "18.24.8", default-features = false, features = ["sync"] }
 futures-util = { workspace = true }
 percent-encoding = { workspace = true }
 proptest = { workspace = true }

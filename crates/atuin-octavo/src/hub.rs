@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use atuin_client::history::{CommandCapture, History, HistoryId};
+use atuin_client::history::{CommandCapture, HistoryId};
+use atuin_client::lua_config::OrgSlug;
 use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
-use atuin_domain::record::RecordId;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use secrecy::{ExposeSecret, SecretString};
@@ -17,11 +17,11 @@ use url::Url;
 
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
-use crate::pb::{HistoryConversionError, NotUuidV7, OutputTooLarge};
+use crate::pb::{NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    #[error("the Octavo endpoint {address} is not a valid URI")]
+    #[error("the Atuin for Teams endpoint {address} is not a valid URI")]
     Endpoint {
         address: Url,
         #[source]
@@ -33,17 +33,15 @@ pub enum ConnectError {
 
 #[derive(Debug, Error)]
 pub enum HubCallError {
-    #[error(transparent)]
-    Convert(#[from] HistoryConversionError),
     #[error("history {0}")]
     Id(#[from] NotUuidV7<HistoryId>),
-    #[error("record {0}")]
-    RecordId(#[from] NotUuidV7<RecordId>),
     #[error(transparent)]
     OutputTooLarge(#[from] OutputTooLarge),
     #[error("the hub has not stored the history entry yet")]
     HistoryNotStored(#[source] tonic::Status),
-    #[error("Octavo needs a hub login; run `atuin login`")]
+    #[error("the hub has not stored the thread yet")]
+    ThreadNotStored(#[source] tonic::Status),
+    #[error("Atuin for Teams needs a hub login; run `atuin login`")]
     NotLoggedIn,
     #[error("the hub login was saved without its user, which the next upload pass learns")]
     UnknownUser,
@@ -51,15 +49,15 @@ pub enum HubCallError {
     Meta(eyre::Report),
     #[error(transparent)]
     Connect(#[from] ConnectError),
-    #[error("Octavo runs only on Atuin's hosted hub, not {0}")]
+    #[error("Atuin for Teams runs only on Atuin's hosted hub, not {0}")]
     SelfHostedHub(Url),
-    #[error("the hub changed to {0} after Octavo connected; restart atuin")]
+    #[error("the hub changed to {0} after Atuin for Teams connected; restart atuin")]
     HubChanged(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
     NoUserId,
-    #[error("Octavo is not enabled for this account")]
+    #[error("Atuin for Teams is not enabled for this account")]
     OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
     Hub(#[source] Status),
@@ -86,7 +84,7 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Convert(_) | Self::Id(_) | Self::RecordId(_) | Self::OutputTooLarge(_) => true,
+            Self::Id(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser
@@ -96,6 +94,7 @@ impl HubCallError {
             | Self::HubChanged(_)
             | Self::InvalidToken(_)
             | Self::HistoryNotStored(_)
+            | Self::ThreadNotStored(_)
             | Self::NoUserId
             // Until the account has Octavo again.
             | Self::OctavoOff(_) => false,
@@ -104,20 +103,18 @@ impl HubCallError {
 }
 
 /// A hub user's id, as `WhoAmI` names it. Opaque.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserId(String);
 
 impl UserId {
     #[must_use]
+    pub fn new(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-#[cfg(test)]
-impl UserId {
-    pub(crate) fn new(id: &str) -> Self {
-        Self(id.to_owned())
     }
 }
 
@@ -128,7 +125,7 @@ enum Target {
     Official,
     /// A self-hosted hub, which Octavo refuses: there is nowhere to upload to.
     SelfHosted,
-    /// The `octavo.__debug__.address` of a self-hosted hub.
+    /// The `teams.__debug__.address` of a self-hosted hub.
     Debug(Url),
 }
 
@@ -137,7 +134,7 @@ impl Target {
         if settings.hub_endpoint() == *DEFAULT_HUB_URL {
             return Self::Official;
         }
-        match &settings.octavo.debug.address {
+        match &settings.teams.debug.address {
             Some(address) => Self::Debug(address.clone()),
             None => Self::SelfHosted,
         }
@@ -166,15 +163,17 @@ pub struct HubClient {
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
         let target = Target::of(settings);
-        if settings.octavo.debug.address.is_some() && matches!(target, Target::Official) {
+        if settings.teams.debug.address.is_some() && matches!(target, Target::Official) {
             warn!(
-                "octavo.__debug__.address is honored only while sync_address is a self-hosted hub \
+                "teams.__debug__.address is honored only while sync_address is a self-hosted hub \
                  (sync_protocol = \"hub\"); uploading to Atuin's hub"
             );
         }
         let channel = connect(target.address(), settings.network_connect_timeout)?;
         Ok(Self {
-            service: HubServiceClient::new(channel),
+            // Uploads are mostly text: gzip shrinks them several times over a slow uplink.
+            service: HubServiceClient::new(channel)
+                .send_compressed(tonic::codec::CompressionEncoding::Gzip),
             hub: settings.hub_endpoint(),
             target,
         })
@@ -292,22 +291,11 @@ impl HubLogin {
         &self.user_id
     }
 
-    pub async fn upload(
-        &self,
-        history: History,
-        record_id: Option<RecordId>,
-    ) -> Result<(), HubCallError> {
-        let mut history = pb::History::try_from(history)?;
-        history.record_id = record_id.map(pb::UuidV7::try_from).transpose()?;
-        let request = self.caller.request(pb::InsertHistoryRequest {
-            history: Some(history),
-        });
+    pub async fn upload_history(&self, batch: pb::HistoryBatch) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::InsertHistoryRequest::from(batch));
 
-        match self.caller.service.clone().insert_history(request).await {
-            Ok(_) => Ok(()),
-            Err(status) if status.code() == Code::AlreadyExists => Ok(()),
-            Err(status) => Err(status.into()),
-        }
+        self.caller.service.clone().insert_history(request).await.map_err(HubCallError::from)?;
+        Ok(())
     }
 
     /// Stores `capture` as the output of the entry with `id`.
@@ -354,6 +342,68 @@ impl HubLogin {
             .await
             .map_err(HubCallError::from)?;
         Ok(())
+    }
+
+    /// Opens `thread` to `orgs`, returning the slugs of those the user belongs to none with, which
+    /// it leaves out.
+    ///
+    /// Fails with [`HubCallError::ThreadNotStored`] until the thread is stored.
+    pub(crate) async fn share_thread_with_orgs(
+        &self,
+        thread: &pb::HarnessSession,
+        orgs: &[OrgSlug],
+    ) -> Result<Vec<String>, HubCallError> {
+        let request = self.caller.request(pb::ShareThreadWithOrgsRequest {
+            thread: Some(thread.clone()),
+            org_slugs: orgs.iter().map(ToString::to_string).collect(),
+        });
+
+        match self.caller.service.clone().share_thread_with_orgs(request).await {
+            Ok(response) => Ok(response.into_inner().skipped_org_slugs),
+            Err(status) if status.code() == Code::NotFound => {
+                Err(HubCallError::ThreadNotStored(status))
+            }
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    /// Closes `thread` to those of `orgs` [`Self::share_thread_with_orgs`] opened it to, which it
+    /// never opens it to again.
+    ///
+    /// Fails with [`HubCallError::ThreadNotStored`] until the thread is stored.
+    pub(crate) async fn close_thread_to_orgs(
+        &self,
+        thread: &pb::HarnessSession,
+        orgs: &[OrgSlug],
+    ) -> Result<(), HubCallError> {
+        let request = self.caller.request(pb::CloseThreadToOrgsRequest {
+            thread: Some(thread.clone()),
+            org_slugs: orgs.iter().map(ToString::to_string).collect(),
+        });
+
+        match self.caller.service.clone().close_thread_to_orgs(request).await {
+            Ok(_response) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => {
+                Err(HubCallError::ThreadNotStored(status))
+            }
+            Err(status) => Err(status.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl HubLogin {
+    /// A login as `user` to a hub nobody answers at, for a test that never calls it.
+    pub(crate) fn offline(user: &str) -> Self {
+        let channel = Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        Self {
+            caller: Caller {
+                service: HubServiceClient::new(channel),
+                authorization: MetadataValue::from_static("Bearer offline"),
+                timeout: Duration::from_secs(1),
+            },
+            user_id: UserId::new(user),
+        }
     }
 }
 
@@ -415,7 +465,7 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
 #[cfg(test)]
 mod tests {
     use atuin_client::settings::{
-        DEFAULT_SYNC_URL, DbLocation, Octavo, OctavoDebug, Settings, SyncProtocol,
+        DEFAULT_SYNC_URL, DbLocation, Settings, SyncProtocol, Teams, TeamsDebug,
     };
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
@@ -433,11 +483,12 @@ mod tests {
             sync_address: Url::parse(sync_address).unwrap(),
             sync_protocol: SyncProtocol::Hub,
             data_dir: AbsPathBuf::new(&dir).unwrap(),
-            octavo: Octavo {
-                debug: OctavoDebug {
+            teams: Teams {
+                debug: TeamsDebug {
                     address: debug_address.map(|url| Url::parse(url).unwrap()),
+                    mcp_address: None,
                 },
-                ..Octavo::default()
+                ..Teams::default()
             },
             ..Settings::default()
         };

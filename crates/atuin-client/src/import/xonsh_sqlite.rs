@@ -3,15 +3,16 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::path::PathBufExt as _;
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::{CastFloat, Conv};
 use eyre::{Result, eyre};
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{FromRow, Row};
-use time::OffsetDateTime;
 use uuid::Uuid;
-use uuid::timestamp::Timestamp;
+use uuid::timestamp::Timestamp as UuidTimestamp;
 use uuid::timestamp::context::NoContext;
 
 use super::{Importer, Loader, get_histfile_path};
@@ -30,11 +31,7 @@ struct HistDbEntry {
 
 impl HistDbEntry {
     fn into_hist_with_cmd_origin(self, cmd_origin: CmdOrigin) -> History {
-        let timestamp = (self.tsb * 1_000_000_000_f64)
-            .try_cast_trunc()
-            .ok()
-            .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let timestamp = Timestamp::from_unix_secs_f64(self.tsb).unwrap_or(Timestamp::UNIX_EPOCH);
 
         #[expect(
             clippy::cast_possible_truncation,
@@ -45,7 +42,7 @@ impl HistDbEntry {
             self.session_start.trunc() as u64,
             (self.session_start.fract() * 1_000_000_000_f64) as u32,
         );
-        let session_ts = Timestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
+        let session_ts = UuidTimestamp::from_unix(NoContext, session_ts_seconds, session_ts_nanos);
         let session_id = Uuid::new_v7(session_ts).to_string();
         let duration = ((self.tse - self.tsb) * 1_000_000_000_f64)
             .try_cast_trunc()
@@ -137,7 +134,6 @@ impl Importer for XonshSqlite {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
@@ -161,7 +157,7 @@ mod tests {
         };
 
         let hist = entry.into_hist_with_cmd_origin(CmdOrigin::try_from("box:user").unwrap());
-        assert_eq!(hist.timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(hist.timestamp, Timestamp::UNIX_EPOCH);
         assert_eq!(hist.command, "echo hello");
     }
 
@@ -189,7 +185,7 @@ mod tests {
     fn expected_hist_entries() -> [History; 4] {
         [
             History::import()
-                .timestamp(datetime!(2024-02-6 17:56:21.130956288 +00:00:00))
+                .timestamp("2024-02-06T17:56:21.130956173+00:00:00".parse::<Timestamp>().unwrap())
                 .command("echo hello world!".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -198,7 +194,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:28.190406144 +00:00:00))
+                .timestamp("2024-02-06T17:56:28.190406084+00:00:00".parse::<Timestamp>().unwrap())
                 .command("ls -l".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -207,7 +203,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:46.989020928 +00:00:00))
+                .timestamp("2024-02-06T17:56:46.989020824+00:00:00".parse::<Timestamp>().unwrap())
                 .command("false".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(1)
@@ -216,7 +212,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:56:48.218384128 +00:00:00))
+                .timestamp("2024-02-06T17:56:48.218384027+00:00:00".parse::<Timestamp>().unwrap())
                 .command("exit".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)

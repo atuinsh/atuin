@@ -1,8 +1,8 @@
 use atuin_client::ai_session::Message;
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_domain::record::HostId;
+use jiff::SignedDuration;
 use rstest::rstest;
-use time::Duration;
 
 use super::*;
 use crate::resume_tui::fake::{
@@ -308,7 +308,7 @@ fn head(id: &str, host: u128, minutes_ago: i64, messages: u64) -> Head {
     Head {
         source_id: id.to_owned().into(),
         host: Some(HostId(uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0000 | host))),
-        last_at: fake::now() - Duration::minutes(minutes_ago),
+        last_at: fake::now() - SignedDuration::from_mins(minutes_ago),
         messages,
     }
 }

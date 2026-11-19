@@ -13,13 +13,13 @@ use atuin_domain::record::{
 };
 use easy_cast::Conv;
 use eyre::{Result, bail, eyre};
-use futures::{Stream, StreamExt, TryStreamExt, future, stream};
+use futures::{Stream, StreamExt, future, stream};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use tracing::instrument;
 use tracing_futures::Instrument;
 
 use super::{History, HistoryId, Version};
-use crate::database::{Sqlite, query_context};
+use crate::database::{DeletedLiveRows, Sqlite, query_context};
 use crate::record::sqlite_store::SqliteStore;
 use crate::settings::Settings;
 
@@ -175,6 +175,71 @@ async fn encrypt_records(
 /// record; overlapping the reads keeps the record store's pool busy without unbounded fan-out.
 /// Kept under the store's connection pool size so decodes don't starve other readers.
 const DECODE_CONCURRENCY: usize = 4;
+
+/// A chunk of records to apply to the history database. [`HistoryStore::incremental_build`] yields
+/// these chunks.
+///
+/// The database sees nothing until the chunk is committed.
+#[must_use = "a chunk does nothing until it's committed"]
+pub enum BuildChunk<'a> {
+    /// History entries to save.
+    Create(CreateChunk<'a>),
+    /// History entries to delete.
+    Delete(DeleteChunk<'a>),
+}
+
+/// History entries to save to the history database. See [`BuildChunk`].
+pub struct CreateChunk<'a> {
+    database: &'a Sqlite,
+    histories: Vec<History>,
+}
+
+impl CreateChunk<'_> {
+    /// The entries to save.
+    #[must_use]
+    pub fn histories(&self) -> &[History] {
+        &self.histories
+    }
+
+    /// Drop the entries whose ids already have a row in the history database. That includes
+    /// tombstones from older versions.
+    ///
+    /// Committing such an entry does nothing, because the save skips ids that already have a row.
+    /// Call this before the entries are registered with the search index. Otherwise the index
+    /// would add an entry that the database doesn't hold as a new live row.
+    pub async fn skip_existing(&mut self) -> Result<()> {
+        // A named function instead of a closure keeps the future `Send` for every lifetime.
+        fn id(history: &History) -> HistoryId {
+            history.id
+        }
+        let existing = self.database.existing_ids(self.histories.iter().map(id)).await?;
+        if !existing.is_empty() {
+            self.histories.retain(|h| !existing.contains(&h.id));
+        }
+        Ok(())
+    }
+
+    /// Save the entries to the history database in one transaction.
+    pub async fn commit(&self) -> Result<()> {
+        Ok(self.database.save_bulk(&self.histories).await?)
+    }
+}
+
+/// History entries to delete from the history database. See [`BuildChunk`].
+pub struct DeleteChunk<'a> {
+    database: &'a Sqlite,
+    ids: Vec<HistoryId>,
+}
+
+impl DeleteChunk<'_> {
+    /// Delete the entries from the history database in one transaction.
+    ///
+    /// Returns the live entries that were deleted. A missing row is not a live entry, and neither
+    /// is a tombstone from an older version.
+    pub async fn commit(&self) -> Result<DeletedLiveRows> {
+        Ok(self.database.delete_rows(self.ids.iter().copied()).await?)
+    }
+}
 
 impl HistoryStore {
     #[must_use]
@@ -385,12 +450,17 @@ impl HistoryStore {
         Ok(())
     }
 
-    /// Apply records to the history database, yielding each batch of created `History`.
+    /// Decode records into chunks to apply to the history database. The chunks come in record
+    /// order.
+    ///
+    /// Nothing is written until a chunk is [committed](BuildChunk). Commit each chunk before you
+    /// pull the next one. That way the database sees the chunks in record order. Records that can't
+    /// be decoded are skipped. [`Self::build_all`] commits each chunk as it goes.
     pub fn incremental_build<'a>(
         &'a self,
         database: &'a Sqlite,
         ids: &'a [RecordId],
-    ) -> impl Stream<Item = Result<Vec<History>>> + 'a {
+    ) -> impl Stream<Item = BuildChunk<'a>> + 'a {
         // Group the concurrent per-record decodes under one span so the whole
         // decode fan-out shows as a single unit (each `decode` nests under it).
         let records = stream::iter(ids)
@@ -402,34 +472,31 @@ impl HistoryStore {
 
         // Group adjacent records of the same kind so each kind lands in its own bulk transaction,
         // while the database still sees them in record order.
-        chunk_by_bounded(records, BUILD_BATCH_SIZE, |record| HistoryRecordKind::from(record)).then(
-            move |(kind, chunk)| async move {
+        chunk_by_bounded(records, BUILD_BATCH_SIZE, |record| HistoryRecordKind::from(record)).map(
+            move |(kind, chunk)| {
                 // TODO(ATU-594): unwrapping the chunk into a typed `Vec` reallocates what
                 // `chunk_by_bounded` already collected.
                 match kind {
-                    HistoryRecordKind::Create => {
-                        let creates: Vec<_> = chunk
+                    HistoryRecordKind::Create => BuildChunk::Create(CreateChunk {
+                        database,
+                        histories: chunk
                             .into_iter()
                             .map(|record| match record {
                                 HistoryRecord::Create(h) => h,
                                 HistoryRecord::Delete(_) => unreachable!(),
                             })
-                            .collect();
-
-                        database.save_bulk(&creates).await?;
-
-                        Ok(creates)
-                    }
-                    HistoryRecordKind::Delete => {
-                        let deletes = chunk.into_iter().map(|record| match record {
-                            HistoryRecord::Delete(id) => id,
-                            HistoryRecord::Create(_) => unreachable!(),
-                        });
-
-                        database.delete_rows(deletes).await?;
-
-                        Ok(Vec::new())
-                    }
+                            .collect(),
+                    }),
+                    HistoryRecordKind::Delete => BuildChunk::Delete(DeleteChunk {
+                        database,
+                        ids: chunk
+                            .into_iter()
+                            .map(|record| match record {
+                                HistoryRecord::Delete(id) => id,
+                                HistoryRecord::Create(_) => unreachable!(),
+                            })
+                            .collect(),
+                    }),
                 }
             },
         )
@@ -465,13 +532,23 @@ impl HistoryStore {
         }
     }
 
-    /// Apply records to the history database, discarding the created `History` entries.
+    /// Apply records to the history database. Each chunk of [`Self::incremental_build`] is
+    /// committed as it goes.
     ///
-    /// Use this when you want the database writes but not the values. Callers that need
-    /// the created entries should use [`HistoryStore::incremental_build`] directly.
+    /// Some callers need the created entries. For example, the daemon indexes them. Those callers
+    /// should commit the chunks themselves.
     #[instrument(level = "trace", skip_all, fields(host = ?self.host_id, n_ids = ids.len()), err)]
     pub async fn build_all(&self, database: &Sqlite, ids: &[RecordId]) -> Result<()> {
-        self.incremental_build(database, ids).try_for_each(|_| future::ready(Ok(()))).await
+        let mut chunks = std::pin::pin!(self.incremental_build(database, ids));
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                BuildChunk::Create(chunk) => chunk.commit().await?,
+                BuildChunk::Delete(chunk) => {
+                    chunk.commit().await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get a list of history IDs that exist in the store
@@ -548,15 +625,14 @@ mod tests {
         CmdOrigin, DecryptedData, Host, HostId, Record, RecordSeriesKey, RecordTag, RecordVersion,
     };
     use easy_cast::Conv;
-    use futures::TryStreamExt;
+    use futures::StreamExt;
+    use jiff::SignedDuration;
     use rstest::*;
-    use time::Duration;
-    use time::macros::datetime;
 
     use super::{BUILD_BATCH_SIZE, History};
     use crate::database::{Context, Sqlite};
     use crate::history::Version;
-    use crate::history::store::{HistoryRecord, HistoryStore};
+    use crate::history::store::{BuildChunk, HistoryRecord, HistoryStore};
     use crate::record::sqlite_store::SqliteStore;
     use crate::settings::test_local_timeout;
 
@@ -565,7 +641,7 @@ mod tests {
     fn sample_history() -> History {
         History {
             id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap(),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
@@ -613,7 +689,7 @@ mod tests {
     #[case::create(
         HistoryRecord::Create(History {
             id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap(),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
@@ -693,11 +769,35 @@ mod tests {
 
         let db = memory_db().await;
 
-        let created: Vec<History> =
-            history_store.incremental_build(&db, &[record_id]).try_concat().await.unwrap();
+        let created = apply(&history_store, &db, &[record_id]).await.unwrap().concat();
 
         assert_eq!(created.len(), 1);
         assert_eq!(created[0], history);
+    }
+
+    /// Apply records to `db` chunk by chunk, the way the sync worker does.
+    ///
+    /// Returns the entries that each chunk saved. A delete chunk saves no entries.
+    async fn apply(
+        history_store: &HistoryStore,
+        db: &Sqlite,
+        ids: &[atuin_domain::record::RecordId],
+    ) -> eyre::Result<Vec<Vec<History>>> {
+        let mut created = Vec::new();
+        let mut chunks = std::pin::pin!(history_store.incremental_build(db, ids));
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                BuildChunk::Create(chunk) => {
+                    chunk.commit().await?;
+                    created.push(chunk.histories().to_vec());
+                }
+                BuildChunk::Delete(chunk) => {
+                    chunk.commit().await?;
+                    created.push(Vec::new());
+                }
+            }
+        }
+        Ok(created)
     }
 
     async fn memory_db() -> Sqlite {
@@ -707,8 +807,8 @@ mod tests {
     fn history_n(n: usize) -> History {
         History {
             id: format!("{n:032x}").parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00)
-                + Duration::seconds(i64::conv(n)),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap()
+                + SignedDuration::from_secs(i64::conv(n)),
             command: format!("command {n}"),
             ..sample_history()
         }
@@ -721,7 +821,7 @@ mod tests {
             cwd: "/".to_owned(),
             cmd_origin: CmdOrigin::try_from("test:test").unwrap(),
             host_id: "test".to_owned(),
-            git_root: None,
+            vcs_root: None,
         }
     }
 
@@ -731,14 +831,7 @@ mod tests {
         db: &Sqlite,
         ids: &[atuin_domain::record::RecordId],
     ) -> Vec<usize> {
-        history_store
-            .incremental_build(db, ids)
-            .try_collect::<Vec<Vec<History>>>()
-            .await
-            .unwrap()
-            .iter()
-            .map(Vec::len)
-            .collect()
+        apply(history_store, db, ids).await.unwrap().iter().map(Vec::len).collect()
     }
 
     #[rstest]
@@ -789,6 +882,42 @@ mod tests {
         ]);
     }
 
+    /// `incremental_build` yields creates and deletes in record order. It writes nothing until a
+    /// chunk is committed.
+    #[rstest]
+    #[tokio::test]
+    async fn incremental_build_commits_only_when_asked(
+        #[future(awt)]
+        #[from(stores)]
+        parts: (SqliteStore, HostId, HistoryStore),
+    ) {
+        let (_store, _host_id, history_store) = parts;
+        let db = memory_db().await;
+
+        let first = history_n(1);
+        let (create_first, _) = history_store.push(first.clone()).await.unwrap();
+        let (delete_first, _) = history_store.delete(first.id).await.unwrap();
+        let (create_second, _) = history_store.push(history_n(2)).await.unwrap();
+        let ids = [create_first, delete_first, create_second];
+
+        let chunks: Vec<_> = history_store.incremental_build(&db, &ids).collect().await;
+        let [BuildChunk::Create(create), BuildChunk::Delete(delete), BuildChunk::Create(_)] =
+            chunks.as_slice()
+        else {
+            panic!("chunks out of order");
+        };
+        assert_eq!(create.histories(), std::slice::from_ref(&first));
+        assert_eq!(delete.ids, [first.id]);
+        let stored = db.list([], &context(), None, false, true, None).await.unwrap();
+        assert!(stored.is_empty(), "nothing is written before a commit");
+
+        create.commit().await.unwrap();
+        assert_eq!(db.list([], &context(), None, false, true, None).await.unwrap().len(), 1);
+        assert_eq!(delete.commit().await.unwrap().len(), 1, "it deleted a live row");
+        assert!(db.list([], &context(), None, false, true, None).await.unwrap().is_empty());
+        assert!(delete.commit().await.unwrap().is_empty(), "the row is already gone");
+    }
+
     #[rstest]
     #[tokio::test]
     async fn creates_are_split_into_bounded_batches(
@@ -836,11 +965,8 @@ mod tests {
 
         let missing = atuin_domain::record::RecordId(atuin_common::utils::uuid_v7());
 
-        let created: Vec<History> = history_store
-            .incremental_build(&db, &[missing, good, corrupt_id])
-            .try_concat()
-            .await
-            .unwrap();
+        let created =
+            apply(&history_store, &db, &[missing, good, corrupt_id]).await.unwrap().concat();
 
         assert_eq!(created, vec![history]);
     }

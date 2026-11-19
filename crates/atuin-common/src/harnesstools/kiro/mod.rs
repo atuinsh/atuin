@@ -7,7 +7,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError};
 use crate::dirs::home_dir;
@@ -42,13 +42,33 @@ impl Harness for Kiro {
         "kiro"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Kiro"
+    }
+
+    fn program(&self) -> &'static str {
+        "kiro-cli"
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["KIRO_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["kiro-cli"]
     }
 
     /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        hooks::install(&kiro_home(), &std::env::current_exe()?).await
+        hooks::install(&kiro_home(), crate::atuin_exe::launch_path().await?).await
+    }
+
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        super::own_file_exists(&hooks::path(&kiro_home())).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        super::remove_own_file(&hooks::path(&kiro_home())).await
     }
 
     /// `kiro-cli chat --resume-id <id>`. Kiro finds the session in whichever bucket holds it,
@@ -62,7 +82,7 @@ impl Harness for Kiro {
             ));
         }
         let args = ["chat".to_owned(), "--resume-id".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::None, "kiro-cli", args))
+        Ok(resume::plan(target, CwdRequirement::None, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -70,8 +90,8 @@ impl Harness for Kiro {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

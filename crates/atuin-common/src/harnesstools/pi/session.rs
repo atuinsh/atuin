@@ -22,9 +22,8 @@ use std::path::{Path, PathBuf};
 
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
+use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -140,6 +139,20 @@ fn settings_session_dir(agent_dir: &Path) -> Option<PathBuf> {
 
 impl Sessions for PiSessions {
     type Listener = PiListener;
+
+    /// When pi and omp share the root, only this flavour's session files count. Otherwise, use of
+    /// the other agent would make this one look recently used.
+    fn last_active(&self) -> Option<std::time::SystemTime> {
+        let root = self.resolve_root();
+        let Some(flavour) = self.only(&root) else {
+            return crate::fs::newest_modified(root);
+        };
+        crate::fs::newest_modified_where(root, |entry| {
+            let path = entry.path();
+            let is_omp = || belongs_to_omp(&path).unwrap_or(false);
+            PiListener::is_session_file(&path) && is_omp() == (flavour == Flavour::Omp)
+        })
+    }
 
     fn listener(&self) -> Result<PiListener, RuntimeError> {
         let root = self.resolve_root();
@@ -371,7 +384,7 @@ fn read_header(path: &Path) -> io::Result<Header> {
 }
 
 /// [`read_header`], taking a session of the other flavour for no session when `only` says whose
-/// files to take: omp's start with their title slot, pi's never do.
+/// files to take. [`belongs_to_omp`] says whose a file is.
 fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     let header = read_header(path)?;
     let Some(flavour) = only else {
@@ -380,16 +393,31 @@ fn header_for(path: &Path, only: Option<Flavour>) -> io::Result<Header> {
     if !matches!(header, Header::Session { .. }) {
         return Ok(header);
     }
-    Ok(if starts_with_title_slot(path)? == (flavour == Flavour::Omp) {
+    Ok(if belongs_to_omp(path)? == (flavour == Flavour::Omp) {
         header
     } else {
         Header::Other
     })
 }
 
-/// Whether the file is omp's: omp's sessions start with their title slot, pi's never do.
-pub(crate) fn is_omp_file(path: &Path) -> bool {
+/// Whether the file is one of omp's own sessions. omp's sessions start with their title slot, and
+/// pi's never do. Returns `false` when the file can't be read.
+///
+/// The transcripts of omp's subagents and advisors have no title slot, so this returns `false` for
+/// them. By contrast, [`belongs_to_omp`] counts them as omp's.
+pub(crate) fn is_omp_session_file(path: &Path) -> bool {
     starts_with_title_slot(path).unwrap_or(false)
+}
+
+/// Whether the file belongs to omp, as a session or as a transcript that one of its sessions
+/// started.
+///
+/// omp's sessions start with their title slot, and pi's never do. However, only top-level omp
+/// sessions start with the title slot, so for subagent transcripts, we check the parent session to
+/// determine whether the subagent transcript belongs to omp.
+fn belongs_to_omp(path: &Path) -> io::Result<bool> {
+    let owner = path.parent().map(owner_file).filter(|owner| owner.is_file());
+    starts_with_title_slot(owner.as_deref().unwrap_or(path))
 }
 
 fn starts_with_title_slot(path: &Path) -> io::Result<bool> {
@@ -618,6 +646,15 @@ struct PiEntry {
     usage: Option<serde_json::Value>,
     /// On `custom_message`: what an extension injected into the model's context.
     content: Option<serde_json::Value>,
+    /// This is set on a `custom_message` whose `customType` is omp's `irc:incoming`. Such an
+    /// entry is a message that another agent sent this one.
+    #[serde(rename = "customType", default, deserialize_with = "is_agent_message")]
+    agent_message: bool,
+}
+
+/// This returns whether a `customType` is `irc:incoming`. Any other value, string or not, is not.
+fn is_agent_message<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(deserializer)? == "irc:incoming")
 }
 
 /// Entry types whose top-level `usage` records a model call of their own.
@@ -713,6 +750,9 @@ impl Message for PiMessage {
             // Summaries pi feeds back to the model as context (session-manager.ts
             // `sessionEntryToContextMessages`); neither the user nor the model said them.
             "compaction" | "branch_summary" => return Role::System,
+            // Since omp 18.18.9, a message from another agent reaches the agent as a user turn.
+            // It is the only copy of the message in this session.
+            "custom_message" if self.entry.agent_message => return Role::User,
             "custom_message" => "custom",
             other => other,
         };
@@ -733,8 +773,8 @@ impl Message for PiMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.entry.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.entry.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok())
     }
 
     fn content(&self) -> Vec<Content> {
@@ -1424,8 +1464,8 @@ mod tests {
         assert_eq!(got.len(), 2);
     }
 
-    /// pi and omp sharing a session directory each take only their own sessions there: omp's
-    /// start with a title slot.
+    /// pi and omp sharing a session directory each take only their own sessions there. omp's
+    /// sessions start with a title slot, and omp's subagent transcripts belong to omp too.
     #[rstest]
     #[tokio::test]
     async fn a_shared_session_dir_is_split_by_flavour(
@@ -1439,15 +1479,52 @@ mod tests {
         std::fs::write(dir.path().join("1_p.jsonl"), header("p")).unwrap();
         let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
         std::fs::write(dir.path().join("2_o.jsonl"), slot + &header("o")).unwrap();
+        // An omp subagent's transcript has no title slot. It is omp's because its parent is.
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        std::fs::write(dir.path().join("2_o").joined("0-Scout.jsonl"), header("c")).unwrap();
 
         let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
-        let ids: Vec<String> =
+        let mut ids: Vec<String> =
             sessions.existing().unwrap().map(|s| s.unwrap().id().into()).collect().await;
-        let want = match flavour {
-            Flavour::Pi => "p",
-            Flavour::Omp => "o",
+        ids.sort();
+        let want: &[&str] = match flavour {
+            Flavour::Pi => &["p"],
+            Flavour::Omp => &["c", "o"],
         };
-        assert_eq!(ids, vec![want.to_owned()]);
+        assert_eq!(ids, want);
+    }
+
+    /// When pi and omp share a session directory, each one's last use counts only its own
+    /// sessions. Daily use of omp doesn't make an uninstalled pi look recently used. That includes
+    /// omp's subagent transcripts, which have no title slot of their own.
+    #[rstest]
+    fn a_shared_session_dir_splits_last_active_by_flavour(
+        #[values(Flavour::Pi, Flavour::Omp)] flavour: Flavour,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let env = crate::env::mock::MockEnv::install();
+        env.set("HOME", dir.path());
+        env.set("PI_CODING_AGENT_SESSION_DIR", dir.path());
+        let header = |id: &str| serde_json::json!({"type": "session", "id": id}).to_string() + "\n";
+        let slot = r#"{"type":"title","v":1,"title":""}"#.to_owned() + "\n";
+        let (pi, omp) = (dir.path().join("1_p.jsonl"), dir.path().join("2_o.jsonl"));
+        std::fs::write(&pi, header("p")).unwrap();
+        std::fs::write(&omp, slot + &header("o")).unwrap();
+        std::fs::create_dir(dir.path().join("2_o")).unwrap();
+        let child = dir.path().join("2_o").joined("0-Scout.jsonl");
+        std::fs::write(&child, header("c")).unwrap();
+        let at = |secs| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let (pi_at, omp_at, child_at) = (at(1_000), at(2_000), at(3_000));
+        File::options().write(true).open(&pi).unwrap().set_modified(pi_at).unwrap();
+        File::options().write(true).open(&omp).unwrap().set_modified(omp_at).unwrap();
+        File::options().write(true).open(&child).unwrap().set_modified(child_at).unwrap();
+
+        let sessions = PiSessions::builder().flavour(flavour).pool(pool()).build();
+        let want = match flavour {
+            Flavour::Pi => pi_at,
+            Flavour::Omp => child_at,
+        };
+        assert_eq!(sessions.last_active(), Some(want));
     }
 
     #[rstest]
@@ -1720,6 +1797,19 @@ mod tests {
         assert_eq!(m.role(), Role::Other("custom".to_owned()));
         assert_eq!(m.id(), Some(MessageId::from("x1".to_owned())));
         assert_eq!(m.usage(), None);
+    }
+
+    /// omp (18.18.9+) records a message from another agent as an `irc:incoming` entry, which it
+    /// sends to the model as a user turn.
+    #[rstest]
+    fn an_agent_message_is_a_user_turn() {
+        let m = pi(&serde_json::json!({"type": "custom_message", "customType": "irc:incoming",
+            "content": "<irc>\nIncoming IRC message from agent `subagent`:\n\nPING\n</irc>",
+            "display": true, "details": {"id": "15cb", "from": "subagent", "message": "PING"},
+            "attribution": "agent", "id": "x1", "parentId": "a1",
+            "timestamp": "2026-11-12T16:06:52.839Z"}));
+        assert_eq!(m.role(), Role::User);
+        assert!(texts(&m)[0].contains("PING"));
     }
 
     /// A tool result's `usage` is "not part of main LLM context accounting" (pi-ai types.ts

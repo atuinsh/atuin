@@ -18,18 +18,19 @@ use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::pushed::PushedMessage;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::time::{DurationExt as _, TimestampExt as _};
 use atuin_common::userio;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{
     ImportSessionsEvent, import_sessions_event, tail_sessions_event,
 };
-use chrono::{DateTime, Utc};
-use chrono_humanize::HumanTime;
+use atuin_daemon::session_capture::Origin;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, eyre};
 use futures::{Stream, StreamExt, TryStreamExt};
+use jiff::Timestamp;
+use jiff::tz::{Offset, TimeZone};
 use serde::Serialize;
-use time::OffsetDateTime;
 
 /// How a subcommand's output is rendered.
 #[derive(Args, Debug)]
@@ -116,7 +117,9 @@ pub enum Cmd {
     /// Pick a captured thread and resume it.
     Resume(super::resume::Cmd),
 
-    /// Turn thread capture on (short for `atuin config enable threads`).
+    /// What `atuin threads enable` did before `atuin setup` did it, kept so that the scripts still
+    /// running it say what to run instead.
+    #[command(hide = true)]
     Enable,
 }
 
@@ -139,6 +142,9 @@ pub enum HarnessArg {
     #[value(alias = "grok-build")]
     #[serde(alias = "grok-build")]
     Grok,
+    #[value(alias = "hermes-agent")]
+    #[serde(alias = "hermes-agent")]
+    Hermes,
     #[value(alias = "kiro-cli")]
     #[serde(alias = "kiro-cli")]
     Kiro,
@@ -155,6 +161,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::Codex => Self::Codex,
             HarnessArg::Copilot => Self::Copilot,
             HarnessArg::Grok => Self::Grok,
+            HarnessArg::Hermes => Self::Hermes,
             HarnessArg::Kiro => Self::Kiro,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
@@ -194,15 +201,21 @@ impl Style {
 pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     let style = match cmd {
         Cmd::Resume(cmd) => return super::resume::run(cmd, settings).await,
-        // The atuin binary runs it as `atuin config enable threads`, which needs the daemon.
-        Cmd::Enable => return Err(eyre!("threads need the daemon, which this build leaves out")),
+        Cmd::Enable => {
+            return Err(eyre!(
+                "`atuin threads enable` is now part of `atuin setup`: run `atuin setup --only \
+                 --threads --daemon`"
+            ));
+        }
         Cmd::List { ref output }
         | Cmd::Show { ref output, .. }
         | Cmd::Search { ref output, .. }
         | Cmd::Tail { ref output }
         | Cmd::Import { ref output, .. } => output.style.resolve(),
         Cmd::Push { .. } if !settings.threads.capture => {
-            return Err(eyre!("thread capture is off; `atuin config enable threads` turns it on"));
+            return Err(eyre!(
+                "thread capture is off; `atuin setup --only --threads --daemon` turns it on"
+            ));
         }
         Cmd::Push { .. } => Style::Plain,
     };
@@ -603,7 +616,7 @@ fn import_amp(client: &mut AiClient) -> impl Stream<Item = Result<ImportSessions
                     harness: HarnessKind::Amp,
                     session: id.clone().into(),
                 };
-                client.push_messages(handle, batches(lines)).await
+                client.push_messages(handle, batches(lines), Origin::Import).await
             }
             .await;
             let reply = match pushed {
@@ -874,8 +887,9 @@ fn write_message_text(out: &mut dyn Write, m: &Message) -> io::Result<()> {
     for block in &m.content {
         match block {
             Content::Text(t) => writeln!(out, "{}", sanitize(t))?,
-            // Capture never stores reasoning text or raw blocks.
-            Content::Reasoning(_) | Content::Other(_) => {}
+            // Capture never stores reasoning text or raw blocks. A block of a kind that this build
+            // doesn't know has nothing to show.
+            Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 writeln!(out, "[thinking] {}", reasoning_label(tokens))?;
@@ -986,8 +1000,9 @@ fn message_summary(m: &Message) -> Option<Summary> {
                     return Some(Summary::Text(line));
                 }
             }
-            // Capture never stores reasoning text or raw blocks.
-            Content::Reasoning(_) | Content::Other(_) => {}
+            // Capture never stores reasoning text or raw blocks. A block of a kind that this build
+            // doesn't know has nothing to show.
+            Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => {}
             Content::ReasoningSummary { tokens } => {
                 let tokens = tokens.or(m.usage.and_then(|u| u.reasoning));
                 return Some(Summary::Thinking(reasoning_label(tokens)));
@@ -1056,10 +1071,8 @@ fn tail_header(handle: &HarnessSession, session: Option<&Session>, color: bool) 
 }
 
 /// Local wall-clock `HH:MM:SS`, for live `tail` lines.
-fn clock(ts: OffsetDateTime) -> String {
-    to_datetime(ts)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
-        .unwrap_or_else(|| "--:--:--".to_owned())
+fn clock(ts: Timestamp) -> String {
+    TimeZone::system().to_datetime(ts).strftime("%H:%M:%S").to_string()
 }
 
 // --- color --------------------------------------------------------------------------------------
@@ -1180,7 +1193,7 @@ async fn push(client: &mut AiClient, harness: HarnessKind, session: String) -> R
         harness,
         session: session.into(),
     };
-    let reply = client.push_messages(handle, batches(lines)).await?;
+    let reply = client.push_messages(handle, batches(lines), Origin::Live).await?;
     let (pushed, duplicates) = (reply.pushed, reply.duplicates);
     println!("pushed {pushed}, already had {duplicates}");
     Ok(())
@@ -1192,6 +1205,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
         HarnessKind::Codex => Ansi::Green,
         HarnessKind::Copilot | HarnessKind::Grok => Ansi::Blue,
         HarnessKind::Kiro => Ansi::White,
+        HarnessKind::Hermes => Ansi::Yellow,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
         HarnessKind::Omp => Ansi::Red,
@@ -1244,17 +1258,14 @@ fn sanitize(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// A humanized age (e.g. "2 hours ago"), or "-" when chrono cannot represent it.
-fn age(ts: OffsetDateTime) -> String {
-    to_datetime(ts).map_or_else(|| "-".to_owned(), |dt| HumanTime::from(dt).to_string())
+/// A humanized age, such as `2 hours ago`.
+fn age(ts: Timestamp) -> String {
+    Timestamp::now().saturating_duration_since(ts).display().ago().to_string()
 }
 
-fn to_datetime(ts: OffsetDateTime) -> Option<DateTime<Utc>> {
-    DateTime::from_timestamp(ts.unix_timestamp(), ts.nanosecond())
-}
-
-fn rfc3339(ts: OffsetDateTime) -> Option<String> {
-    to_datetime(ts).map(|dt| dt.to_rfc3339())
+/// `ts` in RFC 3339, in UTC: `2024-01-22T14:35:07+00:00`.
+fn rfc3339(ts: Timestamp) -> String {
+    ts.display_with_offset(Offset::UTC).to_string()
 }
 
 /// The kebab display label for a harness. Kept exhaustive over every `HarnessKind` (including ones
@@ -1267,6 +1278,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::Copilot => "copilot",
         HarnessKind::Grok => "grok",
         HarnessKind::Kiro => "kiro",
+        HarnessKind::Hermes => "hermes",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",
@@ -1334,10 +1346,8 @@ struct SessionJson {
     git_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    started_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    updated_at: Option<String>,
+    started_at: String,
+    updated_at: String,
     message_count: u64,
     tokens: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1395,8 +1405,7 @@ struct FilePatchJson {
 struct MessageJson {
     id: String,
     role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timestamp: Option<String>,
+    timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1522,11 +1531,12 @@ fn session_json(s: &Session) -> SessionJson {
 }
 
 /// `reasoning` is the message's reasoning token count, for a summary block that lacks its own.
-/// `None` for what capture never stores (reasoning text, raw blocks).
+/// `None` for what capture never stores (reasoning text, raw blocks). Also `None` for a block of
+/// a kind that this build doesn't know.
 fn content_json(block: &Content, reasoning: Option<u64>) -> Option<ContentJson> {
     Some(match block {
         Content::Text(t) => ContentJson::Text { text: t.clone() },
-        Content::Reasoning(_) | Content::Other(_) => return None,
+        Content::Reasoning(_) | Content::Other(_) | Content::Unknown(_) => return None,
         Content::ReasoningSummary { tokens } => ContentJson::Thinking {
             text: reasoning_label(tokens.or(reasoning)),
         },
@@ -1622,8 +1632,8 @@ mod tests {
             .atuin_id(AtuinSessionId::from(uuid::Uuid::from_u128(xxhash_rust::xxh3::xxh3_128(
                 format!("{harness:?}:{id}").as_bytes(),
             ))))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build()
     }
@@ -1912,7 +1922,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle(HarnessKind::ClaudeCode, "s"))
             .source_id(SourceId::from("m".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(role)
             .content(content)
             .build()

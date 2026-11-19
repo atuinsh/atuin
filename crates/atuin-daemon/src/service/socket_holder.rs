@@ -11,7 +11,8 @@ use crate::service::systemd::Systemd;
 pub(super) enum SocketHolder {
     /// The daemon, which binds the configured socket itself and removes it as it exits.
     Daemon,
-    /// launchd, which handed Atuin's agent the socket it holds for it.
+    /// launchd, which handed Atuin's agent the socket it holds for it. Only done for older agents;
+    /// launchd no longer manages the socket.
     #[allow(dead_code, reason = "only macOS has launchd")]
     Launchd(Listening),
     /// systemd, which passes the socket in, as `daemon.systemd_socket` says it does.

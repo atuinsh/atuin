@@ -8,6 +8,45 @@ use std::time::Duration;
 use rustix::io::Errno;
 use rustix::process::{self, Pid, Signal};
 
+mod close_fds;
+
+/// Extension trait for [`std::process::Command`].
+pub trait CommandExt {
+    /// Make the child process not inherit any file descriptors except the standard streams, like
+    /// Python's `close_fds`.
+    fn close_fds(&mut self) -> &mut Self;
+}
+
+impl CommandExt for std::process::Command {
+    fn close_fds(&mut self) -> &mut Self {
+        close_fds::close_fds(self)
+    }
+}
+
+/// Kills a process group with `SIGKILL` when dropped, unless [`Self::disarm`] is called first.
+#[must_use = "the group is killed as soon as the guard is dropped"]
+#[derive(Debug)]
+pub struct KillGroupOnDrop(Option<Pid>);
+
+impl KillGroupOnDrop {
+    pub const fn new(group: Pid) -> Self {
+        Self(Some(group))
+    }
+
+    /// Consume the guard without killing the process group.
+    pub fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            let _ = process::kill_process_group(group, Signal::KILL);
+        }
+    }
+}
+
 /// Try to convert a [`u32`] PID into a typed [`Pid`].
 ///
 /// Standard library functions like [`std::process::id`] use [`u32`], but functions in this module

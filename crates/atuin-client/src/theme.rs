@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::error;
-use std::io::{Error, ErrorKind};
 use std::sync::LazyLock;
 
 use atuin_common::path::PathBufExt as _;
@@ -8,8 +7,6 @@ use atuin_common::userio;
 use config::{Config, File as ConfigFile, FileFormat};
 use palette::named;
 use serde::{Deserialize, Serialize};
-
-static DEFAULT_MAX_DEPTH: u8 = 10;
 
 // Collection of settable "meanings" that can have colors set.
 // NOTE: You can add a new meaning here without breaking backwards compatibility but please:
@@ -45,6 +42,12 @@ pub struct ThemeConfig {
 
     // Colors
     pub colors: HashMap<Meaning, String>,
+}
+
+impl ThemeConfig {
+    fn parse(config: Config) -> Result<Self, Box<dyn error::Error>> {
+        config.try_deserialize().map_err(|e| format!("Failed to deserialize theme: {e}").into())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -126,17 +129,15 @@ impl Theme {
         self.styles[self.closest_meaning(&meaning)]
     }
 
-    // Turns a map of meanings to colornames into a theme
-    // If theme-debug is on, then we will print any colornames that we cannot load,
-    // but we do not have this on in general, as it could print unfiltered text to the terminal
-    // from a theme TOML file. However, it will always return a theme, falling back to
-    // defaults on error, so that a TOML file does not break loading
+    /// Builds a theme from color names over the styles of `parent`.
+    ///
+    /// A color name that does not parse is logged and left unstyled, so that one bad color does
+    /// not stop the theme from loading.
     #[must_use]
     pub fn from_foreground_colors(
         name: String,
         parent: Option<&Self>,
         foreground_colors: &HashMap<Meaning, String>,
-        debug: bool,
     ) -> Self {
         let styles: HashMap<Meaning, ContentStyle> = foreground_colors
             .iter()
@@ -144,14 +145,12 @@ impl Theme {
                 (
                     *name,
                     StyleFactory::from_fg_string(color).unwrap_or_else(|err| {
-                        if debug {
-                            userio::log::warn!(
-                                "theme-color-invalid",
-                                name = name.to_string(),
-                                color = color,
-                                error = err
-                            );
-                        }
+                        userio::log::warn!(
+                            "theme-color-invalid",
+                            name = name.to_string(),
+                            color = color,
+                            error = err
+                        );
                         ContentStyle::default()
                     }),
                 )
@@ -383,164 +382,203 @@ static BUILTIN_THEMES: LazyLock<HashMap<&'static str, Theme>> = LazyLock::new(||
     .collect()
 });
 
-/// Options for building a [`ThemeManager`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ThemeManagerOptions {
-    /// Show more detail about issues in theme files.
-    pub debug: bool,
-    /// Only load built-in themes, rather than reading the user's theme directory.
-    pub builtin_only: bool,
-}
-
-impl ThemeManagerOptions {
-    #[must_use]
-    pub fn from_settings(settings: &crate::settings::Theme) -> Self {
-        Self {
-            debug: settings.debug.unwrap_or(false),
-            builtin_only: false,
-        }
-    }
-
-    #[must_use]
-    pub fn build(self) -> ThemeManager {
-        ThemeManager {
-            loaded_themes: HashMap::new(),
-            debug: self.debug,
-            builtin_only: self.builtin_only,
-        }
-    }
-}
-
-// To avoid themes being repeatedly loaded, we store them in a theme manager
+/// Loads themes by name and keeps each one loaded, so that it is read only once.
+///
+/// The default manager reads theme files from the user's themes directory.
+#[derive(Default)]
 pub struct ThemeManager {
     loaded_themes: HashMap<String, Theme>,
-    debug: bool,
+    /// Only load built-in themes, rather than reading the user's theme directory.
     builtin_only: bool,
 }
 
 // Theme-loading logic
 impl ThemeManager {
+    /// Most parents that loading one theme follows, which is far more than any real theme has.
+    const MAX_PARENTS: usize = 8192;
+
+    /// A manager that only loads built-in themes and never reads the themes directory.
     #[must_use]
-    pub fn from_settings(settings: &crate::settings::Theme) -> Self {
-        ThemeManagerOptions::from_settings(settings).build()
-    }
-
-    // Try to load a theme from a `{name}.toml` file in the themes directory (unless
-    // `Self::builtin_only` is true)
-    fn load_theme_from_file(
-        &mut self,
-        name: &str,
-        max_depth: u8,
-    ) -> Result<&Theme, Box<dyn error::Error>> {
-        if self.builtin_only {
-            return Err(Box::new(Error::new(
-                ErrorKind::NotFound,
-                "cannot load theme file: only built-in themes are enabled",
-            )));
+    pub fn builtin_only() -> Self {
+        Self {
+            builtin_only: true,
+            ..Self::default()
         }
-
-        let theme_file = atuin_common::dirs::config_path("themes").joined(format!("{name}.toml"));
-
-        let mut config_builder = Config::builder();
-
-        config_builder = config_builder
-            .add_source(ConfigFile::new(theme_file.to_str().unwrap(), FileFormat::Toml));
-
-        let config = config_builder.build()?;
-        self.load_theme_from_config(name, config, max_depth)
     }
 
+    /// The theme called `name`, loading it and its parents from the themes directory if it is
+    /// neither loaded nor built in.
+    ///
+    /// A theme that fails to load is logged and replaced by the `(none)` theme.
+    #[must_use]
+    pub fn load_theme(&mut self, name: &str) -> &Theme {
+        // `if let Some(theme) = self.get(name) { return theme; }` keeps `self` borrowed for the
+        // load below, so the lookup runs twice.
+        if self.get(name).is_some() {
+            return self.get(name).expect("the theme was found just above");
+        }
+        match self.read_theme_file(name) {
+            Ok(config) => self.load_with_parents(name, config),
+            Err(err) => {
+                userio::log::warn!("theme-load-failed", name = name, error = err.to_string());
+                &BUILTIN_THEMES["(none)"]
+            }
+        }
+    }
+
+    /// Load the theme in `config` as `name`, with the parents that it names.
     pub fn load_theme_from_config(
         &mut self,
         name: &str,
         config: Config,
-        max_depth: u8,
     ) -> Result<&Theme, Box<dyn error::Error>> {
-        let debug = self.debug;
-        let theme_config: ThemeConfig = match config.try_deserialize() {
-            Ok(tc) => tc,
-            Err(e) => {
-                return Err(Box::new(Error::new(
-                    ErrorKind::InvalidInput,
-                    format!(
-                        "Failed to deserialize theme: {}",
-                        if debug {
-                            e.to_string()
-                        } else {
-                            "set theme debug on for more info".to_string()
-                        }
-                    ),
-                )));
-            }
-        };
-        let colors: HashMap<Meaning, String> = theme_config.colors;
-        let parent: Option<&Theme> = match theme_config.theme.parent {
-            Some(parent_name) => {
-                if max_depth == 0 {
-                    return Err(Box::new(Error::new(
-                        ErrorKind::InvalidInput,
-                        "Parent requested but we hit the recursion limit",
-                    )));
-                }
-                Some(self.load_theme(parent_name.as_str(), Some(max_depth - 1)))
-            }
-            None => Some(self.load_theme("default", Some(max_depth - 1))),
-        };
-
-        if debug && name != theme_config.theme.name {
-            userio::log::warn!(
-                "theme-name-mismatch",
-                name = name,
-                config_name = theme_config.theme.name.as_str()
-            );
-        }
-
-        let theme = Theme::from_foreground_colors(theme_config.theme.name, parent, &colors, debug);
-        let name = name.to_string();
-        self.loaded_themes.insert(name.clone(), theme);
-        let theme = self.loaded_themes.get(&name).unwrap();
-        Ok(theme)
+        let config = ThemeConfig::parse(config)?;
+        Ok(self.load_with_parents(name, config))
     }
 
-    // Check if the requested theme is loaded and, if not, then attempt to get it
-    // from the builtins or, if not there, from file
-    #[must_use]
-    pub fn load_theme(&mut self, name: &str, max_depth: Option<u8>) -> &Theme {
-        if self.loaded_themes.contains_key(name) {
-            return self.loaded_themes.get(name).unwrap();
-        }
-        let built_ins = &BUILTIN_THEMES;
-        match built_ins.get(name) {
-            Some(theme) => theme,
-            None => match self.load_theme_from_file(name, max_depth.unwrap_or(DEFAULT_MAX_DEPTH)) {
-                Ok(theme) => theme,
+    fn get(&self, name: &str) -> Option<&Theme> {
+        self.loaded_themes.get(name).or_else(|| BUILTIN_THEMES.get(name))
+    }
+
+    /// Walks up from `config` to the first parent that is loaded or built in, then builds the
+    /// themes on the way back down, so that each one starts from its parent's styles.
+    ///
+    /// A parent that fails to load is logged and replaced by the `(none)` theme.
+    fn load_with_parents(&mut self, name: &str, config: ThemeConfig) -> &Theme {
+        let mut chain = vec![(name.to_owned(), config)];
+        let mut base = loop {
+            let (_, config) = chain.last().expect("the chain starts with `name`");
+            let parent = config.theme.parent.clone().unwrap_or_else(|| "default".to_owned());
+            if self.get(&parent).is_some() {
+                break parent;
+            }
+            let parent_config = if chain.iter().any(|(key, _)| *key == parent) {
+                Err(format!("theme {parent} is its own ancestor").into())
+            } else if chain.len() > Self::MAX_PARENTS {
+                Err(format!("theme {name} has more than {} parents", Self::MAX_PARENTS).into())
+            } else {
+                self.read_theme_file(&parent)
+            };
+            match parent_config {
+                Ok(config) => chain.push((parent, config)),
                 Err(err) => {
-                    userio::log::warn!("theme-load-failed", name = name, error = err.to_string());
-                    built_ins.get("(none)").unwrap()
+                    userio::log::warn!(
+                        "theme-load-failed",
+                        name = parent.as_str(),
+                        error = err.to_string()
+                    );
+                    break "(none)".to_owned();
                 }
-            },
+            }
+        };
+
+        for (key, config) in chain.into_iter().rev() {
+            let theme =
+                Theme::from_foreground_colors(config.theme.name, self.get(&base), &config.colors);
+            self.loaded_themes.insert(key.clone(), theme);
+            base = key;
         }
+        &self.loaded_themes[name]
+    }
+
+    /// Reads `{name}.toml` from the themes directory, unless only built-in themes are enabled.
+    fn read_theme_file(&self, name: &str) -> Result<ThemeConfig, Box<dyn error::Error>> {
+        if self.builtin_only {
+            return Err("cannot load theme file: only built-in themes are enabled".into());
+        }
+        let theme_file = atuin_common::dirs::config_path("themes").joined(format!("{name}.toml"));
+        let config = Config::builder()
+            .add_source(ConfigFile::from(theme_file).format(FileFormat::Toml))
+            .build()?;
+        ThemeConfig::parse(config)
     }
 }
 
 #[cfg(test)]
 mod theme_tests {
+    use atuin_common::env::MockEnv;
     use atuin_common::test_utils::capture_logs;
     use rstest::*;
+    use tempfile::TempDir;
 
     use super::*;
 
     #[fixture]
-    fn manager(#[default(false)] debug: bool) -> ThemeManager {
-        ThemeManagerOptions {
-            debug,
-            builtin_only: true,
+    fn manager() -> ThemeManager {
+        ThemeManager::builtin_only()
+    }
+
+    /// A mock environment whose `ATUIN_HOME` is a temporary directory with an empty `themes`
+    /// directory.
+    struct ThemesDir {
+        home: TempDir,
+        _env: MockEnv,
+    }
+
+    impl ThemesDir {
+        fn write(&self, name: &str, toml: &str) {
+            std::fs::write(self.home.path().join("themes").joined(format!("{name}.toml")), toml)
+                .unwrap();
         }
-        .build()
+    }
+
+    #[fixture]
+    fn themes_dir() -> ThemesDir {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("themes")).unwrap();
+        let env = MockEnv::install();
+        env.set("ATUIN_HOME", home.path());
+        ThemesDir { home, _env: env }
     }
 
     fn theme_config(toml: &str) -> Config {
         Config::builder().add_source(ConfigFile::from_str(toml, FileFormat::Toml)).build().unwrap()
+    }
+
+    const XINETIC_WARNING: &str = "tried to load string as a color unsuccessfully: \
+                                   (AlertWarn=xinetic) No such color in palette";
+
+    /// A theme file inherits from the theme files that it names as parents, down to a built-in
+    /// theme. A cycle of parents stops at the first theme that repeats, with a warning. It keeps
+    /// the colors of every theme in the cycle, builds each theme once, and falls back to the
+    /// `(none)` theme.
+    #[rstest]
+    #[case::chain("", Some(Color::DarkRed), &[XINETIC_WARNING])]
+    #[case::cycle(
+        "parent = \"a\"",
+        None,
+        &["could not load theme a: theme a is its own ancestor", XINETIC_WARNING],
+    )]
+    #[case::own_parent(
+        "parent = \"b\"",
+        None,
+        &["could not load theme b: theme b is its own ancestor", XINETIC_WARNING],
+    )]
+    fn loads_parents_from_theme_files(
+        themes_dir: ThemesDir,
+        #[case] b_parent: &str,
+        #[case] alert_error: Option<Color>,
+        #[case] warnings: &[&str],
+    ) {
+        let logs = capture_logs();
+        themes_dir.write(
+            "a",
+            "[theme]\nname = \"a\"\nparent = \"b\"\n[colors]\nBase = \"red\"\nAlertWarn = \
+             \"xinetic\"\n",
+        );
+        themes_dir.write(
+            "b",
+            &format!("[theme]\nname = \"b\"\n{b_parent}\n[colors]\nGuidance = \"blue\"\n"),
+        );
+        let mut manager = ThemeManager::default();
+
+        let theme = manager.load_theme("a");
+
+        assert_eq!(theme.as_style(Meaning::Base).foreground_color, from_string("red").ok());
+        assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("blue").ok());
+        assert_eq!(theme.as_style(Meaning::AlertError).foreground_color, alert_error);
+        let messages: Vec<_> = logs.get().iter().map(|log| log.message.clone()).collect();
+        assert_eq!(messages, warnings);
     }
 
     #[rstest]
@@ -552,8 +590,22 @@ mod theme_tests {
         #[case] meaning: Meaning,
         #[case] color: &str,
     ) {
-        let theme = manager.load_theme(name, None);
+        let theme = manager.load_theme(name);
         assert_eq!(theme.as_style(meaning).foreground_color, from_string(color).ok());
+    }
+
+    /// The warning for a theme file that does not parse says why.
+    #[rstest]
+    fn reports_why_a_theme_file_does_not_parse(themes_dir: ThemesDir) {
+        let logs = capture_logs();
+        themes_dir.write("broken", "[theme]\nname = \"broken\"\n");
+        let mut manager = ThemeManager::default();
+
+        let _ = manager.load_theme("broken");
+
+        let messages: Vec<_> = logs.get().iter().map(|log| log.message.clone()).collect();
+        assert_eq!(messages, ["could not load theme broken: Failed to deserialize theme: \
+                               missing configuration field \"colors\""]);
     }
 
     #[rstest]
@@ -564,7 +616,7 @@ mod theme_tests {
             HashMap::from([(Meaning::AlertError, StyleFactory::known_fg_string("yellowgreen"))]),
         );
         manager.loaded_themes.insert("mytheme".to_string(), mytheme);
-        let theme = manager.load_theme("mytheme", None);
+        let theme = manager.load_theme("mytheme");
         assert_eq!(
             theme.as_style(Meaning::AlertError).foreground_color,
             from_string("yellowgreen").ok()
@@ -587,7 +639,7 @@ mod theme_tests {
         AlertInfo = \"zomp\"
         ",
         );
-        let theme = manager.load_theme_from_config("config_theme", config, 1).unwrap();
+        let theme = manager.load_theme_from_config("config_theme", config).unwrap();
 
         // Correctly picks overridden color.
         assert_eq!(theme.as_style(Meaning::Guidance).foreground_color, from_string("white").ok());
@@ -617,7 +669,7 @@ mod theme_tests {
         AlertInfo = \"zomp\"
         ",
         );
-        let title_theme = manager.load_theme_from_config("title_theme", title_config, 1).unwrap();
+        let title_theme = manager.load_theme_from_config("title_theme", title_config).unwrap();
 
         assert_eq!(title_theme.as_style(Meaning::Title).foreground_color, Some(Color::White));
     }
@@ -631,8 +683,8 @@ mod theme_tests {
     }
 
     #[rstest]
-    fn test_can_get_colors_via_convenience_functions(#[with(true)] mut manager: ThemeManager) {
-        let theme = manager.load_theme("default", None);
+    fn test_can_get_colors_via_convenience_functions(mut manager: ThemeManager) {
+        let theme = manager.load_theme("default");
         assert_eq!(theme.get_error().foreground_color.unwrap(), Color::DarkRed);
         assert_eq!(theme.get_warning().foreground_color.unwrap(), Color::DarkYellow);
         assert_eq!(theme.get_info().foreground_color.unwrap(), Color::DarkGreen);
@@ -658,7 +710,7 @@ mod theme_tests {
         AlertInfo = \"pink\"
         ",
         );
-        let solarized_theme = manager.load_theme_from_config("solarized", solarized, 1).unwrap();
+        let solarized_theme = manager.load_theme_from_config("solarized", solarized).unwrap();
 
         assert_eq!(
             solarized_theme.as_style(Meaning::AlertInfo).foreground_color,
@@ -676,8 +728,7 @@ mod theme_tests {
         AlertInfo = \"red\"
         ",
         );
-        let unsolarized_theme =
-            manager.load_theme_from_config("unsolarized", unsolarized, 1).unwrap();
+        let unsolarized_theme = manager.load_theme_from_config("unsolarized", unsolarized).unwrap();
 
         // It will take its own values
         assert_eq!(
@@ -706,7 +757,7 @@ mod theme_tests {
         ",
         );
         let nunsolarized_theme =
-            manager.load_theme_from_config("nunsolarized", nunsolarized, 1).unwrap();
+            manager.load_theme_from_config("nunsolarized", nunsolarized).unwrap();
 
         assert_eq!(nunsolarized_theme.as_style(Meaning::Guidance).foreground_color, None);
 
@@ -720,45 +771,22 @@ mod theme_tests {
         assert_eq!(captured_logs[0].level, tracing::Level::WARN);
     }
 
+    /// A color name that does not parse is logged and left unstyled. A theme whose own `name`
+    /// differs from the name that it is loaded as loads without a warning.
     #[rstest]
-    fn debug_theme_logs(#[values(true, false)] debug: bool) {
+    fn logs_invalid_colors(mut manager: ThemeManager) {
         let logs = capture_logs();
-
-        let mut manager = ThemeManagerOptions {
-            debug,
-            builtin_only: true,
-        }
-        .build();
         let config = theme_config(
-            "
-        [theme]
-        name = \"mytheme\"
-
-        [colors]
-        Guidance = \"white\"
-        AlertInfo = \"xinetic\"
-        ",
+            "[theme]\nname = \"mytheme\"\n[colors]\nGuidance = \"white\"\nAlertInfo = \
+             \"xinetic\"\n",
         );
-        manager.load_theme_from_config("config_theme", config, 1).unwrap();
-        if debug {
-            let captured_logs = logs.get();
-            assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[0].message,
-                "your theme config name is not the name of your loaded theme config_theme != \
-                 mytheme"
-            );
-            assert_eq!(captured_logs[0].level, tracing::Level::WARN);
-            assert_eq!(
-                captured_logs[1].message,
-                "tried to load string as a color unsuccessfully: (AlertInfo=xinetic) No such \
-                 color in palette"
-            );
-            assert_eq!(captured_logs[1].level, tracing::Level::WARN);
-            drop(captured_logs);
-        } else {
-            assert_eq!(logs.get().len(), 0);
-        }
+
+        let theme = manager.load_theme_from_config("config_theme", config).unwrap();
+
+        assert_eq!(theme.as_style(Meaning::AlertInfo).foreground_color, None);
+        let messages: Vec<_> = logs.get().iter().map(|log| log.message.clone()).collect();
+        assert_eq!(messages, ["tried to load string as a color unsuccessfully: \
+                               (AlertInfo=xinetic) No such color in palette"]);
     }
 
     #[rstest]

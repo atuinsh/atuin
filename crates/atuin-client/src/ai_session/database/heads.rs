@@ -10,9 +10,10 @@
 //! Every row of a session is a node of one tree (a forest, really), built per harness from what
 //! its rows say:
 //!
-//! - **Claude Code and Pi** link each line to the one before it (`parent_source_id`). Rows keyed
-//!   on their content (`syn-`: titles and other lines with no id) are no node; a session holding
-//!   nothing else is linear.
+//! - **Claude Code, Pi and Hermes Agent** link each line to the one before it
+//!   (`parent_source_id`; Hermes's reader names it, and a turn `/undo` dropped hangs from the turn
+//!   before it as a dead end, as a Claude Code rewind does). Rows keyed on their content (`syn-`:
+//!   titles and other lines with no id) are no node; a session holding nothing else is linear.
 //! - **Copilot** rows name the row before them in their lane since the reader learnt to; those
 //!   captured before it did have no parent, and each follows on from the row before it (as a
 //!   row whose parent is not stored does, below). Its title rows (`syn-`) are no node.
@@ -57,7 +58,7 @@ use atuin_common::harnesstools::session::{Content, Role, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
 use atuin_domain::record::HostId;
 use futures::TryStreamExt;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::{AiSessionDatabase, DbError};
 use crate::ai_session::{HarnessKind, HarnessSession, Message, SourceId};
@@ -74,7 +75,7 @@ pub struct Head {
     /// The host that captured it.
     pub host: Option<HostId>,
     /// When it was written.
-    pub last_at: OffsetDateTime,
+    pub last_at: Timestamp,
     /// The [substantive](is_substantive) rows from the session's root to here: prompts and
     /// assistant text.
     pub messages: u64,
@@ -89,6 +90,10 @@ pub struct Analysis {
     /// Each row's parent in the branch tree; `None` for a root, and for a row that is no node.
     parent: Vec<Option<usize>>,
     in_tree: Vec<bool>,
+    /// Each row's branch, and each branch's parent branch, as [`Self::find_heads`] hands them
+    /// out: branch 0 is the root's.
+    branch: Vec<usize>,
+    branch_parent: Vec<Option<usize>>,
     /// Newest first.
     heads: Vec<Head>,
     diverged: bool,
@@ -112,10 +117,12 @@ enum Model {
 impl Model {
     const fn of(harness: HarnessKind) -> Self {
         match harness {
-            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp => Self::Tree {
-                chained: false,
-                beside: true,
-            },
+            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp | HarnessKind::Hermes => {
+                Self::Tree {
+                    chained: false,
+                    beside: true,
+                }
+            }
             // Amp's title rows (an import's) are content-addressed, beside its messages.
             HarnessKind::Copilot | HarnessKind::Amp | HarnessKind::Kiro => Self::Tree {
                 chained: true,
@@ -162,6 +169,8 @@ impl Analysis {
             rows,
             parent,
             in_tree,
+            branch: Vec::new(),
+            branch_parent: Vec::new(),
             heads: Vec::new(),
             diverged: false,
         };
@@ -212,6 +221,7 @@ impl Analysis {
         // opens one per substantive side; everything else stays on the branch it is on.
         let mut branch = vec![0_usize; n];
         let mut split = vec![false];
+        let mut branch_parent = vec![None];
         let mut diverged = false;
         let rows = &self.rows;
         let mut fork = |kids: &[usize], on: usize, branch: &mut Vec<usize>| {
@@ -229,12 +239,14 @@ impl Analysis {
             for &k in &sides {
                 branch[k] = split.len();
                 split.push(false);
+                branch_parent.push(Some(on));
             }
         };
         fork(&roots, 0, &mut branch);
         for &i in &preorder {
             fork(&children[i], branch[i], &mut branch);
         }
+        self.branch_parent = branch_parent;
 
         // Each branch no fork closed ends in a leaf below all its substantive rows (which, with no
         // fork that counts, lie on one line: the leaves holding the most messages), the newest of
@@ -254,6 +266,7 @@ impl Analysis {
         let mut tips: Vec<usize> = tips.into_values().collect();
         tips.sort_by_key(|&i| Reverse(i));
 
+        self.branch = branch;
         self.heads = tips
             .into_iter()
             .map(|tip| Head {
@@ -322,6 +335,35 @@ impl Analysis {
             return Vec::new();
         }
         let on: HashSet<usize> = path.iter().copied().collect();
+        self.with_off_tree(&self.with_beside(&path, |_| true), &on)
+    }
+
+    /// Every row a harness that resumes one branch alone keeps of the branch ending at `row`, one
+    /// of the [heads](Self::heads). These are its rows as [`Self::rows_for`] has them, and the rows
+    /// of the tree that stay with it below a fork that doesn't count, which its path leaves out. A
+    /// parallel tool result is one, and so is a twig with nothing substantive in it. Rows of the
+    /// tree come in time order, and the rows off it are placed as [`Self::rows_for`] places them.
+    /// Empty when `row` is not stored, or is no node.
+    #[must_use]
+    pub fn branch_rows(&self, row: &SourceId) -> Vec<&Message> {
+        let Some(&tip) = self.path_indices(row).last() else {
+            return Vec::new();
+        };
+        let mut lineage = HashSet::new();
+        let mut at = Some(self.branch[tip]);
+        while let Some(branch) = at.filter(|b| lineage.insert(*b)) {
+            at = self.branch_parent[branch];
+        }
+        let on: Vec<usize> = (0..self.rows.len())
+            .filter(|&i| self.in_tree[i] && lineage.contains(&self.branch[i]))
+            .collect();
+        let set: HashSet<usize> = on.iter().copied().collect();
+        self.with_off_tree(&on, &set)
+    }
+
+    /// `path`, rows of the tree, with the rows off the tree that go with the rows in `on`, each
+    /// before the first row of `path` after it. [`Self::rows_for`] says which rows go with which.
+    fn with_off_tree(&self, path: &[usize], on: &HashSet<usize>) -> Vec<&Message> {
         // Each host's first row of the tree.
         let mut first: HashMap<Option<HostId>, usize> = HashMap::new();
         for (i, m) in self.rows.iter().enumerate().filter(|(i, _)| self.in_tree[*i]) {
@@ -346,10 +388,9 @@ impl Analysis {
                 off.push(i);
             }
         }
-        let path = self.with_beside(&path, |_| true);
         let mut off = off.into_iter().peekable();
         let mut rows = Vec::with_capacity(path.len() + off.len());
-        for p in path {
+        for &p in path {
             while let Some(i) = off.next_if(|&i| i < p) {
                 rows.push(&self.rows[i]);
             }

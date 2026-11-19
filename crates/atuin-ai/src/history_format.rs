@@ -1,33 +1,20 @@
 use atuin_client::history::History;
 use atuin_common::string::StrExt as _;
-use atuin_common::time::{DurationExt, OffsetDateTimeExt};
-use time::UtcOffset;
-
-pub fn format_last_command(history: &History, local_offset: UtcOffset) -> String {
-    format!(
-        "History ID: {} - `{}`\n{}",
-        history.id,
-        history.command,
-        format_history_metadata(history, local_offset)
-    )
-}
+use atuin_common::time::{DateTimeExt, DurationExt};
+use jiff::tz::TimeZone;
 
 /// How much of a command a search result shows. Agent-run commands are often multi-kilobyte
 /// heredocs or scripts; shown whole, a page of 30 results can run past 100k characters, which
 /// floods a model's context for what is a lookup. The opening shows what the command was.
 const SEARCH_RESULT_COMMAND_CHARS: usize = 600;
 
-pub fn format_history_search_result(
-    ordinal: usize,
-    history: &History,
-    local_offset: UtcOffset,
-) -> String {
+pub fn format_history_search_result(ordinal: usize, history: &History, tz: &TimeZone) -> String {
     format!(
         "## #{}. (History ID: {}):\n`{}`\n{}\n",
         ordinal,
         history.id,
         clip_command(&history.command),
-        format_history_metadata(history, local_offset)
+        format_history_metadata(history, tz)
     )
 }
 
@@ -39,10 +26,10 @@ fn clip_command(command: &str) -> std::borrow::Cow<'_, str> {
     format!("{head}… [+{} chars]", command[head.len()..].chars().count()).into()
 }
 
-fn format_history_metadata(history: &History, local_offset: UtcOffset) -> String {
+fn format_history_metadata(history: &History, tz: &TimeZone) -> String {
     format!(
         "[{}] (in `{}`, exit {}){}{}",
-        format_timestamp(history, local_offset),
+        format_timestamp(history, tz),
         history.cwd,
         history.exit,
         format_duration(history.duration),
@@ -66,8 +53,8 @@ fn format_attribution(history: &History) -> String {
     }
 }
 
-fn format_timestamp(history: &History, local_offset: UtcOffset) -> String {
-    history.timestamp.to_offset(local_offset).display().ymd_hms().to_string()
+fn format_timestamp(history: &History, tz: &TimeZone) -> String {
+    tz.to_datetime(history.timestamp).display().ymd_hms().to_string()
 }
 
 fn format_duration(nanos: i64) -> String {
@@ -82,15 +69,15 @@ fn format_duration(nanos: i64) -> String {
 mod tests {
     use atuin_client::history::History;
     use atuin_domain::record::CmdOrigin;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::{OffsetDateTime, UtcOffset};
 
     use super::*;
 
     fn history(duration: i64) -> History {
         History {
             id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
-            timestamp: OffsetDateTime::UNIX_EPOCH,
+            timestamp: Timestamp::UNIX_EPOCH,
             duration,
             exit: 2,
             command: "cargo test".to_string(),
@@ -109,27 +96,18 @@ mod tests {
     fn search_results_clip_long_commands() {
         let mut long = history(0);
         long.command = format!("cat <<'EOF'\n{}\nEOF", "x".repeat(5_000));
-        let out = format_history_search_result(1, &long, UtcOffset::UTC);
+        let out = format_history_search_result(1, &long, &TimeZone::UTC);
         assert!(out.len() < 1_000, "{}", out.len());
         assert!(out.contains("… [+4"), "{out}");
         assert!(
-            format_history_search_result(1, &history(0), UtcOffset::UTC).contains("`cargo test`")
-        );
-    }
-
-    #[rstest]
-    fn formats_last_command() {
-        assert_eq!(
-            format_last_command(&history(1_234_000_000), UtcOffset::UTC),
-            "History ID: 018f011c9a0a70008000000000000001 - `cargo test`\n[1970-01-01 00:00:00] \
-             (in `/repo`, exit 2), 1.234s"
+            format_history_search_result(1, &history(0), &TimeZone::UTC).contains("`cargo test`")
         );
     }
 
     #[rstest]
     fn formats_history_search_result() {
         assert_eq!(
-            format_history_search_result(3, &history(0), UtcOffset::UTC),
+            format_history_search_result(3, &history(0), &TimeZone::UTC),
             "## #3. (History ID: 018f011c9a0a70008000000000000001):\n`cargo test`\n[1970-01-01 \
              00:00:00] (in `/repo`, exit 2)\n"
         );

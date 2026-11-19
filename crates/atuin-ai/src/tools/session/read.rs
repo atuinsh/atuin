@@ -8,10 +8,10 @@ use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::{Content, is_tool_output};
 use atuin_common::range::Clamped;
 use atuin_common::string::{NonBlankString, StrExt as _};
-use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::get_session_event::Event;
 use futures::StreamExt;
+use jiff::tz::TimeZone;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -297,7 +297,7 @@ fn searchable(m: &Message) -> String {
                     }
                 }
             }
-            Content::ReasoningSummary { .. } | Content::Other(_) => {}
+            Content::ReasoningSummary { .. } | Content::Other(_) | Content::Unknown(_) => {}
         }
     }
     out
@@ -325,15 +325,12 @@ impl AtuinThreadsReadToolCall {
     }
 
     pub(crate) async fn execute(&self, settings: &Settings, caller: &Caller<'_>) -> ToolOutcome {
-        let mut client = match connect(settings).await {
-            Ok(client) => client,
-            Err(outcome) => return outcome,
-        };
+        let mut client = connect(settings).await?;
 
         let selector = self.session_id.trim();
         let sessions = match super::list_sessions(&mut client, None, None).await {
             Ok(sessions) => sessions,
-            Err(e) => return ToolOutcome::Error(format!("Listing threads failed: {e}")),
+            Err(e) => return Err(format!("Listing threads failed: {e}")),
         };
         // `latest` means the last session a person ran before this one: not the caller's own
         // live session, and not a subagent fragment.
@@ -346,11 +343,11 @@ impl AtuinThreadsReadToolCall {
         let handle = match select_session(sessions, selector) {
             Ok(handle) => handle,
             Err(e @ SelectError::NotFound(_)) => {
-                return ToolOutcome::Error(format!(
+                return Err(format!(
                     "{e}. Find one with atuin_threads_list or atuin_threads_search."
                 ));
             }
-            Err(e) => return ToolOutcome::Error(e.to_string()),
+            Err(e) => return Err(e.to_string()),
         };
 
         // A forward page needs the messages up to it plus one it would show beyond (to know more
@@ -365,15 +362,9 @@ impl AtuinThreadsReadToolCall {
         });
         let (session, messages, complete) = match read_session(&mut client, handle, page).await {
             Ok(read) => read,
-            Err(e) => return ToolOutcome::Error(format!("Reading the thread failed: {e}")),
+            Err(e) => return Err(format!("Reading the thread failed: {e}")),
         };
-        ToolOutcome::Success(self.render(
-            &session,
-            &messages,
-            complete,
-            &filter,
-            time::UtcOffset::local_or_utc(),
-        ))
+        Ok(self.render(&session, &messages, complete, &filter, &TimeZone::system()))
     }
 
     /// Render a page of `messages`: the whole transcript when `complete`, otherwise at least
@@ -384,7 +375,7 @@ impl AtuinThreadsReadToolCall {
         messages: &[Message],
         complete: bool,
         filter: &Filter,
-        offset: time::UtcOffset,
+        tz: &TimeZone,
     ) -> String {
         let total = messages.len();
         let limit = self.limit.get() as usize;
@@ -433,8 +424,8 @@ impl AtuinThreadsReadToolCall {
         let _ = writeln!(
             out,
             "time     {} → {}",
-            timestamp(s.started_at, offset),
-            timestamp(s.updated_at, offset),
+            timestamp(s.started_at, tz),
+            timestamp(s.updated_at, tz),
         );
         let _ = writeln!(out);
 
@@ -470,11 +461,8 @@ impl AtuinThreadsReadToolCall {
                     body
                 };
                 // `HH:MM` only: the header carries the date and sessions rarely cross midnight.
-                let time = message
-                    .timestamp
-                    .checked_to_offset(offset)
-                    .map(|t| format!(" {:02}:{:02}", t.hour(), t.minute()))
-                    .unwrap_or_default();
+                let time = tz.to_datetime(message.timestamp);
+                let time = format!(" {:02}:{:02}", time.hour(), time.minute());
                 let _ = writeln!(out, "#{index} {role}{time}");
                 out.push_str(&body);
                 if !full && let Some(snippet) = filter.snippet(message, &body) {
@@ -615,7 +603,10 @@ fn render_message(m: &Message, full: bool) -> Option<(String, String)> {
             // Empty (see `classify`).
             (
                 Block::Readable,
-                Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_),
+                Content::Reasoning(_)
+                | Content::ReasoningSummary { .. }
+                | Content::Other(_)
+                | Content::Unknown(_),
             ) => {}
         }
     }
@@ -750,10 +741,12 @@ fn classify(block: &Content) -> Block<'_> {
         }
         Content::ToolUse(_) | Content::ToolResult(_) | Content::Patch(_) => Block::Readable,
         // Capture keeps only that reasoning happened, which says nothing to a reader, and never
-        // stores reasoning text or raw blocks.
-        Content::ReasoningSummary { .. } | Content::Reasoning(_) | Content::Other(_) => {
-            Block::Empty
-        }
+        // stores reasoning text or raw blocks. A block of a kind that this build doesn't know
+        // holds nothing that it can read.
+        Content::ReasoningSummary { .. }
+        | Content::Reasoning(_)
+        | Content::Other(_)
+        | Content::Unknown(_) => Block::Empty,
     }
 }
 
@@ -871,9 +864,9 @@ mod tests {
         Change, FilePatch, Hunk, Patch, Role, ToolCallId, ToolResult, ToolUse,
     };
     use atuin_domain::record::RecordId;
+    use jiff::Timestamp;
     use rstest::rstest;
     use serde_json::json;
-    use time::OffsetDateTime;
 
     use super::*;
 
@@ -889,7 +882,7 @@ mod tests {
                 session: NativeSessionId::from("abc".to_owned()),
             })
             .source_id(SourceId::from("s".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(role)
             .content(content)
             .build()
@@ -904,7 +897,7 @@ mod tests {
     }
 
     fn session() -> Session {
-        super::super::fixtures::session("abc", Some("/work/x"), OffsetDateTime::UNIX_EPOCH)
+        super::super::fixtures::session("abc", Some("/work/x"), Timestamp::UNIX_EPOCH)
     }
 
     fn tool_call(name: &str) -> Content {
@@ -929,7 +922,7 @@ mod tests {
 
     fn render_on(args: Value, s: &Session, msgs: &[Message], complete: bool) -> String {
         let call = call(args);
-        call.render(s, msgs, complete, &call.filter(), time::UtcOffset::UTC)
+        call.render(s, msgs, complete, &call.filter(), &TimeZone::UTC)
     }
 
     #[rstest]

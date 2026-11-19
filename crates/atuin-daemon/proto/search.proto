@@ -17,7 +17,7 @@ message SearchContext {
   string cwd = 2;
   string hostname = 3;
   string host_id = 4;
-  optional string git_root = 5;
+  optional string vcs_root = 5;
 }
 
 message SearchRequest {

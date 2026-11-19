@@ -64,12 +64,13 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
         "copilot" | "cp" => Some(HarnessKind::Copilot),
         "amp" | "am" => Some(HarnessKind::Amp),
         "kiro" | "kiro-cli" | "ki" => Some(HarnessKind::Kiro),
+        "hermes" | "hermes-agent" | "he" => Some(HarnessKind::Hermes),
         _ => None,
     }
 }
 
 /// The harnesses ctrl-t cycles through, after "all".
-const HARNESS_CYCLE: [HarnessKind; 9] = [
+const HARNESS_CYCLE: [HarnessKind; 10] = [
     HarnessKind::ClaudeCode,
     HarnessKind::Codex,
     HarnessKind::Opencode,
@@ -79,6 +80,7 @@ const HARNESS_CYCLE: [HarnessKind; 9] = [
     HarnessKind::Grok,
     HarnessKind::Amp,
     HarnessKind::Kiro,
+    HarnessKind::Hermes,
 ];
 
 /// Whitespace-separated words with their byte ranges.
@@ -330,9 +332,10 @@ mod tests {
     #[case("agent:copilot", "agent:grok")]
     #[case("agent:grok", "agent:amp")]
     #[case("agent:amp", "agent:kiro")]
-    #[case("agent:kiro", "")]
-    #[case("a agent:kiro b", "a b")]
-    #[case("flaky agent:kiro", "flaky")]
+    #[case("agent:kiro", "agent:hermes")]
+    #[case("agent:hermes", "")]
+    #[case("a agent:hermes b", "a b")]
+    #[case("flaky agent:hermes", "flaky")]
     #[case("agent:codex,pi x", "agent:claude-code x")]
     #[case("agent:vim", "agent:claude-code")]
     #[case("a:claude flaky", "agent:codex flaky")]
@@ -340,7 +343,8 @@ mod tests {
     #[case("a:cp", "agent:grok")]
     #[case("a:gk", "agent:amp")]
     #[case("a:am", "agent:kiro")]
-    #[case("a:ki", "")]
+    #[case("a:ki", "agent:hermes")]
+    #[case("a:he", "")]
     #[case("a:", "agent:claude-code")]
     #[case("h:codex", "h:codex agent:claude-code")]
     fn alt_a_cycles_the_harness_token(#[case] input: &str, #[case] want: &str) {

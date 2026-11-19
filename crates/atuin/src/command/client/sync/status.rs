@@ -43,7 +43,10 @@ pub async fn run(settings: &Arc<Settings>) -> Result<()> {
             "{}",
             fl!(
                 "sync-status-last-sync",
-                time = last_sync.to_offset(settings.timezone.0).to_string()
+                time = last_sync
+                    .to_zoned_datetime(settings.timezone.time_zone())
+                    .strftime("%Y-%m-%d %H:%M:%S%.f %:z")
+                    .to_string()
             )
         );
     }

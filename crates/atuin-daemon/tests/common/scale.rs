@@ -21,7 +21,7 @@ pub async fn index_matches_db_after_seeding_body(rows: usize) {
     let env = TestEnv::builder().seed_rows(rows).build().await;
     report("seed", rows, started);
     assert_eq!(env.active_rows().await, i64::try_from(rows).unwrap());
-    assert_eq!(env.index_count().await, env.expected_command_count().await);
+    assert_eq!(env.index_count(), env.expected_command_count().await);
 }
 
 /// Deleting a 1% sample (what `history dedup`/`prune` typically remove) leaves exactly the other
@@ -69,7 +69,7 @@ pub async fn deleting_a_sample_leaves_everything_else_body(rows: usize) {
     let survivors = env.active_ids().await;
     assert_eq!(survivors.len(), rows - doomed.len());
     assert!(survivors.is_disjoint(&doomed_set));
-    assert_eq!(env.index_count().await, env.expected_command_count().await);
+    assert_eq!(env.index_count(), env.expected_command_count().await);
     for h in &unique_doomed {
         // At this corpus size a long, highly specific query can occasionally fuzzy-match an
         // unrelated surviving command (frizbee is an approximate matcher, not an exact-substring
@@ -124,7 +124,7 @@ pub async fn deleting_everything_in_one_request_body(rows: usize) {
     };
     assert_eq!(reply.deleted, u64::try_from(rows).unwrap());
     assert_eq!(env.active_rows().await, 0);
-    assert_eq!(env.index_count().await, 0);
+    assert_eq!(env.index_count(), 0);
 }
 
 /// `atuin store rebuild history` on a large store restores every row and the whole index.
@@ -149,5 +149,5 @@ pub async fn rebuild_from_a_large_store_body(rows: usize) {
     report("rebuild", rows, started);
 
     assert_eq!(env.active_ids().await, expected_ids);
-    assert_eq!(env.index_count().await, env.expected_command_count().await);
+    assert_eq!(env.index_count(), env.expected_command_count().await);
 }

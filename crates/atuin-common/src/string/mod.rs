@@ -49,6 +49,20 @@ pub trait StrExt {
 
     /// Check whether the string consists entirely of whitespace or is empty.
     fn is_space_or_empty(&self) -> bool;
+
+    /// Like [`str::strip_prefix`], for dotted keys such as `a.b.c`, matching whole segments.
+    ///
+    /// Returns the segments after `prefix`, which are empty when the key is `prefix` itself. For
+    /// example, `"a.b.c"` strips `"a"` to `"b.c"`. `"ab.c"` doesn't strip `"a"`, because `"ab"` is
+    /// a different segment. An empty `prefix` is the root, which every key is inside.
+    fn strip_dotted_prefix(&self, prefix: &str) -> Option<&str>;
+
+    /// Whether the dotted key is `prefix`, or a key inside `prefix`.
+    ///
+    /// See [`Self::strip_dotted_prefix`].
+    fn has_dotted_prefix(&self, prefix: &str) -> bool {
+        self.strip_dotted_prefix(prefix).is_some()
+    }
 }
 
 #[allow(clippy::use_self, reason = "`str` is more readable")]
@@ -91,6 +105,58 @@ impl StrExt for str {
     fn is_space_or_empty(&self) -> bool {
         self.chars().all(char::is_whitespace)
     }
+
+    fn strip_dotted_prefix(&self, prefix: &str) -> Option<&str> {
+        if prefix.is_empty() {
+            return Some(self);
+        }
+        let rest = self.strip_prefix(prefix)?;
+        if rest.is_empty() {
+            Some(rest)
+        } else {
+            rest.strip_prefix('.')
+        }
+    }
+}
+
+/// Extension methods for [`String`].
+// TODO(taylordotfish): fold `TrimExt` into this trait.
+pub trait StringExt {
+    /// Replace `old` with `new` within the first occurrence of `context` in `self`, in place.
+    ///
+    /// # Errors
+    ///
+    /// If `self` doesn't contain `context`, or `context` doesn't contain `old`. `self` is then
+    /// left as it was.
+    fn replace_within(
+        &mut self,
+        context: &str,
+        old: &str,
+        new: &str,
+    ) -> Result<(), ReplaceWithinError>;
+}
+
+impl StringExt for String {
+    fn replace_within(
+        &mut self,
+        context: &str,
+        old: &str,
+        new: &str,
+    ) -> Result<(), ReplaceWithinError> {
+        let context_start = self.find(context).ok_or(ReplaceWithinError::MissingContext)?;
+        let start = context_start + context.find(old).ok_or(ReplaceWithinError::MissingOld)?;
+        self.replace_range(start..start + old.len(), new);
+        Ok(())
+    }
+}
+
+/// Error returned by [`StringExt::replace_within`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ReplaceWithinError {
+    #[error("the string doesn't contain the context")]
+    MissingContext,
+    #[error("the context doesn't contain the text to replace")]
+    MissingOld,
 }
 
 /// Extension trait for owned strings providing an empty-string fallback.
@@ -206,7 +272,66 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::{FormatSafeUrlExt, NonEmptyOrExt, StrExt};
+    use super::{FormatSafeUrlExt, NonEmptyOrExt, ReplaceWithinError, StrExt, StringExt as _};
+
+    /// Only the text within the context changes, even when the same text comes earlier in the
+    /// string.
+    #[rstest]
+    #[case::alone("const A = \"pi\";\n", "const A = \"omp\";\n")]
+    #[case::earlier_in_the_string("pipe();\nconst A = \"pi\";\n", "pipe();\nconst A = \"omp\";\n")]
+    #[case::first_of_two_contexts(
+        "const A = \"pi\";\nconst A = \"pi\";\n",
+        "const A = \"omp\";\nconst A = \"pi\";\n"
+    )]
+    fn replace_within_changes_only_the_context(#[case] s: &str, #[case] want: &str) {
+        let mut s = s.to_owned();
+        s.replace_within(r#"const A = "pi";"#, "pi", "omp").unwrap();
+        assert_eq!(s, want);
+    }
+
+    /// Without the context, or without the old text in it, the string stays as it was.
+    #[rstest]
+    #[case::no_context(r#"const B = "pi";"#, "pi", ReplaceWithinError::MissingContext)]
+    #[case::no_old_text(r#"const A = "pi";"#, "omp", ReplaceWithinError::MissingOld)]
+    fn replace_within_without_the_text_changes_nothing(
+        #[case] context: &str,
+        #[case] old: &str,
+        #[case] want: ReplaceWithinError,
+    ) {
+        let mut s = r#"const A = "pi";"#.to_owned();
+        assert_eq!(s.replace_within(context, old, "new"), Err(want));
+        assert_eq!(s, r#"const A = "pi";"#);
+    }
+
+    #[rstest]
+    #[case::the_key_itself("a.b", "a.b", Some(""))]
+    #[case::a_parent_table("a.b.c", "a", Some("b.c"))]
+    #[case::a_nested_parent_table("a.b.c", "a.b", Some("c"))]
+    #[case::the_root("a.b", "", Some("a.b"))]
+    #[case::a_longer_segment("ab.c", "a", None)]
+    #[case::a_shorter_segment("a.c", "ab", None)]
+    #[case::a_child("a", "a.b", None)]
+    #[case::a_sibling("a.c", "a.b", None)]
+    fn strip_dotted_prefix(
+        #[case] key: &str,
+        #[case] prefix: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(key.strip_dotted_prefix(prefix), expected);
+        assert_eq!(key.has_dotted_prefix(prefix), expected.is_some());
+    }
+
+    proptest! {
+        #[test]
+        fn strip_dotted_prefix_returns_the_segments_after_the_prefix(
+            prefix in "[a-z_]{1,8}(\\.[a-z_]{1,8}){0,3}",
+            rest in "[a-z_]{1,8}(\\.[a-z_]{1,8}){0,3}",
+        ) {
+            let key = format!("{prefix}.{rest}");
+            prop_assert_eq!(key.strip_dotted_prefix(&prefix), Some(rest.as_str()));
+            prop_assert_eq!(prefix.strip_dotted_prefix(&prefix), Some(""));
+        }
+    }
 
     #[rstest]
     #[case::empty("", &[])]

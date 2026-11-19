@@ -29,6 +29,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             ".atuin.api.v1.WatchThreadsResponse.event",
             "#[allow(clippy::large_enum_variant)]",
         )
+        .type_attribute(
+            ".atuin.api.v1.WatchOrgThreadsResponse.event",
+            "#[allow(clippy::large_enum_variant)]",
+        )
         .compile_fds(descriptors)?;
 
     Ok(())

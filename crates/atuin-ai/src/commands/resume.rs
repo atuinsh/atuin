@@ -53,14 +53,17 @@ use atuin_client::ai_session::{Analysis, AtuinSessionId, HarnessKind, HarnessSes
 use atuin_client::settings::{AiSessionFilterMode, Settings};
 use atuin_client::theme::ThemeManager;
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use clap::Args;
+use atuin_common::time::DateTimeExt as _;
+use clap::builder::{PossibleValuesParser, TypedValueParser};
+use clap::{Args, ValueEnum};
 use eyre::{Result, bail};
+use jiff::tz::TimeZone;
 
 use super::session::{HarnessArg, one_line};
 use crate::resume_tui::catchup::{self, CatchUp, Held};
 use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
-use crate::resume_tui::source::{Relation, harness_label};
+use crate::resume_tui::source::{Relation, harness_arg, harness_label};
 use crate::resume_tui::{
     Outcome, Picker, ResumeContext, ResumePlan, Resumer, SessionRow, SessionSource, startup,
 };
@@ -94,7 +97,7 @@ pub struct Cmd {
     /// written out as a new session there, tool calls carried over as its own where it has a like
     /// tool (notes where they weren't captured whole), and resumed. One that went on separately on
     /// several machines needs `--branch`.
-    #[arg(long = "in", value_enum, value_name = "HARNESS")]
+    #[arg(long = "in", value_name = "HARNESS", value_parser = continue_in_parser())]
     continue_in: Option<HarnessArg>,
 
     /// Fork the thread QUERY names (by id, or a unique id prefix): it is written out as a new
@@ -139,6 +142,15 @@ pub struct Cmd {
     /// Report the result on stderr for the shell widget.
     #[arg(long, hide = true)]
     shell_widget: bool,
+}
+
+/// `--in` offers only the agents atuin can write a session for.
+fn continue_in_parser() -> impl TypedValueParser<Value = HarnessArg> {
+    let targets = HarnessArg::value_variants()
+        .iter()
+        .filter(|arg| harness_arg(HarnessKind::from(**arg)).is_some())
+        .filter_map(ValueEnum::to_possible_value);
+    PossibleValuesParser::new(targets).try_map(|name| HarnessArg::from_str(&name, false))
 }
 
 /// Where the result goes.
@@ -239,23 +251,22 @@ fn picker_has_a_terminal() -> bool {
 }
 
 /// What to say when `query` names several sessions and there's no terminal to pick one on: each
-/// on a line of its own, with its harness, when it last changed (in `offset`) and its title.
-fn ambiguous_note(query: &str, found: &[SessionRow], offset: time::UtcOffset) -> String {
+/// on a line of its own, with its harness, when it last changed (in `tz`) and its title.
+fn ambiguous_note(query: &str, found: &[SessionRow], tz: &TimeZone) -> String {
     let note = format!(
         "{query} names {} threads; run `atuin threads resume {query}` on a terminal to pick one:",
         found.len()
     );
-    note + &listing(found, offset)
+    note + &listing(found, tz)
 }
 
-/// `found`, each on a line of its own, with its harness, when it last changed (in `offset`) and
-/// its title.
-fn listing(found: &[SessionRow], offset: time::UtcOffset) -> String {
-    let format = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]");
+/// `found`, each on a line of its own, with its harness, when it last changed (in `tz`) and its
+/// title.
+fn listing(found: &[SessionRow], tz: &TimeZone) -> String {
     let width = found.iter().map(|r| harness_label(r.handle.harness).len()).max().unwrap_or(0);
     let mut note = String::new();
     for row in found {
-        let when = row.updated_at.to_offset(offset).format(&format).unwrap_or_default();
+        let when = tz.to_datetime(row.updated_at).display().ymd_hm();
         note.push_str(&format!(
             "\n  {:<width$}  {when}  {}  ({})",
             harness_label(row.handle.harness),
@@ -269,19 +280,14 @@ fn listing(found: &[SessionRow], offset: time::UtcOffset) -> String {
 /// What to say when `flag` (`--switch`, `--branch`, `--as-is`) is given with a `query` that names
 /// no single session: the picker would drop the flag, so it is an error, listing what `query`
 /// names.
-fn be_more_specific(
-    flag: &str,
-    query: &str,
-    found: &[SessionRow],
-    offset: time::UtcOffset,
-) -> String {
+fn be_more_specific(flag: &str, query: &str, found: &[SessionRow], tz: &TimeZone) -> String {
     let query = query.escape_non_printable();
     match found.len() {
         0 => format!("`{flag}` resumes the thread an id names: no thread has the id \"{query}\""),
         n => format!(
             "`{flag}` resumes the thread an id names: {query} names {n} threads; be more \
              specific:{}",
-            listing(found, offset)
+            listing(found, tz)
         ),
     }
 }
@@ -326,8 +332,7 @@ async fn no_single_session_for(
     } else {
         Vec::new()
     };
-    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-    bail!("{}", be_more_specific(flag, query, &found, offset))
+    bail!("{}", be_more_specific(flag, query, &found, &TimeZone::system()))
 }
 
 /// The sessions `query` names when it is an id naming several (see [`direct_match`]), for the
@@ -346,8 +351,7 @@ async fn ambiguous_matches(
         return Ok(Vec::new());
     }
     if !terminal {
-        let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-        bail!("{}", ambiguous_note(query, &found, offset));
+        bail!("{}", ambiguous_note(query, &found, &TimeZone::system()));
     }
     Ok(found)
 }
@@ -413,7 +417,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
         if settings.threads.capture {
             bail!("no threads here yet: the Atuin daemon hasn't recorded any");
         }
-        bail!("no threads here yet: turn them on with `atuin config enable threads`");
+        bail!("no threads here yet: turn them on with `atuin setup --only --threads --daemon`");
     }
     let source: Arc<dyn SessionSource> = Arc::new(SidecarSource::open(&path, &context).await?);
     startup("session database open");
@@ -484,8 +488,8 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
              resume <id>` (`atuin threads list` lists them)"
         );
     }
-    let mut themes = ThemeManager::from_settings(&settings.theme);
-    let theme = themes.load_theme(settings.theme.name.as_str(), settings.theme.max_depth);
+    let mut themes = ThemeManager::default();
+    let theme = themes.load_theme(settings.theme.name.as_str());
     let (outcome, note) = Picker {
         settings: &settings,
         theme,
@@ -567,7 +571,7 @@ async fn pick_head(
 ) -> Result<SourceId> {
     let analysis = source.analyse(&row.handle).await?;
     let heads = analysis.as_ref().map(Analysis::heads).unwrap_or_default();
-    let now = time::OffsetDateTime::now_utc();
+    let now = jiff::Timestamp::now();
     match catchup::pick_branch(heads, selector, now, here) {
         Ok(head) => Ok(head.source_id.clone()),
         Err(why) => {
@@ -613,7 +617,7 @@ fn choice_note(row: &SessionRow, held: &Held, here: &str) -> String {
     }
     if held.branches.len() > 1 {
         note.push_str("; `--branch` picks another:");
-        let now = time::OffsetDateTime::now_utc();
+        let now = jiff::Timestamp::now();
         for branch in &held.branches {
             let line = catchup::describe(&branch.head, now, here);
             note.push_str(&format!("\n  {}  {line}", branch.selector.escape_non_printable()));
@@ -657,7 +661,7 @@ async fn continue_plan(
             // Which of several branches to carry on is the user's to say, as for `--switch`.
             let analysis = source.analyse(&row.handle).await?;
             if let Some(analysis) = analysis.filter(Analysis::diverged) {
-                let (heads, now) = (analysis.heads(), time::OffsetDateTime::now_utc());
+                let (heads, now) = (analysis.heads(), jiff::Timestamp::now());
                 let message = format!(
                     "can't continue {}: it went {} ways: name the branch to continue with \
                      `--branch`:{}",
@@ -763,22 +767,26 @@ fn exec(plan: &ResumePlan) -> Result<()> {
     // would not resolve to. It is looked up as the check looked it up (a relative path against the
     // session's directory), and made absolute before changing directory, so a relative `PATH` entry
     // such as `.` finds what the check found; elsewhere the name is looked up as it was checked.
-    #[cfg(windows)]
+    use std::path::Path;
+
+    use atuin_common::executable::resolve_in_path;
     use atuin_common::path::AbsPathBuf;
 
-    #[cfg(windows)]
-    use crate::resume_tui::resumer;
-    #[cfg(windows)]
-    let program = match resumer::find_program(&resumer::program_to_check(plan)) {
-        Some(found) => AbsPathBuf::from_current_dir(found)?.into_path_buf(),
-        None => plan.program.clone().into(),
+    use crate::resume_tui::resumer::program_to_check;
+
+    let found = if cfg!(windows) {
+        let to_check = program_to_check(plan);
+        resolve_in_path(Path::new(&to_check)).map(AbsPathBuf::from_current_dir).transpose()?
+    } else {
+        None
     };
-    #[cfg(not(windows))]
-    let program = &plan.program;
     if let Some(cwd) = &plan.cwd {
         std::env::set_current_dir(cwd)?;
     }
-    let mut command = std::process::Command::new(program);
+    let mut command = match &found {
+        Some(found) => std::process::Command::new(found),
+        None => std::process::Command::new(&plan.program),
+    };
     command.args(&plan.args);
     if let Some(cwd) = &plan.cwd {
         // Keep $PWD in step, so harnesses that read it see the session's directory.
@@ -864,13 +872,13 @@ mod tests {
         use atuin_client::ai_session::HarnessKind;
 
         let mut claude = fake::row(HarnessKind::ClaudeCode, "7aaabc31-1631", "fix the flaky test");
-        claude.updated_at = time::macros::datetime!(2026-09-27 14:03 UTC);
+        claude.updated_at = "2026-09-27T14:03:00Z".parse::<jiff::Timestamp>().unwrap();
         let mut pi = fake::row(HarnessKind::Pi, "7aaabc31-1631", "plan the dotfiles sync");
-        pi.updated_at = time::macros::datetime!(2026-09-26 09:12 UTC);
+        pi.updated_at = "2026-09-26T09:12:00Z".parse::<jiff::Timestamp>().unwrap();
         let source = FakeSource::from_rows(vec![claude.clone(), pi.clone()]);
         assert!(direct_match(&source, "7aaabc31-1631").await.unwrap().is_none());
         assert_eq!(
-            ambiguous_note("7aaabc31", &[claude, pi], time::UtcOffset::UTC),
+            ambiguous_note("7aaabc31", &[claude, pi], &TimeZone::UTC),
             [
                 "7aaabc31 names 2 threads; run `atuin threads resume 7aaabc31` on a terminal to \
                  pick one:",
@@ -926,11 +934,11 @@ mod tests {
         use atuin_client::ai_session::HarnessKind;
 
         let mut claude = fake::row(HarnessKind::ClaudeCode, "7aaabc31-1631", "fix the flaky test");
-        claude.updated_at = time::macros::datetime!(2026-09-27 14:03 UTC);
+        claude.updated_at = "2026-09-27T14:03:00Z".parse::<jiff::Timestamp>().unwrap();
         let mut pi = fake::row(HarnessKind::Pi, "7aaabc31-1631", "plan the dotfiles sync");
-        pi.updated_at = time::macros::datetime!(2026-09-26 09:12 UTC);
+        pi.updated_at = "2026-09-26T09:12:00Z".parse::<jiff::Timestamp>().unwrap();
         assert_eq!(
-            be_more_specific("--branch", "7aaabc31", &[claude, pi], time::UtcOffset::UTC),
+            be_more_specific("--branch", "7aaabc31", &[claude, pi], &TimeZone::UTC),
             [
                 "`--branch` resumes the thread an id names: 7aaabc31 names 2 threads; be more \
                  specific:",
@@ -940,7 +948,7 @@ mod tests {
             .join("\n")
         );
         assert_eq!(
-            be_more_specific("--as-is", "flaky", &[], time::UtcOffset::UTC),
+            be_more_specific("--as-is", "flaky", &[], &TimeZone::UTC),
             "`--as-is` resumes the thread an id names: no thread has the id \"flaky\""
         );
 
@@ -1053,10 +1061,10 @@ mod tests {
 
         let hostile = "fix\nthe \x1b]0;pwned\x07flaky\r\ttest\u{9b}2J";
         let mut claude = fake::row(HarnessKind::ClaudeCode, "7aaabc31-1631", hostile);
-        claude.updated_at = time::macros::datetime!(2026-09-27 14:03 UTC);
+        claude.updated_at = "2026-09-27T14:03:00Z".parse::<jiff::Timestamp>().unwrap();
         let mut pi = fake::row(HarnessKind::Pi, "7aaabc31-1631\x1b[2J", "plan");
-        pi.updated_at = time::macros::datetime!(2026-09-26 09:12 UTC);
-        let note = ambiguous_note("7aaabc31", &[claude, pi], time::UtcOffset::UTC);
+        pi.updated_at = "2026-09-26T09:12:00Z".parse::<jiff::Timestamp>().unwrap();
+        let note = ambiguous_note("7aaabc31", &[claude, pi], &TimeZone::UTC);
         assert!(!note.contains(|c: char| c.is_control() && c != '\n'), "{note:?}");
         assert_eq!(note.lines().count(), 3, "{note}");
         assert!(note.contains("  fix the ]0;pwnedflaky test2J  (7aaabc31-1631)"), "{note}");
@@ -1127,6 +1135,7 @@ mod tests {
         let cli = Cli::try_parse_from(["resume", "7f3c9a12", "--in", "opencode"]).unwrap();
         assert_eq!(cli.cmd.continue_in, Some(HarnessArg::Opencode));
         assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "cursor"]).is_err());
+        assert!(Cli::try_parse_from(["resume", "7f3c9a12", "--in", "amp"]).is_err());
     }
 
     /// `--in` takes the harness names the listings show, and `claude` for `claude-code`.

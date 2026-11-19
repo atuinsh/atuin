@@ -13,7 +13,10 @@ use atuin_client::settings::{
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{Alignment as Align, EllipsizeExt as _, Measure};
-use atuin_common::time::OffsetDateTimeExt as _;
+use atuin_common::time::{DateTimeExt as _, TimestampExt as _};
+use jiff::Timestamp;
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use ratatui::backend::FromCrossterm;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -24,7 +27,6 @@ use ratatui::widgets::{
     StatefulWidget, Widget,
 };
 use ratatui::{Frame, symbols};
-use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use super::chooser::Destination;
@@ -185,13 +187,13 @@ pub(super) fn repo_name(row: &SessionRow) -> String {
 }
 
 /// Whether the session itself is running: its own newest message is recent.
-pub(super) fn is_live(now: OffsetDateTime, row: &SessionRow) -> bool {
+pub(super) fn is_live(now: Timestamp, row: &SessionRow) -> bool {
     now.saturating_duration_since(row.active_at).as_secs() < LIVE_SECS
 }
 
 /// Whether a fork listed beneath the row is running, and not the row's own (a subagent doesn't
 /// count: it isn't listed).
-pub(super) fn is_fork_live(now: OffsetDateTime, row: &SessionRow) -> bool {
+pub(super) fn is_fork_live(now: Timestamp, row: &SessionRow) -> bool {
     !is_live(now, row)
         && row.forks_at.is_some_and(|at| now.saturating_duration_since(at).as_secs() < LIVE_SECS)
 }
@@ -329,7 +331,9 @@ pub(super) fn harness_style(theme: &Theme, harness: HarnessKind) -> Style {
         HarnessKind::Codex | HarnessKind::Grok => Meaning::AlertInfo,
         HarnessKind::Opencode | HarnessKind::Amp => Meaning::Guidance,
         HarnessKind::Pi | HarnessKind::Omp => Meaning::Important,
-        HarnessKind::Copilot | HarnessKind::Kiro | HarnessKind::Unknown => Meaning::Annotation,
+        HarnessKind::Copilot | HarnessKind::Kiro | HarnessKind::Hermes | HarnessKind::Unknown => {
+            Meaning::Annotation
+        }
     };
     style(theme, meaning).add_modifier(Modifier::BOLD)
 }
@@ -365,13 +369,13 @@ pub fn list_lines(
     shape: RowShape,
     inverted: bool,
     chooser: Option<(usize, usize)>,
-    day_of: impl Fn(&SessionRow) -> time::Date,
+    day_of: impl Fn(&SessionRow) -> Date,
 ) -> (Vec<ListLine>, Vec<usize>) {
     let mut lines = Vec::with_capacity(rows.len() * (shape.height() + 1));
     let mut starts = Vec::with_capacity(rows.len());
     // A fork goes under its root's day, beside it, whenever it was last active itself: its root
     // is the one over it on screen.
-    let mut days: Vec<time::Date> = rows.iter().map(&day_of).collect();
+    let mut days: Vec<Date> = rows.iter().map(&day_of).collect();
     let mut root = None;
     let order: Vec<usize> = if inverted {
         (0..rows.len()).collect()
@@ -428,8 +432,8 @@ pub struct SessionList<'a> {
     block: Option<Block<'a>>,
     inverted: bool,
     alternate_highlight: bool,
-    now: OffsetDateTime,
-    tz: UtcOffset,
+    now: Timestamp,
+    tz: TimeZone,
     indicator: &'a str,
     theme: &'a Theme,
     cells: &'a [(Column, u16)],
@@ -496,10 +500,10 @@ impl StatefulWidget for SessionList<'_> {
             return;
         }
         state.selected = state.selected.min(self.rows.len() - 1);
-        let (now, tz) = (self.now, self.tz);
+        let (now, tz) = (self.now, self.tz.clone());
         let chooser = self.chooser.map(|(c, _)| (state.selected, c.len()));
         let (lines, starts) = list_lines(self.rows, self.shape, self.inverted, chooser, |r| {
-            clock::list_day(now, r.updated_at, tz)
+            clock::list_day(now, r.updated_at, &tz)
         });
 
         // The selected row (the chooser and its border included), with its own day's heading when
@@ -535,7 +539,7 @@ impl StatefulWidget for SessionList<'_> {
         match (chooser.is_some(), state.chooser_shift) {
             (true, None) => {
                 let (plain, _) = list_lines(self.rows, self.shape, self.inverted, None, |r| {
-                    clock::list_day(now, r.updated_at, tz)
+                    clock::list_day(now, r.updated_at, &tz)
                 });
                 let shift = title(&lines)
                     .zip(title(&plain))
@@ -635,8 +639,8 @@ impl StatefulWidget for SessionList<'_> {
                         y,
                         row_modifier: Modifier::empty(),
                     };
-                    let day = clock::list_day(now, self.rows[row].updated_at, tz);
-                    self.render_heading(&mut w, &clock::day_heading(now, day, tz));
+                    let day = clock::list_day(now, self.rows[row].updated_at, &tz);
+                    self.render_heading(&mut w, &clock::day_heading(now, day, &tz));
                 }
                 continue;
             }
@@ -679,8 +683,8 @@ impl StatefulWidget for SessionList<'_> {
                     w.put(&format!("{l}{}{r}", symbols::line::HORIZONTAL.repeat(across)), border);
                 }
                 ListLine::Heading(_) => {
-                    let day = clock::list_day(now, self.rows[row].updated_at, tz);
-                    self.render_heading(&mut w, &clock::day_heading(now, day, tz));
+                    let day = clock::list_day(now, self.rows[row].updated_at, &tz);
+                    self.render_heading(&mut w, &clock::day_heading(now, day, &tz));
                 }
                 ListLine::Title(_) => {
                     state.max_entries += 1;
@@ -787,9 +791,9 @@ impl SessionList<'_> {
     fn when(&self, row: &SessionRow) -> String {
         // A fork is under its root's day, which may not be its own.
         if self.shape.by_day && row.tree.is_empty() {
-            clock::time_in_day(self.now, row.updated_at, self.tz)
+            clock::time_in_day(self.now, row.updated_at, &self.tz)
         } else {
-            clock::When::of(self.now, row.updated_at, self.tz).short().to_owned()
+            clock::When::of(self.now, row.updated_at, &self.tz).short().to_owned()
         }
     }
 
@@ -1462,7 +1466,7 @@ impl State {
             inverted: invert,
             alternate_highlight: self.keymap_mode == KeymapMode::VimNormal,
             now: (self.now)(),
-            tz: settings.timezone.0,
+            tz: settings.timezone.time_zone(),
             indicator: &indicator,
             theme,
             cells: &cells,
@@ -1516,7 +1520,7 @@ impl State {
         }
 
         if let Some(pane) = pane {
-            self.draw_side(f, pane, settings.timezone.0, theme);
+            self.draw_side(f, pane, &settings.timezone.time_zone(), theme);
         }
 
         if compactness == Compactness::Ultracompact {
@@ -1906,7 +1910,7 @@ impl State {
         };
 
         let now = (self.now)();
-        let tz = settings.timezone.0;
+        let tz = &settings.timezone.time_zone();
         let key = style(theme, Meaning::Annotation);
         let base = style(theme, Meaning::Base);
         let width = usize::from(inner.width).saturating_sub(12);
@@ -1916,7 +1920,7 @@ impl State {
             Line::from(line)
         };
         let text = |s: String| vec![Span::styled(s, base)];
-        let when = |ts: OffsetDateTime| format_when(ts, now, tz);
+        let when = |ts: Timestamp| format_when(ts, now, tz);
 
         let mut lines = vec![
             field("ID", vec![Span::styled(
@@ -2085,7 +2089,7 @@ impl State {
 
     /// The detail pane beside the list, in `pane`: the selected session, its conversation
     /// scrolling under what it is, with a scrollbar in the pane's right margin.
-    fn draw_side(&mut self, f: &mut Frame, pane: Rect, tz: UtcOffset, theme: &Theme) {
+    fn draw_side(&mut self, f: &mut Frame, pane: Rect, tz: &TimeZone, theme: &Theme) {
         let text = pane.inner(ratatui::layout::Margin::new(1, 0));
         let Some(row) = self.selected().cloned() else {
             // Nothing listed (the list says why): nothing to read either.
@@ -2137,7 +2141,7 @@ impl State {
         children: &[SessionRow],
         room: usize,
         width: u16,
-        tz: UtcOffset,
+        tz: &TimeZone,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let key = style(theme, Meaning::Annotation);
@@ -2226,8 +2230,8 @@ fn scope_label(mode: FilterMode) -> &'static str {
 
 /// A full date and time, with what it doesn't already say beside it: `(12m ago)`,
 /// `(yesterday)`, `(Monday)`.
-fn format_when(ts: OffsetDateTime, now: OffsetDateTime, tz: UtcOffset) -> String {
-    let at = ts.to_offset(tz).display().ymd_hm();
+fn format_when(ts: Timestamp, now: Timestamp, tz: &TimeZone) -> String {
+    let at = tz.to_datetime(ts).display().ymd_hm();
     match clock::beside_date(now, ts, tz) {
         Some(when) => format!("{at}  ({when})"),
         None => at.to_string(),
@@ -2280,9 +2284,9 @@ mod tests {
     fn only_a_listed_fork_marks_its_root_live(#[case] fork_days: Option<i64>, #[case] live: bool) {
         let now = crate::resume_tui::fake::now();
         let mut row = crate::resume_tui::fake::row(HarnessKind::ClaudeCode, "a", "t");
-        row.active_at = now - time::Duration::days(1);
+        row.active_at = now - jiff::SignedDuration::from_hours(24);
         row.updated_at = now;
-        row.forks_at = fork_days.map(|d| now - time::Duration::days(d));
+        row.forks_at = fork_days.map(|d| now - jiff::SignedDuration::from_hours(24 * d));
         assert_eq!(is_fork_live(now, &row), live);
     }
 
@@ -2341,9 +2345,9 @@ mod tests {
             .collect();
         // The first two on one day, the third on another.
         let day = |r: &SessionRow| {
-            let d = time::macros::date!(2026 - 10 - 08);
+            let d = jiff::civil::date(2026, 10, 8);
             if r.handle.session.as_ref() == "s2" {
-                d.previous_day().unwrap()
+                d.yesterday().unwrap()
             } else {
                 d
             }
@@ -2383,11 +2387,11 @@ mod tests {
             })
             .collect();
         let day = |r: &SessionRow| {
-            let d = time::macros::date!(2026 - 10 - 08);
+            let d = jiff::civil::date(2026, 10, 8);
             if r.handle.session.as_ref() == "s0" {
                 d
             } else {
-                d.previous_day().unwrap()
+                d.yesterday().unwrap()
             }
         };
         let (lines, _) = list_lines(&rows, BY_DAY, inverted, None, day);

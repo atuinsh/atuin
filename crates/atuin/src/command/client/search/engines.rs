@@ -53,7 +53,7 @@ impl SearchState {
     fn filter_mode_available(&self, mode: FilterMode, settings: &Settings) -> bool {
         match mode {
             FilterMode::Global | FilterMode::SessionPreload => self.custom_context.is_none(),
-            FilterMode::Workspace => settings.workspaces && self.context.git_root.is_some(),
+            FilterMode::Workspace => settings.workspaces && self.context.vcs_root.is_some(),
             _ => true,
         }
     }

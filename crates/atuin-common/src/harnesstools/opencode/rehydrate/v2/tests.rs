@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use rstest::rstest;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection, Executor};
-use time::OffsetDateTime;
 
 use super::*;
+use crate::harnesstools::continuation::tests::{CLAUDE, OPENCODE};
 use crate::harnesstools::opencode::rehydrate::import;
 use crate::harnesstools::opencode::rehydrate::tests::{SES, captured, every_kind};
 use crate::harnesstools::opencode::session::projection::projected;
@@ -114,7 +115,7 @@ fn session(id: &str, title: Option<&str>, messages: Vec<RehydrateMessage>) -> Re
         original_cwd: Some(PathBuf::from("/work/proj")),
         git_branch: None,
         model: None,
-        started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
+        started_at: messages.first().map_or(Timestamp::UNIX_EPOCH, |m| m.timestamp),
         messages,
         fork_of: None,
     }
@@ -402,7 +403,7 @@ fn prompt(id: &str, parent: Option<&str>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::User,
         content: vec![Content::Text(format!("said {id}"))],
         model: None,
@@ -499,7 +500,7 @@ fn a_call_is_written_on_its_provider(
     let row = RehydrateMessage {
         source_id: "prt_1".to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::Assistant,
         content: vec![Content::Text("hi".to_owned())],
         model: Some(model.to_owned()),
@@ -525,7 +526,7 @@ fn a_call_without_a_result_is_written_aborted() {
     let mut row = RehydrateMessage {
         source_id: "prt_1".to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::Assistant,
         content: vec![Content::ToolUse(ToolUse {
             id: "call_1".to_owned().into(),
@@ -617,6 +618,56 @@ fn a_tool_s_output_is_written_as_opencode_2_keeps_it(
     let mut state = tool(&call, Some(&result), None, 0)["state"].clone();
     state.as_object_mut().unwrap().remove("input");
     assert_eq!(state, want);
+}
+
+/// A continuation's calls carried as opencode's own tools are written as opencode 2's: `shell`,
+/// and file tools that name their file `path`.
+#[rstest]
+fn a_continuation_s_calls_are_opencode_2_s_tools() {
+    let calls = [
+        ("c1", "Bash", json!({"command": "ls"})),
+        ("c2", "Read", json!({"file_path": "/a.rs", "offset": 2, "limit": 3})),
+        ("c3", "Write", json!({"file_path": "/b.rs", "content": "x"})),
+        ("c4", "Edit", json!({"file_path": "/a.rs", "old_string": "a", "new_string": "b"})),
+    ];
+    let call = |(id, name, input): &(&str, &str, Value)| {
+        Content::ToolUse(ToolUse {
+            id: (*id).to_owned().into(),
+            name: (*name).to_owned(),
+            input: input.clone(),
+        })
+    };
+    let answer = |(id, ..): &(&str, &str, Value)| {
+        Content::ToolResult(ToolResult {
+            call: (*id).to_owned().into(),
+            output: json!("ok"),
+            error: false,
+        })
+    };
+    let original = session("orig", None, vec![
+        prompt("u1", None),
+        said_by_assistant("a1", calls.iter().map(call).collect()),
+        RehydrateMessage {
+            role: Role::Tool,
+            ..said_by_assistant("t1", calls.iter().map(answer).collect())
+        },
+    ]);
+    let continued = continuation::continue_in(CLAUDE, &original, None, OPENCODE).unwrap();
+    let written = export(&continued.session);
+    let tools: Vec<(String, Value)> = written["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
+        .filter(|item| item["type"] == "tool")
+        .map(|item| (item["name"].as_str().unwrap().to_owned(), item["state"]["input"].clone()))
+        .collect();
+    pretty_assertions::assert_eq!(tools, [
+        ("shell".to_owned(), json!({"command": "ls"})),
+        ("read".to_owned(), json!({"path": "/a.rs", "offset": 2, "limit": 3})),
+        ("write".to_owned(), json!({"path": "/b.rs", "content": "x"})),
+        ("edit".to_owned(), json!({"path": "/a.rs", "oldString": "a", "newString": "b"})),
+    ]);
 }
 
 /// A directory programs can be run from, next to the test binary: CI's temporary directory is

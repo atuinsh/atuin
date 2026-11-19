@@ -1,13 +1,13 @@
 use std::io::{self, Write as _};
 
 use atuin_client::database::{Sqlite, current_context};
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{Dialect, FilterMode, Settings};
 use atuin_client::theme::Theme;
 use atuin_history::stats::{compute, is_ignored, pretty_print};
 use clap::Parser;
 use eyre::Result;
-use interim::parse_date_string;
-use time::{Duration, OffsetDateTime, Time};
+use jiff::civil::Date;
+use jiff::{Timestamp, ToSpan as _, ZonedDateTime};
 use tracing::instrument;
 
 use super::halloween::HalloweenExt as _;
@@ -62,32 +62,8 @@ impl Cmd {
         // OR several, but stats only ever scopes to one at a time.
         let filter = self.filter_mode.map(|f| vec![f]).unwrap_or_default();
 
-        let now = OffsetDateTime::now_utc().to_offset(settings.timezone.0);
-        let last_night = now.replace_time(Time::MIDNIGHT);
-
-        let range = if words.as_str() == "all" {
-            None
-        } else if words.trim() == "today" {
-            let start = last_night;
-            let end = start + Duration::days(1);
-            Some((start, end))
-        } else if words.trim() == "month" {
-            let end = last_night;
-            let start = end - Duration::days(31);
-            Some((start, end))
-        } else if words.trim() == "week" {
-            let end = last_night;
-            let start = end - Duration::days(7);
-            Some((start, end))
-        } else if words.trim() == "year" {
-            let end = last_night;
-            let start = end - Duration::days(365);
-            Some((start, end))
-        } else {
-            let start = parse_date_string(&words, now, settings.dialect.into())?;
-            let end = start + Duration::days(1);
-            Some((start, end))
-        };
+        let now = Timestamp::now().to_zoned_datetime(settings.timezone.time_zone());
+        let range = Self::range(&words, &now, settings.dialect)?;
 
         let history = db.list(filter, &context, None, false, false, range).await?;
 
@@ -101,7 +77,7 @@ impl Cmd {
             let witching = history
                 .iter()
                 .filter(|h| {
-                    h.timestamp.to_offset(settings.timezone.0).hour() == 3
+                    now.time_zone().to_datetime(h.timestamp).hour() == 3
                         && !is_ignored(settings, &h.command)
                 })
                 .count();
@@ -111,5 +87,84 @@ impl Cmd {
         }
 
         Ok(())
+    }
+
+    /// The instants `period` covers, as seen at `now`; `None` for all of history.
+    ///
+    /// A day runs from its own start, which DST can move off midnight, to the next day's.
+    fn range(
+        period: &str,
+        now: &ZonedDateTime,
+        dialect: Dialect,
+    ) -> Result<Option<(Timestamp, Timestamp)>> {
+        let tz = now.time_zone();
+        let today = now.date();
+        let start_of =
+            |day: Date| -> Result<Timestamp> { Ok(day.to_zoned_datetime(tz.clone())?.timestamp()) };
+        let days_before_today = |days: i64| -> Result<_> {
+            Ok((start_of(today.checked_sub(days.days())?)?, start_of(today)?))
+        };
+
+        let range = match period.trim() {
+            "all" => return Ok(None),
+            "today" => (start_of(today)?, start_of(today.tomorrow()?)?),
+            "month" => days_before_today(31)?,
+            "week" => days_before_today(7)?,
+            "year" => days_before_today(365)?,
+            _ => {
+                let start = dialect.parse_date(period, now)?;
+                // A date names its whole day; a time, the day from that time.
+                let end = if start == start.start_of_day()? {
+                    start_of(start.date().tomorrow()?)?
+                } else {
+                    start.checked_add(1.day())?.timestamp()
+                };
+                (start.timestamp(), end)
+            }
+        };
+        Ok(Some(range))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::{Timestamp, ZonedDateTime};
+    use rstest::rstest;
+
+    use super::{Cmd, Dialect};
+
+    /// America/Santiago skips from 00:00 to 01:00 on 2026-09-06, so that day starts at 01:00.
+    #[rstest]
+    #[case::week_into_a_short_day(
+        "2026-09-06T12:00:00-03:00[America/Santiago]",
+        "week",
+        Some(("2026-08-30T00:00:00-04:00", "2026-09-06T01:00:00-03:00"))
+    )]
+    #[case::today_starting_after_a_gap(
+        "2026-09-06T12:00:00-03:00[America/Santiago]",
+        "today",
+        Some(("2026-09-06T01:00:00-03:00", "2026-09-07T00:00:00-03:00"))
+    )]
+    #[case::a_date_starting_after_a_gap(
+        "2026-09-10T12:00:00-03:00[America/Santiago]",
+        "2026-09-06",
+        Some(("2026-09-06T01:00:00-03:00", "2026-09-07T00:00:00-03:00"))
+    )]
+    #[case::a_time_names_the_day_from_it(
+        "2026-09-10T12:00:00-03:00[America/Santiago]",
+        "2026-09-08 15:00",
+        Some(("2026-09-08T15:00:00-03:00", "2026-09-09T15:00:00-03:00"))
+    )]
+    #[case::all("2026-09-10T12:00:00-03:00[America/Santiago]", "all", None)]
+    fn range_runs_from_the_start_of_each_day(
+        #[case] now: &str,
+        #[case] period: &str,
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        let now: ZonedDateTime = now.parse().unwrap();
+        let expected = expected.map(|(start, end)| {
+            (start.parse::<Timestamp>().unwrap(), end.parse::<Timestamp>().unwrap())
+        });
+        assert_eq!(Cmd::range(period, &now, Dialect::Uk).unwrap(), expected);
     }
 }

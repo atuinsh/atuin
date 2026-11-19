@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::ccode::session::{CcodeMessage, CcodeSession};
@@ -29,7 +29,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
             Some(RehydrateMessage {
                 source_id: m.id()?.to_string(),
                 parent_source_id: m.parent_id().map(|p| p.to_string()),
-                timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                timestamp: m.timestamp().unwrap_or(Timestamp::UNIX_EPOCH),
                 role: m.role(),
                 content: m.content(),
                 model: m.model(),
@@ -52,7 +52,7 @@ fn session(id: &str, cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSe
         original_cwd: Some(PathBuf::from("/elsewhere/proj")),
         git_branch: Some("main".to_owned()),
         model: None,
-        started_at: OffsetDateTime::UNIX_EPOCH,
+        started_at: Timestamp::UNIX_EPOCH,
         messages,
         fork_of: None,
     }
@@ -316,7 +316,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role,
         content,
         model: None,
@@ -685,6 +685,69 @@ fn an_edits_result_gets_its_record_back(
     let result = written.iter().find(|l| l["uuid"] == "t1").unwrap();
     assert_eq!(result["toolUseResult"], record);
     // Read back, the line carries the same patch.
+    let read: CcodeMessage = serde_json::from_value(result.clone()).unwrap();
+    assert!(read.content().contains(&Content::Patch(patch)));
+}
+
+/// A shell command's result whose patch capture kept is written with the record Claude Code shows
+/// its diff from (`bashEditDiff`), an added file flagged even without hunks, the other files
+/// without hunks counted past the diffs, and reads back as the same patch.
+#[rstest]
+fn a_shell_commands_result_gets_its_diff_back(projects: TempDir) {
+    let call = ToolCallId::from("toolu_1".to_owned());
+    let file = |path: &str, change, hunks| crate::harnesstools::session::FilePatch {
+        path: path.into(),
+        change,
+        moved_to: None,
+        hunks,
+    };
+    let patch = Patch {
+        call: call.clone(),
+        files: vec![
+            file("/w/a.rs", Change::Update, vec![crate::harnesstools::session::Hunk {
+                old_start: 1,
+                old_lines: 2,
+                new_start: 1,
+                new_lines: 2,
+                lines: vec![" a".into(), "-b".into(), "+c".into()],
+            }]),
+            file("/w/new.txt", Change::Add, Vec::new()),
+            file("/w/b.rs", Change::Update, Vec::new()),
+        ],
+    };
+    let messages = vec![
+        message("u1", None, Role::User, vec![Content::Text("fix it".into())]),
+        message("a1", Some("u1"), Role::Assistant, vec![Content::ToolUse(ToolUse {
+            id: call.clone(),
+            name: "Bash".into(),
+            input: json!({"command": "sed -i s/b/c/ a.rs && cargo fmt"}),
+        })]),
+        message("t1", Some("a1"), Role::Tool, vec![
+            Content::ToolResult(ToolResult {
+                call,
+                output: json!("done"),
+                error: false,
+            }),
+            Content::Patch(patch.clone()),
+        ]),
+    ];
+    let session = session("5d1f0b1e-4a8e-4f1b-9d59-2c0f2f3f0a11", projects.path(), messages);
+    let written = lines(&rehydrate_into(projects.path(), &session).unwrap());
+    let result = written.iter().find(|l| l["uuid"] == "t1").unwrap();
+    assert_eq!(
+        result["toolUseResult"],
+        json!({
+            "stdout": "done", "stderr": "", "interrupted": false, "isImage": false,
+            "noOutputExpected": false,
+            "bashEditDiff": {
+                "files": [{"filePath": "/w/a.rs", "hunks": [{"oldStart": 1, "oldLines": 2,
+                    "newStart": 1, "newLines": 2, "lines": [" a", "-b", "+c"]}]},
+                    {"filePath": "/w/new.txt", "hunks": [], "created": true}],
+                "moreFiles": 1,
+                "changedFiles": ["/w/a.rs", "/w/new.txt", "/w/b.rs"],
+            },
+        })
+    );
     let read: CcodeMessage = serde_json::from_value(result.clone()).unwrap();
     assert!(read.content().contains(&Content::Patch(patch)));
 }

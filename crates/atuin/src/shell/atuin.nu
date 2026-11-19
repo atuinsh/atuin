@@ -81,6 +81,9 @@ def _atuin_mark_output_end [exit_code: int] {
 # Magic token to make sure we don't record commands run by keybindings
 let ATUIN_KEYBINDING_TOKEN = $"# (random uuid)"
 
+# Nushell 0.115 added helix mode. This variable is used by the keybinding snippets.
+let _atuin_has_helix_mode = (version).minor >= 115 or (version).major > 0
+
 let _atuin_pre_execution = {||
     if ($nu | get history-enabled?) == false {
         return

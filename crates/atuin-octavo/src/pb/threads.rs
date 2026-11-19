@@ -1,15 +1,16 @@
 use std::fmt;
-use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 
 use atuin_client::ai_session::{
-    AtuinSessionId, HarnessSession as DomainHarnessSession, MAX_ROW_TOKENS, Message,
+    AtuinSessionId, HarnessKind, HarnessSession as DomainHarnessSession, MAX_ROW_TOKENS, Message,
+    NativeSessionId,
 };
-use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::session::{
     Change, Content, FilePatch, Hunk, ParentKind, Patch, Role, StopReason, ToolResult, ToolUse,
 };
+use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::string::{Bounded, NonNulStr, TooLong};
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::RecordId;
 use prost::Message as _;
 use serde_json::Value;
@@ -18,8 +19,8 @@ use uuid::Uuid;
 
 use super::content_block::{self, Block, file_patch};
 use super::{
-    CapturedThreadMessage, ContentBlock, HarnessSession, InsertThreadMessagesRequest, NotUuidV7,
-    ThreadMessage, ThreadParentKind, UuidV7, thread_message,
+    CapturedThreadMessage, ContentBlock, HarnessSession, NotUuidV7, ThreadMessage,
+    ThreadParentKind, UuidV7, thread_message,
 };
 
 /// The most one message may encode to, which holds the strings of its content to what Octavo
@@ -110,7 +111,7 @@ impl fmt::Display for Field {
 /// Why a key can't go to Octavo.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum KeyError {
-    #[error("{field} is {len} bytes, over the {MAX_ID_BYTES} Octavo takes")]
+    #[error("{field} is {len} bytes, over the {MAX_ID_BYTES} Atuin for Teams takes")]
     TooLong {
         field: Field,
         len: usize,
@@ -124,7 +125,7 @@ pub enum KeyError {
 /// Why a [`Message`] can't be sent to Octavo.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ThreadMessageConversionError {
-    #[error("record id {0} is not a UUIDv7, so Octavo can't store it")]
+    #[error("record id {0} is not a UUIDv7, so Atuin for Teams can't store it")]
     RecordId(RecordId),
     #[error("message {0} names no atuin session id")]
     NoAtuinId(RecordId),
@@ -139,7 +140,9 @@ pub enum ThreadMessageConversionError {
         id: RecordId,
         source: KeyError,
     },
-    #[error("message {id} is {len} bytes encoded, over the {MAX_MESSAGE_BYTES} Octavo takes")]
+    #[error(
+        "message {id} is {len} bytes encoded, over the {MAX_MESSAGE_BYTES} Atuin for Teams takes"
+    )]
     TooLarge {
         id: RecordId,
         len: usize,
@@ -233,11 +236,13 @@ impl TryFrom<Message> for CapturedThreadMessage {
                     .transpose()
                     .map_err(at)?
                     .map(Into::into),
-                timestamp: Some(prost_types::Timestamp {
-                    seconds: timestamp
-                        .unix_timestamp()
-                        .clamp(*TIMESTAMP_SECONDS.start(), *TIMESTAMP_SECONDS.end()),
-                    nanos: timestamp.nanosecond().cast_signed(),
+                timestamp: Some({
+                    let (seconds, nanos) = timestamp.to_timespec();
+                    prost_types::Timestamp {
+                        seconds: seconds
+                            .clamp(*TIMESTAMP_SECONDS.start(), *TIMESTAMP_SECONDS.end()),
+                        nanos,
+                    }
                 }),
                 role: role.into(),
                 role_label: role_label.map(Into::into),
@@ -272,75 +277,35 @@ impl TryFrom<Message> for CapturedThreadMessage {
     }
 }
 
-/// The messages of one `InsertThreadMessages`: at most [`Self::MAX_MESSAGES`], encoding to at most
-/// 1 MiB unless the batch holds one. Only [`Self::batches`] builds one and [`Self::halves`] splits
-/// one, so no request past those limits goes up.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ThreadBatch(Vec<CapturedThreadMessage>);
-
-impl ThreadBatch {
-    /// The most messages one `InsertThreadMessages` takes.
-    pub const MAX_MESSAGES: NonZeroU32 = NonZeroU32::new(500).unwrap();
-    /// The most a batch of more than one message encodes to: its request goes up inside the default
-    /// 30s `network_timeout` at 0.28 Mbit/s, and a lone message of up to [`MAX_MESSAGE_BYTES`]
-    /// stays far under the 4 MiB a server may cap a request body at.
-    const MAX_BYTES: usize = 1 << 20;
-
-    /// `messages` in order, cut into batches.
-    #[must_use]
-    pub fn batches(messages: Vec<CapturedThreadMessage>) -> Vec<Self> {
-        let max_messages = Self::MAX_MESSAGES.get() as usize;
-        let mut batches: Vec<Self> = Vec::new();
-        let mut batch_bytes = 0;
-        for message in messages {
-            let len = Self::framed_len(&message);
-            match batches.last_mut() {
-                Some(Self(batch))
-                    if batch.len() < max_messages && batch_bytes + len <= Self::MAX_BYTES =>
-                {
-                    batch_bytes += len;
-                    batch.push(message);
-                }
-                _ => {
-                    batch_bytes = len;
-                    batches.push(Self(vec![message]));
-                }
-            }
-        }
-        batches
-    }
-
-    /// The batch in two, the earlier messages first, or the batch back whole when it holds one
-    /// message. Each half of a batch is one too.
-    pub fn halves(mut self) -> Result<(Self, Self), Self> {
-        if self.0.len() < 2 {
-            return Err(self);
-        }
-        let back = self.0.split_off(self.0.len() / 2);
-        Ok((self, Self(back)))
-    }
-
-    #[must_use]
-    pub fn messages(&self) -> &[CapturedThreadMessage] {
-        &self.0
-    }
-
-    /// What `message` adds to the `InsertThreadMessagesRequest` holding it, which has no other
-    /// field.
-    fn framed_len(message: &CapturedThreadMessage) -> usize {
-        let len = message.encoded_len();
-        // The tag of `messages`, field 1, takes a byte.
-        1 + prost::length_delimiter_len(len) + len
-    }
-}
-
-impl From<ThreadBatch> for InsertThreadMessagesRequest {
-    fn from(ThreadBatch(messages): ThreadBatch) -> Self {
-        Self { messages }
-    }
-}
-
 impl HarnessSession {
+    /// `session` as Octavo names its thread, or `None` for one it never stores: of no known harness,
+    /// or with a session id it refuses.
+    #[must_use]
+    pub fn of_thread(session: DomainHarnessSession) -> Option<Self> {
+        Self::from_captured(Field::ThreadSessionId, session).ok().flatten()
+    }
+
+    /// The thread Octavo names so, as [`Self::of_thread`] names it: `None` for a harness this
+    /// build doesn't know.
+    #[must_use]
+    pub fn thread(&self) -> Option<DomainHarnessSession> {
+        let harness = AnyHarness::from_name(&self.harness).ok()?;
+        Some(DomainHarnessSession {
+            harness: HarnessKind::from(&harness),
+            session: NativeSessionId::from(self.session_id.clone()),
+        })
+    }
+
+    /// The thread whose share holds `message`: its parent for a subagent's, else its own.
+    #[must_use]
+    pub fn sharing(message: &Message) -> Option<Self> {
+        let thread = match (&message.parent, message.parent_kind) {
+            (Some(parent), Some(ParentKind::Subagent)) => parent.clone(),
+            _ => message.session.clone(),
+        };
+        Self::of_thread(thread)
+    }
+
     /// `session`, the key of `field`, as Octavo names a thread, or `None` for a session of no known
     /// harness.
     fn from_captured(
@@ -432,6 +397,8 @@ impl ContentBlock {
                 Block::ReasoningSummary(content_block::ReasoningSummary { tokens: None })
             }
             Content::Other(_) => return Ok(None),
+            // The store holds back a message with an unknown block until a build knows its kind.
+            Content::Unknown(_) => return Ok(None),
             Content::ReasoningSummary { tokens } => {
                 Block::ReasoningSummary(content_block::ReasoningSummary { tokens })
             }
@@ -550,17 +517,41 @@ impl From<Payload> for String {
 mod tests {
     use std::path::PathBuf;
 
-    use atuin_client::ai_session::{HarnessKind, NativeSessionId, SourceId};
+    use atuin_client::ai_session::SourceId;
     use atuin_common::harnesstools::session::{ToolCallId, Usage};
     use atuin_domain::record::HostId as DomainHostId;
     use prost_types::{FileDescriptorProto, FileDescriptorSet, Timestamp};
     use rstest::{fixture, rstest};
     use serde_json::json;
-    use time::macros::datetime;
     use uuid::Builder;
 
     use super::*;
-    use crate::pb::{HostId, InsertThreadMessagesRequest};
+    use crate::pb::{HostId, InsertThreadMessagesRequest, ThreadBatch};
+
+    /// A thread Octavo names comes back as the thread it was.
+    #[rstest]
+    fn a_thread_comes_back_from_its_name(
+        #[values(
+            HarnessKind::Amp,
+            HarnessKind::ClaudeCode,
+            HarnessKind::Codex,
+            HarnessKind::Copilot,
+            HarnessKind::Grok,
+            HarnessKind::Hermes,
+            HarnessKind::Kiro,
+            HarnessKind::Opencode,
+            HarnessKind::Pi,
+            HarnessKind::Omp
+        )]
+        harness: HarnessKind,
+    ) {
+        let thread = DomainHarnessSession {
+            harness,
+            session: NativeSessionId::from("a-session".to_owned()),
+        };
+        let named = HarnessSession::of_thread(thread.clone()).expect("a thread Octavo names");
+        assert_eq!(named.thread(), Some(thread));
+    }
 
     /// A UUIDv7 told apart from others by `n`.
     fn v7(n: u8) -> Uuid {
@@ -590,7 +581,7 @@ mod tests {
             .id(RecordId(v7(1)))
             .session(handle(HarnessKind::ClaudeCode, "session"))
             .source_id(SourceId::from("line".to_owned()))
-            .timestamp(datetime!(2026-10-29 12:00:00.5 UTC))
+            .timestamp("2026-10-29T12:00:00.5Z".parse::<jiff::Timestamp>().unwrap())
             .role(Role::User)
             .content(vec![Content::Text("hi".to_owned())])
             .atuin_id(Some(AtuinSessionId::from(v7(2))))
@@ -735,10 +726,11 @@ mod tests {
             line(s).timestamp = Some(Timestamp { seconds: *TIMESTAMP_SECONDS.start(), nanos: 0 });
         },
     )]
-    #[case::past_year_9999_clamped(
-        |m: &mut Message| m.timestamp = datetime!(9999-12-31 23:59:59 -23:59),
+    // The latest instant jiff names is still inside protobuf's range, so nothing clamps it.
+    #[case::latest_fits(
+        |m: &mut Message| m.timestamp = jiff::Timestamp::MAX,
         |s: &mut CapturedThreadMessage| {
-            line(s).timestamp = Some(Timestamp { seconds: *TIMESTAMP_SECONDS.end(), nanos: 0 });
+            line(s).timestamp = Some(Timestamp { seconds: 253_402_207_200, nanos: 999_999_999 });
         },
     )]
     fn sends_what_octavo_takes_of_a_message(
@@ -1007,7 +999,7 @@ mod tests {
 
     const SMALL: usize = 16;
     const QUARTER: usize = ThreadBatch::MAX_BYTES / 4;
-    const MESSAGES: usize = ThreadBatch::MAX_MESSAGES.get() as usize;
+    const MESSAGES: usize = ThreadBatch::MAX_ITEMS.get() as usize;
 
     #[rstest]
     #[case::count_at_the_cap(vec![SMALL; MESSAGES], vec![MESSAGES])]
@@ -1023,16 +1015,13 @@ mod tests {
 
         let batches = ThreadBatch::batches(messages.clone());
 
+        assert_eq!(batches.iter().map(|batch| batch.items().len()).collect::<Vec<_>>(), batch_lens);
         assert_eq!(
-            batches.iter().map(|batch| batch.messages().len()).collect::<Vec<_>>(),
-            batch_lens
-        );
-        assert_eq!(
-            batches.iter().flat_map(ThreadBatch::messages).cloned().collect::<Vec<_>>(),
+            batches.iter().flat_map(ThreadBatch::items).cloned().collect::<Vec<_>>(),
             messages
         );
         assert!(
-            batches.iter().filter(|batch| batch.messages().len() > 1).all(|batch| {
+            batches.iter().filter(|batch| batch.items().len() > 1).all(|batch| {
                 InsertThreadMessagesRequest::from(batch.clone()).encoded_len()
                     <= ThreadBatch::MAX_BYTES
             }),

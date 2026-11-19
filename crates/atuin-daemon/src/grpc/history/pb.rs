@@ -12,13 +12,13 @@ use atuin_client::history::{
     CommandCapture as DomainCommandCapture, History, HistoryId as DomainHistoryId,
 };
 use atuin_common::range::{KeptEnds, PyStyleIdxRange};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_domain::record::{CmdOrigin, CmdOriginParseError};
 pub use codegen::*;
 use easy_cast::Conv;
+use jiff::Timestamp;
 pub use tail_history_reply::Event as TailHistoryEvent;
 use thiserror::Error;
-use time::OffsetDateTime;
 use tonic::Status;
 
 pub use crate::grpc::common::pb::HistoryId;
@@ -83,7 +83,7 @@ impl From<AuthorKind> for Option<atuin_client::history::AuthorKind> {
 impl From<History> for HistoryEntry {
     fn from(history: History) -> Self {
         Self {
-            timestamp: i64::conv(history.timestamp.unix_timestamp_nanos()),
+            timestamp: i64::conv(history.timestamp.as_nanosecond()),
             id: Some(history.id.into()),
             command: history.command,
             cwd: history.cwd,
@@ -113,7 +113,7 @@ impl TryFrom<StartHistoryRequest> for History {
         // `author_kind()` borrows `req`, so read it before moving fields out.
         let author_kind = req.author_kind();
         Ok(Self::daemon()
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(req.timestamp))
+            .timestamp(Timestamp::from_unix_nanos_i64(req.timestamp))
             .command(req.command)
             .cwd(req.cwd)
             .session(req.session)
@@ -480,9 +480,9 @@ internal_errors!(GetOutputError);
 #[cfg(test)]
 mod tests {
     use atuin_client::history::AuthorKind as ClientAuthorKind;
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use rstest::rstest;
-    use time::OffsetDateTime;
     use tonic::Code;
 
     use super::*;
@@ -897,7 +897,7 @@ mod tests {
     fn history_entry_field_routing() {
         let h: History = History::from_db()
             .id(DomainHistoryId::from_bytes([7u8; 16]))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .command("CMD".into())
             .cwd("CWD".into())
             .exit(3)

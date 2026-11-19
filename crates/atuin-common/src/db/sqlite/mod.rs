@@ -10,7 +10,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use builder::{Journaling, SqliteBuilder};
+pub use builder::{Access, Journaling, SqliteBuilder};
 use compactor::Compactor;
 pub use info::{Info, VersionError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};

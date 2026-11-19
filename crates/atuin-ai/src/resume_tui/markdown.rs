@@ -10,9 +10,6 @@
 //! *source*, and every text event pulldown-cmark produces knows the source range it came from, so
 //! a highlighted source byte stays highlighted wherever it lands in the rendering, whatever the
 //! syntax around it did (see [`map_highlights`]).
-//!
-//! The chat UI renders its markdown with eye_declare's `Markdown` element, which draws straight
-//! into a buffer and keeps its parser private, so there's nothing there to share.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -761,16 +758,15 @@ impl<'a> Renderer<'a> {
             styles,
             ..
         } = self;
-        for (i, hard) in block.iter().enumerate() {
+        // A hard line that shows nothing leaves its lead, such as a list marker, to the next one.
+        let mut lead = first;
+        for hard in block {
             if *full {
                 return;
             }
-            let lead = if i == 0 {
-                first
-            } else {
-                rest
-            };
+            let mut shown = false;
             wrap(lead, rest, hard, opts.width, wrapped, styles.muted, &mut |line| {
+                shown = true;
                 if let Some(blank) = blank.take() {
                     out.push(blank);
                 }
@@ -778,6 +774,9 @@ impl<'a> Renderer<'a> {
                 *full = opts.max_lines != 0 && out.len() > opts.max_lines;
                 !*full
             });
+            if shown {
+                lead = rest;
+            }
         }
     }
 
@@ -1187,8 +1186,10 @@ fn wrap(
             cur.pop();
         }
     }
-    // An empty line only when it's the whole of an (intentionally) empty hard line.
-    if !cur.is_empty() || !emitted {
+    // An empty line only when it's the whole of an (intentionally) empty hard line, not one whose
+    // every glyph was dropped for being wider than a line.
+    let empty = content.iter().all(|s| s.content.trim().is_empty());
+    if !cur.is_empty() || (!emitted && empty) {
         emit(line_of(prefix, &cur));
     }
 }
@@ -1371,6 +1372,22 @@ mod tests {
             ..opts(40, 0)
         };
         assert_eq!(plain(&render("a\n\n\nb\n\n# c", &[], packed, &styles())), "a\nb\nc");
+    }
+
+    /// A hard line whose every glyph is too wide for the pane leaves no line behind, so it can't
+    /// put two blank lines in a row. A list marker it would have led moves to the next line.
+    #[rstest]
+    #[case::alone("𠀀", 1, &[])]
+    #[case::first("𠀀\n\n_", 1, &["_"])]
+    #[case::between("a\n\n𠀀\n\n_", 1, &["a", "", "_"])]
+    #[case::list_marker("- 𠀀  \n  a", 2, &["•a"])]
+    fn too_wide_glyphs_leave_no_line(
+        #[case] source: &str,
+        #[case] width: usize,
+        #[case] want: &[&str],
+    ) {
+        let lines: Vec<String> = md(source, width, 0).iter().map(ToString::to_string).collect();
+        assert_eq!(lines, want);
     }
 
     #[rstest]

@@ -7,8 +7,10 @@ use atuin_common::harnesstools::session::any::{
 };
 use atuin_common::sync::BlockingPool;
 use futures::{Stream, StreamExt};
+use tokio_util::task::AbortOnDropHandle;
 
 use super::Sink;
+use super::engine::{Start, warm_once};
 use super::message_enricher::MessageEnricher;
 
 #[derive(Debug, Clone)]
@@ -109,26 +111,41 @@ impl SessionImporter {
             let Ok(existing) = sessions.existing() else {
                 return;
             };
+            // Each session is read in a task of its own. A read's warm-up holds capture's locks
+            // across its queries, and the loop below stops polling the reads while it stores a
+            // batch, which takes the same locks. A read polled only by the loop would then never
+            // release them, and the import and live capture would both wait forever. Each task is
+            // aborted when the import is dropped, as a read polled by the loop would be.
             let mut reads = existing
                 .map(|item| {
-                    let keeps_patches = sink.keeps_patches();
-                    async move {
+                    let sink = sink.clone();
+                    AbortOnDropHandle::new(tokio::spawn(async move {
                         // A scan failure (unreadable directory/entry) is not a session; surface it
                         // so the summary reflects a partial backfill instead of a silent one.
                         let session = item.ok()?;
+                        let Some(enricher) = begun(&sink, kind, &session).await else {
+                            let session = NativeSessionId::from(session.id().to_string());
+                            return Some(Read { session, rows: Vec::new(), failed: 1 });
+                        };
                         // Decoding and enriching a session's lines is CPU work: on a blocking
                         // thread, as the runtime's is the daemon's every other request's. (Not the
                         // pool's: reading the session takes a worker of it.)
                         let read = tokio::task::spawn_blocking(move || {
-                            futures::executor::block_on(read(kind, keeps_patches, session))
+                            futures::executor::block_on(read(enricher, session))
                         });
                         match read.await {
                             Ok(read) => Some(read),
                             Err(err) => std::panic::resume_unwind(err.into_panic()),
                         }
-                    }
+                    }))
                 })
-                .buffer_unordered(concurrency);
+                .buffer_unordered(concurrency)
+                .map(|joined| match joined {
+                    Ok(read) => read,
+                    Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+                    // Cancelled: the runtime is shutting down, and the import with it.
+                    Err(_) => None,
+                });
 
             // Sessions' rows are stored a batch at a time, a session's progress once its are.
             let mut batch = Vec::new();
@@ -182,12 +199,34 @@ impl SessionImporter {
     }
 }
 
-/// Read `session` as live capture would: its rows, and how many of its lines failed to read.
-async fn read(kind: HarnessKind, keeps_patches: bool, session: AnySession) -> Read {
+/// An enricher set up to read `session` from its start, as live capture sets one up: with the
+/// parent stored for the session, which a continuation's marker its lines copy can't replace (a
+/// restored pi fork's first prompt carries one). `None` when the store can't say what that is:
+/// rows read without it could relink the session, so none are stored.
+async fn begun(sink: &Sink, kind: HarnessKind, session: &AnySession) -> Option<MessageEnricher> {
+    let mut enricher = MessageEnricher::new(kind).keeping_patches(sink.keeps_patches());
+    let sid = session.id();
+    let warmed = match sink.lock_ready().await {
+        Ok(locks) => warm_once(sink, &mut enricher, &sid, Start::Beginning, locks)
+            .await
+            .map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    match warmed {
+        Ok(()) => Some(enricher),
+        Err(e) => {
+            tracing::warn!(%e, session = %sid, "can't read an ai-session's stored parent; not importing it");
+            None
+        }
+    }
+}
+
+/// Read `session` as live capture would, with `enricher` set up for it ([`begun`]): its rows, and
+/// how many of its lines failed to read.
+async fn read(mut enricher: MessageEnricher, session: AnySession) -> Read {
     // One enricher per session: it carries that session's bookkeeping (title, timestamps,
     // parent, synthetic ids) across its lines, exactly as live capture does, so a backfilled row
     // matches the captured one.
-    let mut enricher = MessageEnricher::new(kind).keeping_patches(keeps_patches);
     let sid = session.id();
     let mut rows = Vec::new();
     let mut failed = 0u64;
@@ -227,6 +266,7 @@ mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_common::harnesstools::copilot::session::CopilotSessions;
+    use atuin_common::harnesstools::hermes::session::HermesSessions;
     use atuin_common::harnesstools::kiro::session::KiroSessions;
     use atuin_common::harnesstools::pi::session::PiSessions;
     use atuin_common::harnesstools::session::ParentKind;
@@ -235,6 +275,7 @@ mod tests {
     use futures::StreamExt;
     use futures::future::BoxFuture;
     use rstest::rstest;
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::session_capture::{AiHarnessSessionCapture, hooks};
@@ -330,6 +371,67 @@ mod tests {
         assert_eq!(after_second, after_first);
     }
 
+    /// A pi fork restored from sync without its link, and gone on with while capture was off, is
+    /// imported as the fork it is: its first prompt opens with the marker of the continuation it
+    /// was forked from, and the parent stored for the session stands over it.
+    #[rstest]
+    #[tokio::test]
+    async fn import_keeps_a_restored_forks_stored_parent() {
+        const ORIGINAL: &str = "019a0d14-f276-77d3-b955-89d5b0151306";
+        let root = tempfile::tempdir().unwrap();
+        let codex = AnyHarness::from_name("codex").unwrap();
+        let marker = atuin_common::harnesstools::continuation::marker_text(codex, ORIGINAL, None);
+        let write = |parent_session: Option<&str>, turns: &[&str]| {
+            let mut header = serde_json::json!({"type": "session", "version": 3, "id": "fork"});
+            if let Some(parent) = parent_session {
+                header["parentSession"] =
+                    serde_json::json!(format!("/s/1690000000_{parent}.jsonl"));
+            }
+            let first = serde_json::json!({"type": "message", "id": "m0", "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": marker}, {"type": "text", "text": "go on"}],
+            }});
+            let rest = turns.iter().enumerate().map(|(i, text)| {
+                serde_json::json!({"type": "message", "id": format!("m{}", i + 1),
+                    "message": {"role": "user", "content": text}})
+            });
+            let lines: Vec<String> = std::iter::once(header)
+                .chain(std::iter::once(first))
+                .chain(rest)
+                .map(|line| line.to_string() + "\n")
+                .collect();
+            std::fs::write(root.path().join("1700000000_fork.jsonl"), lines.concat()).unwrap();
+        };
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let handle = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("fork".to_owned()),
+        };
+        let import = async || -> Vec<ImportProgress> {
+            SessionImporter::new(sink.clone(), pool())
+                .harness(HarnessKind::Pi, pi_sessions(root.path()))
+                .collect()
+                .await
+        };
+        let continuation = HarnessSession {
+            harness: HarnessKind::Pi,
+            session: NativeSessionId::from("cont".to_owned()),
+        };
+
+        // The fork as pi's `/fork` wrote it, naming the continuation's file.
+        write(Some("cont"), &[]);
+        import().await;
+        // Restored without its link, then gone on with.
+        write(None, &["and then?"]);
+        let progress = import().await;
+
+        assert_eq!(sum_new(&progress), 1, "only the new turn");
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.parent, Some(continuation));
+        assert_eq!(session.parent_kind, Some(ParentKind::Fork));
+    }
+
     /// Sessions stored a batch at a time are each credited with their own rows: one part stored
     /// before (an import cut short) counts what was as skipped.
     #[rstest]
@@ -409,6 +511,129 @@ mod tests {
 
         assert_eq!(counts, [(BATCH as u64 + 2, 0, 0)]);
         assert_eq!(pushes.0.load(SeqCst), 2);
+    }
+
+    /// Holds the second warm-up inside capture's locks until the first append is about to wait
+    /// for them.
+    #[derive(Debug)]
+    struct HeldWarmUp {
+        warm_ups: AtomicUsize,
+        appends: AtomicUsize,
+        /// A permit once the second warm-up holds capture's locks.
+        holding: Semaphore,
+        /// A permit once the first append is about to wait for capture's locks.
+        appending: Semaphore,
+    }
+
+    impl HeldWarmUp {
+        fn new() -> Self {
+            Self {
+                warm_ups: AtomicUsize::new(0),
+                appends: AtomicUsize::new(0),
+                holding: Semaphore::new(0),
+                appending: Semaphore::new(0),
+            }
+        }
+    }
+
+    impl hooks::Hooks for HeldWarmUp {
+        fn at(&self, point: hooks::Point) -> BoxFuture<'_, hooks::Fault> {
+            Box::pin(async move {
+                match point {
+                    hooks::Point::WarmRead(hooks::WarmStep::Session)
+                        if self.warm_ups.fetch_add(1, SeqCst) == 1 =>
+                    {
+                        self.holding.add_permits(1);
+                        self.appending.acquire().await.unwrap().forget();
+                    }
+                    hooks::Point::Appending if self.appends.fetch_add(1, SeqCst) == 0 => {
+                        self.holding.acquire().await.unwrap().forget();
+                        self.appending.add_permits(1);
+                    }
+                    _ => {}
+                }
+                hooks::Fault::None
+            })
+        }
+    }
+
+    /// A batch is stored while another session's warm-up holds capture's locks. The import waits
+    /// for that warm-up to finish instead of waiting forever for the locks it holds.
+    #[rstest]
+    #[tokio::test]
+    async fn a_batch_stored_during_another_sessions_warm_up_does_not_deadlock() {
+        let root = tempfile::tempdir().unwrap();
+        // Each session fills a batch on its own. The first one read is stored while the second
+        // one's warm-up holds the locks, and that warm-up only goes on once the store is waiting.
+        let turns = vec!["user:hi"; BATCH];
+        write_pi_session(root.path(), "s1", &turns);
+        write_pi_session(root.path(), "s2", &turns);
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.hooks = Some(Arc::new(HeldWarmUp::new()));
+
+        let import = SessionImporter::new(Arc::new(sink), pool())
+            .harness(HarnessKind::Pi, pi_sessions(root.path()))
+            .collect::<Vec<_>>();
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(10), import)
+            .await
+            .expect("the import deadlocked");
+
+        // Each session's header and turns.
+        assert_eq!(sum_new(&progress), 2 * (BATCH as u64 + 1));
+    }
+
+    /// Holds every warm-up inside capture's locks until it is dropped.
+    #[derive(Debug)]
+    struct StuckWarmUps {
+        /// A permit for each warm-up that holds capture's locks.
+        holding: Semaphore,
+    }
+
+    impl hooks::Hooks for StuckWarmUps {
+        fn at(&self, point: hooks::Point) -> BoxFuture<'_, hooks::Fault> {
+            Box::pin(async move {
+                if point == hooks::Point::WarmRead(hooks::WarmStep::Session) {
+                    self.holding.add_permits(1);
+                    futures::future::pending::<()>().await;
+                }
+                hooks::Fault::None
+            })
+        }
+    }
+
+    /// An import dropped while a session's warm-up holds capture's locks releases them, so
+    /// capture goes on once an import is cancelled.
+    #[rstest]
+    #[tokio::test]
+    async fn a_dropped_import_releases_capture_locks() {
+        let root = tempfile::tempdir().unwrap();
+        write_pi_session(root.path(), "s1", &["user:hi"]);
+        let hooks = Arc::new(StuckWarmUps {
+            holding: Semaphore::new(0),
+        });
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.hooks = Some(hooks.clone());
+        let sink = Arc::new(sink);
+
+        let mut import = Box::pin(
+            SessionImporter::new(sink.clone(), pool())
+                .harness(HarnessKind::Pi, pi_sessions(root.path())),
+        );
+        let held = async {
+            tokio::select! {
+                event = import.next() => panic!("the import went on past a held warm-up: {event:?}"),
+                permit = hooks.holding.acquire() => permit.unwrap().forget(),
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), held)
+            .await
+            .expect("the warm-up never took capture's locks");
+        drop(import);
+
+        let locks = tokio::time::timeout(std::time::Duration::from_secs(5), sink.lock_ready())
+            .await
+            .expect("the dropped import kept capture's locks");
+        assert!(locks.is_ok());
     }
 
     #[rstest]
@@ -540,6 +765,69 @@ mod tests {
         assert_eq!(session.title.as_deref(), Some("Read README and Run Probe Command"));
         assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/kiro-play")));
         assert_eq!(session.git_branch, None);
+    }
+
+    /// Hermes keeps every session in one `state.db`: import reads its coding sessions, with each
+    /// one's directory and the rows the store holds, and the subagent the probe delegated to, a
+    /// child of the session that delegated.
+    #[rstest]
+    #[tokio::test]
+    async fn import_reads_hermes_sessions_from_its_store() {
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("state.db");
+        let mut conn = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&db)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        for sql in [
+            include_str!("../../../atuin-common/tests/fixtures/hermes/schema.sql"),
+            include_str!("../../../atuin-common/tests/fixtures/hermes/probe.sql"),
+        ] {
+            // Not through `atuin_common::db::query`, which takes only static SQL: this stands for
+            // Hermes's own writes.
+            #[allow(clippy::disallowed_methods)]
+            sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut conn).await.unwrap();
+        }
+        sqlx::Connection::close(conn).await.unwrap();
+
+        let sink =
+            Arc::new(Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap()));
+        let sessions = AnySessions::from(
+            HermesSessions::builder().home(home.path().to_path_buf()).pool(pool()).build(),
+        );
+        let progress: Vec<_> = SessionImporter::new(sink.clone(), pool())
+            .harness(HarnessKind::Hermes, sessions)
+            .collect()
+            .await;
+        // Rows 1-28: the subagent's are 23-26.
+        assert_eq!(sum_new(&progress), 28);
+
+        let handle = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from(
+                "local-524543fc0c9eeda01f40f2cd88fefc201a75a0fd59817a174c4f18e0ebb80136".to_owned(),
+            ),
+        };
+        let session = sink.sidecar.get_session(&handle).await.unwrap().unwrap();
+        assert_eq!(session.cwd.as_deref(), Some(Path::new("/tmp/hermes-play/work")));
+        let delegator = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from(
+                "local-56e64527431b680fad9f17881150e9234ddbca30777b3d57949bd767d30315e1".to_owned(),
+            ),
+        };
+        let subagent = HarnessSession {
+            harness: HarnessKind::Hermes,
+            session: NativeSessionId::from("20261109_094652_9ca0a5".to_owned()),
+        };
+        let subagent = sink.sidecar.get_session(&subagent).await.unwrap().unwrap();
+        assert_eq!(subagent.parent.as_ref(), Some(&delegator));
+        assert_eq!(subagent.parent_kind, Some(ParentKind::Subagent));
+        assert_eq!(subagent.cwd.as_deref(), Some(Path::new("/tmp/hermes-play/work")));
     }
 
     /// A Kiro subagent's log, under its parent's directory, is a session of its own: import

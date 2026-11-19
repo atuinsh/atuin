@@ -3,8 +3,9 @@ use std::str;
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use time::macros::format_description;
-use time::{OffsetDateTime, PrimitiveDateTime};
+use jiff::Timestamp;
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
@@ -52,7 +53,7 @@ impl Importer for Replxx {
     }
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
-        let mut timestamp = OffsetDateTime::UNIX_EPOCH;
+        let mut timestamp = Timestamp::UNIX_EPOCH;
 
         for b in unix_byte_lines(&self.bytes) {
             let Ok(s) = std::str::from_utf8(b) else {
@@ -75,16 +76,12 @@ impl Importer for Replxx {
     }
 }
 
-fn try_parse_line_as_timestamp(line: &str) -> Option<OffsetDateTime> {
+fn try_parse_line_as_timestamp(line: &str) -> Option<Timestamp> {
     // replxx history date time format: ### yyyy-mm-dd hh:mm:ss.xxx
     let date_time_str = line.strip_prefix("### ")?;
-    let format =
-        format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]");
-
-    let primitive_date_time = PrimitiveDateTime::parse(date_time_str, format).ok()?;
-    // There is no safe way to get local time offset.
-    // For simplicity let's just assume UTC.
-    Some(primitive_date_time.assume_utc())
+    let date_time = DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", date_time_str).ok()?;
+    // replxx writes local time without an offset. For simplicity, assume UTC.
+    Offset::UTC.to_timestamp(date_time).ok()
 }
 
 #[cfg(test)]
@@ -121,7 +118,7 @@ CREATE TABLE test( stamp DateTime('UTC'))ENGINE = MergeTreePARTITION BY toDat
             ($timestamp:expr_2021, $command:expr_2021) => {
                 let h = history.next().expect("missing entry in history");
                 assert_eq!(h.command.as_str(), $command);
-                assert_eq!(h.timestamp.unix_timestamp(), $timestamp);
+                assert_eq!(h.timestamp.as_second(), $timestamp);
             };
         }
 

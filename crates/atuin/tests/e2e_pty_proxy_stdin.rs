@@ -1,4 +1,4 @@
-//! `atuin pty-proxy` ends its session when its own input ends.
+//! `atuin pty-proxy` steps aside for a shell that isn't talking to a terminal.
 
 #![cfg(unix)]
 
@@ -12,10 +12,44 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rstest::rstest;
 
+/// The command that the shell runs.
+///
+/// The sleep keeps the shell busy after it has read all of its input. The arithmetic only expands
+/// if the shell ran the line, so an echo of the input can't pass. The brackets show the proxy's
+/// socket, which is empty when the shell runs outside a proxy.
+const COMMAND: &str = "sleep 0.2; echo piped-$((40+2))-[${ATUIN_PTY_PROXY_SOCKET-}]";
+
+/// What the shell prints when it ran [`COMMAND`] outside a proxy.
+const EXPECTED: &str = "piped-42-[]";
+
+/// Which of the proxy's standard streams is a pipe instead of the terminal.
+#[derive(Clone, Copy, Debug)]
+enum Piped {
+    /// The shell reads [`COMMAND`] from a pipe.
+    Stdin,
+    /// The shell runs [`COMMAND`] from `-c`, and its output goes through a pipe.
+    Stdout,
+}
+
+impl Piped {
+    fn pipeline(self, shell: &str) -> String {
+        let atuin = env!("CARGO_BIN_EXE_atuin");
+        match self {
+            Self::Stdin => {
+                format!("printf '%s\\n' '{COMMAND}' | '{atuin}' pty-proxy --shell {shell}")
+            }
+            Self::Stdout => {
+                format!("'{atuin}' pty-proxy --shell {shell} --shell -c --shell '{COMMAND}' | cat")
+            }
+        }
+    }
+}
+
 #[rstest]
-fn piped_input_runs_through_the_shell_and_then_ends_it() {
-    // A terminal hands the end of its input to the shell as an EOF character. A proxy reading a
-    // pipe has to do the same, or its shell waits for more input forever.
+fn a_shell_without_a_terminal_runs_outside_the_proxy(
+    #[values("/bin/sh", "/bin/bash")] shell: &str,
+    #[values(Piped::Stdin, Piped::Stdout)] piped: Piped,
+) {
     let env = FreshEnv::new();
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -27,13 +61,7 @@ fn piped_input_runs_through_the_shell_and_then_ends_it() {
         .expect("failed to open pty");
 
     let mut cmd = CommandBuilder::new("/bin/sh");
-    cmd.args([
-        "-c",
-        &format!(
-            "printf 'echo piped-$((40+2))\\n' | '{}' pty-proxy --shell /bin/sh",
-            env!("CARGO_BIN_EXE_atuin")
-        ),
-    ]);
+    cmd.args(["-c", &piped.pipeline(shell)]);
     cmd.env_clear();
     for (key, value) in env.env_vars() {
         cmd.env(key, value);
@@ -56,9 +84,8 @@ fn piped_input_runs_through_the_shell_and_then_ends_it() {
         }
     });
 
-    wait_until("the proxy to exit once its input ends", || {
+    wait_until("the shell to exit once its input ends", || {
         child.try_wait().is_ok_and(|status| status.is_some())
     });
-    // The arithmetic only expands if the shell ran the line, so an echo of the input can't pass.
-    wait_until("the shell's output", || output.lock().contains("piped-42"));
+    wait_until("the shell's output", || output.lock().contains(EXPECTED));
 }

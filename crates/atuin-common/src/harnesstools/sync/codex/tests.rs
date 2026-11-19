@@ -1,7 +1,7 @@
+use jiff::Timestamp;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::rehydrate::testing;
@@ -42,7 +42,7 @@ async fn synced(path: &Path) -> Vec<RehydrateMessage> {
         CodexSession::open(session.clone(), path.to_path_buf(), pool).read().collect().await;
     let mut occurrences = HashMap::new();
     let mut rows: Vec<RehydrateMessage> = Vec::new();
-    let mut at = OffsetDateTime::UNIX_EPOCH;
+    let mut at = Timestamp::UNIX_EPOCH;
     for m in lines.into_iter().map(Result::unwrap) {
         let Some(id) = capture_key(&session, &m, &mut occurrences) else {
             continue;

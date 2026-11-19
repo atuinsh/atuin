@@ -1,6 +1,7 @@
 //! The Halloween season, when the Halloween easter eggs come out.
 
-use time::{Date, Duration, Month, Weekday};
+use jiff::ToSpan as _;
+use jiff::civil::{Date, Weekday};
 
 /// Halloween dates on [`Date`].
 pub trait HalloweenExt {
@@ -11,39 +12,37 @@ pub trait HalloweenExt {
 
 impl HalloweenExt for Date {
     fn is_halloween_season(&self) -> bool {
-        let halloween =
-            Self::from_calendar_date(self.year(), Month::October, 31).expect("October has 31 days");
-        let last_day = match halloween.weekday() {
-            Weekday::Friday => halloween + Duration::days(2),
-            Weekday::Saturday => halloween + Duration::days(1),
+        let halloween = Self::new(self.year(), 10, 31).expect("October has 31 days");
+        let weekend_left = match halloween.weekday() {
+            Weekday::Friday => 2,
+            Weekday::Saturday => 1,
             Weekday::Sunday
             | Weekday::Monday
             | Weekday::Tuesday
             | Weekday::Wednesday
-            | Weekday::Thursday => halloween,
+            | Weekday::Thursday => 0,
         };
-        (halloween - Duration::days(14)..=last_day).contains(self)
+        (halloween - 14.days()..=halloween + weekend_left.days()).contains(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use jiff::civil::{Date, date};
     use rstest::rstest;
-    use time::Date;
-    use time::macros::date;
 
     use super::HalloweenExt as _;
 
     #[rstest]
-    #[case::two_weeks_before(date!(2026-10-17), true)]
-    #[case::the_day_before_that(date!(2026-10-16), false)]
-    #[case::halloween(date!(2026-10-31), true)]
-    #[case::sunday_after_a_saturday_halloween(date!(2026-11-01), true)]
-    #[case::monday_after_a_saturday_halloween(date!(2026-11-02), false)]
-    #[case::sunday_after_a_friday_halloween(date!(2025-11-02), true)]
-    #[case::day_after_a_sunday_halloween(date!(2027-11-01), false)]
-    #[case::day_after_a_tuesday_halloween(date!(2028-11-01), false)]
-    #[case::spring(date!(2026-04-01), false)]
+    #[case::two_weeks_before(date(2026, 10, 17), true)]
+    #[case::the_day_before_that(date(2026, 10, 16), false)]
+    #[case::halloween(date(2026, 10, 31), true)]
+    #[case::sunday_after_a_saturday_halloween(date(2026, 11, 1), true)]
+    #[case::monday_after_a_saturday_halloween(date(2026, 11, 2), false)]
+    #[case::sunday_after_a_friday_halloween(date(2025, 11, 2), true)]
+    #[case::day_after_a_sunday_halloween(date(2027, 11, 1), false)]
+    #[case::day_after_a_tuesday_halloween(date(2028, 11, 1), false)]
+    #[case::spring(date(2026, 4, 1), false)]
     fn halloween_season(#[case] day: Date, #[case] in_season: bool) {
         assert_eq!(day.is_halloween_season(), in_season);
     }

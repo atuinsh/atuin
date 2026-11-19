@@ -1,7 +1,7 @@
 //! Integrations and utilities for interacting with claude code.
 use std::path::PathBuf;
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
@@ -31,6 +31,18 @@ impl Harness for Ccode {
         "claude-code"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn program(&self) -> &'static str {
+        "claude"
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["CLAUDE_CONFIG_DIR"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["claude"]
     }
@@ -41,6 +53,14 @@ impl Harness for Ccode {
         let config_path = config_dir().joined("settings.json");
         json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
+    }
+
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&config_dir().joined("settings.json"), self.name()).await
+    }
+
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::uninstall(&config_dir().joined("settings.json"), self.name()).await
     }
 
     /// `claude --resume <id>`. Claude Code finds the id from any directory, but the session
@@ -54,7 +74,7 @@ impl Harness for Ccode {
             ));
         }
         let args = ["--resume".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "claude", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -62,8 +82,8 @@ impl Harness for Ccode {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

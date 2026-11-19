@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::path::PathBufExt as _;
 use eyre::{Result, eyre};
-use time::{Duration, OffsetDateTime};
+use jiff::{SignedDuration, Timestamp};
 
 use super::{Importer, Loader, unix_byte_lines};
 use crate::history::History;
@@ -51,12 +51,12 @@ impl Importer for Nu {
 
     async fn load(self, h: &mut impl Loader) -> Result<()> {
         // Separate commands by 1ms as with bash and zsh
-        let timestamp_increment = Duration::milliseconds(1);
+        let timestamp_increment = SignedDuration::from_millis(1);
 
         // Subtract enough milliseconds so the most recent command's timestamp will be now.
-        let mut timestamp = OffsetDateTime::now_utc()
+        let mut timestamp = Timestamp::now()
             - timestamp_increment
-                * u32::try_from(self.num_entries().saturating_sub(1)).unwrap_or(u32::MAX);
+                * i32::try_from(self.num_entries().saturating_sub(1)).unwrap_or(i32::MAX);
 
         for b in unix_byte_lines(&self.bytes) {
             let current_timestamp = timestamp;

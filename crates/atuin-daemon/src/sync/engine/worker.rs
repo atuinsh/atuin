@@ -2,23 +2,23 @@
 
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore};
-use atuin_client::history::store::HistoryStore;
+use atuin_client::database::{DeletedLiveRows, Sqlite};
+use atuin_client::history::store::{BuildChunk, HistoryStore};
 use atuin_client::record::sync::{ClientSource, SyncError as ClientSyncError, SyncSession};
 use atuin_client::settings::Settings;
 use atuin_common::futures::Backoff;
 use atuin_domain::record::RecordId;
 use futures::StreamExt;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tokio::time;
 
 use super::rebuild::ReplayedStores;
 use crate::daemon::DaemonHandle;
-use crate::search::SearchIndex;
-use crate::session_capture::Recovery;
+use crate::search::{RebuildSettings, SharedSearchIndex};
 
 /// Cap on the exponential backoff between failed sync attempts. Once a failing sync has ramped to
 /// this interval it keeps retrying at that cadence until it succeeds -- it is never abandoned, and
@@ -38,11 +38,11 @@ const SIGNED_OUT_POLL: Duration = Duration::from_secs(10);
 /// Owns everything the sync loop needs across ticks.
 pub struct Worker {
     handle: DaemonHandle,
-    index: Arc<RwLock<SearchIndex>>,
+    index: Arc<SharedSearchIndex>,
     history_store: HistoryStore,
     /// The kv and scripts dbs, rebuilt after a sync that brought records of theirs.
     replayed: ReplayedStores,
-    /// Tells [`spawn_ai_session_projector`] records were downloaded; `None` without a sidecar.
+    /// Tells the AI-session projector that records were downloaded; `None` without one.
     ai_session_projector: Option<mpsc::UnboundedSender<()>>,
 }
 
@@ -86,44 +86,11 @@ impl From<SyncTickError> for ControlFlow<()> {
     }
 }
 
-/// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded some)
-/// reprojects everything past the watermarks, so records a failed or interrupted earlier one left
-/// out are retried too. Signals that queued up meanwhile are taken together.
-///
-/// Nothing is projected until startup recovery is over, and each reprojection takes
-/// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
-/// rebuilds' replays: two at once would race each other's watermarks. A rebuild's wipe landing
-/// meanwhile fails its watermark moves (compare-and-set on the sidecar's generation), and it
-/// starts over. This host's own series is included, under capture's lock
-/// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
-/// (a reinstall that kept the host id), and capture dedups against the sidecar.
-///
-/// This never sets the store's state, and never deletes a row of this host (see
-/// [`Recovery::project_synced`]): a series rewritten under its watermark whose forgetting would
-/// is handed to the recovery coordinator, which holds capture off while it forgets and replays
-/// it. The task ends once the sender is dropped.
-pub fn spawn_ai_session_projector(
-    store: AiSessionStore,
-    db: AiSessionDatabase,
-    recovery: Recovery,
-) -> mpsc::UnboundedSender<()> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<()>();
-    tokio::spawn(async move {
-        recovery.finished().await;
-        while rx.recv().await.is_some() {
-            while rx.try_recv().is_ok() {}
-            recovery.project_synced(&store, &db).await;
-        }
-    });
-    tx
-}
-
 impl Worker {
     pub async fn new(
         handle: DaemonHandle,
-        index: Arc<RwLock<SearchIndex>>,
-        ai_session_db: Option<AiSessionDatabase>,
-        ai_session_recovery: Recovery,
+        index: Arc<SharedSearchIndex>,
+        ai_session_projector: Option<mpsc::UnboundedSender<()>>,
     ) -> Result<Self, StartError> {
         let host_id = handle.settings().await.host_id().await.map_err(StartError::HostId)?;
 
@@ -139,15 +106,6 @@ impl Worker {
             host_id,
             encryption_key.clone(),
         );
-        let ai_session_store = AiSessionStore::builder()
-            .store(handle.store().clone())
-            .host_id(host_id)
-            .key(encryption_key.clone())
-            .build();
-
-        let ai_session_projector = ai_session_db
-            .map(|db| spawn_ai_session_projector(ai_session_store, db, ai_session_recovery));
-
         Ok(Self {
             handle,
             index,
@@ -268,116 +226,175 @@ impl Worker {
     }
 
     /// Build freshly-downloaded records into `history_db` and index the resulting rows.
+    ///
+    /// If a downloaded delete removed a live row, the commands of the deleted rows are updated in
+    /// the index afterwards. See [`build_downloaded_records`].
     async fn index_downloaded_records(&self, ids: &[RecordId]) {
-        // This first accumulates all the IDs that were built, inserts them into history_db and then
-        // in a separate phase, walks through the history_db to populate the index.
-        //
-        // This is really not great, but unfortunately incremental_build has a bad misbehavior, it
-        // yields entries that were first created and then subsequently deleted, just by virtue of
-        // them being created.
-        //
-        // [`HistoryStore::build`] yields only the entries which were created, but
-        // [`HistoryStore::incremental_build`] yields both entries which were created and then
-        // subsequently deleted.
-        //
-        // There is a categorical problem with [`HistoryStore::incremental_build`]. Suppose you run
-        // incremental_build([add(1), add(2), delete(2), add(3)]), followed by an
-        // incremental_build([delete(3)]), the first iteration of `incremental_build` would tell you
-        // that it added 1 and 3, but a subsequent one would immediately delete it.
-        //
-        // In general, this anti-pattern and footgun with incremental_build exists in other places
-        // in the codebase.
-        //
-        // I would like to make incremental_build be a stream combinator, but it can't be -- it
-        // needs to compute all its inputs before it knows whether an operation created a history
-        // or not.
-        //
-        // Currently the logic is the exact same as it was before.
-        //
-        // TODO(markovejnovic): Figure out what's happening with [`HistoryStore::incremental_build`]
-        //                      and [`HistoryStore::build`], decide which one can be deleted and
-        //                      then improve this logic here.
-        const INDEX_CHUNK: usize = 1024;
+        let db = self.handle.history_db();
+        let deleted = build_downloaded_records(&self.history_store, db, &self.index, ids).await;
+        if !deleted.is_empty() {
+            // Every permit from this build is dropped by now. So the update can't wait on one of
+            // them.
+            let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
+            self.index.sync_deleted(db, deleted.into_commands(), latest).await;
+        }
+    }
+}
 
-        let mut built_ids = Vec::new();
-        {
-            let batches = self.history_store.incremental_build(self.handle.history_db(), ids);
-            futures::pin_mut!(batches);
-            while let Some(batch) = batches.next().await {
-                match batch {
-                    Ok(histories) => built_ids.extend(histories.iter().map(|h| h.id)),
+/// Build the downloaded records `ids` into `db`, and add the new rows to `index`.
+///
+/// Each chunk of created entries is registered with the search index before it's saved. The
+/// entries are added to the index after the save. See [`AddPermit`](crate::search::AddPermit).
+///
+/// A created entry whose id already has a row in `db` is skipped. The row may be live, and then
+/// the index already has it. The row may also be a tombstone from an older version, and then the
+/// entry must stay out of the index.
+///
+/// Returns the live rows that downloaded deletes removed. Their commands need updating in the
+/// index. That includes a row that was created earlier in this same build. A delete of a missing
+/// row or a tombstone removes no live row.
+async fn build_downloaded_records(
+    history_store: &HistoryStore,
+    db: &Sqlite,
+    index: &SharedSearchIndex,
+    ids: &[RecordId],
+) -> DeletedLiveRows {
+    let mut deleted = DeletedLiveRows::default();
+    let mut chunks = pin!(history_store.incremental_build(db, ids));
+    while let Some(chunk) = chunks.next().await {
+        match chunk {
+            BuildChunk::Create(mut chunk) => {
+                if let Err(e) = chunk.skip_existing().await {
+                    tracing::error!("failed to check downloaded history against the db: {e}");
+                    continue;
+                }
+                let permit = index.begin_add().await;
+                permit.register(chunk.histories());
+                match chunk.commit().await {
+                    Ok(()) => permit.add_history(chunk.histories()),
                     Err(e) => {
+                        permit.unregister(chunk.histories().iter().map(|h| h.id));
+                        drop(permit);
                         tracing::error!("failed to build history from downloaded records: {e}");
                     }
                 }
             }
-        }
-
-        for chunk in built_ids.chunks(INDEX_CHUNK) {
-            match self.handle.history_db().load_active(chunk.iter().copied()).await {
-                Ok(active) if !active.is_empty() => self.index.read().await.add_histories(&active),
-                Ok(_) => {}
-                Err(e) => tracing::error!("failed to load synced history for indexing: {e}"),
-            }
+            BuildChunk::Delete(chunk) => match chunk.commit().await {
+                Ok(chunk_deleted) => deleted.extend(chunk_deleted),
+                Err(e) => {
+                    tracing::error!("failed to apply downloaded history deletes: {e}");
+                }
+            },
         }
     }
+    deleted
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use atuin_client::ai_session::{
-        AiSessionDatabase, AiSessionStore, HarnessKind, HarnessSession, Message, NativeSessionId,
-        SourceId,
-    };
+    use atuin_client::database::Sqlite;
+    use atuin_client::history::History;
+    use atuin_client::history::store::HistoryStore;
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
-    use atuin_common::harnesstools::session::{Content, Role};
-    use atuin_domain::record::{HostId, RecordId};
-    use rstest::rstest;
-    use time::OffsetDateTime;
+    use atuin_domain::record::HostId;
+    use jiff::Timestamp;
+    use rstest::{fixture, rstest};
 
-    use super::spawn_ai_session_projector;
-    use crate::session_capture::{AiHarnessSessionCapture, StoreState};
+    use super::build_downloaded_records;
+    use crate::search::{SearchIndex, SearchIndexSettings, SharedSearchIndex};
 
+    /// An empty history db.
+    #[fixture]
+    async fn db() -> Sqlite {
+        Sqlite::in_memory(Duration::from_secs(5)).await.unwrap()
+    }
+
+    /// An empty history record store.
+    #[fixture]
+    async fn history_store() -> HistoryStore {
+        let store = SqliteStore::in_memory(Duration::from_secs(5)).await.unwrap();
+        HistoryStore::new(store, HostId(atuin_common::utils::uuid_v7()), Key::generate())
+    }
+
+    fn history(command: &str) -> History {
+        History::import()
+            .timestamp(Timestamp::now())
+            .command(command)
+            .cwd("/tmp")
+            .author("test-user")
+            .build()
+            .into()
+    }
+
+    /// A downloaded create for an id that history.db holds as a tombstone isn't indexed. The
+    /// tombstone isn't a live row. So a later downloaded delete of that id removes no live row and
+    /// triggers no rebuild. The entry must not be in the index by then.
     #[rstest]
     #[tokio::test]
-    async fn downloaded_ai_sessions_are_projected_after_recovery() {
-        let store = AiSessionStore::builder()
-            .store(SqliteStore::in_memory(Duration::from_secs(5)).await.unwrap())
-            .host_id(HostId(atuin_common::utils::uuid_v7()))
-            .key(Key::generate())
-            .build();
-        let db = AiSessionDatabase::in_memory().await.unwrap();
-        let msg = Message::builder()
-            .id(RecordId(atuin_common::utils::uuid_v7()))
-            .session(HarnessSession {
-                harness: HarnessKind::ClaudeCode,
-                session: NativeSessionId::from("downloaded".to_owned()),
-            })
-            .source_id(SourceId::from("source".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
-            .role(Role::User)
-            .content(vec![Content::Text("hello".to_owned())])
-            .build();
-        store.push(&msg).await.unwrap();
-        let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
+    async fn downloaded_create_of_a_tombstone_is_not_indexed(
+        #[future(awt)] db: Sqlite,
+        #[future(awt)] history_store: HistoryStore,
+    ) {
+        let history = history("echo deleted");
+        let mut tombstone = history.clone();
+        tombstone.deleted_at = Some(Timestamp::now());
+        db.save_bulk([&tombstone]).await.unwrap();
+        let index = SharedSearchIndex::from(SearchIndex::default());
 
-        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
-        let projector = spawn_ai_session_projector(store, db.clone(), capture.recovery());
-        // Accepted at once, so a sync never waits on recovery.
-        projector.send(()).unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!projected().await, "nothing is projected while recovery replays");
+        let (create, _) = history_store.push(history.clone()).await.unwrap();
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[create]).await;
+        assert!(deleted.is_empty());
+        assert_eq!(index.read().invocations("echo deleted"), 0);
 
-        state.send_replace(StoreState::Ready);
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !projected().await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("queued records are projected once recovery ends");
+        let (delete, _) = history_store.delete(history.id).await.unwrap();
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[delete]).await;
+        assert!(deleted.is_empty(), "only the tombstone was removed");
+        assert_eq!(index.read().invocations("echo deleted"), 0);
+    }
+
+    /// A downloaded create for an id that history.db already holds as a live row isn't indexed
+    /// again. The index already counts that row.
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_create_of_an_existing_row_is_counted_once(
+        #[future(awt)] db: Sqlite,
+        #[future(awt)] history_store: HistoryStore,
+    ) {
+        let history = history("echo existing");
+        db.save(&history).await.unwrap();
+        let index = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        index.fill(&db).await.unwrap();
+        assert_eq!(index.read().invocations("echo existing"), 1);
+
+        let (create, _) = history_store.push(history).await.unwrap();
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[create]).await;
+        assert!(deleted.is_empty());
+        assert_eq!(index.read().invocations("echo existing"), 1);
+    }
+
+    /// A downloaded delete of a live row reports the row's command, so that only that command is
+    /// updated in the index.
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_delete_of_a_live_row_reports_its_command(
+        #[future(awt)] db: Sqlite,
+        #[future(awt)] history_store: HistoryStore,
+    ) {
+        let history = history("echo doomed");
+        db.save(&history).await.unwrap();
+        let index = SharedSearchIndex::unfilled(SearchIndexSettings::default());
+        index.fill(&db).await.unwrap();
+
+        let (delete, _) = history_store.delete(history.id).await.unwrap();
+        let deleted = build_downloaded_records(&history_store, &db, &index, &[delete]).await;
+
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(
+            deleted.commands(),
+            &std::collections::HashSet::from(["echo doomed".to_owned()])
+        );
     }
 }

@@ -1,6 +1,7 @@
 [Aa]gents?
 [Aa]lphanumerics
 [Bb]oolean
+[Cc]olocat(ed|ion)
 [Cc]onfig
 [Cc]rossterm
 [Cc]trl
@@ -13,6 +14,7 @@
 [Ff]rontmatter
 [Hh]ostname
 [Ii]nvalid
+[Jj]ujutsu
 [Kk]eymaps?
 [Mm]ultiline
 [Nn]ushell
@@ -22,6 +24,7 @@
 [Ss]ubagents?
 [Ss]ubcommands?
 [Uu]ndecryptable
+[Ww]orktrees?
 [Xx]onsh
 [Zz]sh
 Artifactory

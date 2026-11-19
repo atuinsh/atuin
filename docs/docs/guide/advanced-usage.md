@@ -15,11 +15,14 @@ modes by pressing **ctrl-r** inside the TUI.
 | host             | Only history from this machine                                                       |
 | session          | Only history from the current shell session                                          |
 | directory        | Only history from the current directory                                              |
-| workspace        | Only history from anywhere in the current git repository                             |
+| workspace        | Only history from anywhere in the current repository, Git or Jujutsu                 |
 | session-preload  | The current session, plus all global history from before the session started         |
 
-Atuin skips `workspace` mode when you aren't inside a git repository or when
+Atuin skips `workspace` mode when you aren't inside a repository or when
 [`workspaces = false`](../configuration/config.md#workspaces).
+A plain Git worktree searches history under the main repository root.
+A Jujutsu workspace searches history under its own root, even when colocated
+with a Git worktree.
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the
@@ -40,6 +43,8 @@ modes by pressing **ctrl-s** inside the TUI.
 | daemon-fuzzy    | Like `fuzzy`, but served from the [daemon's](../reference/daemon.md) in-memory index, with tunable scoring     |
 
 To change the default, set [`search_mode`](../configuration/config.md#search_mode).
+`atuin setup --only --daemon` turns on the daemon and sets `search_mode` to
+`daemon-fuzzy`. If the daemon is on already, set `search_mode` yourself.
 
 ## Context switch
 

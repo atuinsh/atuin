@@ -30,6 +30,8 @@ use engine::SessionCaptureEngine;
 use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
+#[cfg(feature = "octavo")]
+use jiff::Timestamp;
 use message_enricher::MessageEnricher;
 pub use policy::CapturePolicy;
 use policy::Verdict;
@@ -41,9 +43,19 @@ pub use tools::ToolCapture;
 use tracing::Instrument as _;
 
 #[cfg(feature = "octavo")]
-use crate::octavo::Octavo;
+use crate::octavo::{Octavo, UserId};
 
 const NOP_STORE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Where appended rows come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// Captured as they happen: each thread one written since capture started is stored new in
+    /// may be shared.
+    Live,
+    /// Read from a harness's past sessions, whose threads no config file shares.
+    Import,
+}
 
 #[derive(Debug, Clone)]
 pub enum SessionTailEvent {
@@ -113,6 +125,11 @@ pub(crate) struct Sink {
     /// Hears of every row this host captures, live or imported.
     #[cfg(feature = "octavo")]
     octavo: Arc<Octavo>,
+    /// When capture last started. A row from before was written while nothing captured (the
+    /// daemon stopped, or capture off), and is read as capture catches up, so it shares no
+    /// thread: as with an import, the agent carrying on with the thread does.
+    #[cfg(feature = "octavo")]
+    captured_since: Arc<parking_lot::Mutex<Timestamp>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -142,9 +159,20 @@ impl Sink {
             capture_mark: Arc::default(),
             #[cfg(feature = "octavo")]
             octavo: Arc::new(Octavo::nop()),
+            #[cfg(feature = "octavo")]
+            captured_since: Arc::new(parking_lot::Mutex::new(Timestamp::now())),
             #[cfg(test)]
             hooks: None,
         }
+    }
+
+    /// Capture starts from `since`: a row written before it shares no thread (see
+    /// `captured_since`).
+    #[cfg(feature = "octavo")]
+    fn capturing_since(&self, since: SystemTime) {
+        // A clock past what a Timestamp can name is broken; capturing everything beats
+        // capturing nothing.
+        *self.captured_since.lock() = Timestamp::try_from(since).unwrap_or(Timestamp::MIN);
     }
 
     #[cfg(test)]
@@ -190,8 +218,17 @@ impl Sink {
     /// it again; stopped once policy forgot a credential command waiting for its output, the
     /// output appended again would be kept.)
     pub(crate) async fn append(&self, msg: Message) -> Result<Appended, AppendError> {
-        let appended = self.append_all(vec![msg]).await?;
+        let appended = self.append_live(vec![msg]).await?;
         Ok(appended[0])
+    }
+
+    /// [`Self::append_all`] for rows captured as they happen, which an import's aren't: each thread
+    /// one written since capture started is stored new in may be shared.
+    pub(crate) async fn append_live(
+        &self,
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Appended>, AppendError> {
+        self.append_from(Origin::Live, msgs).await
     }
 
     /// [`Self::append`] each of `msgs`, in order (each session's lines as they come): their
@@ -201,11 +238,21 @@ impl Sink {
         &self,
         msgs: Vec<Message>,
     ) -> Result<Vec<Appended>, AppendError> {
+        self.append_from(Origin::Import, msgs).await
+    }
+
+    async fn append_from(
+        &self,
+        origin: Origin,
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Appended>, AppendError> {
+        #[cfg(test)]
+        self.hook(hooks::Point::Appending).await;
         let locks = self.lock_ready().await?;
         let sink = self.clone();
         // The locks go with the task: released when it ends, however it ends (a panic unwinding
         // included, which leaves a tokio mutex usable).
-        let section = tokio::spawn(async move { sink.append_locked(locks, msgs).await });
+        let section = tokio::spawn(async move { sink.append_locked(locks, origin, msgs).await });
         match section.await {
             Ok(appended) => appended,
             // A panic: what it may have pushed is pending (see `append_locked`). Cancelled: the
@@ -380,6 +427,7 @@ impl Sink {
     async fn append_locked(
         self,
         (mut pending, local): CaptureLocks,
+        #[cfg_attr(not(feature = "octavo"), expect(unused_variables))] origin: Origin,
         msgs: Vec<Message>,
     ) -> Result<Vec<Appended>, AppendError> {
         self.repair(&mut pending).await?;
@@ -456,6 +504,10 @@ impl Sink {
         // `start` uploads them once, and what a dead daemon or a failed push skips goes nowhere.
         #[cfg(feature = "octavo")]
         let upload = self.octavo.queue_thread_messages(&new).await;
+        // Shared as the user the messages go up as, read once for both, so a login in between
+        // can't queue the share under an account its thread never reaches.
+        #[cfg(feature = "octavo")]
+        let sharer = upload.user().filter(|_| origin == Origin::Live).cloned();
         // Write the record store first: it is the synced source of truth and the sidecar is a
         // pure projection of it. If the sidecar write fails afterwards a later rebuild repairs it;
         // the reverse ordering could strand a message in the sidecar only -- lost on rebuild and
@@ -474,6 +526,11 @@ impl Sink {
         let count = new.len() as u64;
         let projected = self.project_and_broadcast(&new).await?;
         *pending = Arc::default();
+        // Once projected, as the sharer reads the thread's rows from the sidecar.
+        #[cfg(feature = "octavo")]
+        if let Some(user) = sharer {
+            self.consider_sharing(&user, &new, &projected);
+        }
         for (i, msg) in positions.into_iter().zip(projected) {
             appended[i] = msg;
         }
@@ -489,6 +546,22 @@ impl Sink {
         drop(local);
         drop(pending);
         Ok(appended)
+    }
+
+    /// Hands Octavo each thread `projected` stored a new row of, written since capture started,
+    /// for `user` to share as its config files say.
+    #[cfg(feature = "octavo")]
+    fn consider_sharing(&self, user: &UserId, new: &[Message], projected: &[Appended]) {
+        let since = *self.captured_since.lock();
+        let sessions: HashSet<_> = new
+            .iter()
+            .zip(projected)
+            .filter(|(msg, row)| **row == Appended::New && msg.timestamp >= since)
+            .map(|(msg, _)| &msg.session)
+            .collect();
+        for session in sessions {
+            self.octavo.consider_sharing(user.clone(), session.clone(), &self.sidecar);
+        }
     }
 
     /// Take capture's locks with the store ready, so the sidecar holds every record and nothing
@@ -670,7 +743,10 @@ fn bulky(msg: &Message) -> bool {
                 let lines = patch.files.iter().flat_map(|f| &f.hunks).flat_map(|h| &h.lines);
                 left = left.saturating_sub(lines.map(String::len).sum());
             }
-            Content::Reasoning(_) | Content::ReasoningSummary { .. } | Content::Other(_) => {}
+            Content::Reasoning(_)
+            | Content::ReasoningSummary { .. }
+            | Content::Other(_)
+            | Content::Unknown(_) => {}
         }
         if left == 0 {
             return true;
@@ -718,7 +794,7 @@ fn sanitize(msg: &mut Message, tools: ToolCapture, policy: &CapturePolicy) {
             true
         }
         Content::ReasoningSummary { .. } => true,
-        Content::Text(_) | Content::Other(_) => false,
+        Content::Text(_) | Content::Other(_) | Content::Unknown(_) => false,
     });
     // Both titles a row carries: the session's, and the one its own line set.
     let change = msg.title_change.as_mut().and_then(|change| change.text.as_mut());
@@ -740,8 +816,8 @@ pub(crate) enum StoreState {
     Unavailable,
 }
 
-/// The sync worker's handle on recovery: resolves once startup recovery is over, whether it
-/// succeeded or not, and projects downloaded records beside capture.
+/// The handle on recovery for projecting synced records: resolves once startup recovery is over,
+/// whether it succeeded or not, and projects downloaded records beside capture.
 #[derive(Debug, Clone)]
 pub struct Recovery {
     state: watch::Receiver<StoreState>,
@@ -756,6 +832,39 @@ impl Recovery {
     pub async fn finished(&self) {
         // A closed channel means the coordinator is gone: recovery is over either way.
         let _ = self.state.clone().wait_for(|state| *state != StoreState::Recovering).await;
+    }
+
+    /// Project downloaded AI-session records into the sidecar: each signal (a sync downloaded
+    /// some) reprojects everything past the watermarks, so records a failed or interrupted
+    /// earlier one left out are retried too. Signals that queued up meanwhile are taken together.
+    ///
+    /// Nothing is projected until startup recovery is over, and each reprojection takes
+    /// [`AiSessionDatabase::lock_reprojection`], so one runs at a time beside recovery's and
+    /// rebuilds' replays: two at once would race each other's watermarks. A rebuild's wipe landing
+    /// meanwhile fails its watermark moves (compare-and-set on the sidecar's generation), and it
+    /// starts over. This host's own series is included, under capture's lock
+    /// ([`AiSessionDatabase::lock_local_projection`]): its own records can arrive from the server
+    /// (a reinstall that kept the host id), and capture dedups against the sidecar.
+    ///
+    /// This never sets the store's state, and never deletes a row of this host (see
+    /// [`Self::project_synced`]): a series rewritten under its watermark whose forgetting would
+    /// is handed to the recovery coordinator, which holds capture off while it forgets and replays
+    /// it. The task ends once the sender is dropped.
+    #[must_use]
+    pub fn spawn_projector(
+        self,
+        store: AiSessionStore,
+        db: AiSessionDatabase,
+    ) -> mpsc::UnboundedSender<()> {
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        tokio::spawn(async move {
+            self.finished().await;
+            while rx.recv().await.is_some() {
+                while rx.try_recv().is_ok() {}
+                self.project_synced(&store, &db).await;
+            }
+        });
+        tx
     }
 
     /// Project what a sync downloaded into `sidecar`, beside capture
@@ -1130,19 +1239,20 @@ impl AiHarnessSessionCapture {
         &self,
         harness: HarnessKind,
         session: &SessionId,
+        origin: Origin,
     ) -> Result<Push, AppendError> {
         let sink = self.sink.clone();
         let mut enricher = MessageEnricher::new(harness).keeping_patches(sink.keeps_patches());
         let handle = enricher.handle(session);
         let warmed =
-            engine::read_warm(&sink, &handle, sink.lock_ready().await?).await.map_err(|err| {
-                match err {
+            engine::read_warm(&sink, &handle, sink.lock_ready().await?, engine::Start::Resumed)
+                .await
+                .map_err(|err| match err {
                     engine::WarmError::Repair(err) => err,
                     engine::WarmError::Read(err) => AppendError::Sidecar(err),
                     #[cfg(test)]
                     engine::WarmError::Injected => AppendError::Aborted,
-                }
-            })?;
+                })?;
         // Without the content-addressed ids stored: a line without an id pushed again is the
         // same line, not the next one like it.
         enricher.resume(session, warmed.row.as_ref(), &warmed.titles, warmed.last.as_ref(), &[]);
@@ -1150,6 +1260,7 @@ impl AiHarnessSessionCapture {
             sink,
             enricher,
             session: session.clone(),
+            origin,
         })
     }
 
@@ -1214,6 +1325,8 @@ pub struct Push {
     sink: Arc<Sink>,
     enricher: MessageEnricher,
     session: SessionId,
+    /// An import's rows share no thread.
+    origin: Origin,
 }
 
 impl Push {
@@ -1224,13 +1337,13 @@ impl Push {
         for line in lines {
             rows.extend(self.enricher.capture(&self.session, &AnyMessage::Pushed(line)));
         }
-        self.sink.append_all(rows).await
+        self.sink.append_from(self.origin, rows).await
     }
 
     /// The push is over: store what was waiting.
     pub async fn finish(mut self) -> Result<Vec<Appended>, AppendError> {
         let rows = self.enricher.finish(&self.session);
-        self.sink.append_all(rows).await
+        self.sink.append_from(self.origin, rows).await
     }
 }
 
@@ -1244,8 +1357,8 @@ mod tests {
     };
     use atuin_domain::record::{RecordId, RecordTag};
     use futures::StreamExt;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
     use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
     use super::*;
@@ -1257,6 +1370,32 @@ mod tests {
             .host_id(HostId(atuin_common::utils::uuid_v7()))
             .key(Key::generate())
             .build()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn downloaded_ai_sessions_are_projected_after_recovery() {
+        let store = mem_store().await;
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let msg = sample_message();
+        store.push(&msg).await.unwrap();
+        let projected = async || db.contains_message(&msg.session, &msg.source_id).await.unwrap();
+
+        let (capture, state) = AiHarnessSessionCapture::with_state(StoreState::Recovering).await;
+        let projector = capture.recovery().spawn_projector(store, db.clone());
+        // Accepted at once, so a sync never waits on recovery.
+        projector.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!projected().await, "nothing is projected while recovery replays");
+
+        state.send_replace(StoreState::Ready);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !projected().await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("queued records are projected once recovery ends");
     }
 
     fn sample_handle() -> HarnessSession {
@@ -1271,7 +1410,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(sample_handle())
             .source_id(SourceId::from("source-id".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
@@ -1321,7 +1460,7 @@ mod tests {
         let mut earlier = sample_message();
         earlier.id = RecordId(atuin_common::utils::uuid_v7());
         earlier.source_id = SourceId::from("earlier".to_owned());
-        earlier.timestamp = first.timestamp - time::Duration::hours(1);
+        earlier.timestamp = first.timestamp - jiff::SignedDuration::from_hours(1);
 
         sink.append(first.clone()).await.unwrap();
         sink.append(earlier).await.unwrap();
@@ -1365,6 +1504,41 @@ mod tests {
         let (from, to) = (id_of(&original.session).await, id_of(&continued.session).await);
         assert_ne!(from, to);
         assert_eq!(uuid::Uuid::from(to).get_version(), Some(uuid::Version::SortRand));
+    }
+
+    /// An import brings in old conversations by the thousand, which config files must leave
+    /// alone: it covers what is captured from now on, as is, and a row seen before is no news. Nor
+    /// is one written before capture started, which a restart reads as it catches up. A thread is
+    /// shared as the user its messages went up as.
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[tokio::test]
+    async fn only_rows_newly_captured_live_consider_sharing() {
+        let octavo = crate::octavo::RecordingOctavoClient::default();
+        let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
+        sink.octavo = Arc::new(Octavo::recording(octavo.clone()));
+        let started = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1);
+        sink.capturing_since(SystemTime::try_from(started).unwrap());
+        let at = |secs, source: &str| Message {
+            id: RecordId(atuin_common::utils::uuid_v7()),
+            source_id: SourceId::from(source.to_owned()),
+            timestamp: started + jiff::SignedDuration::from_secs(secs),
+            ..sample_message()
+        };
+        let msg = at(0, "imported");
+
+        sink.append_all(vec![msg.clone()]).await.unwrap();
+        assert_eq!(octavo.considered(), []);
+
+        sink.append(msg.clone()).await.unwrap();
+        assert_eq!(octavo.considered(), []);
+
+        sink.append(at(-1, "written while capture was off")).await.unwrap();
+        assert_eq!(octavo.considered(), []);
+
+        sink.append(at(0, "later")).await.unwrap();
+        let user = crate::octavo::UserId::new(crate::octavo::RecordingOctavoClient::USER);
+        assert_eq!(octavo.considered(), [(user, msg.session)]);
     }
 
     #[rstest]
@@ -1543,7 +1717,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.content = content;
             msg
@@ -1733,7 +1907,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.cwd = cwd.map(Into::into);
             msg.content = content;
@@ -1813,7 +1987,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.cwd = cwd.map(Into::into);
             msg.content = content;
@@ -1955,7 +2129,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n);
+            msg.timestamp += jiff::SignedDuration::from_secs(n);
             msg.content = match row {
                 Stored::Cwd(cwd) => {
                     msg.cwd = Some(cwd.into());
@@ -1997,7 +2171,8 @@ mod tests {
         let mut messages = Box::pin(rebuilt.messages(&msg.session));
         let stored = messages.next().await.unwrap().unwrap();
         assert_eq!(stored.content, msg.content);
-        let block = crate::grpc::ai::agent::pb::ContentBlock::from(stored.content[0].clone());
+        let block =
+            crate::grpc::ai::agent::pb::ContentBlock::of(stored.content[0].clone()).unwrap();
         assert_eq!(
             block.block,
             Some(crate::grpc::ai::agent::pb::content_block::Block::ReasoningSummary(
@@ -2935,8 +3110,7 @@ mod tests {
         let projected = || sidecar.contains_message(&msg.session, &msg.source_id);
 
         rewrite_series(&store, &key, host).await;
-        let projector =
-            crate::sync::spawn_ai_session_projector(records, sidecar.clone(), capture.recovery());
+        let projector = capture.recovery().spawn_projector(records, sidecar.clone());
         projector.send(()).unwrap();
         let reached = tokio::time::timeout(Duration::from_secs(10), hooks.reached.acquire());
         reached.await.expect("the sync worker never had it forgotten").unwrap().forget();
@@ -3267,12 +3441,12 @@ mod tests {
     /// A line naming an instant past the years a date can name is captured at the nearest one
     /// stored, so the record synced never carries it.
     #[rstest]
-    #[case::late(time::macros::datetime!(9999-12-31 23:59:59 -23:59), Message::LATEST)]
-    #[case::early(time::macros::datetime!(-9999-01-01 0:00 +23:59), Message::EARLIEST)]
+    #[case::late(Timestamp::MAX, Message::LATEST)]
+    #[case::early(Timestamp::MIN, Message::EARLIEST)]
     #[tokio::test]
     async fn capture_holds_a_timestamp_to_the_range_stored(
-        #[case] timestamp: OffsetDateTime,
-        #[case] want: OffsetDateTime,
+        #[case] timestamp: Timestamp,
+        #[case] want: Timestamp,
     ) {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
@@ -4170,7 +4344,12 @@ mod pipeline_tests {
         .await;
         let row = sink.sidecar.get_session(&handle(HarnessKind::ClaudeCode, "s1")).await;
         let row = row.unwrap().unwrap();
-        assert_eq!(row.updated_at.year(), 2020, "updated_at = {}", row.updated_at);
+        assert_eq!(
+            row.updated_at.in_tz("UTC").unwrap().year(),
+            2020,
+            "updated_at = {}",
+            row.updated_at
+        );
         assert_eq!(row.started_at, row.updated_at);
         assert_eq!(row.title.as_deref(), Some("Old work"));
     }
@@ -4457,7 +4636,7 @@ mod pipeline_tests {
         })));
         let session = SessionId::from("T-1".to_owned());
         let push = |lines| async {
-            let mut push = capture.push(HarnessKind::Pi, &session).await?;
+            let mut push = capture.push(HarnessKind::Pi, &session, Origin::Live).await?;
             let mut appended = push.lines(lines).await?;
             appended.extend(push.finish().await?);
             Ok::<_, AppendError>(appended)
@@ -4477,6 +4656,37 @@ mod pipeline_tests {
         assert_eq!(messages.len(), 3);
         let row = capture.get_session(&handle).await.unwrap().unwrap();
         assert_eq!(row.title.as_deref(), Some("fix the tests"));
+    }
+
+    /// An import pushes past threads (Amp's), which config files must leave alone, while an agent
+    /// pushing its thread as it happens may share it.
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::import(Origin::Import, false)]
+    #[case::live(Origin::Live, true)]
+    #[tokio::test]
+    async fn only_a_push_as_it_happens_considers_sharing(
+        #[case] origin: Origin,
+        #[case] considered: bool,
+    ) {
+        let octavo = crate::octavo::RecordingOctavoClient::default();
+        let (mut capture, _state) = AiHarnessSessionCapture::with_state(StoreState::Ready).await;
+        let sink = Arc::get_mut(&mut capture.sink).expect("a sink nothing else holds yet");
+        sink.octavo = Arc::new(Octavo::recording(octavo.clone()));
+        // Written after capture started, as only such a row shares its thread.
+        let time = (Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
+        let line = serde_json::from_value::<PushedMessage>(serde_json::json!({
+            "v": 1, "id": "m1", "role": "user", "time": time,
+            "content": [{"type": "text", "text": "hi"}]
+        }))
+        .unwrap();
+
+        let session = SessionId::from("T-1".to_owned());
+        let mut push = capture.push(HarnessKind::Amp, &session, origin).await.unwrap();
+        push.lines(vec![line]).await.unwrap();
+        push.finish().await.unwrap();
+
+        assert_eq!(!octavo.considered().is_empty(), considered);
     }
 
     /// A push in several batches is read as one: identical lines without an id in different
@@ -4501,7 +4711,7 @@ mod pipeline_tests {
             "content": [{"type": "text", "text": "hello"}]
         }));
         let session = SessionId::from("T-1".to_owned());
-        let mut push = capture.push(HarnessKind::Amp, &session).await.unwrap();
+        let mut push = capture.push(HarnessKind::Amp, &session, Origin::Live).await.unwrap();
         push.lines(vec![untimed]).await.unwrap();
         push.lines(vec![ping(), timed]).await.unwrap();
         push.lines(vec![ping()]).await.unwrap();
@@ -4514,6 +4724,6 @@ mod pipeline_tests {
         let messages: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
         assert_eq!(messages.len(), 4, "both pings are kept");
         let hi = messages.iter().find(|m| m.source_id.as_ref() == "m1").unwrap();
-        assert_eq!(hi.timestamp.unix_timestamp(), 1_792_144_800, "the first ping's time");
+        assert_eq!(hi.timestamp.as_second(), 1_792_144_800, "the first ping's time");
     }
 }

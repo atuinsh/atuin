@@ -334,8 +334,8 @@ pub fn compute(
 mod tests {
     use atuin_client::history::History;
     use atuin_client::settings::Settings;
+    use jiff::Timestamp;
     use rstest::*;
-    use time::OffsetDateTime;
 
     use super::{
         compute, interesting_command, split_at_pipe, split_common_prefix, strip_leading_env_vars,
@@ -346,7 +346,7 @@ mod tests {
         let settings = Settings::utc();
 
         let history: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("FOO='BAR=🚀' echo foo")
             .cwd("/")
             .build()
@@ -362,9 +362,9 @@ mod tests {
         settings.stats.ignored_commands.push("cd".to_string());
 
         let history = [
-            History::import().timestamp(OffsetDateTime::now_utc()).command("cd foo").build().into(),
+            History::import().timestamp(Timestamp::now()).command("cd foo").build().into(),
             History::import()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command("cargo build stuff")
                 .build()
                 .into(),
@@ -380,11 +380,8 @@ mod tests {
         let mut settings = Settings::utc();
         settings.stats.ignored_commands.push("cd".to_string());
 
-        let history = [History::import()
-            .timestamp(OffsetDateTime::now_utc())
-            .command("cd foo")
-            .build()
-            .into()];
+        let history =
+            [History::import().timestamp(Timestamp::now()).command("cd foo").build().into()];
 
         // non-empty history can still leave nothing to report, so callers have
         // to handle None rather than assuming history.is_empty() covers it

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use atuin_common::db::sqlite::fts::{
     TextHighlighter, match_any_expression, match_expression, prefix_match_expression,
 };
-use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
+use atuin_common::db::sqlite::{Access, Sqlite, SqliteOpenOrCreateError};
 use atuin_common::db::{self};
 use atuin_common::harnesstools::continuation;
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
@@ -17,8 +17,8 @@ use atuin_common::string::StrExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, TryStreamExt};
+use jiff::Timestamp;
 use sqlx::migrate::MigrateError;
-use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -58,8 +58,8 @@ const DAY_MILLIS: f64 = 86_400_000.0;
 pub const MAX_ROW_TOKENS: u64 = 1 << 40;
 
 /// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
-const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
-const LATEST_MILLIS: i64 = Message::LATEST.unix_timestamp() * 1000;
+const EARLIEST_MILLIS: i64 = Message::EARLIEST_SECOND * 1000;
+const LATEST_MILLIS: i64 = Message::LATEST_SECOND * 1000;
 
 /// The shortest last term that matches as a prefix. A one-character prefix matches most of the
 /// index (every row with a word starting `e`), which costs hundreds of milliseconds to rank for
@@ -453,7 +453,7 @@ impl AiSessionDatabase {
     /// [`DbError::Uninitialized`], [`DbError::OutdatedSchema`] or [`DbError::UnknownSchema`]
     /// unless it is at exactly the schema this build reads.
     pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let db = Sqlite::builder(path.as_ref().as_os_str()).read_only().open().await?;
+        let db = Sqlite::builder(path.as_ref().as_os_str()).access(Access::ReadOnly).open().await?;
         let db = Self::from_sqlite(db, None);
         db.check_schema().await?;
         Ok(db)
@@ -617,6 +617,20 @@ impl AiSessionDatabase {
         .fetch_all(self.db.pool())
         .await?;
         Ok(ids.into_iter().map(SourceId::from).collect())
+    }
+
+    /// Each directory the session's rows name, once, the one named first first.
+    pub async fn directories(&self, session: &HarnessSession) -> Result<Vec<PathBuf>, DbError> {
+        let dirs: Vec<String> = db::query_scalar(
+            "SELECT (SELECT value FROM interned WHERE id = cwd) FROM messages WHERE session = \
+             (SELECT id FROM sessions WHERE harness = ? AND session_id = ?) AND cwd IS NOT NULL \
+             GROUP BY cwd ORDER BY MIN(timestamp), MIN(rowid)",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(dirs.into_iter().map(PathBuf::from).collect())
     }
 
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
@@ -1205,7 +1219,7 @@ impl AiSessionDatabase {
             for bind in binds {
                 stmt = bind.apply_as(stmt);
             }
-            stmt = stmt.bind(Self::millis(OffsetDateTime::now_utc()));
+            stmt = stmt.bind(Self::millis(Timestamp::now()));
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
@@ -1441,6 +1455,10 @@ impl AiSessionDatabase {
                 Self::push_json_text(out, &tool.input);
             }
             Content::Other(value) => Self::push_json_text(out, value),
+            // This build can't tell text in the block from anything else, so the block isn't
+            // indexed. A build that knows its kind indexes it after a migration projects the
+            // message again.
+            Content::Unknown(_) => {}
             // The files a call changed are what a search for them looks for; their lines are
             // tool output like any other.
             Content::Patch(patch) => {
@@ -1547,17 +1565,14 @@ impl AiSessionDatabase {
     }
 
     /// `ts` in milliseconds, held to [`Message::EARLIEST`] and [`Message::LATEST`].
-    fn millis(ts: OffsetDateTime) -> i64 {
-        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000)
-            .expect("every OffsetDateTime fits in i64 milliseconds")
-            .clamp(EARLIEST_MILLIS, LATEST_MILLIS)
+    fn millis(ts: Timestamp) -> i64 {
+        ts.as_millisecond().clamp(EARLIEST_MILLIS, LATEST_MILLIS)
     }
 
     /// The inverse of [`Self::millis`], held to the same range, so it never fails.
-    fn time_from_millis(ms: i64) -> OffsetDateTime {
+    fn time_from_millis(ms: i64) -> Timestamp {
         let ms = ms.clamp(EARLIEST_MILLIS, LATEST_MILLIS);
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
-            .expect("the range is representable")
+        Timestamp::from_millisecond(ms).expect("the range is representable")
     }
 
     fn harness_from_repr(n: i64) -> Result<HarnessKind, DbError> {
@@ -1572,6 +1587,7 @@ impl AiSessionDatabase {
             7 => Ok(HarnessKind::Grok),
             8 => Ok(HarnessKind::Amp),
             9 => Ok(HarnessKind::Kiro),
+            10 => Ok(HarnessKind::Hermes),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -1937,18 +1953,18 @@ impl QueryTerms {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use atuin_common::db;
-    use atuin_common::db::sqlite::Sqlite;
     use atuin_common::db::sqlite::fts::TextHighlighter;
+    use atuin_common::db::sqlite::{Access, Sqlite};
     use atuin_common::harnesstools::session::{
-        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, Usage,
+        Checkpoint, Content, ParentKind, Role, ToolCallId, ToolResult, ToolUse, UnknownBlock, Usage,
     };
     use atuin_domain::record::{HostId, RecordId};
     use futures::TryStreamExt;
+    use jiff::Timestamp;
     use rstest::{fixture, rstest};
-    use time::OffsetDateTime;
 
     use super::{
         AiSessionDatabase, Appended, AtuinSessionId, COMPRESS_THRESHOLD, DbError, QueryTerms,
@@ -1974,7 +1990,7 @@ mod tests {
                 session: NativeSessionId::from("native-session".to_owned()),
             })
             .source_id(SourceId::from("source-id".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
@@ -2097,7 +2113,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from(format!("source-{index}")))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(index))
             .role(Role::User)
             .content(vec![Content::Text(text.to_owned())])
             .build()
@@ -2150,7 +2166,7 @@ mod tests {
             db.append(&m).await.unwrap();
         }
 
-        let since = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(since);
+        let since = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(since);
         let sessions = db
             .list_sessions(&SessionFilter {
                 updated_since: Some(since),
@@ -2179,7 +2195,7 @@ mod tests {
     async fn same_timestamp_orders_by_capture_id_not_source_id() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let ts = OffsetDateTime::UNIX_EPOCH;
+        let ts = Timestamp::UNIX_EPOCH;
 
         // Two messages sharing a stored timestamp; source_ids sort opposite to capture order, so
         // ordering by source_id would reverse them. The monotonic capture id must break the tie.
@@ -2252,7 +2268,7 @@ mod tests {
         db.append(&message_in(&session, 50, "earlier")).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
-        assert_eq!(s.started_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50));
+        assert_eq!(s.started_at, Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(50));
     }
 
     #[rstest]
@@ -2265,7 +2281,7 @@ mod tests {
         db.append(&message_in(&session, 50, "old")).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
-        let ts = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50);
+        let ts = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(50);
         assert_eq!(s.updated_at, ts);
         assert_eq!(s.started_at, ts);
     }
@@ -2283,7 +2299,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from("with-usage".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1))
             .role(Role::Assistant)
             .content(vec![Content::Text("has usage".to_owned())])
             .usage(Some(Usage {
@@ -2416,6 +2432,29 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn directories_names_each_one_once_in_the_order_rows_reached_it() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        let other = handle(HarnessKind::ClaudeCode, "other");
+        for (session, at, cwd) in [
+            (&session, 3, Some("/work")),
+            (&session, 1, Some("/fork")),
+            (&session, 2, None),
+            (&session, 4, Some("/fork")),
+            (&other, 0, Some("/elsewhere")),
+        ] {
+            let mut m = message_in(session, at, "x");
+            m.cwd = cwd.map(PathBuf::from);
+            db.append(&m).await.unwrap();
+        }
+
+        let dirs = db.directories(&session).await.unwrap();
+
+        assert_eq!(dirs, [PathBuf::from("/fork"), PathBuf::from("/work")]);
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn source_ids_with_prefix_lists_only_matching_rows() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
@@ -2449,7 +2488,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from(format!("source-{index}")))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(index))
             .role(role)
             .content(content)
             .build()
@@ -2693,7 +2732,7 @@ mod tests {
     /// until it is named, and then fails the test until it has a sample and a bit.
     #[rstest]
     fn every_kind_of_block_has_its_own_bit() {
-        const KINDS: [&str; 10] = [
+        const KINDS: [&str; 11] = [
             "text",
             "reasoning",
             "tool use",
@@ -2704,6 +2743,7 @@ mod tests {
             "other",
             "reasoning summary",
             "tool error",
+            "unknown",
         ];
         let kind = |c: &Content| match c {
             Content::Text(_) => "text",
@@ -2716,6 +2756,7 @@ mod tests {
             Content::Error(_) => "error",
             Content::Other(_) => "other",
             Content::ReasoningSummary { .. } => "reasoning summary",
+            Content::Unknown(_) => "unknown",
         };
         let result = |error| {
             Content::ToolResult(ToolResult {
@@ -2742,6 +2783,10 @@ mod tests {
             Content::Error(String::new()),
             Content::Other(serde_json::Value::Null),
             Content::ReasoningSummary { tokens: None },
+            Content::Unknown(UnknownBlock {
+                kind: "Newer".to_owned(),
+                value: None,
+            }),
         ];
 
         let mut kinds: Vec<_> = samples.iter().map(kind).collect();
@@ -2882,6 +2927,39 @@ mod tests {
         let generation = count("SELECT generation FROM projection_state");
 
         conn.execute_batch(include_str!("migrations/0005_reproject_for_kiro.sql")).unwrap();
+
+        assert_eq!(count("SELECT count(*) FROM sessions"), 0);
+        assert_eq!(count("SELECT count(*) FROM messages"), 0);
+        assert_eq!(count("SELECT count(*) FROM reproject_watermark"), 0);
+        assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
+    }
+
+    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
+    /// harness before they knew Hermes.
+    #[rstest]
+    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+            include_str!("migrations/0005_reproject_for_kiro.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO sessions (id, harness, session_id, atuin_id, started_at, updated_at)
+                 VALUES (1, 0, 'local-1', x'00', 0, 0);
+             INSERT INTO messages (id, harness, session, source_id, timestamp, role, content)
+                 VALUES (x'01', 0, 1, '1', 0, 1, '[]');
+             INSERT INTO reproject_watermark (host, tag, idx, record_id) VALUES ('h', 't', 3, 'r');",
+        )
+        .unwrap();
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        let generation = count("SELECT generation FROM projection_state");
+
+        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
 
         assert_eq!(count("SELECT count(*) FROM sessions"), 0);
         assert_eq!(count("SELECT count(*) FROM messages"), 0);
@@ -3595,10 +3673,10 @@ mod tests {
     #[tokio::test]
     async fn recency_breaks_equal_relevance() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let now = Timestamp::now().as_second();
         for (id, age_days) in [("old", 90), ("new", 1), ("mid", 30)] {
             let mut m = message_in(&handle(HarnessKind::Pi, id), 0, "same words here");
-            m.timestamp = OffsetDateTime::from_unix_timestamp(now - age_days * 86_400).unwrap();
+            m.timestamp = Timestamp::from_second(now - age_days * 86_400).unwrap();
             db.append(&m).await.unwrap();
         }
         let ids: Vec<_> = search(&db, "words")
@@ -4352,7 +4430,7 @@ mod tests {
                 (s.handle.session.to_string(), s.child_count, s.group_updated_at.unwrap())
             })
             .collect();
-        let at = |seconds| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(seconds);
+        let at = |seconds| Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(seconds);
         // Newest activity in the group first: `root`'s newest is `late`, at 14. Its size counts
         // `fork` and `late`, not the subagents grouped under it.
         assert_eq!(groups, [
@@ -4631,7 +4709,7 @@ mod tests {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let mut e = filtered_row("e", "/work/atuin", "main", "opus", 0);
         e.host = None;
-        e.timestamp += time::Duration::seconds(1);
+        e.timestamp += jiff::SignedDuration::from_secs(1);
         for m in [
             filtered_row("a", "/work/atuin", "main", "opus", 1),
             filtered_row("b", "/work/atuin", "main", "opus", 2),
@@ -5323,7 +5401,8 @@ mod tests {
         assert!(message.contains(&path.display().to_string()), "{message}");
         assert!(message.contains("delete"), "{message}");
 
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await
@@ -5351,7 +5430,8 @@ mod tests {
 
         let err = AiSessionDatabase::open(&path).await.expect_err("must refuse");
         assert!(matches!(err, DbError::IncompatibleSchema { .. }), "{err}");
-        let reader = Sqlite::builder(path.as_os_str()).read_only().open().await.unwrap();
+        let reader =
+            Sqlite::builder(path.as_os_str()).access(Access::ReadOnly).open().await.unwrap();
         let sessions: i64 = db::query_scalar("SELECT count(*) FROM sessions")
             .fetch_one(reader.pool())
             .await
@@ -5362,12 +5442,12 @@ mod tests {
     /// A timestamp past the years a date can name, appended or stored, is held to the range
     /// rather than failing every read that meets it.
     #[rstest]
-    #[case::appended(time::macros::datetime!(9999-12-31 23:59:59 -23:59), None)]
-    #[case::stored_late(OffsetDateTime::UNIX_EPOCH, Some(i64::MAX))]
-    #[case::stored_early(OffsetDateTime::UNIX_EPOCH, Some(i64::MIN))]
+    #[case::appended(Timestamp::MAX, None)]
+    #[case::stored_late(Timestamp::UNIX_EPOCH, Some(i64::MAX))]
+    #[case::stored_early(Timestamp::UNIX_EPOCH, Some(i64::MIN))]
     #[tokio::test]
     async fn an_out_of_range_timestamp_reads_as_the_nearest_in_range(
-        #[case] timestamp: OffsetDateTime,
+        #[case] timestamp: Timestamp,
         #[case] stored: Option<i64>,
     ) {
         let db = AiSessionDatabase::in_memory().await.unwrap();

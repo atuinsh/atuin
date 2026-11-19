@@ -1,7 +1,7 @@
 //! Rendering tests: the picker drawn from the fake source into ratatui's `TestBackend`.
 
 use atuin_client::settings::{KeymapMode, Settings, Style as UiStyle};
-use atuin_client::theme::ThemeManagerOptions;
+use atuin_client::theme::ThemeManager;
 use atuin_client::tui::cursor::Cursor;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -51,12 +51,8 @@ async fn loaded(settings: &Settings, query: &str, tab: usize) -> State {
 }
 
 fn render(state: &mut State, settings: &Settings, width: u16, height: u16) -> Buffer {
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| state.draw(f, settings, theme)).unwrap();
     terminal.backend().buffer().clone()
@@ -697,8 +693,8 @@ async fn with_chooser(settings: &Settings, query: &str, action: super::state::Pe
     let mut state = loaded(settings, query, 0).await;
     // Idle: a session running here would have the fork selected.
     let at = state.list.selected;
-    state.results[at].updated_at = fake::now() - time::Duration::days(1);
-    state.results[at].active_at = fake::now() - time::Duration::days(1);
+    state.results[at].updated_at = fake::now() - jiff::SignedDuration::from_hours(24);
+    state.results[at].active_at = fake::now() - jiff::SignedDuration::from_hours(24);
     let row = state.selected().unwrap().clone();
     let resumer = FakeResumer::default();
     state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
@@ -1190,12 +1186,12 @@ async fn the_fork_is_preselected_over_an_original_that_shouldnt_resume(
         // The group's newest message; the session's own is older when only a child ran.
         row.updated_at = fake::now();
         row.active_at = if child_only {
-            fake::now() - time::Duration::days(1)
+            fake::now() - jiff::SignedDuration::from_hours(24)
         } else {
             fake::now()
         };
     } else {
-        row.updated_at = fake::now() - time::Duration::days(1);
+        row.updated_at = fake::now() - jiff::SignedDuration::from_hours(24);
         row.active_at = row.updated_at;
     }
     state.plans.insert(row.handle.clone(), FakeResumer::default().plan(&row).await);
@@ -1371,8 +1367,8 @@ async fn the_chooser_opens_when_there_is_a_choice() {
 }
 
 /// A session recorded on another machine is restored from sync (by the worker) only once it is
-/// chosen, and then resumed from where it was written; ctrl-y copies `atuin resume <id>`,
-/// which restores it when run, and writes nothing.
+/// chosen, and then resumed from where it was written, saying so; ctrl-y copies
+/// `atuin resume <id>`, which restores it when run, and writes nothing.
 #[rstest]
 #[tokio::test]
 async fn a_session_from_another_machine_is_restored_first() {
@@ -1402,6 +1398,8 @@ async fn a_session_from_another_machine_is_restored_first() {
     let restore = resume.restore.clone().unwrap();
     let plan = resumer.restore(&FakeSource::new(), &row, &restore).await;
     apply_response(&mut state, Response::Restored(row.handle.clone(), plan));
+    // The restore's status waits with its plan, for whichever enter resumes it.
+    assert_eq!(state.note, None);
     let outcome = accept(&mut state, Pending::Resume, resumer.as_ref(), &requests, false);
     let Some(Outcome::Resume(plan)) = outcome else {
         panic!("{outcome:?}");
@@ -1410,6 +1408,7 @@ async fn a_session_from_another_machine_is_restored_first() {
         plan.native_path,
         Some(std::path::PathBuf::from(format!("/restored/{}.jsonl", row.handle.session)))
     );
+    assert_eq!(state.note.as_deref(), Some("restored the thread from sync"));
 }
 
 /// An enter waiting on its session's plan, or on its restore from sync, and then an idle refresh
@@ -1634,7 +1633,7 @@ impl Resumer for GatedRestores {
         source: &dyn SessionSource,
         session: &super::source::SessionRow,
         restore: &super::resumer::Restore,
-    ) -> Result<super::resumer::ResumePlan, super::resumer::NotResumable> {
+    ) -> Result<super::resumer::Restored, super::resumer::NotResumable> {
         self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.gate.acquire().await.unwrap().forget();
         self.inner.restore(source, session, restore).await
@@ -2055,17 +2054,13 @@ fn a_continuation_in_the_tree_says_where_it_went_on() {
     let mut child = fake::row(HarnessKind::Codex, "0199aaaa", "fix the flaky test");
     child.parent = Some(root.handle.clone());
     child.relation = Relation::Fork;
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let lines = super::panel::tree_lines(
         &root.handle,
         &[child],
         fake::now(),
-        time::UtcOffset::UTC,
+        &jiff::tz::TimeZone::UTC,
         90,
         theme,
     );
@@ -2356,12 +2351,8 @@ async fn the_wheel_scrolls_the_pane_under_it(#[case] origin: u16) {
 
     let s = settings();
     let mut state = loaded(&s, "", 0).await;
-    let mut themes = ThemeManagerOptions {
-        debug: false,
-        builtin_only: true,
-    }
-    .build();
-    let theme = themes.load_theme("default", None);
+    let mut themes = ThemeManager::builtin_only();
+    let theme = themes.load_theme("default");
     let mut backend = TestBackend::new(100, 42);
     backend.set_cursor_position((0, origin)).unwrap();
     let viewport = if origin == 0 {
@@ -2998,7 +2989,7 @@ async fn a_session_open_here_preselects_the_fork(
     let mut state = loaded(&s, "", 0).await;
     let at = state.list.selected;
     if !recent {
-        state.results[at].active_at = fake::now() - time::Duration::days(1);
+        state.results[at].active_at = fake::now() - jiff::SignedDuration::from_hours(24);
     }
     let row = state.results[at].clone();
     let plan = FakeResumer::default().plan(&row).await.unwrap().plan;

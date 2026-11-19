@@ -67,10 +67,12 @@ impl DaemonAddress {
     /// The configured socket, cleared of the sockets a daemon that crashed left behind and with
     /// its default directory created, ready to bind. Only the pidfile's holder may clear them.
     pub(crate) fn prepare(daemon: &DaemonSettings) -> Result<Self, PrepareError> {
-        // A stale socket would keep this daemon from binding.
-        SocketFile::remove_stale(daemon)?;
+        // Create the directory first. If launchd created it as root, this moves it aside, along
+        // with the socket that launchd left in it. This daemon couldn't remove that socket.
         let socket_path = daemon.socket_path();
         socket_path.create_default_dir_if_needed()?;
+        // A stale socket would keep this daemon from binding.
+        SocketFile::remove_stale(daemon)?;
         Ok(Self(socket_path.into_owned()))
     }
 

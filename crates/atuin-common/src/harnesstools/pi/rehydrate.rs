@@ -46,12 +46,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use super::Flavour;
-use super::session::{default_root, is_omp_file, locate, new_session_dir};
+use super::session::{default_root, is_omp_session_file, locate, new_session_dir};
 use crate::harnesstools::rehydrate::{
     RehydrateError, RehydrateMessage, RehydrateSession, UNCAPTURED_OUTPUT, break_line_cycles,
     merge_uncaptured_runs, on_parent_cycles, record_merged,
@@ -175,7 +174,7 @@ impl StartModel {
     }
 
     /// The `model_change` entry naming this model, with `id` for the entries after it to hang from.
-    fn entry(&self, id: &str, at: OffsetDateTime) -> Value {
+    fn entry(&self, id: &str, at: Timestamp) -> Value {
         let mut entry = json!({
             "type": "model_change",
             "id": id,
@@ -244,40 +243,35 @@ fn last_started_model(sessions: &Path) -> Option<String> {
         }
     }
     files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    files.into_iter().filter(|(_, path)| is_omp_file(path)).take(LOOK_AT).find_map(|(_, path)| {
-        let raw = std::fs::read_to_string(path).ok()?;
-        raw.lines()
-            .rev()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|entry| entry["type"] == "model_change")
-            .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
-            .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
-            .find(|model| model.contains('/'))
-    })
+    files.into_iter().filter(|(_, path)| is_omp_session_file(path)).take(LOOK_AT).find_map(
+        |(_, path)| {
+            let raw = std::fs::read_to_string(path).ok()?;
+            raw.lines()
+                .rev()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|entry| entry["type"] == "model_change")
+                .filter(|entry| !entry["id"].as_str().is_some_and(|id| id.starts_with("atuin-")))
+                .filter_map(|entry| entry["model"].as_str().map(str::to_owned))
+                .find(|model| model.contains('/'))
+        },
+    )
 }
 
 /// A timestamp as pi writes one (`Date.toISOString`): UTC, to the millisecond.
-fn timestamp(at: OffsetDateTime) -> String {
-    let format =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
-    at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+fn timestamp(at: Timestamp) -> String {
+    jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%.3fZ", at).unwrap_or_default()
 }
 
 /// omp's title slot (omp `session-title-slot.ts`): the `title` line every omp session starts
 /// with, exactly 256 bytes with its newline, which omp rewrites in place. Untitled, so omp names
 /// the session. It is also what tells an omp session from a pi one where both keep sessions.
-fn title_slot(at: OffsetDateTime) -> String {
+fn title_slot(at: Timestamp) -> String {
     const SLOT_BYTES: usize = 256;
     let slot = |pad: &str| {
         json!({"type": "title", "v": 1, "title": "", "updatedAt": timestamp(at), "pad": pad})
             .to_string()
     };
     slot(&" ".repeat(SLOT_BYTES - 1 - slot("").len())) + "\n"
-}
-
-/// Milliseconds since the epoch, as pi times its messages.
-fn millis(at: OffsetDateTime) -> i64 {
-    i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
 }
 
 fn transcript(session: &RehydrateSession, start: Option<&StartModel>) -> String {
@@ -508,12 +502,7 @@ impl<'a> Writer<'a> {
             .find(|m| m.role == Role::Other("session_info".to_owned()))
             .filter(|m| !self.writable.contains(m.source_id.as_str()));
         let (id, at) = named.map_or_else(
-            || {
-                (
-                    format!("atuin-{}", crate::utils::uuid_v7().as_simple()),
-                    OffsetDateTime::now_utc(),
-                )
-            },
+            || (format!("atuin-{}", crate::utils::uuid_v7().as_simple()), Timestamp::now()),
             |m| (m.source_id.clone(), m.timestamp),
         );
         self.lines.push(json!({
@@ -527,7 +516,7 @@ impl<'a> Writer<'a> {
 
     /// The entry for `m`, without its tree fields; `None` when nothing of it can be written.
     fn entry(&self, m: &RehydrateMessage) -> Option<Value> {
-        let at = millis(m.timestamp);
+        let at = m.timestamp.as_millisecond();
         match &m.role {
             Role::User => {
                 if let Some(bash) = bash_execution(m, at) {

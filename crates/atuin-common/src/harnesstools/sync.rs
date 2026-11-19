@@ -39,6 +39,7 @@ mod ccode;
 mod codex;
 mod copilot;
 mod grok;
+mod hermes;
 mod kiro;
 pub mod liveness;
 mod opencode;
@@ -384,7 +385,7 @@ fn replace_jsonl_with(
     if Stamp::of(current) != stamp {
         return Err(SyncError::Changed);
     }
-    let backup = keep_backup(path, current, backups, time::OffsetDateTime::now_utc())?;
+    let backup = keep_backup(path, current, backups, jiff::Timestamp::now())?;
     match replace(path, bytes, &|now| Stamp::of(now) == stamp) {
         Ok(()) => Ok((backup, None)),
         // The transcript holds the branch now: the backup is all that is left of the copy as it
@@ -412,7 +413,7 @@ fn keep_backup(
     path: &Path,
     bytes: &[u8],
     backups: &Path,
-    at: time::OffsetDateTime,
+    at: jiff::Timestamp,
 ) -> Result<PathBuf, SyncError> {
     std::fs::create_dir_all(backups)?;
     let mut n = 0;
@@ -431,19 +432,10 @@ fn keep_backup(
 /// `<its file stem>-<at, to the millisecond, UTC>[-<n>].<its extension>`, `n` counting from 1 the
 /// names already taken. In a directory of atuin's own, so no harness lists it with its sessions,
 /// whatever its extension.
-fn backup_path(path: &Path, backups: &Path, at: time::OffsetDateTime, n: u32) -> Option<PathBuf> {
+fn backup_path(path: &Path, backups: &Path, at: jiff::Timestamp, n: u32) -> Option<PathBuf> {
     let stem = path.file_stem()?.to_string_lossy();
     let ext = path.extension().map_or_else(|| "jsonl".into(), |e| e.to_string_lossy());
-    let when = format!(
-        "{:04}{:02}{:02}T{:02}{:02}{:02}.{:03}Z",
-        at.year(),
-        u8::from(at.month()),
-        at.day(),
-        at.hour(),
-        at.minute(),
-        at.second(),
-        at.millisecond()
-    );
+    let when = at.strftime("%Y%m%dT%H%M%S%.3fZ");
     let again = if n == 0 {
         String::new()
     } else {

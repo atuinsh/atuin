@@ -94,6 +94,45 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
 - Feature flags: `client`, `sync`, `daemon`, `clipboard`, `check-update`.
+- Use `#[cfg()]` only for code that actually needs conditional compilation; prefer `if cfg!()` otherwise.
+- Use `let _ = ...` rather than `_ = ...` except where an expression, rather than a statement, is needed.
+
+## Writing style (comments, commit messages, prose)
+
+These rules are for AI agents. Human contributors don't need to follow them.
+
+Sentences:
+
+- Write plain, complete sentences. Keep articles and relative pronouns ("that", "which", "who").
+- One idea per sentence. A sentence can join two closely related clauses with a conjunction. For
+  example, write "X might be true, so we need to do Y." Don't split it into "X might be true. So
+  we need to do Y."
+- Split a sentence that chains more than two clauses, or that piles on conditions and exceptions.
+  For example, split "X might be true, so we need to do Y, which also requires Z, except when Q is
+  less than 0."
+- Don't nest one relative clause inside another. For example, rewrite "the errors that the server
+  that we connected to returns."
+- Put examples in a separate sentence that starts with "For example". Don't use mid-sentence
+  parentheticals.
+- Repeat the noun when a pronoun could refer to more than one thing. For example, in "tell the
+  daemon to forward the error when it sees that its code is wrong", "it" and "its" could each mean
+  the daemon or the error.
+- Don't start a sentence with a back-reference such as "So does X", "Same for X", or "This too".
+  Restate the claim that applies. For example, after a long sentence about how the daemon retries
+  failed uploads, write "The sync worker also retries failed uploads." Avoid "So does the sync
+  worker."
+- State what something does and why. Don't describe it by contrast with what it doesn't do. For
+  example, write "Read the command ids because the cache is keyed by id." Avoid "Read the command
+  ids, not their names."
+- If a reader would need to reread a sentence, rewrite it.
+
+Comments:
+
+- Comment only on what the code doesn't already make clear. For example, `upload(records.first())`
+  needs no comment that says "Upload the first record."
+- Doc comments describe the behavior that callers see. Keep implementation details out of them.
+- Comments describe the current code. Put the history of a change in the commit message. For
+  example, avoid comments such as "now uses X" or "previously did Y".
 
 ## Testing
 

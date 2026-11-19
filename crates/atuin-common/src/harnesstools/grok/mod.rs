@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use super::rehydrate::{RehydrateError, RehydrateSession};
+use serde_json::json;
+
+use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
 use crate::dirs::home_dir;
@@ -17,7 +19,7 @@ pub(crate) fn home() -> PathBuf {
     var_nonempty("GROK_HOME").map_or_else(|| home_dir().joined(".grok"), PathBuf::from)
 }
 
-/// Whether `atuin hook install grok` has registered hooks in `$GROK_HOME/hooks/atuin.json`.
+/// Whether `atuin setup --agent-history` has registered hooks in `$GROK_HOME/hooks/atuin.json`.
 #[must_use]
 pub fn has_installed_hooks() -> bool {
     json_hooks::has_installed(&home().joined("hooks").joined("atuin.json"), "grok")
@@ -38,6 +40,18 @@ impl Harness for Grok {
         "grok"
     }
 
+    fn display_name(&self) -> &'static str {
+        "Grok Build"
+    }
+
+    fn program(&self) -> &'static str {
+        "grok"
+    }
+
+    fn home_vars(&self) -> &'static [&'static str] {
+        &["GROK_HOME"]
+    }
+
     fn alias_names(&self) -> &'static [&'static str] {
         &["grok-build"]
     }
@@ -49,11 +63,21 @@ impl Harness for Grok {
         Ok(config_path)
     }
 
+    async fn has_hooks(&self) -> Result<bool, InstallHookError> {
+        json_hooks::has(&home().joined("hooks").joined("atuin.json"), self.name()).await
+    }
+
+    /// The file goes with atuin's hooks, unless something else was put in it.
+    async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
+        let config_path = home().joined("hooks").joined("atuin.json");
+        json_hooks::uninstall_own(&config_path, self.name(), &json!({})).await
+    }
+
     /// `grok --resume <id>`. Grok Build finds the session across directories, and works in the
     /// directory it is started from.
     fn resume_plan(&self, target: &ResumeTarget) -> Result<ResumePlan, ResumeError> {
         let args = ["--resume".to_owned(), target.id.clone()];
-        Ok(resume::plan(target, CwdRequirement::Preferred, "grok", args))
+        Ok(resume::plan(target, CwdRequirement::Preferred, self.program(), args))
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
@@ -61,8 +85,8 @@ impl Harness for Grok {
         resume::blocking(move || session::locate(&root, &id)).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-        rehydrate::rehydrate(session).await
+    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session).await.map(Rehydrated::at)
     }
 }
 

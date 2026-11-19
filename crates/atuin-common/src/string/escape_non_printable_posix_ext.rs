@@ -44,6 +44,18 @@ pub trait EscapeNonPrintablePosixExt: AsRef<str> {
 
         Cow::Owned(s.chars().flat_map(escape_char).collect())
     }
+
+    /// Equivalent to [`Self::escape_non_printable`], except that a line feed stays, so that
+    /// multi-line text keeps its lines.
+    fn escape_non_printable_lines(&self) -> Cow<'_, str> {
+        let s = self.as_ref();
+        if !s.contains(|c: char| c.is_control() && c != '\n') {
+            return Cow::Borrowed(s);
+        }
+
+        let lines: Vec<_> = s.split('\n').map(|line| line.escape_non_printable()).collect();
+        Cow::Owned(lines.join("\n"))
+    }
 }
 
 impl<T: AsRef<str> + ?Sized> EscapeNonPrintablePosixExt for T {}
@@ -88,7 +100,27 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::plain_text_unchanged("plain text", "plain text")]
+    #[case::line_feeds_kept("one\ntwo\n", "one\ntwo\n")]
+    #[case::esc_on_a_line("one\n\x1b]0;title\x07two", "one\n^[]0;title^Gtwo")]
+    #[case::carriage_return("one\r\ntwo", "one^M\ntwo")]
+    #[case::tab("a\tb", "a^Ib")]
+    #[case::c1_control("a\u{9b}b", "aM-^[b")]
+    fn escapes_all_but_line_feeds(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(input.escape_non_printable_lines(), expected);
+    }
+
     proptest! {
+        /// The line-keeping variant never outputs a control character other than a line feed, and
+        /// keeps every line feed.
+        #[rstest]
+        fn line_escaping_keeps_only_line_feeds(s in r"(?s).*") {
+            let escaped = s.escape_non_printable_lines();
+            prop_assert!(!escaped.chars().any(|c| c.is_control() && c != '\n'));
+            prop_assert_eq!(escaped.matches('\n').count(), s.matches('\n').count());
+        }
+
         /// The whole point of the function: for ANY input string, the escaped
         /// output never contains a control character.
         #[rstest]

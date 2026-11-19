@@ -25,8 +25,8 @@ pub fn sort(query: &str, input: Vec<History>) -> Vec<History> {
             };
 
             // calculate how long ago the history was, in seconds
-            let now = time::OffsetDateTime::now_utc().unix_timestamp();
-            let time = h.timestamp.unix_timestamp();
+            let now = jiff::Timestamp::now().as_second();
+            let time = h.timestamp.as_second();
             let diff = std::cmp::max(1, now - time); // no /0 please
 
             // prefer newer history, but not hugely so as to offset the other scoring

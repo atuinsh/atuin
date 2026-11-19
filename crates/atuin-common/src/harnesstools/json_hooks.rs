@@ -12,17 +12,28 @@ use super::InstallHookError;
 /// Hook lifecycle events atuin registers itself for.
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 
+/// How a hook entry tells the harness to run atuin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookStyle {
+    /// A `command` string, run through the harness's shell.
+    Shell,
+    /// `exec` and `args`, run directly with no shell. Avoids quoting the executable path, which
+    /// PowerShell rejects at the start of a command.
+    Exec,
+}
+
 /// Merge atuin's command hooks into a Claude-Code-style JSON hook config at `config_path`, leaving
 /// the user's existing keys, values, and ordering intact.
 ///
-/// The hooks invoke the running executable by absolute path, since harnesses do not necessarily
-/// run them with the user's shell `PATH`.
+/// The hooks run atuin by absolute path, since harnesses do not necessarily run them with the
+/// user's shell `PATH`. The path is the one that [`launch_path`](crate::atuin_exe::launch_path)
+/// gives, which outlasts a package manager's upgrade.
 pub async fn install(
     config_path: &Path,
     matcher: &str,
     harness: &str,
 ) -> Result<(), InstallHookError> {
-    install_in(config_path, matcher, harness, Value::Object(Map::new())).await
+    install_in(config_path, matcher, harness, HookStyle::Shell, Value::Object(Map::new())).await
 }
 
 /// [`install`], into `skeleton` when there is no config at `config_path` yet: what the harness
@@ -31,9 +42,10 @@ pub async fn install_in(
     config_path: &Path,
     matcher: &str,
     harness: &str,
+    style: HookStyle,
     skeleton: Value,
 ) -> Result<(), InstallHookError> {
-    let hook_command = hook_command(&std::env::current_exe()?, harness)?;
+    let hook = hook_entry(crate::atuin_exe::launch_path().await?, harness, style)?;
 
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -53,7 +65,7 @@ pub async fn install_in(
         .as_object_mut()
         .ok_or(InstallHookError::Malformed("`hooks` is not an object"))?;
 
-    if !add_hook_entries(hooks, matcher, harness, &hook_command)? {
+    if !add_hook_entries(hooks, matcher, harness, &hook)? {
         return Err(InstallHookError::AlreadyInstalled);
     }
 
@@ -62,7 +74,7 @@ pub async fn install_in(
     Ok(())
 }
 
-/// Replace every event's atuin hooks with one `hook_command` entry, returning whether `hooks`
+/// Replace every event's atuin hooks with one `hook` entry, returning whether `hooks`
 /// changed.
 ///
 /// Atuin hooks are removed wherever they sit, so reinstalling after an upgrade or a moved binary
@@ -73,7 +85,7 @@ fn add_hook_entries(
     hooks: &mut Map<String, Value>,
     matcher: &str,
     harness: &str,
-    hook_command: &str,
+    hook: &Value,
 ) -> Result<bool, InstallHookError> {
     let before = hooks.clone();
     for event_type in HOOK_EVENT_TYPES {
@@ -85,7 +97,7 @@ fn add_hook_entries(
 
         let installed = json!({
             "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_command}],
+            "hooks": [hook],
         });
         let kept = entries.iter().position(|entry| *entry == installed);
         for (at, entry) in entries.iter_mut().enumerate() {
@@ -93,12 +105,7 @@ fn add_hook_entries(
                 continue;
             }
             if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
-                entry_hooks.retain(|hook| {
-                    !hook
-                        .get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|command| invokes_atuin_hook(command, harness))
-                });
+                entry_hooks.retain(|hook| !hook_invokes_atuin(hook, harness));
             }
         }
         entries.retain(|entry| {
@@ -111,6 +118,25 @@ fn add_hook_entries(
     }
 
     Ok(*hooks != before)
+}
+
+/// Build the hook entry that runs `atuin hook <harness>` through `executable`.
+fn hook_entry(
+    executable: &Path,
+    harness: &str,
+    style: HookStyle,
+) -> Result<Value, InstallHookError> {
+    match style {
+        HookStyle::Shell => {
+            Ok(json!({"type": "command", "command": hook_command(executable, harness)?}))
+        }
+        HookStyle::Exec => {
+            let executable = executable
+                .to_str()
+                .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;
+            Ok(json!({"type": "command", "exec": executable, "args": ["hook", harness]}))
+        }
+    }
 }
 
 /// Build the shell command that runs `atuin hook <harness>` through `executable`.
@@ -133,6 +159,119 @@ pub(super) fn hook_command(executable: &Path, harness: &str) -> Result<String, I
     })?;
 
     Ok(command)
+}
+
+/// Whether the JSON hook config at `config_path` runs `atuin hook <harness>` at any stage.
+pub async fn has(config_path: &Path, harness: &str) -> Result<bool, InstallHookError> {
+    let Some(root) = read(config_path).await? else {
+        return Ok(false);
+    };
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object) else {
+        return Ok(false);
+    };
+    let ours = this_atuins(harness);
+    let runs_atuin = |entry: &Value| {
+        let hooks = entry.get("hooks").and_then(Value::as_array);
+        hooks.is_some_and(|hooks| hooks.iter().any(|hook| is_atuins(hook, harness, &ours)))
+    };
+    Ok(HOOK_EVENT_TYPES.iter().any(|stage| {
+        let entries = hooks.get(*stage).and_then(Value::as_array);
+        entries.is_some_and(|entries| entries.iter().any(runs_atuin))
+    }))
+}
+
+/// Take every hook running `atuin hook <harness>` out of the JSON hook config at `config_path`,
+/// with the entries and stages that leaves empty, keeping the rest of it as it is. `false` when
+/// there were none.
+pub async fn uninstall(config_path: &Path, harness: &str) -> Result<bool, InstallHookError> {
+    let Some(mut root) = read(config_path).await? else {
+        return Ok(false);
+    };
+    let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    if !remove_hook_entries(hooks, harness) {
+        return Ok(false);
+    }
+    tokio::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
+    Ok(true)
+}
+
+/// [`uninstall`] for a config atuin made from `skeleton`, which goes once only that's left of it.
+/// What another tool merged into it keeps it, and stays.
+pub async fn uninstall_own(
+    config_path: &Path,
+    harness: &str,
+    skeleton: &Value,
+) -> Result<bool, InstallHookError> {
+    if !uninstall(config_path, harness).await? {
+        return Ok(false);
+    }
+    let Some(mut left) = read(config_path).await? else {
+        return Ok(true);
+    };
+    if let Some(root) = left.as_object_mut()
+        && root.get("hooks").and_then(Value::as_object).is_some_and(Map::is_empty)
+    {
+        root.remove("hooks");
+    }
+    if left == *skeleton {
+        super::remove_own_file(config_path).await?;
+    }
+    Ok(true)
+}
+
+/// The JSON at `path`, `None` when there's no file.
+async fn read(path: &Path) -> Result<Option<Value>, InstallHookError> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Take atuin's hooks out of each stage of `hooks`, then the entries and stages that leaves
+/// empty, returning whether that changed it.
+fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
+    let before = hooks.clone();
+    let ours = this_atuins(harness);
+    for stage in HOOK_EVENT_TYPES {
+        let Some(entries) = hooks.get_mut(*stage).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let had_some = !entries.is_empty();
+        for entry in entries.iter_mut() {
+            if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                entry_hooks.retain(|hook| !is_atuins(hook, harness, &ours));
+            }
+        }
+        entries.retain(|entry| {
+            entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
+        });
+        if had_some && entries.is_empty() {
+            hooks.remove(*stage);
+        }
+    }
+    *hooks != before
+}
+
+/// The hook entries this atuin writes for `harness`, in each style.
+///
+/// Install writes [`crate::atuin_exe::launch_path`], which is either the running executable or an
+/// `atuin` on `PATH`. [`is_atuins`] already matches an executable named `atuin`, so the running
+/// executable is the only one to list. Using it also saves `launch_path`'s probes.
+fn this_atuins(harness: &str) -> Vec<Value> {
+    let Ok(exe) = crate::os::process::current_exe() else {
+        return Vec::new();
+    };
+    let styles = [HookStyle::Shell, HookStyle::Exec];
+    styles.into_iter().filter_map(|style| hook_entry(&exe, harness, style).ok()).collect()
+}
+
+/// Whether `hook` runs `atuin hook <harness>`: an executable named atuin, or this one, whatever
+/// it's called, as one of `ours`.
+fn is_atuins(hook: &Value, harness: &str, ours: &[Value]) -> bool {
+    hook_invokes_atuin(hook, harness) || ours.contains(hook)
 }
 
 /// Whether `config_path` already registers `atuin hook <harness>` across every hook lifecycle
@@ -172,12 +311,38 @@ pub fn invokes_atuin_hook(command: &str, harness: &str) -> bool {
         return false;
     };
 
-    parts.len() == 3
-        && Path::new(&parts[0]).file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+    is_atuin_hook_argv(parts.iter().map(String::as_str), harness)
+}
+
+/// Whether the hook entry runs `atuin hook <harness>`, as a `command` string or as `exec` and
+/// `args`.
+fn hook_invokes_atuin(hook: &Value, harness: &str) -> bool {
+    if let Some(command) = hook.get("command").and_then(Value::as_str) {
+        return invokes_atuin_hook(command, harness);
+    }
+
+    let Some(executable) = hook.get("exec").and_then(Value::as_str) else {
+        return false;
+    };
+    let args = hook.get("args").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let mut argv = vec![Some(executable)];
+    argv.extend(args.iter().map(Value::as_str));
+
+    argv.into_iter()
+        .collect::<Option<Vec<_>>>()
+        .is_some_and(|argv| is_atuin_hook_argv(argv, harness))
+}
+
+fn is_atuin_hook_argv<'a>(argv: impl IntoIterator<Item = &'a str>, harness: &str) -> bool {
+    let argv: Vec<_> = argv.into_iter().collect();
+    let [executable, "hook", name] = argv.as_slice() else {
+        return false;
+    };
+
+    *name == harness
+        && executable.rsplit(['/', '\\']).next().is_some_and(|name| {
             name.eq_ignore_ascii_case("atuin") || name.eq_ignore_ascii_case("atuin.exe")
         })
-        && parts[1] == "hook"
-        && parts[2] == harness
 }
 
 #[cfg(test)]
@@ -186,9 +351,92 @@ mod tests {
 
     use super::*;
 
+    /// A config atuin made goes with its hooks, unless something else was put in it, which stays.
+    #[rstest]
+    #[case::alone(json!({}), None)]
+    #[case::beside_theirs(
+        json!({"hooks": {"preToolUse": [{"matcher": "x", "hooks": [{"type": "command", "command": "printf keep-me"}]}]}}),
+        Some(json!({"version": 1, "hooks": {"preToolUse": [{"matcher": "x", "hooks": [{"type": "command", "command": "printf keep-me"}]}]}})),
+    )]
+    #[case::beside_a_setting(
+        json!({"disableAllHooks": false}),
+        Some(json!({"version": 1, "disableAllHooks": false, "hooks": {}})),
+    )]
+    #[tokio::test]
+    async fn own_config_goes_only_with_nothing_else_in_it(
+        #[case] theirs: Value,
+        #[case] left: Option<Value>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atuin.json");
+        let skeleton = json!({"version": 1});
+        let mut config = skeleton.clone();
+        config.as_object_mut().unwrap().extend(theirs.as_object().unwrap().clone());
+        std::fs::write(&path, config.to_string()).unwrap();
+        install_in(&path, "^Bash$", "copilot", HookStyle::Exec, skeleton.clone()).await.unwrap();
+
+        assert!(uninstall_own(&path, "copilot", &skeleton).await.unwrap());
+        let read = std::fs::read_to_string(&path).ok();
+        assert_eq!(read.map(|read| serde_json::from_str::<Value>(&read).unwrap()), left);
+        assert!(!uninstall_own(&path, "copilot", &skeleton).await.unwrap());
+    }
+
+    /// Taken out, atuin's hooks leave the user's behind, and drop the stages they were alone in.
+    #[rstest]
+    #[tokio::test]
+    async fn uninstall_leaves_the_users_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let atuin = json!({"type": "command", "command": "/opt/atuin/bin/atuin hook claude-code"});
+        let theirs = json!({"type": "command", "command": "printf keep-me"});
+        let config = json!({
+            "model": "opus",
+            "hooks": {
+                "PreToolUse": [{"matcher": "Bash", "hooks": [atuin, theirs]}],
+                "PostToolUse": [{"matcher": "^Bash$", "hooks": [atuin]}],
+            },
+        });
+        std::fs::write(&path, config.to_string()).unwrap();
+
+        assert!(has(&path, "claude-code").await.unwrap());
+        assert!(!has(&path, "codex").await.unwrap());
+        assert!(uninstall(&path, "claude-code").await.unwrap());
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let theirs_alone = json!([{"matcher": "Bash", "hooks": [theirs]}]);
+        assert_eq!(left, json!({"model": "opus", "hooks": {"PreToolUse": theirs_alone}}));
+        assert!(!has(&path, "claude-code").await.unwrap());
+        assert!(!uninstall(&path, "claude-code").await.unwrap());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn no_config_has_no_hooks_to_take_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert!(!has(&path, "claude-code").await.unwrap());
+        assert!(!uninstall(&path, "claude-code").await.unwrap());
+    }
+
+    /// What this atuin installs is found and taken out, whatever its executable is called.
+    #[rstest]
+    #[tokio::test]
+    async fn the_hooks_this_atuin_installs_come_out(
+        #[values(HookStyle::Shell, HookStyle::Exec)] style: HookStyle,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.json");
+        install_in(&path, "^Bash$", "grok", style, json!({})).await.unwrap();
+
+        assert!(has(&path, "grok").await.unwrap());
+        assert!(uninstall(&path, "grok").await.unwrap());
+        assert!(!has(&path, "grok").await.unwrap());
+    }
+
     #[rstest]
     fn add_hook_entries_replaces_legacy_commands_without_duplicates() {
         let command = "/opt/atuin/bin/atuin hook claude-code";
+        let hook = json!({"type": "command", "command": command});
         let mut hooks = json!({
             "PreToolUse": [{
                 "matcher": "Bash",
@@ -206,8 +454,8 @@ mod tests {
         });
         let hooks_map = hooks.as_object_mut().unwrap();
 
-        assert!(add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
-        assert!(!add_hook_entries(hooks_map, "^Bash$", "claude-code", command).unwrap());
+        assert!(add_hook_entries(hooks_map, "^Bash$", "claude-code", &hook).unwrap());
+        assert!(!add_hook_entries(hooks_map, "^Bash$", "claude-code", &hook).unwrap());
 
         let installed = json!({
             "matcher": "^Bash$",
@@ -233,6 +481,7 @@ mod tests {
     #[rstest]
     fn add_hook_entries_keeps_an_installed_entry_in_place() {
         let command = "/opt/atuin/bin/atuin hook codex";
+        let hook = json!({"type": "command", "command": command});
         let installed = json!({
             "matcher": "^Bash$",
             "hooks": [{"type": "command", "command": command}],
@@ -246,7 +495,7 @@ mod tests {
         });
 
         assert!(
-            add_hook_entries(hooks.as_object_mut().unwrap(), "^Bash$", "codex", command).unwrap()
+            add_hook_entries(hooks.as_object_mut().unwrap(), "^Bash$", "codex", &hook).unwrap()
         );
         assert_eq!(
             hooks,
@@ -256,6 +505,43 @@ mod tests {
                 "PostToolUseFailure": [installed],
             })
         );
+    }
+
+    /// Reinstalling Copilot's hook as `exec` replaces the quoted `command` that PowerShell rejects.
+    #[rstest]
+    fn add_hook_entries_replaces_a_command_with_exec() {
+        let stale = json!({
+            "matcher": "^Bash$",
+            "hooks": [{"type": "command", "command": r#""C:\Users\me\atuin.exe" hook copilot"#}],
+        });
+        let hook =
+            hook_entry(Path::new(r"C:\Users\me\atuin.exe"), "copilot", HookStyle::Exec).unwrap();
+        let installed = json!({"matcher": "^Bash$", "hooks": [hook]});
+        let mut hooks = json!({"PreToolUse": [stale]});
+        let hooks_map = hooks.as_object_mut().unwrap();
+
+        assert!(add_hook_entries(hooks_map, "^Bash$", "copilot", &hook).unwrap());
+        assert!(!add_hook_entries(hooks_map, "^Bash$", "copilot", &hook).unwrap());
+
+        assert_eq!(hooks["PreToolUse"], json!([installed]));
+    }
+
+    #[rstest]
+    fn exec_hook_entry_runs_the_executable_without_a_shell() {
+        let hook =
+            hook_entry(Path::new(r"C:\Program Files\Atuin\atuin.exe"), "copilot", HookStyle::Exec)
+                .unwrap();
+
+        assert_eq!(
+            hook,
+            json!({
+                "type": "command",
+                "exec": r"C:\Program Files\Atuin\atuin.exe",
+                "args": ["hook", "copilot"],
+            })
+        );
+        assert!(hook_invokes_atuin(&hook, "copilot"));
+        assert!(!hook_invokes_atuin(&hook, "codex"));
     }
 
     #[cfg(not(windows))]

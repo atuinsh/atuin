@@ -13,8 +13,9 @@
 //!
 //! **Append.** The rows are written by the rehydrate writer (the same line shapes, and calls
 //! captured without their input flattened into notes the same way), each hanging from the line
-//! its row was written after, the first from the tip, under the file's own session id. When the
-//! loader would then not resume from the last of them, nothing is written
+//! its row was written after, the first from the tip (or, going on from an earlier line, from the
+//! last of the lines trailing it, as Claude Code would hang its next line), under the file's own
+//! session id. When the loader would then not resume from the last of them, nothing is written
 //! ([`SyncError::Unsupported`]): making it the tip would take a `last-prompt` marker, which is a
 //! branch switch, not a fast-forward.
 //!
@@ -41,9 +42,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
 use serde_json::Value;
-use time::PrimitiveDateTime;
-use time::macros::format_description;
 
 use super::liveness::Start;
 use super::{
@@ -203,13 +204,9 @@ fn filetime_secs(filetime: &str) -> Option<u64> {
 /// What `LC_ALL=C TZ=UTC ps -o lstart=` prints (`Mon Oct  5 12:34:56 2026`), as seconds since
 /// the Unix epoch.
 fn lstart_secs(lstart: &str) -> Option<u64> {
-    let format = format_description!(
-        "[weekday repr:short] [month repr:short] [day padding:none] [hour]:[minute]:[second] \
-         [year]"
-    );
     let words = lstart.split_whitespace().collect::<Vec<_>>().join(" ");
-    let at = PrimitiveDateTime::parse(&words, format).ok()?;
-    u64::try_from(at.assume_utc().unix_timestamp()).ok()
+    let at = DateTime::strptime("%a %b %d %H:%M:%S %Y", &words).ok()?;
+    u64::try_from(Offset::UTC.to_timestamp(at).ok()?.as_second()).ok()
 }
 
 /// A line as Claude Code parses it, leniently (see `CcodeMessage::decode`).
@@ -261,13 +258,7 @@ fn tip_of(path: &Path, bytes: &[u8]) -> LocalTip {
 
 /// The line `claude --resume` continues the transcript `bytes` from (see the module docs).
 pub(super) fn tip(bytes: &[u8]) -> Option<String> {
-    let mut tree = Tree::default();
-    for line in jsonl_lines(bytes) {
-        if let Some(value) = parse(line) {
-            tree.push(&value);
-        }
-    }
-    tree.tip()
+    Tree::of(bytes).tip()
 }
 
 struct Node {
@@ -299,6 +290,16 @@ struct Tree {
 }
 
 impl Tree {
+    fn of(bytes: &[u8]) -> Self {
+        let mut tree = Self::default();
+        for line in jsonl_lines(bytes) {
+            if let Some(value) = parse(line) {
+                tree.push(&value);
+            }
+        }
+        tree
+    }
+
     fn push(&mut self, line: &Value) {
         let kind = line["type"].as_str().unwrap_or_default();
         let uuid = line["uuid"].as_str();
@@ -443,7 +444,15 @@ impl Tree {
         {
             from = Some(last.clone());
         }
-        let mut at = from.or(fallback)?;
+        self.continued_from(from.or(fallback)?)
+    }
+
+    /// The line the conversation is continued from when the loader picks line `at`: from it up
+    /// to the nearest user or assistant line, and on to the last of that one's [trailing]
+    /// lines. `None` when `at` is no line, or none of its ancestors is a user or assistant line.
+    ///
+    /// [trailing]: Self::trailing
+    fn continued_from(&self, mut at: String) -> Option<String> {
         let mut seen = HashSet::new();
         let leaf = loop {
             let node = self.nodes.get(&at)?;
@@ -546,11 +555,11 @@ fn extend(
         original_cwd: lines.iter().find_map(|m| m.cwd.clone()),
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::now_utc(),
+        started_at: jiff::Timestamp::now(),
         messages: lines.to_vec(),
         fork_of: None,
     };
-    let out = rehydrate::lines(&session, base.tip_source_id.as_deref());
+    let out = rehydrate::lines(&session, hang_from(current, base).as_deref());
     let appended: Vec<String> =
         out.iter().filter_map(|l| l["uuid"].as_str().map(str::to_owned)).collect();
     if let Some(last) = appended.last()
@@ -561,6 +570,19 @@ fn extend(
         ));
     }
     Ok((out, appended))
+}
+
+/// The line of the transcript holding `current` (read as `base`) that rows going on from its tip
+/// hang from: the line Claude Code would hang its next line from, going on from there.
+///
+/// That is the tip itself, unless the rows go on from a line before the transcript's end, as
+/// catching up does when the copy ended on a twig off their line (`classify` in `atuin-ai`):
+/// then from the last of the lines trailing that one. Claude Code's TUI ends a turn with such a
+/// line (`turn_duration`) and a `last-prompt` naming it as the leaf; hanging from before it, the
+/// appended lines would not descend from that leaf, and Claude Code would resume from it.
+fn hang_from(current: &[u8], base: &LocalTip) -> Option<String> {
+    let tip = base.tip_source_id.clone()?;
+    Some(Tree::of(current).continued_from(tip.clone()).unwrap_or(tip))
 }
 
 /// The transcript holding `current`, with `lines` appended (as [`append_jsonl`] appends them).

@@ -231,7 +231,7 @@ async fn stale_ai_session_index(env: &FreshEnv) -> PathBuf {
             session: NativeSessionId::from("stale".to_owned()),
         })
         .source_id(SourceId::from("stale-1".to_owned()))
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .role(Role::User)
         .content(vec![Content::Text("purged long ago".to_owned())])
         .build();

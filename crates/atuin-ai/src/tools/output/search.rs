@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
-use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
 use futures::TryStreamExt;
@@ -42,12 +41,10 @@ pub struct AtuinOutputSearchToolCall {
 impl AtuinOutputSearchToolCall {
     pub(crate) async fn execute(&self, db: &Sqlite, settings: &Settings) -> ToolOutcome {
         if matches!(settings.output, OutputCapture::Disabled(_)) {
-            return ToolOutcome::Error(
-                "Output search is unavailable: output capture is disabled in the Atuin config \
-                 (the [output] section), so no command output has been recorded. History search \
-                 still works."
-                    .to_string(),
-            );
+            return Err("Output search is unavailable: output capture is disabled in the Atuin \
+                        config (the [output] section), so no command output has been recorded. \
+                        History search still works."
+                .to_string());
         }
 
         // TODO(markovejnovic): It would be good if this was injected into the tool rather than
@@ -56,7 +53,7 @@ impl AtuinOutputSearchToolCall {
         let mut client = match SearchClient::from_settings(settings).await {
             Ok(client) => client,
             Err(e) => {
-                return ToolOutcome::Error(format!(
+                return Err(format!(
                     "Output search is unavailable: could not connect to the Atuin daemon ({e}). \
                      History search still works. {NO_OUTPUT_ADVICE}"
                 ));
@@ -89,10 +86,10 @@ impl AtuinOutputSearchToolCall {
         .await;
         let hits = match hits {
             Ok(hits) => hits,
-            Err(e) => return ToolOutcome::Error(e),
+            Err(e) => return Err(e),
         };
 
-        let local_offset = time::UtcOffset::local_or_utc();
+        let local_tz = jiff::tz::TimeZone::system();
         let formatted: Vec<String> = hits
             .iter()
             .enumerate()
@@ -105,14 +102,14 @@ impl AtuinOutputSearchToolCall {
                 });
                 format!(
                     "{}Matching output lines:\n{}\n",
-                    format_history_search_result(i + 1, history, local_offset),
+                    format_history_search_result(i + 1, history, &local_tz),
                     format_chunked_output_line_views_for_llm(views),
                 )
             })
             .collect();
 
         if formatted.is_empty() {
-            return ToolOutcome::Success(format!(
+            return Ok(format!(
                 "No captured output matched {:?}. Only commands run in an Atuin-enabled terminal \
                  while the daemon was running are searchable, and older output may have been \
                  dropped. Terms are AND-ed and matched as whole words, so try fewer or different \
@@ -120,7 +117,7 @@ impl AtuinOutputSearchToolCall {
                 self.terms
             ));
         }
-        ToolOutcome::Success(formatted.join("\n"))
+        Ok(formatted.join("\n"))
     }
 }
 
