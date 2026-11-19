@@ -82,7 +82,8 @@ impl Caller<'_> {
         self.env_session().or_else(|| self.pick(sessions))
     }
 
-    fn env_session(&self) -> Option<HarnessSession> {
+    /// The caller's session, when the harness names it in the server's environment.
+    pub fn env_session(&self) -> Option<HarnessSession> {
         let harness = self.harness()?;
         let var = match harness {
             HarnessKind::ClaudeCode => "CLAUDE_CODE_SESSION_ID",

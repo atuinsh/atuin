@@ -29,6 +29,7 @@ derive_more = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 i18n-embed = { workspace = true }
 jiff = { workspace = true }
 parking_lot = { workspace = true }

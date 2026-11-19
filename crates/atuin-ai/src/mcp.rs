@@ -17,15 +17,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
+use atuin_client::ai_session::HarnessSession;
 use atuin_client::database::Sqlite;
 use atuin_client::history::{AUTHOR_FILTER_ALL_AGENT, AUTHOR_FILTER_ALL_USER, KNOWN_AGENTS};
 use atuin_client::settings::Settings;
 use eyre::Result;
+use http::{HeaderName, HeaderValue};
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerConfig, Tool, ToolAnnotations,
+    Implementation, JsonObject, ListToolsResult, MetaObject, PaginatedRequestParams,
+    ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
 };
 use rmcp::service::{Peer, RequestContext, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
@@ -36,6 +38,7 @@ use serde_json::{Value, json};
 use strum::IntoEnumIterator;
 use tokio::sync::Mutex;
 
+use crate::commands::session::harness_name;
 use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::session::caller::{Caller, OwnSession};
 use crate::tools::session::list::AtuinThreadsListToolCall;
@@ -115,29 +118,37 @@ impl Remote {
         }
     }
 
-    /// Returns the connection. It is made again when the last one has closed.
-    async fn peer(&self) -> Result<Peer<RoleClient>> {
+    /// Returns the connection. It is made again, for `caller`, when the last one has closed.
+    async fn peer(&self, caller: Option<&HarnessSession>) -> Result<Peer<RoleClient>> {
         let mut client = self.client.lock().await;
         if let Some(open) = client.as_ref().filter(|c| !c.is_transport_closed()) {
             return Ok(open.peer().clone());
         }
-        let open = self.connect().await?;
+        let open = self.connect(caller).await?;
         let peer = open.peer().clone();
         *client = Some(open);
         drop(client);
         Ok(peer)
     }
 
-    /// Returns a new connection to Octavo.
-    async fn connect(&self) -> Result<RunningService<RoleClient, ()>> {
+    /// Returns a new connection to Octavo, which names `caller` as the thread its calls come from.
+    async fn connect(
+        &self,
+        caller: Option<&HarnessSession>,
+    ) -> Result<RunningService<RoleClient, ()>> {
         let config = StreamableHttpClientTransportConfig::with_uri(self.octavo.url.clone())
-            .auth_header(self.octavo.token.expose_secret());
+            .auth_header(self.octavo.token.expose_secret())
+            .custom_headers(caller.and_then(caller_header).into_iter().collect());
         let connect = ().serve(StreamableHttpClientTransport::from_config(config));
         Ok(tokio::time::timeout(CONNECT_TIMEOUT, connect).await??)
     }
 
-    async fn call(&self, request: CallToolRequestParams) -> CallToolResult {
-        let call = async { eyre::Ok(self.peer().await?.call_tool(request).await?) };
+    async fn call(
+        &self,
+        request: CallToolRequestParams,
+        caller: Option<&HarnessSession>,
+    ) -> CallToolResult {
+        let call = async { eyre::Ok(self.peer(caller).await?.call_tool(request).await?) };
         match tokio::time::timeout(CALL_TIMEOUT, call).await {
             Ok(Ok(result)) => result,
             Ok(Err(e)) => self.failed(format!("Octavo failed: {e:#}")).await,
@@ -158,7 +169,7 @@ impl Remote {
     /// Lists Octavo's tools into the cache and returns them. It uses a connection of its own,
     /// because closing the shared one would fail a tool call in flight.
     async fn list(&self) -> Result<Vec<Tool>> {
-        let octavo = self.connect().await?;
+        let octavo = self.connect(None).await?;
         let tools = forwarded(tokio::time::timeout(CALL_TIMEOUT, octavo.list_all_tools()).await??);
         // Written aside and renamed, so another session never reads half of it.
         let dir = self.cache.parent().unwrap_or(&self.cache);
@@ -273,12 +284,6 @@ impl ServerHandler for AtuinMcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if let Some(remote) = &self.octavo
-            && remote.tools.iter().any(|t| t.name == request.name)
-        {
-            return Ok(remote.call(request).await.into());
-        }
-        let arguments = request.arguments.unwrap_or_default();
         // Stateless clients (protocol 2026-07-28, e.g. Claude Code) skip `initialize` and send
         // their client info in each request's `_meta`.
         let client = context.client_info();
@@ -286,6 +291,12 @@ impl ServerHandler for AtuinMcp {
             client: client.as_ref().map(|c| c.name.as_str()),
             own: &self.own_session,
         };
+        if let Some(remote) = &self.octavo
+            && remote.tools.iter().any(|t| t.name == request.name)
+        {
+            return Ok(remote.call(request, caller.env_session().as_ref()).await.into());
+        }
+        let arguments = request.arguments.unwrap_or_default();
         // Bad arguments come back as a tool error, not a JSON-RPC one, so the model sees what was
         // wrong and can retry (MCP SEP-1303); many clients never show protocol errors to it.
         let outcome = match request.name.as_ref() {
@@ -332,6 +343,24 @@ impl ServerHandler for AtuinMcp {
         };
         Ok(result.into())
     }
+}
+
+/// Octavo reads this header for the thread that its calls come from. Octavo leaves that thread
+/// out of a search, because the thread is live and the caller already has it.
+const CALLER_HEADER: HeaderName = HeaderName::from_static("atuin-caller");
+
+/// Returns the [`CALLER_HEADER`] that names `own`, as the harness and the session.
+fn caller_header(own: &HarnessSession) -> Option<(HeaderName, HeaderValue)> {
+    let caller = format!("{} {}", harness_name(own.harness), own.session);
+    Some((CALLER_HEADER, HeaderValue::from_str(&caller).ok()?))
+}
+
+/// Claude Code lists a tool that carries this `_meta` in full from the first turn. It defers the
+/// other tools behind a tool search, which an agent may never run.
+fn always_load() -> MetaObject {
+    let mut meta = MetaObject::new();
+    meta.0.insert("anthropic/alwaysLoad".into(), json!(true));
+    meta
 }
 
 fn parse<T: serde::de::DeserializeOwned>(tool: &str, arguments: JsonObject) -> Result<T, String> {
@@ -496,7 +525,8 @@ fn tool_definitions() -> Vec<Tool> {
             ),
             history_schema,
         )
-        .annotate(ToolAnnotations::with_title("Search shell history").read_only(true)),
+        .annotate(ToolAnnotations::with_title("Search shell history").read_only(true))
+        .with_meta(always_load()),
         Tool::new(
             "atuin_output",
             "Read the terminal output that a previously executed command actually printed, \
@@ -589,6 +619,13 @@ mod tests {
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
         }
+
+        let always_loaded: Vec<&str> = tools
+            .iter()
+            .filter(|t| t.meta == Some(always_load()))
+            .map(|t| t.name.as_ref())
+            .collect();
+        assert_eq!(always_loaded, ["atuin_history"]);
 
         // Everything except `query` is optional — see the filter_modes
         // comment in AtuinHistoryToolCall::try_from for why.
@@ -734,6 +771,21 @@ mod tests {
     }
 
     #[rstest]
+    #[case::named("9f1c", Some("claude-code 9f1c"))]
+    #[case::not_a_header_value("9f\n1c", None)]
+    fn the_caller_header_names_the_harness_and_the_session(
+        #[case] session: &str,
+        #[case] want: Option<&str>,
+    ) {
+        let own = HarnessSession {
+            harness: atuin_client::ai_session::HarnessKind::ClaudeCode,
+            session: session.to_owned().into(),
+        };
+        let header = caller_header(&own).map(|(_name, value)| value);
+        assert_eq!(header.as_ref().map(|v| v.to_str().unwrap()), want);
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn a_failed_call_ages_the_cache_and_a_failed_refresh_drops_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -751,7 +803,7 @@ mod tests {
             cache: cache.clone(),
         });
 
-        let result = remote.call(CallToolRequestParams::new("search_threads")).await;
+        let result = remote.call(CallToolRequestParams::new("search_threads"), None).await;
 
         assert_eq!(result.is_error, Some(true));
         let age = fs_err::metadata(&cache).unwrap().modified().unwrap().elapsed().unwrap();

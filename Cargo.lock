@@ -363,6 +363,7 @@ dependencies = [
  "eyre",
  "fs-err",
  "futures",
+ "http",
  "i18n-embed",
  "jiff 1.0.1",
  "parking_lot",
