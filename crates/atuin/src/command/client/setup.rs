@@ -1789,6 +1789,13 @@ const fn init_marker(shell: Shell) -> Option<&'static str> {
     }
 }
 
+/// Whether the given line of an rc file holds the [init marker](init_marker) `marker`.
+///
+/// Lines that consist only of a comment are ignored.
+fn has_init_marker(line: &str, marker: &str) -> bool {
+    !line.trim_start().starts_with('#') && line.contains(marker)
+}
+
 /// The programs that run `shell`, any of which on `PATH` means it's here.
 const fn programs(shell: Shell) -> &'static [&'static str] {
     match shell {
@@ -1811,7 +1818,7 @@ async fn shell_inits(dirs: &RcDirs) -> Vec<Shell> {
         for rc in dirs.rc_files(shell) {
             let read = tokio::fs::read(&rc).await;
             let text = read.ok().and_then(|bytes| Encoding::decode(&bytes).ok());
-            if text.is_some_and(|(_, rc)| rc.contains(marker)) {
+            if text.is_some_and(|(_, rc)| rc.lines().any(|line| has_init_marker(line, marker))) {
                 inits.push(shell);
                 break;
             }
@@ -1948,7 +1955,7 @@ fn remove_shell_init(dirs: &RcDirs, shells: &[Shell]) -> io::Result<Unhooked> {
                 removed = true;
             }
             let after = without.as_deref().unwrap_or(&text);
-            let left = after.lines().filter(|line| line.contains(marker));
+            let left = after.lines().filter(|line| has_init_marker(line, marker));
             unhooked.left.extend(left.map(|line| (rc.clone(), line.trim().to_owned())));
         }
         if removed {
@@ -2032,7 +2039,9 @@ fn newline_of(text: &str) -> &'static str {
 fn append_once(path: &Path, marker: &str, text: &str) -> io::Result<bool> {
     let (encoding, newline) = match std::fs::read(path) {
         Ok(read) => match Encoding::decode(&read)? {
-            (_, existing) if existing.contains(marker) => return Ok(false),
+            (_, existing) if existing.lines().any(|line| has_init_marker(line, marker)) => {
+                return Ok(false);
+            }
             (encoding, existing) => (encoding, newline_of(&existing)),
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => (Encoding::Utf8, "\n"),
@@ -2229,6 +2238,36 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(without_init(rc, shell).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::code("eval \"$(atuin init zsh)\"", true)]
+    #[case::commented_out("# eval \"$(atuin init zsh)\"", false)]
+    #[case::indented_comment(" \t#eval \"$(atuin init zsh)\"", false)]
+    #[case::trailing_comment("export A=1 # atuin init zsh", true)]
+    #[case::elsewhere("export A=1", false)]
+    fn only_lines_that_are_comments_are_ignored(#[case] line: &str, #[case] expected: bool) {
+        assert_eq!(has_init_marker(line, "atuin init zsh"), expected);
+    }
+
+    /// An init that's commented out reads as no init: setup adds its own, and leaves the comment
+    /// when it takes its own out, without reporting the comment as loading Atuin.
+    #[rstest]
+    #[tokio::test]
+    async fn commented_out_inits_are_not_inits() {
+        let home = TempDir::new().unwrap();
+        let bashrc = home.path().join(".bashrc");
+        let commented = "# eval \"$(atuin init bash)\"\n";
+        std::fs::write(&bashrc, commented).unwrap();
+        let dirs = RcDirs::under(home.path());
+        assert_eq!(shell_inits(&dirs).await, []);
+
+        assert_eq!(install_shell_init(&dirs, &[Shell::Bash]).unwrap(), ["bash"]);
+        assert_eq!(shell_inits(&dirs).await, [Shell::Bash]);
+        let unhooked = remove_shell_init(&dirs, &[Shell::Bash]).unwrap();
+        assert_eq!(unhooked.shells, ["bash"]);
+        assert_eq!(unhooked.left, []);
+        assert_eq!(std::fs::read_to_string(&bashrc).unwrap(), commented);
     }
 
     /// A profile written with Windows line endings gets the init with them too.
