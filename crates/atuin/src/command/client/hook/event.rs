@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 
 use atuin_common::string::NonNulStr;
+use jiff::Timestamp;
 use serde_json::error::Category;
-use time::OffsetDateTime;
 
 use super::wire::{
     HermesEventName, HermesTerminalOutcome, HermesToolName, HookEventName, WireHermesEvent,
@@ -48,7 +48,7 @@ pub enum HookEvent {
         cwd: Option<PathBuf>,
         /// When it started, when the event says so: Hermes's plugin queues its events, so one
         /// can reach atuin well after its command started. Others' arrive as it starts.
-        at: Option<OffsetDateTime>,
+        at: Option<Timestamp>,
     },
     /// A Bash command finished; close the matching history entry.
     End {
@@ -716,8 +716,8 @@ mod tests {
     const HERMES_CALLED_AT: f64 = 1_794_263_000.5;
     const HERMES_DURATION: u64 = 557_000_000;
 
-    fn hermes_at() -> Option<OffsetDateTime> {
-        OffsetDateTime::from_unix_timestamp_nanos(1_794_263_000_500_000_000).ok()
+    fn hermes_at() -> Option<Timestamp> {
+        Timestamp::from_nanosecond(1_794_263_000_500_000_000).ok()
     }
 
     /// The key a Hermes call in [`HERMES_SESSION`] correlates by.

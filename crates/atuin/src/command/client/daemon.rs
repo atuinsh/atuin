@@ -430,11 +430,8 @@ mod tests {
         // not a socket with nothing behind it to give up on.
         let info = PidfileInfo::current(&settings.daemon, RunMode::DaemonizeForked);
         let _stopped = Pidfile::new(&settings.daemon.pidfile_path).acquire(&info).unwrap();
-        let history = History::import()
-            .timestamp(time::OffsetDateTime::now_utc())
-            .command("true")
-            .cwd("/")
-            .build();
+        let history =
+            History::import().timestamp(jiff::Timestamp::now()).command("true").cwd("/").build();
 
         let started = std::time::Instant::now();
         let err = start_history(&settings, history.into()).await.unwrap_err();

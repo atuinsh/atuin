@@ -320,8 +320,8 @@ mod tests {
     use atuin_common::harnesstools::session::Role;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::RecordId;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
 
@@ -346,7 +346,7 @@ atuin.config = { orgs = { "acme" } }"#;
                 session: NativeSessionId::from("parent".to_owned()),
             }))
             .parent_kind(parent_kind)
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(at))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(at))
             .role(Role::User)
             .content(Vec::new())
             .cwd(cwd.map(Path::to_path_buf))

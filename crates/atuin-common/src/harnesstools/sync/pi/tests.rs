@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use jiff::Timestamp;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use serde_json::json;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::session::{Content, Role};
@@ -39,7 +39,7 @@ fn row(id: &str, parent: &str, role: Role) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: Some(parent.to_owned()),
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role,
         content: vec![Content::Text(format!("said {id}"))],
         model: Some("m".to_owned()),
@@ -507,7 +507,7 @@ fn a_switch_inside_a_merged_run_keeps_its_text(dir: TempDir, #[case] from: &str)
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        started_at: Timestamp::from_second(1_790_000_000).unwrap(),
         messages: rows.clone(),
         fork_of: None,
     };
@@ -578,7 +578,7 @@ fn a_switch_inside_a_merged_run_past_a_failed_call_keeps_its_text(dir: TempDir) 
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        started_at: Timestamp::from_second(1_790_000_000).unwrap(),
         messages: rows.clone(),
         fork_of: None,
     };

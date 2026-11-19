@@ -31,13 +31,13 @@ use atuin_client::tui::key::{KeyCodeValue, SingleKey};
 use atuin_common::harnesstools::continuation::NothingToContinue;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
-use atuin_common::time::OffsetDateTimeExt as _;
+use atuin_common::time::TimestampExt as _;
+use jiff::Timestamp;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::{Frame, symbols};
-use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr;
 
 use super::catchup::{Branch, Held, Why};
@@ -152,7 +152,7 @@ pub struct Choice {
 /// Whether the session itself was written to in the last [`LIVE_SECS`], so may still be open
 /// (here or on another host: there's no telling). Only its own messages count, not its
 /// children's (a fork or subagent busy under an idle session leaves the session free to resume).
-fn recently_used(now: OffsetDateTime, row: &SessionRow) -> bool {
+fn recently_used(now: Timestamp, row: &SessionRow) -> bool {
     now.saturating_duration_since(row.active_at).as_secs() < LIVE_SECS
 }
 

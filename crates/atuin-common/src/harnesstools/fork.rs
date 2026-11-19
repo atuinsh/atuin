@@ -28,7 +28,7 @@
 //! database, and `opencode import` skips one that exists already, so its writer gives a fork
 //! fresh ones.
 
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::rehydrate::{ForkOf, RehydrateMessage, RehydrateSession};
 use super::{AnyHarness, continuation};
@@ -47,7 +47,7 @@ pub fn fork(
         None => original.messages.clone(),
     };
     Some(RehydrateSession {
-        id: continuation::new_session_id(harness, OffsetDateTime::now_utc()),
+        id: continuation::new_session_id(harness, Timestamp::now()),
         messages,
         fork_of: Some(of),
         ..original.clone()

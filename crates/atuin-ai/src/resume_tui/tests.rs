@@ -693,8 +693,8 @@ async fn with_chooser(settings: &Settings, query: &str, action: super::state::Pe
     let mut state = loaded(settings, query, 0).await;
     // Idle: a session running here would have the fork selected.
     let at = state.list.selected;
-    state.results[at].updated_at = fake::now() - time::Duration::days(1);
-    state.results[at].active_at = fake::now() - time::Duration::days(1);
+    state.results[at].updated_at = fake::now() - jiff::SignedDuration::from_hours(24);
+    state.results[at].active_at = fake::now() - jiff::SignedDuration::from_hours(24);
     let row = state.selected().unwrap().clone();
     let resumer = FakeResumer::default();
     state.plans.insert(row.handle.clone(), resumer.plan(&row).await);
@@ -1186,12 +1186,12 @@ async fn the_fork_is_preselected_over_an_original_that_shouldnt_resume(
         // The group's newest message; the session's own is older when only a child ran.
         row.updated_at = fake::now();
         row.active_at = if child_only {
-            fake::now() - time::Duration::days(1)
+            fake::now() - jiff::SignedDuration::from_hours(24)
         } else {
             fake::now()
         };
     } else {
-        row.updated_at = fake::now() - time::Duration::days(1);
+        row.updated_at = fake::now() - jiff::SignedDuration::from_hours(24);
         row.active_at = row.updated_at;
     }
     state.plans.insert(row.handle.clone(), FakeResumer::default().plan(&row).await);
@@ -2060,7 +2060,7 @@ fn a_continuation_in_the_tree_says_where_it_went_on() {
         &root.handle,
         &[child],
         fake::now(),
-        time::UtcOffset::UTC,
+        &jiff::tz::TimeZone::UTC,
         90,
         theme,
     );
@@ -2989,7 +2989,7 @@ async fn a_session_open_here_preselects_the_fork(
     let mut state = loaded(&s, "", 0).await;
     let at = state.list.selected;
     if !recent {
-        state.results[at].active_at = fake::now() - time::Duration::days(1);
+        state.results[at].active_at = fake::now() - jiff::SignedDuration::from_hours(24);
     }
     let row = state.results[at].clone();
     let plan = FakeResumer::default().plan(&row).await.unwrap().plan;

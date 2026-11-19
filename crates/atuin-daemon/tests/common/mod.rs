@@ -52,12 +52,12 @@ use uuid::Uuid;
 
 /// A tame history entry: UUID session, strict `host:user` origin, bash. Everything the index needs.
 pub fn history(cmd: &str) -> History {
-    history_at(cmd, time::OffsetDateTime::now_utc())
+    history_at(cmd, jiff::Timestamp::now())
 }
 
 /// Like [`history`], started at `timestamp`. The index tracks "most recent invocation" with
 /// one-second granularity and keeps the first on a tie, so tests about recency must space entries.
-pub fn history_at(cmd: &str, timestamp: time::OffsetDateTime) -> History {
+pub fn history_at(cmd: &str, timestamp: jiff::Timestamp) -> History {
     History::daemon()
         .timestamp(timestamp)
         .command(cmd)
@@ -345,7 +345,7 @@ impl TestEnv {
 
     /// Start and end `cmd` through the RPCs, the way a shell does.
     pub async fn record(&self, client: &mut HistoryClient, cmd: &str) -> HistoryId {
-        self.record_at(client, cmd, time::OffsetDateTime::now_utc()).await
+        self.record_at(client, cmd, jiff::Timestamp::now()).await
     }
 
     /// [`Self::record`] with an explicit start timestamp (see [`history_at`]).
@@ -353,7 +353,7 @@ impl TestEnv {
         &self,
         client: &mut HistoryClient,
         cmd: &str,
-        timestamp: time::OffsetDateTime,
+        timestamp: jiff::Timestamp,
     ) -> HistoryId {
         let start = client.start_history(history_at(cmd, timestamp)).await.unwrap();
         let id: HistoryId = start.id.unwrap().try_into().unwrap();

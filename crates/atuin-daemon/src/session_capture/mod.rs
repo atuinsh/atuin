@@ -30,12 +30,12 @@ use engine::SessionCaptureEngine;
 use futures::{FutureExt, Stream, StreamExt};
 pub use import::ImportProgress;
 use import::SessionImporter;
+#[cfg(feature = "octavo")]
+use jiff::Timestamp;
 use message_enricher::MessageEnricher;
 pub use policy::CapturePolicy;
 use policy::Verdict;
 use recovery::{Backoff, Coordinator, Msg};
-#[cfg(feature = "octavo")]
-use time::OffsetDateTime;
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
@@ -129,7 +129,7 @@ pub(crate) struct Sink {
     /// daemon stopped, or capture off), and is read as capture catches up, so it shares no
     /// thread: as with an import, the agent carrying on with the thread does.
     #[cfg(feature = "octavo")]
-    captured_since: Arc<parking_lot::Mutex<OffsetDateTime>>,
+    captured_since: Arc<parking_lot::Mutex<Timestamp>>,
     #[cfg(test)]
     hooks: Option<Arc<dyn hooks::Hooks>>,
 }
@@ -160,7 +160,7 @@ impl Sink {
             #[cfg(feature = "octavo")]
             octavo: Arc::new(Octavo::nop()),
             #[cfg(feature = "octavo")]
-            captured_since: Arc::new(parking_lot::Mutex::new(OffsetDateTime::now_utc())),
+            captured_since: Arc::new(parking_lot::Mutex::new(Timestamp::now())),
             #[cfg(test)]
             hooks: None,
         }
@@ -170,7 +170,9 @@ impl Sink {
     /// `captured_since`).
     #[cfg(feature = "octavo")]
     fn capturing_since(&self, since: SystemTime) {
-        *self.captured_since.lock() = OffsetDateTime::from(since);
+        // A clock past what a Timestamp can name is broken; capturing everything beats
+        // capturing nothing.
+        *self.captured_since.lock() = Timestamp::try_from(since).unwrap_or(Timestamp::MIN);
     }
 
     #[cfg(test)]
@@ -1355,8 +1357,8 @@ mod tests {
     };
     use atuin_domain::record::{RecordId, RecordTag};
     use futures::StreamExt;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
     use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
     use super::*;
@@ -1408,7 +1410,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(sample_handle())
             .source_id(SourceId::from("source-id".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
@@ -1458,7 +1460,7 @@ mod tests {
         let mut earlier = sample_message();
         earlier.id = RecordId(atuin_common::utils::uuid_v7());
         earlier.source_id = SourceId::from("earlier".to_owned());
-        earlier.timestamp = first.timestamp - time::Duration::hours(1);
+        earlier.timestamp = first.timestamp - jiff::SignedDuration::from_hours(1);
 
         sink.append(first.clone()).await.unwrap();
         sink.append(earlier).await.unwrap();
@@ -1515,12 +1517,12 @@ mod tests {
         let octavo = crate::octavo::RecordingOctavoClient::default();
         let mut sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         sink.octavo = Arc::new(Octavo::recording(octavo.clone()));
-        let started = OffsetDateTime::UNIX_EPOCH + time::Duration::hours(1);
-        sink.capturing_since(started.into());
+        let started = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(1);
+        sink.capturing_since(SystemTime::try_from(started).unwrap());
         let at = |secs, source: &str| Message {
             id: RecordId(atuin_common::utils::uuid_v7()),
             source_id: SourceId::from(source.to_owned()),
-            timestamp: started + time::Duration::seconds(secs),
+            timestamp: started + jiff::SignedDuration::from_secs(secs),
             ..sample_message()
         };
         let msg = at(0, "imported");
@@ -1715,7 +1717,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.content = content;
             msg
@@ -1905,7 +1907,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.cwd = cwd.map(Into::into);
             msg.content = content;
@@ -1985,7 +1987,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n.into());
+            msg.timestamp += jiff::SignedDuration::from_secs(n.into());
             msg.role = role;
             msg.cwd = cwd.map(Into::into);
             msg.content = content;
@@ -2127,7 +2129,7 @@ mod tests {
             let mut msg = sample_message();
             msg.id = RecordId(atuin_common::utils::uuid_v7());
             msg.source_id = SourceId::from(format!("line-{n}"));
-            msg.timestamp += time::Duration::seconds(n);
+            msg.timestamp += jiff::SignedDuration::from_secs(n);
             msg.content = match row {
                 Stored::Cwd(cwd) => {
                     msg.cwd = Some(cwd.into());
@@ -3439,12 +3441,12 @@ mod tests {
     /// A line naming an instant past the years a date can name is captured at the nearest one
     /// stored, so the record synced never carries it.
     #[rstest]
-    #[case::late(time::macros::datetime!(9999-12-31 23:59:59 -23:59), Message::LATEST)]
-    #[case::early(time::macros::datetime!(-9999-01-01 0:00 +23:59), Message::EARLIEST)]
+    #[case::late(Timestamp::MAX, Message::LATEST)]
+    #[case::early(Timestamp::MIN, Message::EARLIEST)]
     #[tokio::test]
     async fn capture_holds_a_timestamp_to_the_range_stored(
-        #[case] timestamp: OffsetDateTime,
-        #[case] want: OffsetDateTime,
+        #[case] timestamp: Timestamp,
+        #[case] want: Timestamp,
     ) {
         let sink = Sink::new(mem_store().await, AiSessionDatabase::in_memory().await.unwrap());
         let mut sub = sink.subscribe();
@@ -4342,7 +4344,12 @@ mod pipeline_tests {
         .await;
         let row = sink.sidecar.get_session(&handle(HarnessKind::ClaudeCode, "s1")).await;
         let row = row.unwrap().unwrap();
-        assert_eq!(row.updated_at.year(), 2020, "updated_at = {}", row.updated_at);
+        assert_eq!(
+            row.updated_at.in_tz("UTC").unwrap().year(),
+            2020,
+            "updated_at = {}",
+            row.updated_at
+        );
         assert_eq!(row.started_at, row.updated_at);
         assert_eq!(row.title.as_deref(), Some("Old work"));
     }
@@ -4667,9 +4674,7 @@ mod pipeline_tests {
         let sink = Arc::get_mut(&mut capture.sink).expect("a sink nothing else holds yet");
         sink.octavo = Arc::new(Octavo::recording(octavo.clone()));
         // Written after capture started, as only such a row shares its thread.
-        let time = (OffsetDateTime::now_utc() + time::Duration::hours(1))
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap();
+        let time = (Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
         let line = serde_json::from_value::<PushedMessage>(serde_json::json!({
             "v": 1, "id": "m1", "role": "user", "time": time,
             "content": [{"type": "text", "text": "hi"}]
@@ -4719,6 +4724,6 @@ mod pipeline_tests {
         let messages: Vec<_> = capture.messages(&handle).map(Result::unwrap).collect().await;
         assert_eq!(messages.len(), 4, "both pings are kept");
         let hi = messages.iter().find(|m| m.source_id.as_ref() == "m1").unwrap();
-        assert_eq!(hi.timestamp.unix_timestamp(), 1_792_144_800, "the first ping's time");
+        assert_eq!(hi.timestamp.as_second(), 1_792_144_800, "the first ping's time");
     }
 }

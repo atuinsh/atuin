@@ -206,7 +206,7 @@ fn extend(
         original_cwd: lines.iter().find_map(|m| m.cwd.clone()),
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::now_utc(),
+        started_at: jiff::Timestamp::now(),
         messages: lines.to_vec(),
         fork_of: None,
     };
@@ -293,8 +293,8 @@ fn shared_lines(bytes: &[u8], from: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::harnesstools::copilot::session::EVENTS_FILE;
@@ -308,7 +308,7 @@ mod tests {
         RehydrateMessage {
             source_id: id.to_owned(),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000 + at).unwrap(),
+            timestamp: Timestamp::from_second(1_790_000_000 + at).unwrap(),
             role,
             content: vec![Content::Text(format!("said {id}"))],
             model: Some("gpt-x".to_owned()),
@@ -348,7 +348,7 @@ mod tests {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+            started_at: Timestamp::from_second(1_790_000_000).unwrap(),
             messages: rows,
             fork_of: None,
         };
@@ -438,7 +438,7 @@ mod tests {
         let base = read_tip(&path).unwrap();
         let mut branch = rows(&["u1", "a1"], None);
         branch.extend(rows(&["u3", "a3"], Some("a1")).into_iter().map(|mut r| {
-            r.timestamp += time::Duration::seconds(10);
+            r.timestamp += jiff::SignedDuration::from_secs(10);
             r
         }));
         let backups = dir.path().join("backups");

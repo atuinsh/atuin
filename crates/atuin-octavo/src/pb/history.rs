@@ -1,7 +1,8 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use atuin_client::history::{CommandCapture, History as DomainHistory, HistoryId};
 use atuin_common::string::NonNulStr;
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::{CmdOrigin as DomainCmdOrigin, RecordId};
 use prost::Message;
 use thiserror::Error;
@@ -77,7 +78,10 @@ impl TryFrom<DomainHistory> for History {
             id: Some(history.id.try_into()?),
             record_id: None,
             cmd_origin: Some(CmdOrigin::from(&history.cmd_origin)),
-            start_time: Some(SystemTime::from(history.timestamp).into()),
+            start_time: Some({
+                let (seconds, nanos) = history.timestamp.to_timespec();
+                prost_types::Timestamp { seconds, nanos }
+            }),
             duration,
             session: session_key(NonNulStr::stripping(history.session).into_inner().into_owned()),
             author: Some(Author {

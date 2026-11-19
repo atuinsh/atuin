@@ -247,8 +247,8 @@ mod tests {
     use atuin_common::harnesstools::session::Role;
     use atuin_common::utils::uuid_v7;
     use atuin_domain::record::{HostId, RecordId};
+    use jiff::{SignedDuration, Timestamp};
     use rstest::{fixture, rstest};
-    use time::{Duration, OffsetDateTime};
     use uuid::Uuid;
 
     use super::*;
@@ -276,7 +276,7 @@ mod tests {
             .source_id(SourceId::from(format!("{id}-{minutes}")))
             .parent(parent.map(handle))
             .parent_kind(parent.map(|_| kind))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + Duration::minutes(minutes))
+            .timestamp(Timestamp::UNIX_EPOCH + SignedDuration::from_mins(minutes))
             .role(role)
             .content(vec![Content::Text(text.to_owned())])
             .cwd(Some(PathBuf::from("/tmp")))

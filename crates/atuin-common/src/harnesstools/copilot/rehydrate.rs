@@ -45,9 +45,8 @@
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 use uuid::Uuid;
 
 use super::session::{EVENTS_FILE, SIDECAR_FILE, default_root, locate};
@@ -152,10 +151,8 @@ fn yaml_text(text: &str) -> String {
 }
 
 /// A timestamp as Copilot writes one: UTC, to the millisecond.
-fn timestamp(at: OffsetDateTime) -> String {
-    let format =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
-    at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+fn timestamp(at: Timestamp) -> String {
+    jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%.3fZ", at).unwrap_or_default()
 }
 
 /// The events for `session`'s rows, calls captured without their input flattened into notes
@@ -233,7 +230,7 @@ impl<'a> Writer<'a> {
     }
 
     /// Write `kind` with `data` as the event `id`, chained to the last.
-    fn event(&mut self, kind: &str, id: String, at: OffsetDateTime, data: Value) {
+    fn event(&mut self, kind: &str, id: String, at: Timestamp, data: Value) {
         let mut line = json!({
             "type": kind,
             "data": Value::Null,

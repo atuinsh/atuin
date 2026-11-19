@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use crate::harnesstools::note::{Part, render, tool_note};
 use crate::harnesstools::session::{Content, Role, StopReason, ToolCallId, Usage};
@@ -16,7 +16,7 @@ pub struct RehydrateMessage {
     /// back verbatim so re-capturing the rehydrated transcript dedups against the synced rows.
     pub source_id: String,
     pub parent_source_id: Option<String>,
-    pub timestamp: OffsetDateTime,
+    pub timestamp: Timestamp,
     pub role: Role,
     pub content: Vec<Content>,
     pub model: Option<String>,
@@ -39,7 +39,7 @@ pub struct RehydrateSession {
     pub original_cwd: Option<PathBuf>,
     pub git_branch: Option<String>,
     pub model: Option<String>,
-    pub started_at: OffsetDateTime,
+    pub started_at: Timestamp,
     pub messages: Vec<RehydrateMessage>,
     /// Set on a fork ([`crate::harnesstools::fork`]): the session it was forked from, which the
     /// writer links it to the way its harness links a fork of its own.

@@ -10,7 +10,7 @@ use atuin_common::harnesstools::session::{
     AnyMessage, Content, Message as HarnessMessage, ParentKind, SessionId, TitleChange, TitleSource,
 };
 use atuin_domain::record::RecordId;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 /// Builds the canonical [`Message`] rows for one harness's lines, carrying the per-session
 /// bookkeeping (title, timestamps, parent, synthetic id ordinals) that a single line cannot
@@ -200,7 +200,7 @@ impl MessageEnricher {
         let Some(state) = self.sessions.get_mut(session.as_ref()) else {
             return Vec::new();
         };
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let mut rows = std::mem::take(&mut state.untimed);
         for row in &mut rows {
             row.timestamp = now;
@@ -298,7 +298,7 @@ fn build(
             .parent_kind(state.parent_kind)
             .parent_source_id(parent_source_id)
             .turn_id(m.turn_id())
-            .timestamp(state.last_ts.unwrap_or(OffsetDateTime::UNIX_EPOCH))
+            .timestamp(state.last_ts.unwrap_or(Timestamp::UNIX_EPOCH))
             .role(m.role())
             .content(content)
             .model(model)
@@ -344,7 +344,7 @@ struct SessionState {
     titles: BTreeMap<TitleSource, String>,
     /// Timestamp of the last line that had one. Lines without (Claude Code `ai-title` and
     /// friends) take it, so a replayed session is not stamped with capture time.
-    last_ts: Option<OffsetDateTime>,
+    last_ts: Option<Timestamp>,
     /// Session this one was spawned from, when it has one (subagents, forks), or continues
     /// (maybe another harness's).
     parent: Option<HarnessSession>,
@@ -517,7 +517,7 @@ mod tests {
 
     #[rstest]
     fn title_lines_keep_a_row_stamped_with_the_given_timestamp() {
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let m = ccode(&serde_json::json!({
             "type": "ai-title", "aiTitle": "Fix it", "timestamp": "2023-11-14T22:13:20Z",
         }));
@@ -542,7 +542,7 @@ mod tests {
         assert!(n.capture(&session(), &title("first")).is_empty(), "waits for a timestamp");
         let flushed = n.capture(&session(), &at("2020-01-01T00:00:00Z"));
         let later = n.capture(&session(), &title("second"));
-        let expected = OffsetDateTime::from_unix_timestamp(1_577_836_800).unwrap();
+        let expected = Timestamp::from_second(1_577_836_800).unwrap();
         assert_eq!(flushed.iter().map(|m| m.timestamp).collect::<Vec<_>>(), vec![
             expected, expected
         ]);
@@ -694,7 +694,7 @@ mod tests {
     #[rstest]
     fn a_resumed_capture_keeps_the_stored_titles_rank() {
         let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let row = Session::builder()
             .handle(n.handle(&session()))
             .title(Some("Mine".to_owned()))
@@ -777,7 +777,7 @@ mod tests {
     #[rstest]
     fn resumed_state_carries_over_a_restart() {
         let mut n = MessageEnricher::new(HarnessKind::ClaudeCode);
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let parent = HarnessSession {
             harness: HarnessKind::ClaudeCode,
             session: NativeSessionId::from("p".to_owned()),
@@ -1282,7 +1282,7 @@ mod parser_contract {
     ) {
         let fork = SessionId::from("fork".to_owned());
         let mut n = MessageEnricher::new(HarnessKind::Pi);
-        let ts = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let ts = Timestamp::from_second(1_700_000_000).unwrap();
         let harness_of = |id: &str| {
             if id == ORIGINAL {
                 HarnessKind::Codex

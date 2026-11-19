@@ -12,7 +12,7 @@ use atuin_common::utils::uuid_v7;
 use atuin_daemon::search::SharedSearchIndex;
 use atuin_domain::record::{Host, Record, RecordSeriesKey, RecordTag, RecordVersion};
 use easy_cast::Conv;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 /// How many rows go into one `save_bulk` / `push_batch` transaction while seeding.
@@ -101,7 +101,7 @@ impl Rng {
 pub struct HistoryGen {
     rng: Rng,
     sessions: Vec<String>,
-    base: OffsetDateTime,
+    base: Timestamp,
     produced: u64,
 }
 
@@ -125,7 +125,7 @@ impl HistoryGen {
             rng,
             sessions,
             // ~2022-07-05, one entry every 30s from there.
-            base: OffsetDateTime::from_unix_timestamp(1_657_000_000).unwrap(),
+            base: Timestamp::from_second(1_657_000_000).unwrap(),
             produced: 0,
         }
     }
@@ -164,7 +164,7 @@ impl HistoryGen {
 
         History::from_db()
             .id(HistoryId::from(uuid_v7()))
-            .timestamp(self.base + time::Duration::seconds(i64::conv(ordinal) * 30))
+            .timestamp(self.base + jiff::SignedDuration::from_secs(i64::conv(ordinal) * 30))
             .command(command)
             .cwd(cwd)
             .exit(exit)

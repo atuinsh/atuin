@@ -20,8 +20,8 @@ use atuin_common::harnesstools::resume::CwdRequirement;
 use atuin_common::harnesstools::session::{Content, Role as Said, Usage};
 use atuin_common::harnesstools::sync::{LocalTip, Stamp};
 use atuin_domain::record::{HostId, RecordId};
+use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
-use time::{Duration, OffsetDateTime};
 
 use super::ResumeContext;
 use super::catchup::CatchUp;
@@ -40,8 +40,8 @@ pub const REPO: &str = "/home/ellie/src/atuin";
 pub const DELETED_WORKTREE: &str = "/home/ellie/src/atuin/.claude/worktrees/theme-preview";
 
 /// The fixed "now" the fake sessions are relative to, so renders are deterministic.
-pub fn now() -> OffsetDateTime {
-    time::macros::datetime!(2026-09-27 15:00:00 UTC)
+pub fn now() -> Timestamp {
+    "2026-09-27T15:00:00Z".parse::<Timestamp>().unwrap()
 }
 
 /// Where the fake picker runs: in the atuin repo on the `ai-resume` branch.
@@ -56,7 +56,7 @@ pub fn context() -> ResumeContext {
 
 /// A bare row with sensible defaults, for tests.
 pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
-    let started_at = now() - Duration::hours(1);
+    let started_at = now() - SignedDuration::from_hours(1);
     SessionRow {
         atuin_id: atuin_id(harness, id, started_at),
         handle: handle(harness, id),
@@ -69,8 +69,8 @@ pub fn row(harness: HarnessKind, id: &str, title: &str) -> SessionRow {
         model: None,
         host_id: THIS_HOST_ID.to_owned(),
         started_at,
-        updated_at: now() - Duration::minutes(30),
-        active_at: now() - Duration::minutes(30),
+        updated_at: now() - SignedDuration::from_mins(30),
+        active_at: now() - SignedDuration::from_mins(30),
         messages: 10,
         usage: Usage::default(),
         children: 0,
@@ -90,8 +90,8 @@ fn handle(harness: HarnessKind, id: &str) -> HarnessSession {
 
 /// A fake session's atuin id: a UUIDv7 at its start, like a minted one, but with its other bits
 /// from its handle, so renders are deterministic.
-fn atuin_id(harness: HarnessKind, id: &str, started_at: OffsetDateTime) -> AtuinSessionId {
-    let millis = u64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+fn atuin_id(harness: HarnessKind, id: &str, started_at: Timestamp) -> AtuinSessionId {
+    let millis = u64::try_from(started_at.as_millisecond()).unwrap_or(0);
     let hash = xxhash_rust::xxh3::xxh3_128(format!("{harness:?}:{id}").as_bytes()).to_le_bytes();
     let mut bits = [0; 10];
     bits.copy_from_slice(&hash[..10]);
@@ -179,7 +179,7 @@ pub fn synced_row(
         .session(handle.clone())
         .source_id(SourceId::from(id.to_owned()))
         .parent_source_id(parent.map(|p| SourceId::from(p.to_owned())))
-        .timestamp(now() - Duration::hours(1) + Duration::minutes(minutes))
+        .timestamp(now() - SignedDuration::from_hours(1) + SignedDuration::from_mins(minutes))
         .role(role)
         .content(vec![Content::Text(format!("message {id}"))])
         .build();
@@ -195,8 +195,8 @@ struct Spec {
     branch: Option<&'static str>,
     model: &'static str,
     host: &'static str,
-    age: Duration,
-    duration: Duration,
+    age: SignedDuration,
+    duration: SignedDuration,
     msgs: u64,
     messages: Vec<(Role, &'static str)>,
 }
@@ -273,9 +273,9 @@ impl FakeSource {
         use Role::{Assistant as A, User as U};
 
         let mut sessions = Vec::new();
-        let m = Duration::minutes;
-        let h = Duration::hours;
-        let d = Duration::days;
+        let m = SignedDuration::from_mins;
+        let h = SignedDuration::from_hours;
+        let d = |days: i64| SignedDuration::from_hours(24 * days);
 
         let resume = build(
             Spec {
@@ -286,7 +286,7 @@ impl FakeSource {
                 branch: Some("ai-resume"),
                 model: "claude-opus-4-5",
                 host: HERE,
-                age: Duration::seconds(30),
+                age: SignedDuration::from_secs(30),
                 duration: h(3),
                 msgs: 142,
                 messages: vec![
@@ -435,7 +435,7 @@ impl FakeSource {
                 branch: Some("main"),
                 model: "gpt-5-codex",
                 host: HERE,
-                age: Duration::seconds(95),
+                age: SignedDuration::from_secs(95),
                 duration: m(20),
                 msgs: 27,
                 messages: vec![
@@ -1090,7 +1090,10 @@ impl Resumer for FakeResumer {
             let ago = now() - session.active_at;
             return Ok(Resume {
                 catch_up: self.catch_up.is_some(),
-                live: ago < Duration::seconds(i64::try_from(super::state::LIVE_SECS).unwrap_or(0)),
+                live: ago
+                    < SignedDuration::from_secs(
+                        i64::try_from(super::state::LIVE_SECS).unwrap_or(0),
+                    ),
                 ..Resume::ready(plan)
             });
         }

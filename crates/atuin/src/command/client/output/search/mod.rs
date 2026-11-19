@@ -13,8 +13,8 @@ use atuin_common::env;
 use atuin_daemon::client::SearchClient;
 use clap::{Parser, ValueEnum};
 use futures_util::{StreamExt, TryStreamExt};
+use jiff::Timestamp;
 use thiserror::Error;
-use time::OffsetDateTime;
 use tracing::debug;
 
 mod writers;
@@ -184,7 +184,7 @@ impl Cmd {
 
         let writer = writer_for(self.style);
         let ctx = RenderCtx {
-            now: OffsetDateTime::now_utc(),
+            now: Timestamp::now(),
             width: crossterm::terminal::size().map_or(80, |(cols, _)| cols as usize),
             theme,
         };

@@ -8,9 +8,9 @@ use atuin_client::ai_session::{
 };
 use atuin_client::settings::Settings;
 use atuin_common::range::Clamped;
-use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
+use jiff::tz::TimeZone;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -151,7 +151,7 @@ impl AtuinThreadsSearchToolCall {
             });
         }
 
-        let offset = time::UtcOffset::local_or_utc();
+        let tz = TimeZone::system();
         let mut out = String::new();
         if any_term {
             let _ = writeln!(
@@ -161,7 +161,7 @@ impl AtuinThreadsSearchToolCall {
             );
         }
         for (index, hit) in hits.iter().enumerate() {
-            SessionHit(hit).render_into(&mut out, index + 1, offset);
+            SessionHit(hit).render_into(&mut out, index + 1, &tz);
         }
         if let Some(note) = note {
             let _ = writeln!(out, "\n{note}");
@@ -229,8 +229,8 @@ fn should_loosen(strict: &[SessionMatch], unscoped: Option<&[SessionMatch]>) -> 
 struct SessionHit<'a>(&'a SessionMatch);
 
 impl SessionHit<'_> {
-    fn render_into(&self, out: &mut String, index: usize, offset: time::UtcOffset) {
-        render_session_summary(out, index, &self.0.session, offset);
+    fn render_into(&self, out: &mut String, index: usize, tz: &TimeZone) {
+        render_session_summary(out, index, &self.0.session, tz);
         let preview = one_line(&self.0.preview.to_plain().text, 400);
         if !preview.is_empty() {
             // The message number is in the session holding it, which a grouped search can
@@ -289,7 +289,7 @@ mod tests {
 
     fn hit(id: &str) -> SessionMatch {
         SessionMatch {
-            session: super::super::fixtures::session(id, None, time::OffsetDateTime::UNIX_EPOCH),
+            session: super::super::fixtures::session(id, None, jiff::Timestamp::UNIX_EPOCH),
             title: TextHighlighter::default().as_highlighted(String::new()),
             preview: TextHighlighter::default().as_highlighted(String::new()),
             message_index: 0,
@@ -312,7 +312,7 @@ mod tests {
         let mut session = super::super::fixtures::session(
             "abc-123",
             Some("/work/atuin"),
-            time::OffsetDateTime::UNIX_EPOCH,
+            jiff::Timestamp::UNIX_EPOCH,
         );
         session.title = Some("Add FTS".to_owned());
         session.last_reply = Some("Done: the index is\nbackfilled.".to_owned());
@@ -326,7 +326,7 @@ mod tests {
         };
 
         let mut out = String::new();
-        SessionHit(&hit).render_into(&mut out, 1, time::UtcOffset::UTC);
+        SessionHit(&hit).render_into(&mut out, 1, &TimeZone::UTC);
 
         assert!(out.contains("claude-code"));
         assert!(out.contains(&hit.session.atuin_id.to_string()));
@@ -348,7 +348,7 @@ mod tests {
             ..hit
         };
         let mut out = String::new();
-        SessionHit(&child).render_into(&mut out, 1, time::UtcOffset::UTC);
+        SessionHit(&child).render_into(&mut out, 1, &TimeZone::UTC);
         assert!(out.contains("message #42 in child-9):"), "{out}");
     }
 }

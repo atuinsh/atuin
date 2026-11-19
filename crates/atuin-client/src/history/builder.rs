@@ -9,7 +9,7 @@ use super::{AuthorKind, History, HistoryId, is_known_agent};
 /// The only two required fields are `timestamp` and `command`.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryImported {
-    timestamp: time::OffsetDateTime,
+    timestamp: jiff::Timestamp,
     #[builder(setter(into))]
     command: String,
     #[builder(default = Self::UNKNOWN_CWD.into(), setter(into))]
@@ -66,7 +66,7 @@ impl From<HistoryImported> for History {
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct HistoryCaptured {
-    timestamp: time::OffsetDateTime,
+    timestamp: jiff::Timestamp,
     #[builder(setter(into))]
     command: String,
     #[builder(setter(into))]
@@ -123,7 +123,7 @@ impl From<HistoryCaptured> for History {
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryFromDb {
     id: HistoryId,
-    timestamp: time::OffsetDateTime,
+    timestamp: jiff::Timestamp,
     command: String,
     cwd: String,
     exit: i64,
@@ -132,7 +132,7 @@ pub struct HistoryFromDb {
     hostname: String,
     author: String,
     intent: Option<String>,
-    deleted_at: Option<time::OffsetDateTime>,
+    deleted_at: Option<jiff::Timestamp>,
     shell: Option<String>,
     author_kind: Option<AuthorKind>,
 }
@@ -166,7 +166,7 @@ impl From<HistoryFromDb> for History {
 /// data. This is no longer the case.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct HistoryDaemonCapture {
-    timestamp: time::OffsetDateTime,
+    timestamp: jiff::Timestamp,
     #[builder(setter(into))]
     command: String,
     #[builder(setter(into))]

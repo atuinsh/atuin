@@ -18,19 +18,19 @@ use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::pushed::PushedMessage;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::time::{DurationExt as _, TimestampExt as _};
 use atuin_common::userio;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::{
     ImportSessionsEvent, import_sessions_event, tail_sessions_event,
 };
 use atuin_daemon::session_capture::Origin;
-use chrono::{DateTime, Utc};
-use chrono_humanize::HumanTime;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, eyre};
 use futures::{Stream, StreamExt, TryStreamExt};
+use jiff::Timestamp;
+use jiff::tz::{Offset, TimeZone};
 use serde::Serialize;
-use time::OffsetDateTime;
 
 /// How a subcommand's output is rendered.
 #[derive(Args, Debug)]
@@ -1071,10 +1071,8 @@ fn tail_header(handle: &HarnessSession, session: Option<&Session>, color: bool) 
 }
 
 /// Local wall-clock `HH:MM:SS`, for live `tail` lines.
-fn clock(ts: OffsetDateTime) -> String {
-    to_datetime(ts)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string())
-        .unwrap_or_else(|| "--:--:--".to_owned())
+fn clock(ts: Timestamp) -> String {
+    TimeZone::system().to_datetime(ts).strftime("%H:%M:%S").to_string()
 }
 
 // --- color --------------------------------------------------------------------------------------
@@ -1260,17 +1258,14 @@ fn sanitize(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// A humanized age (e.g. "2 hours ago"), or "-" when chrono cannot represent it.
-fn age(ts: OffsetDateTime) -> String {
-    to_datetime(ts).map_or_else(|| "-".to_owned(), |dt| HumanTime::from(dt).to_string())
+/// A humanized age, such as `2 hours ago`.
+fn age(ts: Timestamp) -> String {
+    Timestamp::now().saturating_duration_since(ts).display().ago().to_string()
 }
 
-fn to_datetime(ts: OffsetDateTime) -> Option<DateTime<Utc>> {
-    DateTime::from_timestamp(ts.unix_timestamp(), ts.nanosecond())
-}
-
-fn rfc3339(ts: OffsetDateTime) -> Option<String> {
-    to_datetime(ts).map(|dt| dt.to_rfc3339())
+/// `ts` in RFC 3339, in UTC: `2024-01-22T14:35:07+00:00`.
+fn rfc3339(ts: Timestamp) -> String {
+    ts.display_with_offset(Offset::UTC).to_string()
 }
 
 /// The kebab display label for a harness. Kept exhaustive over every `HarnessKind` (including ones
@@ -1351,10 +1346,8 @@ struct SessionJson {
     git_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    started_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    updated_at: Option<String>,
+    started_at: String,
+    updated_at: String,
     message_count: u64,
     tokens: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1412,8 +1405,7 @@ struct FilePatchJson {
 struct MessageJson {
     id: String,
     role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timestamp: Option<String>,
+    timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1640,8 +1632,8 @@ mod tests {
             .atuin_id(AtuinSessionId::from(uuid::Uuid::from_u128(xxhash_rust::xxh3::xxh3_128(
                 format!("{harness:?}:{id}").as_bytes(),
             ))))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build()
     }
@@ -1930,7 +1922,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(handle(HarnessKind::ClaudeCode, "s"))
             .source_id(SourceId::from("m".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(role)
             .content(content)
             .build()

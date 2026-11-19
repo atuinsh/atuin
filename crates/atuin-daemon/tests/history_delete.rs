@@ -148,7 +148,7 @@ async fn empty_delete_does_nothing(#[future(awt)] env: TestEnv) {
 async fn search_follows_the_surviving_invocations(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let mut search = env.search_client().await;
-    let now = time::OffsetDateTime::now_utc();
+    let now = jiff::Timestamp::now();
     let first =
         env.record_at(&mut client, "cargo build --release", now - Duration::from_secs(3)).await;
     let second =

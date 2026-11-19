@@ -15,7 +15,7 @@ use atuin_client::settings::Settings;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::logs::LogConfig;
 use atuin_common::string::{EscapeNonPrintablePosixExt as _, NonNulStr};
-use atuin_common::time::{DurationExt, OffsetDateTimeExt, UtcOffsetSpec};
+use atuin_common::time::{DateTimeExt, DurationExt, TimeZoneSpec, TimestampExt};
 use atuin_common::utils::normalize_optional_string;
 use atuin_common::{userio, utils};
 #[cfg(feature = "daemon")]
@@ -33,10 +33,11 @@ use clap::Subcommand;
 #[cfg(feature = "daemon")]
 use colored::Colorize;
 use eyre::{Context, Result, bail};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use runtime_format::{FormatKey, FormatKeyError, ParseSegment, ParsedFmt};
 #[cfg(feature = "daemon")]
 use serde::Serialize;
-use time::OffsetDateTime;
 use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "daemon")]
@@ -116,7 +117,7 @@ pub enum Cmd {
             help = fl!("arg-history-timezone"),
             long_help = fl!("arg-history-timezone", "long")
         )]
-        timezone: Option<UtcOffsetSpec>,
+        timezone: Option<TimeZoneSpec>,
 
         #[arg(
             long,
@@ -141,7 +142,7 @@ pub enum Cmd {
             help = fl!("arg-history-timezone"),
             long_help = fl!("arg-history-timezone", "long")
         )]
-        timezone: Option<UtcOffsetSpec>,
+        timezone: Option<TimeZoneSpec>,
 
         #[arg(
             long,
@@ -199,7 +200,7 @@ pub fn print_list(
     format: Option<&str>,
     print0: bool,
     reverse: bool,
-    tz: UtcOffsetSpec,
+    tz: &TimeZoneSpec,
 ) {
     let w = std::io::stdout();
     let mut w = w.lock();
@@ -229,6 +230,7 @@ pub fn print_list(
     };
     let flush_each_line = print0;
 
+    let tz = tz.time_zone();
     for history in iterator {
         let fh = FmtHistory {
             history,
@@ -289,7 +291,7 @@ fn check_for_write_errors(write: Result<(), io::Error>) {
 struct FmtHistory<'a> {
     history: &'a History,
     cmd_format: CmdFormat,
-    tz: &'a UtcOffsetSpec,
+    tz: &'a TimeZone,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -324,10 +326,10 @@ impl FormatKey for FmtHistory<'_> {
                 write!(f, "{}", dur.display().largest_unit())?;
             }
             "time" => {
-                self.history.timestamp.to_offset(self.tz.0).display().ymd_hms().fmt(f)?;
+                self.tz.to_datetime(self.history.timestamp).display().ymd_hms().fmt(f)?;
             }
             "relativetime" => {
-                let d = OffsetDateTime::now_utc().saturating_duration_since(self.history.timestamp);
+                let d = Timestamp::now().saturating_duration_since(self.history.timestamp);
                 write!(f, "{}", d.display().largest_unit())?;
             }
             "host" => f.write_str(self.history.cmd_origin.host().into_inner())?,
@@ -390,7 +392,7 @@ fn make_starting_history(
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
     cwd: Option<&Path>,
-    at: Option<OffsetDateTime>,
+    at: Option<Timestamp>,
 ) -> Option<History> {
     // It's better for atuin to silently fail here and attempt to
     // store whatever is ran, than to throw an error to the terminal
@@ -414,7 +416,7 @@ fn make_starting_history(
         author_kind.or_else(|| author.is_some().then(AuthorKind::probe_current).flatten());
 
     let h: History = History::capture()
-        .timestamp(at.unwrap_or_else(OffsetDateTime::now_utc))
+        .timestamp(at.unwrap_or_else(Timestamp::now))
         .command(command)
         .cwd(cwd.to_string_lossy().into_owned())
         .author_opt(author)
@@ -477,7 +479,7 @@ async fn handle_end(
     h.exit = exit;
     h.duration = match duration {
         Some(value) => i64::try_from(value).context("command took over 292 years")?,
-        None => i64::try_from((OffsetDateTime::now_utc() - h.timestamp).whole_nanoseconds())
+        None => i64::try_from((Timestamp::now() - h.timestamp).as_nanos())
             .context("command took over 292 years")?,
     };
 
@@ -537,7 +539,7 @@ pub(super) async fn start_history_entry(
     author_kind: Option<AuthorKind>,
     intent: Option<&str>,
     cwd: Option<&Path>,
-    at: Option<OffsetDateTime>,
+    at: Option<Timestamp>,
 ) -> Result<Option<HistoryId>> {
     let Some(h) = make_starting_history(settings, command, author, author_kind, intent, cwd, at)
     else {
@@ -747,7 +749,7 @@ impl TailEvent {
             }
             None => bail!("daemon sent an unspecified history tail event"),
         };
-        let timestamp = OffsetDateTime::from_unix_nanos_i64(history.timestamp);
+        let timestamp = Timestamp::from_unix_nanos_i64(history.timestamp);
         let author_kind = history.author_kind();
 
         Ok(Self {
@@ -774,7 +776,7 @@ impl TailEvent {
         })
     }
 
-    fn render(&self, tty: bool, tz: UtcOffsetSpec) -> Result<String> {
+    fn render(&self, tty: bool, tz: &TimeZoneSpec) -> Result<String> {
         if tty {
             Ok(self.render_pretty(tz))
         } else {
@@ -784,13 +786,14 @@ impl TailEvent {
         }
     }
 
-    fn render_json(&self, tz: UtcOffsetSpec) -> Result<String> {
+    fn render_json(&self, tz: &TimeZoneSpec) -> Result<String> {
+        let tz = tz.time_zone();
         let payload = TailJsonEvent {
             event: self.kind.as_str(),
             history: TailJsonHistory {
                 id: self.history.id,
-                timestamp: self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
-                timestamp_unix_ns: u64::try_from(self.history.timestamp.unix_timestamp_nanos())
+                timestamp: tz.to_datetime(self.history.timestamp).display().ymd_hms().to_string(),
+                timestamp_unix_ns: u64::try_from(self.history.timestamp.as_nanosecond())
                     .context("history timestamp predates unix epoch")?,
                 command: &self.history.command,
                 cwd: &self.history.cwd,
@@ -808,14 +811,15 @@ impl TailEvent {
                 success: self.success_value(),
                 finished_at: self
                     .finished_at()
-                    .map(|time| time.to_offset(tz.0).display().ymd_hms().to_string()),
+                    .map(|time| tz.to_datetime(time).display().ymd_hms().to_string()),
             },
         };
 
         Ok(serde_json::to_string(&payload)?)
     }
 
-    fn render_pretty(&self, tz: UtcOffsetSpec) -> String {
+    fn render_pretty(&self, tz: &TimeZoneSpec) -> String {
+        let tz = tz.time_zone();
         let mut out = String::new();
         let border = match self.kind {
             TailKind::Started => "-".repeat(72).bright_blue().to_string(),
@@ -847,7 +851,7 @@ impl TailEvent {
         push_pretty_field(
             &mut out,
             "start",
-            &self.history.timestamp.to_offset(tz.0).display().ymd_hms().to_string(),
+            &tz.to_datetime(self.history.timestamp).display().ymd_hms().to_string(),
         );
         push_pretty_field(&mut out, "history", &self.history.id.to_string());
         push_pretty_field(&mut out, "session", &self.history.session);
@@ -867,7 +871,7 @@ impl TailEvent {
         }
 
         if let Some(finished) = self.finished_at() {
-            let finished = finished.to_offset(tz.0).display().ymd_hms().to_string();
+            let finished = tz.to_datetime(finished).display().ymd_hms().to_string();
             push_pretty_field(&mut out, "finished", &finished);
         }
 
@@ -896,11 +900,11 @@ impl TailEvent {
         matches!(self.kind, TailKind::Ended).then_some(self.history.exit == 0)
     }
 
-    fn finished_at(&self) -> Option<OffsetDateTime> {
+    fn finished_at(&self) -> Option<Timestamp> {
         self.duration_value()
             .filter(|duration| *duration >= 0)
-            .map(time::Duration::nanoseconds)
-            .and_then(|duration| self.history.timestamp.checked_add(duration))
+            .map(jiff::SignedDuration::from_nanos)
+            .and_then(|duration| self.history.timestamp.checked_add(duration).ok())
     }
 
     fn exit_display(&self) -> String {
@@ -980,7 +984,7 @@ impl Cmd {
             }
 
             let event = TailEvent::from_proto(reply)?;
-            let rendered = event.render(tty, settings.timezone)?;
+            let rendered = event.render(tty, &settings.timezone)?;
             let mut out = stdout.lock();
 
             match out.write_all(rendered.as_bytes()) {
@@ -1008,7 +1012,7 @@ impl Cmd {
         include_deleted: bool,
         print0: bool,
         reverse: bool,
-        tz: UtcOffsetSpec,
+        tz: &TimeZoneSpec,
     ) -> Result<()> {
         let filters = match (session, cwd) {
             (true, true) => [Session, Directory],
@@ -1064,7 +1068,7 @@ impl Cmd {
                 Some(settings.history_format.as_str()),
                 false,
                 false,
-                settings.timezone,
+                &settings.timezone,
             );
         } else {
             let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
@@ -1110,7 +1114,7 @@ impl Cmd {
                 Some(settings.history_format.as_str()),
                 false,
                 false,
-                settings.timezone,
+                &settings.timezone,
             );
         } else {
             let encryption_key = paseto_v4::Key::try_load_or_generate(&settings.key_path)
@@ -1199,10 +1203,10 @@ impl Cmd {
                     } => {
                         let context = current_context(settings).await?;
                         let mode = ListMode::from_flags(human, cmd_only);
-                        let tz = timezone.unwrap_or(settings.timezone);
+                        let tz = timezone.unwrap_or_else(|| settings.timezone.clone());
                         Self::handle_list(
                             &db, settings, context, session, cwd, mode, format, false, print0,
-                            reverse, tz,
+                            reverse, &tz,
                         )
                         .await
                     }
@@ -1215,7 +1219,7 @@ impl Cmd {
                     } => {
                         let last = db.last().await?;
                         let last = last.as_slice();
-                        let tz = timezone.unwrap_or(settings.timezone);
+                        let tz = timezone.unwrap_or_else(|| settings.timezone.clone());
                         print_list(
                             last,
                             ListMode::from_flags(human, cmd_only),
@@ -1225,7 +1229,7 @@ impl Cmd {
                             },
                             false,
                             true,
-                            tz,
+                            &tz,
                         );
 
                         Ok(())
@@ -1243,13 +1247,13 @@ impl Cmd {
                         before,
                         dupkeep,
                     } => {
+                        let now = Timestamp::now().to_zoned_datetime(settings.timezone.time_zone());
                         let before = i64::try_from(
-                            interim::parse_date_string(
-                                before.as_str(),
-                                OffsetDateTime::now_utc().to_offset(settings.timezone.0),
-                                settings.dialect.into(),
-                            )?
-                            .unix_timestamp_nanos(),
+                            settings
+                                .dialect
+                                .parse_date(before.as_str(), &now)?
+                                .timestamp()
+                                .as_nanosecond(),
                         )?;
                         Self::handle_dedup(&db, settings, store, before, dupkeep, dry_run).await
                     }
@@ -1275,8 +1279,6 @@ impl Cmd {
 #[cfg(test)]
 mod tests {
     use rstest::{fixture, rstest};
-    #[cfg(feature = "daemon")]
-    use time::macros::datetime;
 
     use super::*;
 
@@ -1322,7 +1324,7 @@ mod tests {
         handle_start(&db, &h).await;
 
         let history = db
-            .before(OffsetDateTime::now_utc() + time::Duration::SECOND, 1)
+            .before(Timestamp::now() + jiff::SignedDuration::from_secs(1), 1)
             .await
             .unwrap()
             .pop()
@@ -1356,7 +1358,7 @@ mod tests {
             kind,
             history: History {
                 id: "018f011c-9a0a-7000-8000-000000000001".parse().unwrap(),
-                timestamp: datetime!(2026-04-09 17:18:19 UTC),
+                timestamp: "2026-04-09T17:18:19Z".parse::<Timestamp>().unwrap(),
                 duration: 12_345_678,
                 exit: 0,
                 command: "git status".to_owned(),
@@ -1375,7 +1377,7 @@ mod tests {
     #[cfg(feature = "daemon")]
     #[rstest]
     fn test_tail_json_output_contains_history_fields(tail_event: TailEvent) {
-        let json = tail_event.render(false, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let json = tail_event.render(false, &TimeZoneSpec::default()).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["event"], "ended");
@@ -1390,7 +1392,7 @@ mod tests {
     fn test_tail_pretty_output_shows_pending_fields_for_started_events(
         #[with(TailKind::Started)] tail_event: TailEvent,
     ) {
-        let rendered = tail_event.render(true, UtcOffsetSpec(time::UtcOffset::UTC)).unwrap();
+        let rendered = tail_event.render(true, &TimeZoneSpec::default()).unwrap();
         let plain = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap().replace_all(&rendered, "");
 
         assert!(plain.contains("STARTED git status"));
@@ -1431,7 +1433,7 @@ mod tests {
             .into_iter()
             .map(|cmd| {
                 History::capture()
-                    .timestamp(time::OffsetDateTime::now_utc())
+                    .timestamp(jiff::Timestamp::now())
                     .command(cmd)
                     .cwd("/")
                     .build()

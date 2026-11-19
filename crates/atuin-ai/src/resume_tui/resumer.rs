@@ -877,7 +877,7 @@ impl Resumer for HarnessResumer {
         let analysis = analysis.ok_or_else(|| {
             fail("its branches aren't known yet: the daemon hasn't synced its messages".to_owned())
         })?;
-        let (now, here) = (time::OffsetDateTime::now_utc(), &self.context.host_id);
+        let (now, here) = (jiff::Timestamp::now(), &self.context.host_id);
         let head = catchup::switch_to(&analysis, kind, head, &tip, now, here).map_err(fail)?;
         let running = || fail(format!("{} is running this session here", harness_label(kind)));
         // Never under an agent that may be writing the session: checked again as it is written.

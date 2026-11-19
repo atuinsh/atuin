@@ -5,8 +5,8 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use atuin_common::sync::free_in_background;
+use jiff::Timestamp;
 use parking_lot::{MappedRwLockReadGuard, Mutex, RwLockReadGuard, RwLockWriteGuard};
-use time::OffsetDateTime;
 
 use crate::search::index::SearchIndexSettings;
 use crate::search::index::core::{LoadFromDbError, SearchIndex};
@@ -97,7 +97,7 @@ pub(super) struct Rebuild<'a> {
     shared: &'a SharedSearchIndex,
     pending: Arc<PendingRebuild>,
     /// When the rebuild started. The rebuilt index's frecency is computed as of this time.
-    now: OffsetDateTime,
+    now: Timestamp,
     /// Whether dropping the rebuild should abandon it. Install clears this flag once it has dealt
     /// with `pending`.
     abandon_on_drop: bool,
@@ -118,7 +118,7 @@ impl<'a> Rebuild<'a> {
         Self {
             shared,
             pending,
-            now: OffsetDateTime::now_utc(),
+            now: Timestamp::now(),
             abandon_on_drop: true,
         }
     }
@@ -213,8 +213,8 @@ impl<'a> Rebuild<'a> {
 #[cfg(test)]
 mod tests {
     use atuin_common::filter::OrFilter;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::search::index::core::tests::*;
@@ -230,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn shared_index_rebuild(#[future(awt)] db: Sqlite) {
         for (command, shell) in [("echo bash", "bash"), ("echo zsh", "zsh")] {
-            let mut history = make_history(command, "/tmp", OffsetDateTime::now_utc());
+            let mut history = make_history(command, "/tmp", Timestamp::now());
             history.shell = Some(shell.to_owned());
             db.save(&history).await.unwrap();
         }
@@ -337,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn adds_during_a_rebuild_are_kept_once(#[future(awt)] db: Sqlite) {
         let shared = SharedSearchIndex::from(SearchIndex::default());
-        let history = |command| make_history(command, "/tmp", OffsetDateTime::now_utc());
+        let history = |command| make_history(command, "/tmp", Timestamp::now());
         let rebuild = shared.start().await;
         let rebuild_settings = rebuild.pending.settings.clone();
 
@@ -396,7 +396,7 @@ mod tests {
         let older_loaded = older.load(&db).await.unwrap();
         let newer = shared.start().await;
 
-        let history = make_history("echo meanwhile", "/tmp", OffsetDateTime::now_utc());
+        let history = make_history("echo meanwhile", "/tmp", Timestamp::now());
         add_through_permit(&shared, Some(&db), &history).await;
 
         let installed = older.install(older_loaded).await;
@@ -424,7 +424,7 @@ mod tests {
 
         // This entry is written after the older rebuild's load. So it is a leftover of that
         // rebuild.
-        let history = make_history("echo leftover", "/tmp", OffsetDateTime::now_utc());
+        let history = make_history("echo leftover", "/tmp", Timestamp::now());
         add_through_permit(&shared, Some(&db), &history).await;
 
         let newer = shared.start().await;
@@ -483,7 +483,7 @@ mod tests {
         #[values(false, true)] after_load: bool,
         #[future(awt)] db: Sqlite,
     ) {
-        db.save(&make_history("echo hello", "/tmp", OffsetDateTime::now_utc())).await.unwrap();
+        db.save(&make_history("echo hello", "/tmp", Timestamp::now())).await.unwrap();
         let shared = SharedSearchIndex::from(SearchIndex::default());
         let rebuild = shared.start().await;
         let newer = if newer_pending {

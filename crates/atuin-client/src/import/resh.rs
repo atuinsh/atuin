@@ -2,13 +2,12 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use atuin_common::path::PathBufExt as _;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
-use easy_cast::CastFloat;
 use eyre::{Result, eyre};
+use jiff::Timestamp;
 use serde::Deserialize;
-use time::OffsetDateTime;
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
@@ -106,14 +105,8 @@ impl Importer for Resh {
                 continue;
             };
 
-            let try_to_time = |realtime: f64| {
-                let secs: i64 = realtime.try_cast_floor().ok()?;
-                let nanosecs: i64 =
-                    (realtime.fract() * 1_000_000_000_f64).try_cast_nearest().ok()?;
-                OffsetDateTime::from_timespec(i128::from(secs), i128::from(nanosecs)).ok()
-            };
-            let start = try_to_time(entry.realtime_before);
-            let end = try_to_time(entry.realtime_after);
+            let start = Timestamp::from_unix_secs_f64(entry.realtime_before);
+            let end = Timestamp::from_unix_secs_f64(entry.realtime_after);
 
             // a corrupt entry must not abort the whole import. only report a duration when
             // both ends are representable - measuring against the epoch sentinel would
@@ -121,15 +114,13 @@ impl Importer for Resh {
             // can also make realtime_after precede realtime_before; a negative duration is
             // just as meaningless as an unrepresentable one, so it falls back the same way
             let duration = match (start, end) {
-                (Some(start), Some(end)) => {
-                    match i64::try_from((end - start).whole_nanoseconds()) {
-                        Ok(nanos) if nanos >= 0 => nanos,
-                        _ => HistoryImported::DEFAULT_DURATION,
-                    }
-                }
+                (Some(start), Some(end)) => match i64::try_from((end - start).as_nanos()) {
+                    Ok(nanos) if nanos >= 0 => nanos,
+                    _ => HistoryImported::DEFAULT_DURATION,
+                },
                 _ => HistoryImported::DEFAULT_DURATION,
             };
-            let timestamp = start.unwrap_or(OffsetDateTime::UNIX_EPOCH);
+            let timestamp = start.unwrap_or(Timestamp::UNIX_EPOCH);
 
             let imported = History::import()
                 // resh shell string matches what we use; see
@@ -239,9 +230,9 @@ mod test {
         let commands: Vec<&str> = loader.buf.iter().map(|h| h.command.as_str()).collect();
         assert_eq!(commands, ["echo good", "echo corrupt"]);
 
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 1_639_162_832);
+        assert_eq!(loader.buf[0].timestamp.as_second(), 1_639_162_832);
         assert_eq!(loader.buf[0].duration, 1_000_000_000);
-        assert_eq!(loader.buf[1].timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(loader.buf[1].timestamp, Timestamp::UNIX_EPOCH);
         assert_eq!(loader.buf[1].duration, HistoryImported::DEFAULT_DURATION);
     }
 
@@ -289,7 +280,7 @@ mod test {
         resh.load(&mut loader).await.expect("import must not fail");
 
         assert_eq!(loader.buf.iter().map(|h| h.command.as_str()).collect::<Vec<_>>(), [cmd]);
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), expected_unix_ts);
+        assert_eq!(loader.buf[0].timestamp.as_second(), expected_unix_ts);
         assert_eq!(loader.buf[0].duration, expected_duration);
     }
 }

@@ -8,10 +8,10 @@ use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::{Content, is_tool_output};
 use atuin_common::range::Clamped;
 use atuin_common::string::{NonBlankString, StrExt as _};
-use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::AiClient;
 use atuin_daemon::grpc::ai::session::pb::get_session_event::Event;
 use futures::StreamExt;
+use jiff::tz::TimeZone;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -364,7 +364,7 @@ impl AtuinThreadsReadToolCall {
             Ok(read) => read,
             Err(e) => return Err(format!("Reading the thread failed: {e}")),
         };
-        Ok(self.render(&session, &messages, complete, &filter, time::UtcOffset::local_or_utc()))
+        Ok(self.render(&session, &messages, complete, &filter, &TimeZone::system()))
     }
 
     /// Render a page of `messages`: the whole transcript when `complete`, otherwise at least
@@ -375,7 +375,7 @@ impl AtuinThreadsReadToolCall {
         messages: &[Message],
         complete: bool,
         filter: &Filter,
-        offset: time::UtcOffset,
+        tz: &TimeZone,
     ) -> String {
         let total = messages.len();
         let limit = self.limit.get() as usize;
@@ -424,8 +424,8 @@ impl AtuinThreadsReadToolCall {
         let _ = writeln!(
             out,
             "time     {} → {}",
-            timestamp(s.started_at, offset),
-            timestamp(s.updated_at, offset),
+            timestamp(s.started_at, tz),
+            timestamp(s.updated_at, tz),
         );
         let _ = writeln!(out);
 
@@ -461,11 +461,8 @@ impl AtuinThreadsReadToolCall {
                     body
                 };
                 // `HH:MM` only: the header carries the date and sessions rarely cross midnight.
-                let time = message
-                    .timestamp
-                    .checked_to_offset(offset)
-                    .map(|t| format!(" {:02}:{:02}", t.hour(), t.minute()))
-                    .unwrap_or_default();
+                let time = tz.to_datetime(message.timestamp);
+                let time = format!(" {:02}:{:02}", time.hour(), time.minute());
                 let _ = writeln!(out, "#{index} {role}{time}");
                 out.push_str(&body);
                 if !full && let Some(snippet) = filter.snippet(message, &body) {
@@ -867,9 +864,9 @@ mod tests {
         Change, FilePatch, Hunk, Patch, Role, ToolCallId, ToolResult, ToolUse,
     };
     use atuin_domain::record::RecordId;
+    use jiff::Timestamp;
     use rstest::rstest;
     use serde_json::json;
-    use time::OffsetDateTime;
 
     use super::*;
 
@@ -885,7 +882,7 @@ mod tests {
                 session: NativeSessionId::from("abc".to_owned()),
             })
             .source_id(SourceId::from("s".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(role)
             .content(content)
             .build()
@@ -900,7 +897,7 @@ mod tests {
     }
 
     fn session() -> Session {
-        super::super::fixtures::session("abc", Some("/work/x"), OffsetDateTime::UNIX_EPOCH)
+        super::super::fixtures::session("abc", Some("/work/x"), Timestamp::UNIX_EPOCH)
     }
 
     fn tool_call(name: &str) -> Content {
@@ -925,7 +922,7 @@ mod tests {
 
     fn render_on(args: Value, s: &Session, msgs: &[Message], complete: bool) -> String {
         let call = call(args);
-        call.render(s, msgs, complete, &call.filter(), time::UtcOffset::UTC)
+        call.render(s, msgs, complete, &call.filter(), &TimeZone::UTC)
     }
 
     #[rstest]

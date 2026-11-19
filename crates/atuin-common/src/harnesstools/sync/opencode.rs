@@ -243,10 +243,8 @@ where
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::from_unix_timestamp_nanos(
-            i128::from(current.created) * 1_000_000,
-        )
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH),
+        started_at: jiff::Timestamp::from_millisecond(current.created)
+            .unwrap_or(jiff::Timestamp::UNIX_EPOCH),
         messages: lines.to_vec(),
         fork_of: None,
     };

@@ -5,10 +5,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use atuin_client::history::{History, HistoryId};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use easy_cast::Cast;
 use futures::StreamExt;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
@@ -133,7 +133,7 @@ impl GrpcService for Service {
         // timestamp, which the journal tracks for us.
         let duration = match req.duration {
             Some(duration) => duration,
-            None => OffsetDateTime::now_utc()
+            None => Timestamp::now()
                 .saturating_duration_since(self.journal.get(req.history_id)?.timestamp),
         };
 

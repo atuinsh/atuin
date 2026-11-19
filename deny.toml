@@ -25,12 +25,14 @@ ignore = [
     # opens only files the same user's processes wrote. Remove this, and bump sqlx, rusqlite
     # (0.41) and our own libsqlite3-sys range, once sqlx 0.9.1 ships.
     "RUSTSEC-2026-0459",
-    # chrono is unmaintained, and no version is patched. It is no vulnerability. atuin-ai uses it
-    # directly, and rmcp needs it on every target but wasm, so it stays until rmcp drops it.
+    # chrono is unmaintained, and no version is patched. It is no vulnerability. rmcp needs it on
+    # every target but wasm, so it stays until rmcp drops it.
     "RUSTSEC-2026-0543",
     # humantime is unmaintained, as chrono is, since the same maintainers left both. It has no
     # dependencies of its own. atuin-common parses and prints duration settings with it, and a
-    # replacement has to accept exactly what users' configs hold now.
+    # replacement has to accept exactly what users' configs hold now. jiff's friendly format
+    # does not: it rejects fractional days (`1.5d`), units out of order (`30m 1h`) and `M` for
+    # months.
     "RUSTSEC-2026-0542",
 ]
 

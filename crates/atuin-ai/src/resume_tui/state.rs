@@ -13,12 +13,12 @@ use atuin_client::theme::Meaning;
 use atuin_client::tui::cursor::Cursor;
 use atuin_client::tui::key::{KeyCodeValue, KeyInput, SingleKey};
 use atuin_common::harnesstools::continuation::Flattened;
-use atuin_common::time::OffsetDateTimeExt as _;
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::HostId;
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use time::OffsetDateTime;
 
 use super::chooser::{Chooser, Destination};
 use super::keymap::{Action, Keymap, KeymapSet};
@@ -342,7 +342,7 @@ pub struct State {
     /// The daemon is rebuilding the threads index, so results may be incomplete: said in the
     /// status row while it has nothing else to say.
     pub rebuilding: Option<Rebuilding>,
-    pub now: Box<dyn Fn() -> OffsetDateTime + Send>,
+    pub now: Box<dyn Fn() -> Timestamp + Send>,
 }
 
 /// Drawn bottom-up (index 0 at the bottom), each root's forks go before it, last first, so they
@@ -418,10 +418,10 @@ impl State {
             status: None,
             rebuilding: None,
             now: if settings.prefers_reduced_motion {
-                let now = OffsetDateTime::now_utc();
+                let now = Timestamp::now();
                 Box::new(move || now)
             } else {
-                Box::new(OffsetDateTime::now_utc)
+                Box::new(Timestamp::now)
             },
         };
         state.set_initial_mode(sessions.filter_mode);

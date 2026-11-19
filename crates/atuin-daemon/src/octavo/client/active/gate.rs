@@ -299,8 +299,8 @@ mod tests {
     use atuin_client::lua_config::OrgSlug;
     use atuin_common::harnesstools::session::Role;
     use atuin_common::utils::uuid_v7;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
 
@@ -316,7 +316,7 @@ mod tests {
             .id(RecordId(uuid_v7()))
             .session(session(thread))
             .source_id(SourceId::from(uuid_v7().to_string()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(Vec::new())
             .cwd(cwd.map(Into::into))

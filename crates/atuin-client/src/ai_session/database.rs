@@ -17,8 +17,8 @@ use atuin_common::string::StrExt as _;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_domain::record::{HostId, RecordId};
 use futures::{Stream, TryStreamExt};
+use jiff::Timestamp;
 use sqlx::migrate::MigrateError;
-use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -58,8 +58,8 @@ const DAY_MILLIS: f64 = 86_400_000.0;
 pub const MAX_ROW_TOKENS: u64 = 1 << 40;
 
 /// [`Message::EARLIEST`] and [`Message::LATEST`] in milliseconds: the range of a stored timestamp.
-const EARLIEST_MILLIS: i64 = Message::EARLIEST.unix_timestamp() * 1000;
-const LATEST_MILLIS: i64 = Message::LATEST.unix_timestamp() * 1000;
+const EARLIEST_MILLIS: i64 = Message::EARLIEST_SECOND * 1000;
+const LATEST_MILLIS: i64 = Message::LATEST_SECOND * 1000;
 
 /// The shortest last term that matches as a prefix. A one-character prefix matches most of the
 /// index (every row with a word starting `e`), which costs hundreds of milliseconds to rank for
@@ -1219,7 +1219,7 @@ impl AiSessionDatabase {
             for bind in binds {
                 stmt = bind.apply_as(stmt);
             }
-            stmt = stmt.bind(Self::millis(OffsetDateTime::now_utc()));
+            stmt = stmt.bind(Self::millis(Timestamp::now()));
             if limit != 0 {
                 stmt = stmt.bind(i64::from(limit));
             }
@@ -1565,17 +1565,14 @@ impl AiSessionDatabase {
     }
 
     /// `ts` in milliseconds, held to [`Message::EARLIEST`] and [`Message::LATEST`].
-    fn millis(ts: OffsetDateTime) -> i64 {
-        i64::try_from(ts.unix_timestamp_nanos() / 1_000_000)
-            .expect("every OffsetDateTime fits in i64 milliseconds")
-            .clamp(EARLIEST_MILLIS, LATEST_MILLIS)
+    fn millis(ts: Timestamp) -> i64 {
+        ts.as_millisecond().clamp(EARLIEST_MILLIS, LATEST_MILLIS)
     }
 
     /// The inverse of [`Self::millis`], held to the same range, so it never fails.
-    fn time_from_millis(ms: i64) -> OffsetDateTime {
+    fn time_from_millis(ms: i64) -> Timestamp {
         let ms = ms.clamp(EARLIEST_MILLIS, LATEST_MILLIS);
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000)
-            .expect("the range is representable")
+        Timestamp::from_millisecond(ms).expect("the range is representable")
     }
 
     fn harness_from_repr(n: i64) -> Result<HarnessKind, DbError> {
@@ -1966,8 +1963,8 @@ mod tests {
     };
     use atuin_domain::record::{HostId, RecordId};
     use futures::TryStreamExt;
+    use jiff::Timestamp;
     use rstest::{fixture, rstest};
-    use time::OffsetDateTime;
 
     use super::{
         AiSessionDatabase, Appended, AtuinSessionId, COMPRESS_THRESHOLD, DbError, QueryTerms,
@@ -1993,7 +1990,7 @@ mod tests {
                 session: NativeSessionId::from("native-session".to_owned()),
             })
             .source_id(SourceId::from("source-id".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
@@ -2116,7 +2113,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from(format!("source-{index}")))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(index))
             .role(Role::User)
             .content(vec![Content::Text(text.to_owned())])
             .build()
@@ -2169,7 +2166,7 @@ mod tests {
             db.append(&m).await.unwrap();
         }
 
-        let since = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(since);
+        let since = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(since);
         let sessions = db
             .list_sessions(&SessionFilter {
                 updated_since: Some(since),
@@ -2198,7 +2195,7 @@ mod tests {
     async fn same_timestamp_orders_by_capture_id_not_source_id() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
-        let ts = OffsetDateTime::UNIX_EPOCH;
+        let ts = Timestamp::UNIX_EPOCH;
 
         // Two messages sharing a stored timestamp; source_ids sort opposite to capture order, so
         // ordering by source_id would reverse them. The monotonic capture id must break the tie.
@@ -2271,7 +2268,7 @@ mod tests {
         db.append(&message_in(&session, 50, "earlier")).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
-        assert_eq!(s.started_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50));
+        assert_eq!(s.started_at, Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(50));
     }
 
     #[rstest]
@@ -2284,7 +2281,7 @@ mod tests {
         db.append(&message_in(&session, 50, "old")).await.unwrap();
 
         let s = db.get_session(&session).await.unwrap().unwrap();
-        let ts = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(50);
+        let ts = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(50);
         assert_eq!(s.updated_at, ts);
         assert_eq!(s.started_at, ts);
     }
@@ -2302,7 +2299,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from("with-usage".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1))
             .role(Role::Assistant)
             .content(vec![Content::Text("has usage".to_owned())])
             .usage(Some(Usage {
@@ -2491,7 +2488,7 @@ mod tests {
             .id(RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from(format!("source-{index}")))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(index))
             .role(role)
             .content(content)
             .build()
@@ -3676,10 +3673,10 @@ mod tests {
     #[tokio::test]
     async fn recency_breaks_equal_relevance() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
-        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let now = Timestamp::now().as_second();
         for (id, age_days) in [("old", 90), ("new", 1), ("mid", 30)] {
             let mut m = message_in(&handle(HarnessKind::Pi, id), 0, "same words here");
-            m.timestamp = OffsetDateTime::from_unix_timestamp(now - age_days * 86_400).unwrap();
+            m.timestamp = Timestamp::from_second(now - age_days * 86_400).unwrap();
             db.append(&m).await.unwrap();
         }
         let ids: Vec<_> = search(&db, "words")
@@ -4433,7 +4430,7 @@ mod tests {
                 (s.handle.session.to_string(), s.child_count, s.group_updated_at.unwrap())
             })
             .collect();
-        let at = |seconds| OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(seconds);
+        let at = |seconds| Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(seconds);
         // Newest activity in the group first: `root`'s newest is `late`, at 14. Its size counts
         // `fork` and `late`, not the subagents grouped under it.
         assert_eq!(groups, [
@@ -4712,7 +4709,7 @@ mod tests {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let mut e = filtered_row("e", "/work/atuin", "main", "opus", 0);
         e.host = None;
-        e.timestamp += time::Duration::seconds(1);
+        e.timestamp += jiff::SignedDuration::from_secs(1);
         for m in [
             filtered_row("a", "/work/atuin", "main", "opus", 1),
             filtered_row("b", "/work/atuin", "main", "opus", 2),
@@ -5445,12 +5442,12 @@ mod tests {
     /// A timestamp past the years a date can name, appended or stored, is held to the range
     /// rather than failing every read that meets it.
     #[rstest]
-    #[case::appended(time::macros::datetime!(9999-12-31 23:59:59 -23:59), None)]
-    #[case::stored_late(OffsetDateTime::UNIX_EPOCH, Some(i64::MAX))]
-    #[case::stored_early(OffsetDateTime::UNIX_EPOCH, Some(i64::MIN))]
+    #[case::appended(Timestamp::MAX, None)]
+    #[case::stored_late(Timestamp::UNIX_EPOCH, Some(i64::MAX))]
+    #[case::stored_early(Timestamp::UNIX_EPOCH, Some(i64::MIN))]
     #[tokio::test]
     async fn an_out_of_range_timestamp_reads_as_the_nearest_in_range(
-        #[case] timestamp: OffsetDateTime,
+        #[case] timestamp: Timestamp,
         #[case] stored: Option<i64>,
     ) {
         let db = AiSessionDatabase::in_memory().await.unwrap();

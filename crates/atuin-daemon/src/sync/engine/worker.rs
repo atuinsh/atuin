@@ -300,8 +300,8 @@ mod tests {
     use atuin_client::record::sqlite_store::SqliteStore;
     use atuin_common::encryption::paseto_v4::Key;
     use atuin_domain::record::HostId;
+    use jiff::Timestamp;
     use rstest::{fixture, rstest};
-    use time::OffsetDateTime;
 
     use super::build_downloaded_records;
     use crate::search::{SearchIndex, SearchIndexSettings, SharedSearchIndex};
@@ -321,7 +321,7 @@ mod tests {
 
     fn history(command: &str) -> History {
         History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command(command)
             .cwd("/tmp")
             .author("test-user")
@@ -340,7 +340,7 @@ mod tests {
     ) {
         let history = history("echo deleted");
         let mut tombstone = history.clone();
-        tombstone.deleted_at = Some(OffsetDateTime::now_utc());
+        tombstone.deleted_at = Some(Timestamp::now());
         db.save_bulk([&tombstone]).await.unwrap();
         let index = SharedSearchIndex::from(SearchIndex::default());
 

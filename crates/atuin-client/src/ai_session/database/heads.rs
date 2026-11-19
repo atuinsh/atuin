@@ -58,7 +58,7 @@ use atuin_common::harnesstools::session::{Content, Role, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
 use atuin_domain::record::HostId;
 use futures::TryStreamExt;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::{AiSessionDatabase, DbError};
 use crate::ai_session::{HarnessKind, HarnessSession, Message, SourceId};
@@ -75,7 +75,7 @@ pub struct Head {
     /// The host that captured it.
     pub host: Option<HostId>,
     /// When it was written.
-    pub last_at: OffsetDateTime,
+    pub last_at: Timestamp,
     /// The [substantive](is_substantive) rows from the session's root to here: prompts and
     /// assistant text.
     pub messages: u64,

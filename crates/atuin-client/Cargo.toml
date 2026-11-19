@@ -46,6 +46,7 @@ futures = { workspace = true }
 i18n-embed = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 libsqlite3-sys = { workspace = true }
 memchr = { workspace = true }
 minspan = { workspace = true }
@@ -68,7 +69,7 @@ sqlx = { workspace = true, features = ["sqlite", "regexp"] }
 rusqlite = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = ["macros", "formatting", "parsing"] }
+time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true }

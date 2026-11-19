@@ -61,6 +61,7 @@ i18n-embed = { workspace = true }
 i18n-embed-fl = { workspace = true }
 imara-diff = { workspace = true, optional = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 libsqlite3-sys = { workspace = true, optional = true }
 memchr = { workspace = true }
 notify = { workspace = true }
@@ -90,7 +91,6 @@ strum_macros = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = ["formatting", "parsing"] }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, optional = true }

@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use rstest::{fixture, rstest};
 use serde_json::json;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::pi::session::{PiMessage, PiSession};
@@ -30,7 +30,7 @@ fn captured(jsonl: &str) -> Vec<RehydrateMessage> {
         .map(|(n, m)| RehydrateMessage {
             source_id: m.id().map_or_else(|| format!("synthetic-{n}"), |id| id.to_string()),
             parent_source_id: m.parent_id().map(|p| p.to_string()),
-            timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            timestamp: m.timestamp().unwrap_or(Timestamp::UNIX_EPOCH),
             role: m.role(),
             content: m.content(),
             model: m.model(),
@@ -52,7 +52,7 @@ fn session(id: &str, cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSe
         original_cwd: Some(PathBuf::from("/home/u/proj")),
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::UNIX_EPOCH,
+        started_at: Timestamp::UNIX_EPOCH,
         messages,
         fork_of: None,
     }
@@ -134,7 +134,7 @@ fn message(id: &str, parent: Option<&str>, role: Role, content: Vec<Content>) ->
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role,
         content,
         model: Some("claude-sonnet-5".to_owned()),

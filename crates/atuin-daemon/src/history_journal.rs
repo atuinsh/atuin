@@ -835,7 +835,7 @@ mod tests {
 
     fn entry(cmd: &str) -> History {
         History::daemon()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(cmd)
             .cwd("/tmp")
             .session(uuid_v7().as_simple().to_string())

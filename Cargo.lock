@@ -102,7 +102,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -113,7 +113,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -298,8 +298,8 @@ dependencies = [
  "futures-util",
  "i18n-embed",
  "indicatif",
- "interim",
  "itertools 0.15.0",
+ "jiff 1.0.1",
  "locked-tripwire",
  "nix 0.28.0",
  "norm",
@@ -327,7 +327,6 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tiny-bip39",
  "tokio",
  "toml_edit",
@@ -358,8 +357,6 @@ dependencies = [
  "atuin-daemon",
  "atuin-domain",
  "base64 0.22.1",
- "chrono",
- "chrono-humanize",
  "clap",
  "crossterm",
  "derive_more",
@@ -367,7 +364,7 @@ dependencies = [
  "fs-err",
  "futures",
  "i18n-embed",
- "interim",
+ "jiff 1.0.1",
  "parking_lot",
  "proptest",
  "pulldown-cmark",
@@ -385,7 +382,6 @@ dependencies = [
  "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tracing",
  "unicode-segmentation",
@@ -418,6 +414,7 @@ dependencies = [
  "indicatif",
  "interim",
  "itertools 0.15.0",
+ "jiff 1.0.1",
  "libsqlite3-sys",
  "memchr",
  "minspan",
@@ -490,6 +487,7 @@ dependencies = [
  "i18n-embed-fl",
  "imara-diff",
  "itertools 0.15.0",
+ "jiff 1.0.1",
  "libc",
  "libsqlite3-sys",
  "memchr",
@@ -527,7 +525,6 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tiny-bip39",
  "tokio",
  "tokio-util",
@@ -572,6 +569,7 @@ dependencies = [
  "http",
  "hyper-util",
  "itertools 0.15.0",
+ "jiff 1.0.1",
  "lasso",
  "listenfd",
  "parking_lot",
@@ -594,7 +592,6 @@ dependencies = [
  "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -617,6 +614,7 @@ dependencies = [
  "derive_more",
  "easy-cast",
  "http",
+ "jiff 1.0.1",
  "parking_lot",
  "pretty_assertions",
  "proptest",
@@ -631,7 +629,6 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.28.0",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tower",
  "typed-builder",
@@ -667,9 +664,9 @@ dependencies = [
  "atuin-client",
  "crossterm",
  "easy-cast",
+ "jiff 1.0.1",
  "rstest",
  "serde",
- "time",
  "unicode-segmentation",
 ]
 
@@ -705,6 +702,7 @@ dependencies = [
  "futures",
  "hyper-tls",
  "hyper-util",
+ "jiff 1.0.1",
  "native-tls",
  "prost",
  "prost-types",
@@ -715,7 +713,6 @@ dependencies = [
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tonic",
  "tonic-prost",
@@ -799,6 +796,7 @@ dependencies = [
  "futures-util",
  "i18n-embed",
  "ipnet",
+ "jiff 1.0.1",
  "metrics",
  "metrics-exporter-prometheus",
  "percent-encoding",
@@ -814,7 +812,6 @@ dependencies = [
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tower",
  "tower-http",
@@ -1257,20 +1254,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link 0.2.1",
-]
-
-[[package]]
-name = "chrono-humanize"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799627e6b4d27827a814e837b9d8a504832086081806d45b1afa34dc982b023b"
-dependencies = [
- "chrono",
 ]
 
 [[package]]
@@ -1402,7 +1388,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1989,7 +1975,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2130,7 +2116,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3302,9 +3288,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2b005715dcbeb0089a3c0dab99f2ff1cc3b2525323552703d648585d342a383"
 dependencies = [
  "defmt",
- "jiff-core",
- "jiff-static",
- "jiff-tzdb-platform",
+ "jiff-core 0.1.1",
+ "jiff-static 0.2.38",
+ "jiff-tzdb-platform 0.1.3",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "jiff"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5d126d72eb017f10b302e73bdeca446bea405ee449af4d9e7866d6b082d83e"
+dependencies = [
+ "jiff-core 1.0.1",
+ "jiff-static 1.0.1",
+ "jiff-tzdb-platform 1.0.0",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -3323,15 +3325,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiff-core"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b46a105a9874634dd96231021526bf24ca04955a5998c59a9c7666e634b7b8"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "jiff-static"
 version = "0.2.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cc9817253cf7c7ee4684451bd327e88d6f3658014e54a29198625590650695c"
 dependencies = [
- "jiff-core",
+ "jiff-core 0.1.1",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0127e9bde3c6130d6169e7d8d68676e4be69c4bf7573c308b6f960a5089c428"
+dependencies = [
+ "jiff-core 1.0.1",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3341,12 +3364,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
 
 [[package]]
+name = "jiff-tzdb"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12e71a1b68a875a44a33bb7a1dd84392cb77145a3367a552a3cfe6a4f5cf3afc"
+
+[[package]]
 name = "jiff-tzdb-platform"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
 dependencies = [
- "jiff-tzdb",
+ "jiff-tzdb 0.1.9",
+]
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc65b284afcfa8f6cf189c7274c805505314a7ab975c60e1f548bff56525420e"
+dependencies = [
+ "jiff-tzdb 1.0.0",
 ]
 
 [[package]]
@@ -3979,7 +4017,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4325,7 +4363,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5475,7 +5513,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5812,7 +5850,7 @@ dependencies = [
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.14.0",
- "jiff",
+ "jiff 0.2.38",
  "schemars 0.9.0",
  "schemars 1.2.1",
  "serde_core",
@@ -6014,7 +6052,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6088,7 +6126,6 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -6158,7 +6195,6 @@ dependencies = [
  "sha2 0.11.0",
  "sqlx-core",
  "thiserror 2.0.21",
- "time",
  "tracing",
  "uuid",
 ]
@@ -6194,7 +6230,6 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.21",
- "time",
  "tracing",
  "uuid",
  "whoami",
@@ -6221,7 +6256,6 @@ dependencies = [
  "serde",
  "sqlx-core",
  "thiserror 2.0.21",
- "time",
  "tracing",
  "url",
  "uuid",
@@ -6407,7 +6441,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6420,7 +6454,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7648,7 +7682,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

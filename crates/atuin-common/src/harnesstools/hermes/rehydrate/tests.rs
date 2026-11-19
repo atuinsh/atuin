@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
@@ -183,7 +184,7 @@ fn msg(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_794_000_000),
+        timestamp: Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1_794_000_000),
         role,
         content,
         model: None,
@@ -220,7 +221,7 @@ fn session(cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSession {
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1_793_999_999),
+        started_at: Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1_793_999_999),
         messages,
         fork_of: None,
     }

@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use atuin_client::ai_session::{HarnessKind, HarnessSession};
 use atuin_common::harnesstools::resume::CwdRequirement;
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::resume_tui::fake;
@@ -204,7 +204,7 @@ impl SessionSource for Synced {
             original_cwd: None,
             git_branch: None,
             model: None,
-            started_at: OffsetDateTime::UNIX_EPOCH,
+            started_at: Timestamp::UNIX_EPOCH,
             messages: Vec::new(),
             fork_of: None,
         })
@@ -605,7 +605,7 @@ impl SessionSource for Worked {
         let row = |n: i64, role, content| RehydrateMessage {
             source_id: format!("r{n}"),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(n).unwrap(),
+            timestamp: Timestamp::from_second(n).unwrap(),
             role,
             content,
             model: None,

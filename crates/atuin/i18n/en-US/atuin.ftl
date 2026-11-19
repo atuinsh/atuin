@@ -226,6 +226,7 @@ arg-history-timezone = Display the command time in another timezone other than t
         This option takes one of the following kinds of values:
 
         - the special value "local" (or "l") which refers to the system time zone
+        - a time zone name (e.g. "Europe/Berlin")
         - an offset from UTC (e.g. "+9", "-2:30")
 arg-history-list-format = Available variables: {"{"}command{"}"}, {"{"}directory{"}"}, {"{"}duration{"}"}, {"{"}user{"}"}, {"{"}host{"}"}, {"{"}author{"}"}, {"{"}intent{"}"}, {"{"}exit{"}"}, {"{"}time{"}"}, {"{"}session{"}"}, and {"{"}uuid{"}"}
     .long = 
@@ -330,6 +331,7 @@ arg-search-timezone =
         This option takes one of the following kinds of values:
 
         - the special value "local" (or "l") which refers to the system time zone
+        - a time zone name (e.g. "Europe/Berlin")
         - an offset from UTC (e.g. "+9", "-2:30")
 arg-search-format = Available variables: {"{"}command{"}"}, {"{"}directory{"}"}, {"{"}duration{"}"}, {"{"}user{"}"}, {"{"}host{"}"}, {"{"}time{"}"}, {"{"}exit{"}"} and {"{"}relativetime{"}"}
     .long = 

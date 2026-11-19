@@ -4,7 +4,7 @@
 //! daemon's `MessageEnricher`), so re-reading the line resolves to the same row. A reader that
 //! has to name such a row (the line a resumed read follows on from) computes the id the same way.
 
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 use super::{Message, SessionId};
 
@@ -16,7 +16,7 @@ pub const SYNTHETIC: &str = "syn-";
 pub fn content_hash<M: Message + ?Sized>(session: &SessionId, m: &M) -> u64 {
     let canonical = serde_json::json!([
         session.as_ref(),
-        m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
+        m.timestamp().map(Timestamp::as_nanosecond).map(|ns| ns.to_string()),
         m.role(),
         m.content(),
         m.title(),

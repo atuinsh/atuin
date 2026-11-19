@@ -51,7 +51,7 @@ fn row_of<M: Message>(n: usize, m: &M) -> RehydrateMessage {
     RehydrateMessage {
         source_id: m.id().map_or_else(|| format!("line-{n}"), String::from),
         parent_source_id: m.parent_id().map(String::from),
-        timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+        timestamp: m.timestamp().unwrap_or(Timestamp::UNIX_EPOCH),
         role: m.role(),
         content: m.content(),
         model: m.model(),
@@ -76,11 +76,7 @@ fn session_of(id: &str, messages: Vec<RehydrateMessage>) -> RehydrateSession {
         original_cwd: Some(PathBuf::from("/work/proj")),
         git_branch: Some("main".to_owned()),
         model: Some("some-model".to_owned()),
-        started_at: messages
-            .iter()
-            .map(|m| m.timestamp)
-            .min()
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+        started_at: messages.iter().map(|m| m.timestamp).min().unwrap_or(Timestamp::UNIX_EPOCH),
         messages,
         fork_of: None,
     }
@@ -613,7 +609,7 @@ fn continued_from_row(r: &RehydrateMessage) -> Option<(&'static str, String)> {
         fn role(&self) -> Role {
             self.0.role.clone()
         }
-        fn timestamp(&self) -> Option<OffsetDateTime> {
+        fn timestamp(&self) -> Option<Timestamp> {
             None
         }
         fn content(&self) -> Vec<Content> {
@@ -627,7 +623,7 @@ fn msg(role: Role, content: Vec<Content>, at: i64) -> RehydrateMessage {
     RehydrateMessage {
         source_id: format!("r{at}"),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+        timestamp: Timestamp::from_second(at).unwrap(),
         role,
         content,
         model: Some("claude-opus-5".to_owned()),
@@ -671,7 +667,7 @@ fn an_away_recap_is_not_carried_over() {
         msg(Role::Assistant, vec![text("Fixed.")], 2),
         msg(recap, vec![Content::Summary("You fixed the flaky test.".into())], 3),
     ]);
-    let c = continue_at(CLAUDE, &original, None, CODEX, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(CLAUDE, &original, None, CODEX, Timestamp::UNIX_EPOCH).unwrap();
     let said: Vec<(Role, Vec<Content>)> =
         c.session.messages[1..].iter().map(|m| (m.role.clone(), m.content.clone())).collect();
     assert_eq!(said, vec![
@@ -712,7 +708,7 @@ fn calls_become_notes_and_turns_merge() {
         msg(Role::Assistant, vec![Content::Error("overloaded_error: Overloaded".into())], 10),
         msg(Role::System, vec![Content::Summary("We fixed the store.".into())], 11),
     ]);
-    let c = continue_at(CLAUDE, &original, None, CODEX, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(CLAUDE, &original, None, CODEX, Timestamp::UNIX_EPOCH).unwrap();
     assert_eq!(c.flattened, Flattened {
         tool_calls: 2,
         tool_results: 3,
@@ -768,7 +764,7 @@ fn an_unreadable_compaction_starts_the_conversation() {
         msg(Role::System, vec![Content::Summary(String::new())], 7),
         msg(Role::Assistant, vec![text("Done.")], 8),
     ]);
-    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(CODEX, &original, None, CLAUDE, Timestamp::UNIX_EPOCH).unwrap();
     assert_eq!(c.flattened, Flattened::default());
     pretty_assertions::assert_eq!(texts(&c), vec![
         (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nthen this\n\nand now this")),
@@ -786,7 +782,7 @@ fn the_prompts_before_a_cut_leave_out_a_marker() {
         msg(Role::User, vec![text("and now this")], 3),
         msg(Role::Assistant, vec![text("Done.")], 4),
     ]);
-    let c = continue_at(PI, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(PI, &original, None, CLAUDE, Timestamp::UNIX_EPOCH).unwrap();
     pretty_assertions::assert_eq!(texts(&c), vec![
         (Role::User, format!("{COMPACTED}\n\nfirst, a long task\n\nand now this")),
         (Role::Assistant, "Done.".to_owned()),
@@ -805,7 +801,7 @@ fn a_long_conversation_starts_where_it_fits() {
         rows.push(msg(Role::Assistant, vec![text(&big)], 2 * n + 1));
     }
     let original = session_of("orig", rows);
-    let c = continue_at(CODEX, &original, None, CLAUDE, OffsetDateTime::UNIX_EPOCH).unwrap();
+    let c = continue_at(CODEX, &original, None, CLAUDE, Timestamp::UNIX_EPOCH).unwrap();
     let turns = texts(&c);
     // The last two turns fit; the third from last would not.
     assert_eq!(turns.len(), 4, "{turns:.200?}");

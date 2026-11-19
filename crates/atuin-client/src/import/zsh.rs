@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use time::{Duration, OffsetDateTime};
+use jiff::{SignedDuration, Timestamp};
 
 use super::{Importer, Loader, get_histfile_path, unix_byte_lines};
 use crate::history::History;
@@ -52,7 +52,7 @@ fn default_histpath() -> Result<PathBuf> {
 /// Represents a line of zsh history.
 struct Entry {
     pub command: String,
-    pub timestamp: Option<OffsetDateTime>,
+    pub timestamp: Option<Timestamp>,
     /// Nanoseconds
     pub duration: Option<i64>,
 }
@@ -74,8 +74,7 @@ impl Entry {
             };
         };
 
-        let time =
-            time.parse::<i64>().ok().and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok());
+        let time = time.parse::<i64>().ok().and_then(|t| Timestamp::from_second(t).ok());
 
         // use nanos, because why the hell not? we won't display them.
         // saturate rather than overflow on an implausible duration
@@ -127,11 +126,11 @@ impl Importer for Zsh {
             .iter()
             .enumerate()
             .find_map(|(i, entry)| entry.timestamp.map(|t| (i + 1, t)))
-            .unwrap_or_else(|| (entries.len(), OffsetDateTime::now_utc()));
+            .unwrap_or_else(|| (entries.len(), Timestamp::now()));
 
-        let timestamp_increment = Duration::milliseconds(1);
+        let timestamp_increment = SignedDuration::from_millis(1);
         let backfill =
-            u32::try_from(commands_until_timestamp).unwrap_or(u32::MAX) * timestamp_increment;
+            timestamp_increment * i32::try_from(commands_until_timestamp).unwrap_or(i32::MAX);
         // a timestamp near the start of the representable range would underflow
         let mut timestamp = first_timestamp.checked_sub(backfill).unwrap_or(first_timestamp);
 
@@ -218,7 +217,7 @@ mod test {
 
         assert_eq!(parsed.command, command);
         assert_eq!(parsed.duration, duration);
-        assert_eq!(parsed.timestamp.map(|t| t.unix_timestamp()), timestamp);
+        assert_eq!(parsed.timestamp.map(|t| t.as_second()), timestamp);
     }
 
     /// Lines that are not valid extended history must not panic. Anything that
@@ -243,7 +242,7 @@ mod test {
         let parsed = Entry::parse(line);
 
         assert_eq!(parsed.command, command);
-        assert_eq!(parsed.timestamp.map(OffsetDateTime::unix_timestamp), timestamp);
+        assert_eq!(parsed.timestamp.map(Timestamp::as_second), timestamp);
         assert_eq!(parsed.duration, duration);
     }
 
@@ -274,7 +273,7 @@ cargo update
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
         // untimestamped command; backfilling before it must not underflow
-        let bytes = b"cargo install atuin\n: -377705116800:0;cargo update\n".to_vec();
+        let bytes = b"cargo install atuin\n: -377705023201:0;cargo update\n".to_vec();
 
         let mut zsh = Zsh { bytes };
         assert_eq!(zsh.entries().await.unwrap(), 2);
@@ -290,12 +289,12 @@ cargo update
 
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
-        // first timestamp is the maximum representable instant (253402300799 is the
-        // last second `OffsetDateTime` can represent, i.e. 9999-12-31 23:59:59 UTC).
+        // first timestamp is the maximum representable instant (253402207200 is the
+        // last second `Timestamp` can represent, i.e. 9999-12-31 23:59:59 UTC).
         // 1000 untimestamped commands walk the 1ms increment past .999 and off the
         // end of the representable range.
         let commands: Vec<String> = (0..1_000).map(|i| format!("cmd-{i}")).collect();
-        let bytes = format!(": 253402300799:0;first\n{}\n", commands.join("\n")).into_bytes();
+        let bytes = format!(": 253402207200:0;first\n{}\n", commands.join("\n")).into_bytes();
 
         let mut zsh = Zsh { bytes };
         assert_eq!(zsh.entries().await.unwrap(), commands.len() + 1);
@@ -313,10 +312,10 @@ cargo update
         // the first entry's timestamp must actually resolve; without this, every
         // entry would silently fall back to untimestamped and the overflow this
         // test targets would never be exercised
-        assert_eq!(loader.buf[0].timestamp.unix_timestamp(), 253_402_300_799);
+        assert_eq!(loader.buf[0].timestamp.as_second(), 253_402_207_200);
         // the increment saturates at the maximum representable instant rather than
         // wrapping or resetting to the epoch
-        assert_eq!(loader.buf.last().unwrap().timestamp.unix_timestamp(), 253_402_300_799);
+        assert_eq!(loader.buf.last().unwrap().timestamp.as_second(), 253_402_207_200);
     }
 
     #[tokio::test]

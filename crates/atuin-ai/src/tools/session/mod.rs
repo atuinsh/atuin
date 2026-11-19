@@ -13,9 +13,10 @@ use atuin_client::ai_session::{HarnessKind, HarnessSession, Session, SessionFilt
 use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::ParentKind;
 use atuin_common::path::PathBufExt as _;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::DateTimeExt as _;
 use atuin_daemon::AiClient;
 use futures::{StreamExt, TryStreamExt};
+use jiff::tz::TimeZone;
 
 use crate::commands::session::{harness_name, one_line};
 
@@ -33,7 +34,7 @@ async fn connect(settings: &Settings) -> Result<AiClient, String> {
 pub async fn list_sessions(
     client: &mut AiClient,
     harness: Option<HarnessKind>,
-    updated_since: Option<time::OffsetDateTime>,
+    updated_since: Option<jiff::Timestamp>,
 ) -> Result<Vec<Session>, String> {
     let filter = SessionFilter {
         harness,
@@ -217,20 +218,19 @@ fn label(s: &Session) -> String {
         .map_or_else(String::new, |text| one_line(text, 120))
 }
 
-fn timestamp(ts: time::OffsetDateTime, offset: time::UtcOffset) -> String {
-    ts.checked_to_offset(offset)
-        .map_or_else(|| "unknown time".to_owned(), |local| local.display().ymd_hm().to_string())
+fn timestamp(ts: jiff::Timestamp, tz: &TimeZone) -> String {
+    tz.to_datetime(ts).display().ymd_hm().to_string()
 }
 
 /// The compact per-session line shared by list and search results:
 /// `[harness] <updated>  <atuin id>  (<n> msgs)` then the directory/branch and title on their own
 /// lines.
-fn render_session_summary(out: &mut String, index: usize, s: &Session, offset: time::UtcOffset) {
+fn render_session_summary(out: &mut String, index: usize, s: &Session, tz: &TimeZone) {
     let _ = writeln!(
         out,
         "{index}. [{}] {}  {}  ({} msgs)",
         harness_name(s.handle.harness),
-        timestamp(s.updated_at, offset),
+        timestamp(s.updated_at, tz),
         s.atuin_id,
         s.message_count,
     );
@@ -261,7 +261,7 @@ pub(super) mod fixtures {
     use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId, Session};
     use atuin_common::harnesstools::session::Usage;
 
-    pub fn session(id: &str, cwd: Option<&str>, started: time::OffsetDateTime) -> Session {
+    pub fn session(id: &str, cwd: Option<&str>, started: jiff::Timestamp) -> Session {
         Session::builder()
             .handle(HarnessSession {
                 harness: HarnessKind::ClaudeCode,
@@ -318,7 +318,7 @@ mod tests {
         #[case] kind: Option<ParentKind>,
         #[case] subagent: bool,
     ) {
-        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        let mut s = fixtures::session("child", None, jiff::Timestamp::UNIX_EPOCH);
         s.parent = Some(HarnessSession {
             harness: HarnessKind::Codex,
             session: NativeSessionId::from("p".to_owned()),
@@ -342,7 +342,7 @@ mod tests {
     #[rstest]
     fn a_summary_names_links_by_atuin_id() {
         let id = |n: u128| AtuinSessionId::from(uuid::Uuid::from_u128(n));
-        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        let mut s = fixtures::session("child", None, jiff::Timestamp::UNIX_EPOCH);
         s.parent = Some(HarnessSession {
             harness: HarnessKind::ClaudeCode,
             session: NativeSessionId::from("p".to_owned()),
@@ -353,7 +353,7 @@ mod tests {
         s.child_atuin_ids = (3..8).map(id).collect();
 
         let mut out = String::new();
-        render_session_summary(&mut out, 1, &s, time::UtcOffset::UTC);
+        render_session_summary(&mut out, 1, &s, &TimeZone::UTC);
         assert!(out.contains(&format!("   forked from p (atuin id {})\n", id(1))), "{out}");
         assert!(out.contains(&format!("   root {}\n", id(2))), "{out}");
         assert!(
@@ -366,14 +366,14 @@ mod tests {
         s.parent_atuin_id = None;
         s.child_atuin_ids.clear();
         let mut out = String::new();
-        render_session_summary(&mut out, 1, &s, time::UtcOffset::UTC);
+        render_session_summary(&mut out, 1, &s, &TimeZone::UTC);
         assert!(out.contains("   forked from p\n"), "{out}");
         assert!(!out.contains("root ") && !out.contains("children "), "{out}");
     }
 
     #[rstest]
     fn a_root_that_is_the_parent_is_named_once() {
-        let mut s = fixtures::session("child", None, time::OffsetDateTime::UNIX_EPOCH);
+        let mut s = fixtures::session("child", None, jiff::Timestamp::UNIX_EPOCH);
         s.parent_atuin_id = Some(AtuinSessionId::from(uuid::Uuid::from_u128(1)));
         s.root_atuin_id = s.parent_atuin_id;
         assert!(link_lines(&s).is_empty());
@@ -381,7 +381,7 @@ mod tests {
 
     #[rstest]
     fn elsewhere_note_puts_the_same_project_first() {
-        let at = |cwd: &str| fixtures::session("s", Some(cwd), time::OffsetDateTime::UNIX_EPOCH);
+        let at = |cwd: &str| fixtures::session("s", Some(cwd), jiff::Timestamp::UNIX_EPOCH);
         let others = [
             at("/work/atuin/crates"),
             at("/Users/e/scratch"),

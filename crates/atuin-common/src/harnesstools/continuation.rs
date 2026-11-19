@@ -57,7 +57,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use time::{Duration, OffsetDateTime};
+use jiff::{SignedDuration, Timestamp};
 use uuid::Uuid;
 
 use super::note::{Part, clip, render, tool_note};
@@ -281,7 +281,7 @@ pub fn continue_in(
     atuin_id: Option<&str>,
     target: AnyHarness,
 ) -> Result<Continuation, NothingToContinue> {
-    continue_at(source, original, atuin_id, target, OffsetDateTime::now_utc())
+    continue_at(source, original, atuin_id, target, Timestamp::now())
 }
 
 /// [`continue_in`], its new session minted at `now`.
@@ -290,7 +290,7 @@ fn continue_at(
     original: &RehydrateSession,
     atuin_id: Option<&str>,
     target: AnyHarness,
-    now: OffsetDateTime,
+    now: Timestamp,
 ) -> Result<Continuation, NothingToContinue> {
     let (turns, flattened) = turns(&original.messages);
     let Some(start) = turns.first().map(|t| t.at) else {
@@ -314,7 +314,7 @@ fn continue_at(
     // message. So the marker is the first block of the first prompt, as the module docs say.
     let in_prompt = matches!(target, AnyHarness::Pi(_) | AnyHarness::Hermes(_));
     if in_prompt {
-        rows.last -= Duration::milliseconds(1);
+        rows.last -= SignedDuration::from_millis(1);
     } else {
         rows.push(start, Role::System, vec![Content::Text(marker.clone())], None);
     }
@@ -380,7 +380,7 @@ struct Rows {
     ids: Ids,
     calls: tools::CallIds,
     rows: Vec<RehydrateMessage>,
-    last: OffsetDateTime,
+    last: Timestamp,
     /// The steps written so far, and the key of the one being written, for opencode: its rows
     /// are its parts, which it folds into one message for as long as their turn is the same (see
     /// `opencode::rehydrate::Draft::holds`), so each step's rows name one of their own. Else
@@ -390,14 +390,8 @@ struct Rows {
 }
 
 impl Rows {
-    fn push(
-        &mut self,
-        at: OffsetDateTime,
-        role: Role,
-        content: Vec<Content>,
-        stop: Option<StopReason>,
-    ) {
-        let at = at.max(self.last + Duration::milliseconds(1));
+    fn push(&mut self, at: Timestamp, role: Role, content: Vec<Content>, stop: Option<StopReason>) {
+        let at = at.max(self.last + SignedDuration::from_millis(1));
         self.last = at;
         self.rows.push(RehydrateMessage {
             source_id: self.ids.row(at),
@@ -419,7 +413,7 @@ impl Rows {
     /// answered by its result. Claude Code and pi send a message's text and calls together,
     /// then the results (Claude Code all in one message, pi one each); Codex and Kiro write
     /// every item as a row of its own, and opencode every part, a call and its result being one.
-    fn step(&mut self, at: OffsetDateTime, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
+    fn step(&mut self, at: Timestamp, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
         self.open_step();
         self.write_step(at, step, ran_in, cwd);
         self.step = None;
@@ -433,7 +427,7 @@ impl Rows {
         }
     }
 
-    fn write_step(&mut self, at: OffsetDateTime, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
+    fn write_step(&mut self, at: Timestamp, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
         let text = (!step.parts.is_empty()).then(|| Content::Text(render(&step.parts)));
         let (calls, results): (Vec<_>, Vec<_>) = step
             .calls
@@ -504,7 +498,7 @@ enum Item<'m> {
 #[derive(Debug)]
 struct Turn<'m> {
     kind: Kind,
-    at: OffsetDateTime,
+    at: Timestamp,
     items: Vec<Item<'m>>,
 }
 
@@ -516,7 +510,7 @@ struct Step<'m> {
 }
 
 impl<'m> Turn<'m> {
-    fn parts(kind: Kind, at: OffsetDateTime, parts: Vec<Part>) -> Self {
+    fn parts(kind: Kind, at: Timestamp, parts: Vec<Part>) -> Self {
         Self {
             kind,
             at,
@@ -760,19 +754,19 @@ fn turns(messages: &[RehydrateMessage]) -> (Vec<Turn<'_>>, Flattened) {
 }
 
 /// A new session's id for `harness`, in its own format, minted at `now`.
-pub(crate) fn new_session_id(harness: AnyHarness, now: OffsetDateTime) -> String {
+pub(crate) fn new_session_id(harness: AnyHarness, now: Timestamp) -> String {
     Ids::new(harness, now).session()
 }
 
 /// Fresh ids in the target's own formats.
 struct Ids {
     target: AnyHarness,
-    now: OffsetDateTime,
+    now: Timestamp,
     seen: HashSet<String>,
 }
 
 impl Ids {
-    fn new(target: AnyHarness, now: OffsetDateTime) -> Self {
+    fn new(target: AnyHarness, now: Timestamp) -> Self {
         Self {
             target,
             now,
@@ -787,12 +781,7 @@ impl Ids {
     fn session(&self) -> String {
         match self.target {
             AnyHarness::Hermes(_) => {
-                let at = self.now.to_offset(time::UtcOffset::UTC);
-                let stamp = at
-                    .format(time::macros::format_description!(
-                        "[year][month][day]_[hour][minute][second]"
-                    ))
-                    .expect("a UTC time formats");
+                let stamp = self.now.strftime("%Y%m%d_%H%M%S");
                 format!("{stamp}_{}", &Uuid::new_v4().as_simple().to_string()[..6])
             }
             AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => {
@@ -814,7 +803,7 @@ impl Ids {
     /// message it names no id; an opencode `prt_` part id, in time order (rows of one message,
     /// the marker and the first prompt, are read in id order); a pi entry id (8 hex digits,
     /// unique in the session); a Hermes `message_uid`, 32 hex digits as Hermes mints them.
-    fn row(&mut self, at: OffsetDateTime) -> String {
+    fn row(&mut self, at: Timestamp) -> String {
         loop {
             let id = match self.target {
                 AnyHarness::Hermes(_) => Uuid::new_v4().as_simple().to_string(),

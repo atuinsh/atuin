@@ -4,14 +4,14 @@ use atuin_common::filter::OrFilter;
 use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::secrets::contains_secret;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_common::utils::{normalize_optional_string, uuid_v7};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use easy_cast::Conv;
 use eyre::Result;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use thiserror;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::settings::Settings;
@@ -301,7 +301,7 @@ impl HistoryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellSession {
     pub id: Uuid,
-    pub start: OffsetDateTime,
+    pub start: Timestamp,
 }
 
 impl ShellSession {
@@ -319,14 +319,14 @@ impl ShellSession {
             .checked_mul(1_000_000_000)?
             .checked_add(i64::from(nanos))?;
 
-        let start = OffsetDateTime::from_unix_timestamp_nanos(start.into()).ok()?;
+        let start = Timestamp::from_nanosecond(start.into()).ok()?;
         Some(Self { id, start })
     }
 
     /// The [start](Self::start) time, represented as nanoseconds since the Unix epoch.
     #[must_use]
     pub fn start_unix_nanos(&self) -> i64 {
-        i64::conv(self.start.unix_timestamp_nanos())
+        i64::conv(self.start.as_nanosecond())
     }
 }
 
@@ -350,7 +350,7 @@ pub struct History {
     /// Stored as `client_id` in the database.
     pub id: HistoryId,
     /// When the command was run.
-    pub timestamp: OffsetDateTime,
+    pub timestamp: Timestamp,
     /// How long the command took to run.
     pub duration: i64,
     /// The exit code of the command.
@@ -368,7 +368,7 @@ pub struct History {
     /// Optional rationale for why the command was executed.
     pub intent: Option<String>,
     /// Timestamp, which is set when the entry is deleted, allowing a soft delete.
-    pub deleted_at: Option<OffsetDateTime>,
+    pub deleted_at: Option<Timestamp>,
     /// The shell used to run the command.
     pub shell: Option<String>,
     /// Whether a human or an agent wrote this command, if whatever captured it said so.
@@ -394,8 +394,8 @@ pub struct CommandRuns {
     pub runs: u32,
     /// How many of the runs exited non-zero, not counting the `-1` of a run whose exit is unknown.
     pub failures: u32,
-    pub first: OffsetDateTime,
-    pub last: OffsetDateTime,
+    pub first: Timestamp,
+    pub last: Timestamp,
     /// A directory the command ran in.
     pub cwd: String,
 }
@@ -431,7 +431,7 @@ impl<'a> From<DecodeError<'a>> for HistoryDeserializeError<'a> {
 impl History {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        timestamp: OffsetDateTime,
+        timestamp: Timestamp,
         command: String,
         cwd: String,
         exit: i64,
@@ -440,7 +440,7 @@ impl History {
         cmd_origin: Option<CmdOrigin>,
         author: Option<String>,
         intent: Option<String>,
-        deleted_at: Option<OffsetDateTime>,
+        deleted_at: Option<Timestamp>,
         shell: Option<String>,
         author_kind: Option<AuthorKind>,
     ) -> Self {
@@ -517,7 +517,7 @@ impl History {
         encode::write_array_len(&mut output, LATEST_SERIALIZED_FIELDS)?;
 
         encode::write_str(&mut output, &self.id.to_string())?;
-        encode::write_u64(&mut output, u64::conv(self.timestamp.unix_timestamp_nanos()))?;
+        encode::write_u64(&mut output, u64::conv(self.timestamp.as_nanosecond()))?;
         encode::write_sint(&mut output, self.duration)?;
         encode::write_sint(&mut output, self.exit)?;
         encode::write_str(&mut output, &self.command)?;
@@ -527,7 +527,7 @@ impl History {
 
         encode::write_optional(
             &mut output,
-            self.deleted_at.map(|d| u64::conv(d.unix_timestamp_nanos())),
+            self.deleted_at.map(|d| u64::conv(d.as_nanosecond())),
             encode::write_u64,
         )?;
         encode::write_str(&mut output, self.author.as_str())?;
@@ -614,7 +614,7 @@ impl History {
 
         Ok(Self {
             id: id.parse().map_err(HistoryDeserializeError::MalformedHistoryId)?,
-            timestamp: OffsetDateTime::from_unix_nanos_u64(timestamp),
+            timestamp: Timestamp::from_unix_nanos_u64(timestamp),
             duration,
             exit,
             command,
@@ -623,7 +623,7 @@ impl History {
             author: author.unwrap_or_else(|| cmd_origin.user().to_string()),
             cmd_origin,
             intent,
-            deleted_at: deleted_at.map(OffsetDateTime::from_unix_nanos_u64),
+            deleted_at: deleted_at.map(Timestamp::from_unix_nanos_u64),
             shell,
             author_kind,
         })
@@ -638,7 +638,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .build()
     ///     .into();
@@ -649,7 +649,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::import()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .exit(0)
@@ -685,7 +685,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::capture()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .build()
@@ -699,7 +699,7 @@ impl History {
     ///
     /// // this will not compile because `cwd` is missing
     /// let history: History = History::capture()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .build()
     ///     .into();
@@ -723,7 +723,7 @@ impl History {
     /// use atuin_client::history::History;
     ///
     /// let history: History = History::daemon()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .session("018deb6e8287781f9973ef40e0fde76b")
@@ -739,7 +739,7 @@ impl History {
     ///
     /// // this will not compile because `hostname` is missing
     /// let history: History = History::daemon()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la")
     ///     .cwd("/home/user")
     ///     .session("018deb6e8287781f9973ef40e0fde76b")
@@ -759,7 +759,7 @@ impl History {
     ///
     /// // this will not compile because `id` field is missing
     /// let history: History = History::from_db()
-    ///     .timestamp(time::OffsetDateTime::now_utc())
+    ///     .timestamp(jiff::Timestamp::now())
     ///     .command("ls -la".to_string())
     ///     .cwd("/home/user".to_string())
     ///     .exit(0)
@@ -796,9 +796,9 @@ impl History {
 mod tests {
     use atuin_common::filter::OrFilter;
     use atuin_domain::record::CmdOrigin;
+    use jiff::Timestamp;
     use regex::RegexSet;
     use rstest::*;
-    use time::macros::datetime;
 
     use super::{
         AuthorKind, AuthorPattern, History, ShellSession, all_user_author_filter, is_known_agent,
@@ -823,7 +823,7 @@ mod tests {
     fn entry(author: &str, origin: &str, author_kind: Option<AuthorKind>) -> History {
         #[allow(deprecated, reason = "the bare-hostname test case has no `:` separator")]
         History::import()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("git status")
             .cmd_origin(CmdOrigin::parse_lenient(origin))
             .author(author)
@@ -856,7 +856,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         let history: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(command)
             .cwd(cwd)
             .build()
@@ -899,7 +899,7 @@ mod tests {
         #[case] expected: Option<AuthorKind>,
     ) {
         let history: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("git status")
             .cwd("/")
             .author(author)
@@ -973,7 +973,7 @@ mod tests {
         };
 
         let stripe_key: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("curl foo.com/bar?key=sk_test_1234567890abcdefghijklmnop")
             .cwd("/")
             .build()
@@ -985,7 +985,7 @@ mod tests {
     #[rstest]
     #[case::basic(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
-        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        timestamp: "2023-05-28T18:35:40.633872+00:00".parse::<Timestamp>().unwrap(),
         duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
@@ -1000,7 +1000,7 @@ mod tests {
     })]
     #[case::deleted(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
-        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        timestamp: "2023-05-28T18:35:40.633872+00:00".parse::<Timestamp>().unwrap(),
         duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
@@ -1009,13 +1009,13 @@ mod tests {
         cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
         author: "conrad.ludgate".to_owned(),
         intent: None,
-        deleted_at: Some(datetime!(2023-11-19 20:18 +00:00)),
+        deleted_at: Some("2023-11-19T20:18:00+00:00".parse::<Timestamp>().unwrap()),
         shell: Some("bash".into()),
         author_kind: Some(AuthorKind::User),
     })]
     #[case::with_author_and_intent(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
-        timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+        timestamp: "2023-05-28T18:35:40.633872+00:00".parse::<Timestamp>().unwrap(),
         duration: 49_206_000,
         exit: 0,
         command: "git status".to_owned(),
@@ -1066,7 +1066,7 @@ mod tests {
     fn expected_v2() -> History {
         History {
             id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
-            timestamp: datetime!(2023-05-28 18:35:40.633872 +00:00),
+            timestamp: "2023-05-28T18:35:40.633872+00:00".parse::<Timestamp>().unwrap(),
             duration: 49_206_000,
             exit: 0,
             command: "git status".to_owned(),
@@ -1075,7 +1075,7 @@ mod tests {
             cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
             author: "conrad.ludgate".to_owned(),
             intent: Some("sample intent".to_owned()),
-            deleted_at: Some(time::OffsetDateTime::from_unix_timestamp(1_784_080_673).unwrap()),
+            deleted_at: Some(jiff::Timestamp::from_second(1_784_080_673).unwrap()),
             shell: Some("zsh".into()),
             author_kind: None,
         }

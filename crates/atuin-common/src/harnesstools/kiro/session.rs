@@ -91,10 +91,9 @@ use std::time::SystemTime;
 
 use futures::future::Either;
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use serde::Deserialize;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -818,7 +817,7 @@ fn title_row(
         parent_row: None,
         stop_reason: None,
         title: Some(title),
-        at: at.map(OffsetDateTime::from),
+        at: at.and_then(|at| Timestamp::try_from(at).ok()),
     }
 }
 
@@ -931,8 +930,8 @@ fn spawn_of(path: &Path, sub: &str) -> Option<(TitleChange, Option<SystemTime>)>
             let at = row
                 .timestamp
                 .as_deref()
-                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-                .map(SystemTime::from);
+                .and_then(|s| s.parse::<Timestamp>().ok())
+                .and_then(|at| SystemTime::try_from(at).ok());
             Some((TitleChange::new(TitleSource::Agent, name), at))
         })
 }
@@ -1071,7 +1070,7 @@ pub struct KiroMessage {
     /// On a title row ([`TITLE_ROW`]), the session's title from the header.
     title: Option<TitleChange>,
     /// When a title row's header was written: the row's time.
-    at: Option<OffsetDateTime>,
+    at: Option<Timestamp>,
 }
 
 impl KiroMessage {
@@ -1155,10 +1154,8 @@ impl Message for KiroMessage {
         self.parent.as_ref().map(|(_, kind)| *kind)
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.at.or_else(|| {
-            self.row.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        })
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.at.or_else(|| self.row.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok()))
     }
 
     fn content(&self) -> Vec<Content> {
@@ -1703,12 +1700,8 @@ mod tests {
         assert_eq!(title.len(), 1);
         assert_eq!(title[0].title(), Some(TitleChange::new(TitleSource::Agent, "kit-reviewer")));
         assert_eq!(
-            title[0].timestamp().map(|at| at.unix_timestamp()),
-            Some(
-                OffsetDateTime::parse("2026-10-08T15:02:33.394Z", &Rfc3339)
-                    .unwrap()
-                    .unix_timestamp()
-            ),
+            title[0].timestamp().map(|at| at.as_second()),
+            Some("2026-10-08T15:02:33.394Z".parse::<Timestamp>().unwrap().as_second()),
             "the title is given when the subagent was spawned"
         );
         assert!(

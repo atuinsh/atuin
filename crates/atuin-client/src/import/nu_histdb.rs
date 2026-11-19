@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use atuin_common::db;
 use atuin_common::path::PathBufExt as _;
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use eyre::{Result, eyre};
+use jiff::Timestamp;
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
-use time::OffsetDateTime;
 
 use super::Importer;
 use crate::history::History;
@@ -36,8 +36,8 @@ impl From<HistDbEntry> for History {
         let ts_ns = (histdb_item.start_timestamp % 1000) * 1_000_000;
         // a corrupt row must not take down the whole import. the epoch sorts to the
         // bottom of history and is obviously not a real time
-        let timestamp = OffsetDateTime::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let timestamp = Timestamp::from_timespec(i128::from(ts_secs), i128::from(ts_ns))
+            .unwrap_or(Timestamp::UNIX_EPOCH);
 
         let imported = Self::import()
             .shell("nu")
@@ -156,13 +156,13 @@ mod test {
         #[case] start_timestamp: i64,
         #[case] command_line: &[u8],
         #[case] seconds: i64,
-        #[case] nanoseconds: u32,
+        #[case] nanoseconds: i32,
         #[case] command: &str,
     ) {
         let h: History = entry(start_timestamp, command_line.to_vec()).into();
 
-        assert_eq!(h.timestamp.unix_timestamp(), seconds);
-        assert_eq!(h.timestamp.nanosecond(), nanoseconds);
+        assert_eq!(h.timestamp.as_second(), seconds);
+        assert_eq!(h.timestamp.subsec_nanosecond(), nanoseconds);
         assert_eq!(h.command, command);
     }
 }

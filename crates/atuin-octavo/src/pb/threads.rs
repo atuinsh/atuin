@@ -10,6 +10,7 @@ use atuin_common::harnesstools::session::{
 };
 use atuin_common::harnesstools::{AnyHarness, Harness as _};
 use atuin_common::string::{Bounded, NonNulStr, TooLong};
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::RecordId;
 use prost::Message as _;
 use serde_json::Value;
@@ -235,11 +236,13 @@ impl TryFrom<Message> for CapturedThreadMessage {
                     .transpose()
                     .map_err(at)?
                     .map(Into::into),
-                timestamp: Some(prost_types::Timestamp {
-                    seconds: timestamp
-                        .unix_timestamp()
-                        .clamp(*TIMESTAMP_SECONDS.start(), *TIMESTAMP_SECONDS.end()),
-                    nanos: timestamp.nanosecond().cast_signed(),
+                timestamp: Some({
+                    let (seconds, nanos) = timestamp.to_timespec();
+                    prost_types::Timestamp {
+                        seconds: seconds
+                            .clamp(*TIMESTAMP_SECONDS.start(), *TIMESTAMP_SECONDS.end()),
+                        nanos,
+                    }
                 }),
                 role: role.into(),
                 role_label: role_label.map(Into::into),
@@ -520,7 +523,6 @@ mod tests {
     use prost_types::{FileDescriptorProto, FileDescriptorSet, Timestamp};
     use rstest::{fixture, rstest};
     use serde_json::json;
-    use time::macros::datetime;
     use uuid::Builder;
 
     use super::*;
@@ -579,7 +581,7 @@ mod tests {
             .id(RecordId(v7(1)))
             .session(handle(HarnessKind::ClaudeCode, "session"))
             .source_id(SourceId::from("line".to_owned()))
-            .timestamp(datetime!(2026-10-29 12:00:00.5 UTC))
+            .timestamp("2026-10-29T12:00:00.5Z".parse::<jiff::Timestamp>().unwrap())
             .role(Role::User)
             .content(vec![Content::Text("hi".to_owned())])
             .atuin_id(Some(AtuinSessionId::from(v7(2))))
@@ -724,10 +726,11 @@ mod tests {
             line(s).timestamp = Some(Timestamp { seconds: *TIMESTAMP_SECONDS.start(), nanos: 0 });
         },
     )]
-    #[case::past_year_9999_clamped(
-        |m: &mut Message| m.timestamp = datetime!(9999-12-31 23:59:59 -23:59),
+    // The latest instant jiff names is still inside protobuf's range, so nothing clamps it.
+    #[case::latest_fits(
+        |m: &mut Message| m.timestamp = jiff::Timestamp::MAX,
         |s: &mut CapturedThreadMessage| {
-            line(s).timestamp = Some(Timestamp { seconds: *TIMESTAMP_SECONDS.end(), nanos: 0 });
+            line(s).timestamp = Some(Timestamp { seconds: 253_402_207_200, nanos: 999_999_999 });
         },
     )]
     fn sends_what_octavo_takes_of_a_message(

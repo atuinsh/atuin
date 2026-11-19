@@ -16,8 +16,8 @@ atuin-client = { workspace = true }
 
 crossterm = { workspace = true, features = ["use-dev-tty"] }
 easy-cast = { workspace = true }
+jiff = { workspace = true }
 serde = { workspace = true }
-time = { workspace = true }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]

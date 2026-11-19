@@ -4,9 +4,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use serde::Deserialize;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -1397,8 +1396,8 @@ impl Message for CodexMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok())
     }
 
     fn content(&self) -> Vec<Content> {

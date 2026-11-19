@@ -5,7 +5,6 @@ use std::num::NonZeroU32;
 use atuin_client::database::Sqlite;
 use atuin_client::settings::{OutputCapture, Settings};
 use atuin_common::range::Clamped;
-use atuin_common::time::UtcOffsetExt;
 use atuin_daemon::client::SearchClient;
 use atuin_daemon::grpc::history::pb::ChunkedOutputLineView;
 use futures::TryStreamExt;
@@ -90,7 +89,7 @@ impl AtuinOutputSearchToolCall {
             Err(e) => return Err(e),
         };
 
-        let local_offset = time::UtcOffset::local_or_utc();
+        let local_tz = jiff::tz::TimeZone::system();
         let formatted: Vec<String> = hits
             .iter()
             .enumerate()
@@ -103,7 +102,7 @@ impl AtuinOutputSearchToolCall {
                 });
                 format!(
                     "{}Matching output lines:\n{}\n",
-                    format_history_search_result(i + 1, history, local_offset),
+                    format_history_search_result(i + 1, history, &local_tz),
                     format_chunked_output_line_views_for_llm(views),
                 )
             })

@@ -3,13 +3,14 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use atuin_common::path::PathBufExt as _;
+use atuin_common::time::TimestampExt as _;
 use atuin_domain::record::CmdOrigin;
 use easy_cast::CastFloat;
 use eyre::{Result, eyre};
+use jiff::Timestamp;
 use serde::Deserialize;
-use time::OffsetDateTime;
 use uuid::Uuid;
-use uuid::timestamp::Timestamp;
+use uuid::timestamp::Timestamp as UuidTimestamp;
 use uuid::timestamp::context::NoContext;
 
 use super::{Importer, Loader, get_histdir_path};
@@ -95,7 +96,7 @@ fn load_session(path: &Path) -> Result<Option<HistoryData>> {
         )]
         let (seconds, nanos) =
             (cmd.ts.0.trunc() as u64, (cmd.ts.0.fract() * 1_000_000_000_f64) as u32);
-        let ts = Timestamp::from_unix(NoContext, seconds, nanos);
+        let ts = UuidTimestamp::from_unix(NoContext, seconds, nanos);
         hist_file.data.sessionid = Uuid::new_v7(ts).to_string();
     }
     Ok(Some(hist_file.data))
@@ -126,11 +127,8 @@ impl Importer for Xonsh {
         for session in self.sessions {
             for cmd in session.cmds {
                 let (start, end) = cmd.ts;
-                let timestamp = (start * 1_000_000_000_f64)
-                    .try_cast_trunc()
-                    .ok()
-                    .and_then(|nanos: i128| OffsetDateTime::from_unix_timestamp_nanos(nanos).ok())
-                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let timestamp =
+                    Timestamp::from_unix_secs_f64(start).unwrap_or(Timestamp::UNIX_EPOCH);
 
                 let duration = ((end - start) * 1_000_000_000_f64)
                     .try_cast_trunc()
@@ -155,7 +153,6 @@ impl Importer for Xonsh {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
-    use time::macros::datetime;
 
     use super::*;
     use crate::history::History;
@@ -186,7 +183,7 @@ mod tests {
         xonsh.load(&mut loader).await.expect("import must not fail");
 
         assert_eq!(loader.buf.len(), 1);
-        assert_eq!(loader.buf[0].timestamp, OffsetDateTime::UNIX_EPOCH);
+        assert_eq!(loader.buf[0].timestamp, Timestamp::UNIX_EPOCH);
         assert_eq!(loader.buf[0].command, "echo hello");
     }
 
@@ -217,7 +214,7 @@ mod tests {
     fn expected_hist_entries() -> [History; 4] {
         [
             History::import()
-                .timestamp(datetime!(2024-02-6 04:17:59.478272256 +00:00:00))
+                .timestamp("2024-02-06T04:17:59.4782722+00:00:00".parse::<Timestamp>().unwrap())
                 .command("echo hello world!".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -226,7 +223,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 04:18:01.70632832 +00:00:00))
+                .timestamp("2024-02-06T04:18:01.706328392+00:00:00".parse::<Timestamp>().unwrap())
                 .command("ls -l".to_string())
                 .cwd("/home/user/Documents/code/atuin".to_string())
                 .exit(0)
@@ -235,7 +232,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:41:31.142515968 +00:00:00))
+                .timestamp("2024-02-06T17:41:31.142515898+00:00:00".parse::<Timestamp>().unwrap())
                 .command("false".to_string())
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(1)
@@ -244,7 +241,7 @@ mod tests {
                 .build()
                 .into(),
             History::import()
-                .timestamp(datetime!(2024-02-06 17:41:32.271584 +00:00:00))
+                .timestamp("2024-02-06T17:41:32.271584034+00:00:00".parse::<Timestamp>().unwrap())
                 .command("exit".to_string())
                 .cwd("/home/user/Documents/code/atuin/atuin-client".to_string())
                 .exit(0)

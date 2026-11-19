@@ -8,10 +8,10 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::history::{History, HistoryId};
 use futures::{Stream, TryStreamExt};
+use jiff::Timestamp;
 use parking_lot::{
     MappedRwLockReadGuard, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
-use time::OffsetDateTime;
 use tracing::instrument;
 
 use crate::search::index::core::{IndexIdentity, LoadFromDbError, RemainingRuns, SearchIndex};
@@ -132,7 +132,7 @@ struct Fill<'a> {
     /// The identity of the installed index when the fill started.
     installed: IndexIdentity,
     /// When the fill started. Frecency is computed as of this time.
-    now: OffsetDateTime,
+    now: Timestamp,
 }
 
 impl Drop for Fill<'_> {
@@ -290,7 +290,7 @@ impl SharedSearchIndex {
             shared: self,
             registered,
             installed: state.index.identity.clone(),
-            now: OffsetDateTime::now_utc(),
+            now: Timestamp::now(),
         })
     }
 
@@ -563,7 +563,7 @@ impl AddPermit<'_> {
         if matches!(self.fill, FillState::Waiting) {
             return;
         }
-        SearchIndex::add_history_shared(&self.index.state, histories, OffsetDateTime::now_utc());
+        SearchIndex::add_history_shared(&self.index.state, histories, Timestamp::now());
     }
 }
 
@@ -599,7 +599,7 @@ impl SyncPermit<'_> {
     /// Make the installed index agree with the database about each command in `commands`. A
     /// command that has no runs left is removed. Frecency is computed as of now.
     pub fn sync(self, commands: impl IntoIterator<Item = RemainingRuns>) {
-        self.index.state.write().index.sync_commands(commands, OffsetDateTime::now_utc());
+        self.index.state.write().index.sync_commands(commands, Timestamp::now());
     }
 }
 
@@ -663,7 +663,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn shared_index_operations() {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let shared = SharedSearchIndex::from(SearchIndex::default());
 
         for command in ["echo one", "echo two"] {
@@ -712,7 +712,7 @@ mod tests {
     async fn fill_shows_each_page_as_it_loads() {
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
         let (sender, pages) = page_channel();
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
 
         let shared_ref = &shared;
         let feed = async move {
@@ -743,7 +743,7 @@ mod tests {
     async fn fill_counts_entries_added_meanwhile_once() {
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
         let (sender, pages) = page_channel();
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let history = |command: &str| make_history(command, "/tmp", now);
         let (before, after, replaced) =
             (history("echo before"), history("echo after"), history("echo replaced"));
@@ -783,7 +783,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn fill_stops_once_a_rebuild_installs(#[future(awt)] db: Sqlite) {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         db.save(&make_history("echo saved", "/tmp", now)).await.unwrap();
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
         let (sender, pages) = page_channel();
@@ -810,7 +810,7 @@ mod tests {
     #[tokio::test]
     async fn adds_before_the_fill_are_left_to_its_load() {
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
-        let early = make_history("echo early", "/tmp", OffsetDateTime::now_utc());
+        let early = make_history("echo early", "/tmp", Timestamp::now());
         add_through_permit(&shared, None, &early).await;
         assert!(!has(&shared, "echo early"), "the add was ignored");
 
@@ -825,7 +825,7 @@ mod tests {
     #[tokio::test]
     async fn adds_during_a_failed_rebuild_before_the_fill_are_counted_once() {
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
-        let early = make_history("echo early", "/tmp", OffsetDateTime::now_utc());
+        let early = make_history("echo early", "/tmp", Timestamp::now());
         let rebuild = shared.start().await;
         add_through_permit(&shared, None, &early).await;
         assert!(!has(&shared, "echo early"), "the unfilled index ignored the add");
@@ -840,7 +840,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn fill_skips_an_index_that_a_rebuild_installed(#[future(awt)] db: Sqlite) {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         db.save(&make_history("echo saved", "/tmp", now)).await.unwrap();
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
         let rebuilt = shared.rebuild(&db, |settings| Some(settings.latest.clone())).await.unwrap();
@@ -863,12 +863,8 @@ mod tests {
         assert!(shared.fill_from(pages).await.is_err());
         assert!(matches!(shared.state.read().fill, FillState::Filled));
 
-        add_through_permit(
-            &shared,
-            None,
-            &make_history("echo after", "/tmp", OffsetDateTime::now_utc()),
-        )
-        .await;
+        add_through_permit(&shared, None, &make_history("echo after", "/tmp", Timestamp::now()))
+            .await;
         assert!(has(&shared, "echo after"));
     }
 
@@ -883,11 +879,11 @@ mod tests {
         #[case] rows: usize,
         #[case] synced_in_place: bool,
     ) {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         // An imported entry's id comes from its timestamp, so each run needs its own.
         let hot: Vec<History> = (0..rows)
             .map(|i| {
-                let ago = time::Duration::seconds(i64::try_from(i).unwrap() + 1);
+                let ago = jiff::SignedDuration::from_secs(i64::try_from(i).unwrap() + 1);
                 make_history("echo hot", "/tmp", now - ago)
             })
             .collect();
@@ -916,7 +912,7 @@ mod tests {
         #[case] commands: usize,
         #[case] synced_in_place: bool,
     ) {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let shared = SharedSearchIndex::unfilled(SearchIndexSettings::default());
         shared.fill(&db).await.unwrap();
         // Only the index has this entry. A rebuild from the db drops it.
@@ -972,7 +968,7 @@ mod tests {
         let latest = |settings: RebuildSettings<'_>| Some(settings.latest.clone());
         let wait = std::time::Duration::from_millis(50);
         let shared = SharedSearchIndex::from(SearchIndex::default());
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         add_through_permit(&shared, Some(&db), &make_history("echo kept", "/tmp", now)).await;
 
         let add = shared.begin_add().await;

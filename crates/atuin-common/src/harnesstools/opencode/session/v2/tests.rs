@@ -639,7 +639,7 @@ fn a_call_s_content_is_its_text_reasoning_and_tools() {
     assert_eq!(message.model().as_deref(), Some("mock-model"));
     assert_eq!(message.provider().as_deref(), Some("mock"));
     assert_eq!(message.cwd(), Some(PathBuf::from("/work/proj")));
-    assert_eq!(message.timestamp().unwrap().unix_timestamp_nanos(), 2_000_000_000);
+    assert_eq!(message.timestamp().unwrap().as_nanosecond(), 2_000_000_000);
     let content = message.content();
     assert!(matches!(
         content.as_slice(),
@@ -801,7 +801,7 @@ fn a_session_s_info_is_stamped_when_its_title_changed(#[case] renamed: bool, #[c
     info.created = Some(1_000);
     info.updated = Some(9_000);
     let stamped = info.message(renamed).timestamp().unwrap();
-    assert_eq!(stamped.unix_timestamp_nanos(), stamp * 1_000_000);
+    assert_eq!(stamped.as_nanosecond(), stamp * 1_000_000);
 }
 
 /// A renamed session read from scratch says its title as of its start, however much later it is
@@ -820,7 +820,7 @@ async fn a_renamed_session_read_from_scratch_is_titled_at_its_start(#[future] db
 
     let title = |messages: &[(String, OpencodeMessage)]| {
         let (_, title) = &messages[0];
-        (title.id().map(String::from), title.timestamp().unwrap().unix_timestamp_nanos())
+        (title.id().map(String::from), title.timestamp().unwrap().as_nanosecond())
     };
     assert_eq!(title(&first), (Some(title_id("ses_1", "Named")), 1_000_000_000));
     assert_eq!(title(&second), title(&first));
@@ -1124,7 +1124,7 @@ async fn a_rename_is_delivered(#[future] db: Db) {
     db.bump("ses_1").await;
     let renamed = next_n(&mut stream, &stored, 1).await;
     assert_eq!(renamed[0].1.title().and_then(|title| title.text).as_deref(), Some("Named"));
-    assert_eq!(renamed[0].1.timestamp().unwrap().unix_timestamp_nanos(), 3_000_000_000);
+    assert_eq!(renamed[0].1.timestamp().unwrap().as_nanosecond(), 3_000_000_000);
 }
 
 /// A database only opencode 2.0 ever wrote: no 1.x tables at all.

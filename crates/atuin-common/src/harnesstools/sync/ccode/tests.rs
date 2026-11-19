@@ -1,8 +1,8 @@
+use jiff::Timestamp;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use serde_json::json;
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::rehydrate::testing;
@@ -143,7 +143,7 @@ fn row(id: &str, parent: &str, role: Role, at: i64) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: Some(parent.to_owned()),
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000 + at).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000 + at).unwrap(),
         role,
         content,
         model: Some("claude-x".to_owned()),
@@ -649,7 +649,7 @@ fn restored_with_a_merged_run() -> Vec<u8> {
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        started_at: Timestamp::from_second(1_790_000_000).unwrap(),
         messages: vec![
             RehydrateMessage {
                 parent_source_id: None,
@@ -721,7 +721,7 @@ fn restored_with_a_failed_call_in_a_merged_run() -> Vec<u8> {
         original_cwd: None,
         git_branch: None,
         model: None,
-        started_at: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        started_at: Timestamp::from_second(1_790_000_000).unwrap(),
         messages: vec![
             RehydrateMessage {
                 parent_source_id: None,

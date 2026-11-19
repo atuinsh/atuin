@@ -126,8 +126,8 @@ frizbee = { workspace = true }
 futures-util = { workspace = true }
 i18n-embed = { workspace = true }
 indicatif = { workspace = true }
-interim = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 locked-tripwire = { workspace = true }
 norm = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
@@ -148,7 +148,6 @@ shlex = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
 # settings editor with comment and relative ordering preservation

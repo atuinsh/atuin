@@ -42,9 +42,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
 use serde_json::Value;
-use time::PrimitiveDateTime;
-use time::macros::format_description;
 
 use super::liveness::Start;
 use super::{
@@ -204,13 +204,9 @@ fn filetime_secs(filetime: &str) -> Option<u64> {
 /// What `LC_ALL=C TZ=UTC ps -o lstart=` prints (`Mon Oct  5 12:34:56 2026`), as seconds since
 /// the Unix epoch.
 fn lstart_secs(lstart: &str) -> Option<u64> {
-    let format = format_description!(
-        "[weekday repr:short] [month repr:short] [day padding:none] [hour]:[minute]:[second] \
-         [year]"
-    );
     let words = lstart.split_whitespace().collect::<Vec<_>>().join(" ");
-    let at = PrimitiveDateTime::parse(&words, format).ok()?;
-    u64::try_from(at.assume_utc().unix_timestamp()).ok()
+    let at = DateTime::strptime("%a %b %d %H:%M:%S %Y", &words).ok()?;
+    u64::try_from(Offset::UTC.to_timestamp(at).ok()?.as_second()).ok()
 }
 
 /// A line as Claude Code parses it, leniently (see `CcodeMessage::decode`).
@@ -559,7 +555,7 @@ fn extend(
         original_cwd: lines.iter().find_map(|m| m.cwd.clone()),
         git_branch: None,
         model: None,
-        started_at: time::OffsetDateTime::now_utc(),
+        started_at: jiff::Timestamp::now(),
         messages: lines.to_vec(),
         fork_of: None,
     };

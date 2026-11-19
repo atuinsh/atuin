@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use atuin_common::path::PathBufExt as _;
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 /// A coding agent atuin captures sessions from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,21 +196,17 @@ pub struct Transcript {
 }
 
 /// Each line a millisecond after the last, so every agent orders them as written.
-fn tick() -> OffsetDateTime {
+fn tick() -> Timestamp {
     static LAST: AtomicI64 = AtomicI64::new(0);
-    let now = i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap();
+    let now = Timestamp::now().as_millisecond();
     let last =
         LAST.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| Some(now.max(last + 1)));
     let ms = now.max(last.unwrap() + 1);
-    OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).unwrap()
+    Timestamp::from_millisecond(ms).unwrap()
 }
 
-fn rfc3339(at: OffsetDateTime) -> String {
-    at.format(&Rfc3339).unwrap()
-}
-
-fn millis(at: OffsetDateTime) -> i64 {
-    i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap()
+fn rfc3339(at: Timestamp) -> String {
+    at.to_string()
 }
 
 fn short() -> String {
@@ -228,14 +223,9 @@ impl Transcript {
                 agent.root(home).joined(claude_project(cwd)).joined(format!("{id}.jsonl"))
             }
             Agent::Codex => {
-                let day = started.format(time::macros::format_description!("[year]/[month]/[day]"));
-                let stamp = started.format(time::macros::format_description!(
-                    "[year]-[month]-[day]T[hour]-[minute]-[second]"
-                ));
-                agent
-                    .root(home)
-                    .joined(day.unwrap())
-                    .joined(format!("rollout-{}-{id}.jsonl", stamp.unwrap()))
+                let day = started.strftime("%Y/%m/%d").to_string();
+                let stamp = started.strftime("%Y-%m-%dT%H-%M-%S");
+                agent.root(home).joined(day).joined(format!("rollout-{stamp}-{id}.jsonl"))
             }
             Agent::Pi => {
                 let dir = format!(
@@ -345,7 +335,7 @@ impl Transcript {
                             "id": transcript.id,
                             "title": title,
                             "directory": cwd,
-                            "time": {"created": millis(started), "updated": millis(started)},
+                            "time": {"created": started.as_millisecond(), "updated": started.as_millisecond()},
                         },
                     }),
                 )]);
@@ -522,7 +512,7 @@ impl Transcript {
                     "id": self.id,
                     "title": title,
                     "directory": directory,
-                    "time": {"created": created, "updated": millis(tick())},
+                    "time": {"created": created, "updated": tick().as_millisecond()},
                 },
             }),
         )]);
@@ -799,9 +789,9 @@ impl Transcript {
         let mut update = |update: Value| {
             let at = tick();
             updates.push(json!({
-                "timestamp": at.unix_timestamp(),
+                "timestamp": at.as_second(),
                 "method": "session/update",
-                "params": {"sessionId": self.id, "update": update, "_meta": {"agentTimestampMs": millis(at)}},
+                "params": {"sessionId": self.id, "update": update, "_meta": {"agentTimestampMs": at.as_millisecond()}},
             }));
         };
         for (turn, index) in turns.iter().zip(prompts..) {
@@ -868,7 +858,7 @@ impl Transcript {
 
     /// Kiro's session directory (Kiro CLI 2.36.0, V3 engine): `session.json` as it stands before
     /// the first turn, untitled, an empty log, and the session's line in the bucket's index.
-    fn create_kiro(&self, home: &Path, cwd: &Path, started: OffsetDateTime) {
+    fn create_kiro(&self, home: &Path, cwd: &Path, started: Timestamp) {
         let dir = self.path.parent().unwrap();
         fs::create_dir_all(dir).unwrap();
         let at = rfc3339(started);
@@ -914,7 +904,7 @@ impl Transcript {
         write_lines(&index.joined(format!("{bucket}.jsonl")), &[json!({
             "op": "add",
             "sessionPath": format!("{bucket}/{}", self.id),
-            "at": millis(started),
+            "at": started.as_millisecond(),
         })]);
     }
 
@@ -932,7 +922,7 @@ impl Transcript {
         let first = fs::metadata(&self.path).map(|log| log.len() == 0).unwrap_or(true);
         let uuid = || uuid::Uuid::new_v4().to_string();
         let mut lines = Vec::new();
-        let row = |id: String, at: OffsetDateTime, payload: Value| json!({"id": id, "timestamp": rfc3339(at), "payload": payload});
+        let row = |id: String, at: Timestamp, payload: Value| json!({"id": id, "timestamp": rfc3339(at), "payload": payload});
         if first {
             lines.push(row(
                 format!("context_snapshot_{}", uuid()),
@@ -1219,7 +1209,7 @@ impl Transcript {
     /// Hermes Agent's session row as its gateway writes it when `hermes` opens a chat (v0.23.0):
     /// `source` `local`, the surface in `created_source`, untitled, its system prompt kept apart
     /// by hash, and open (`ended_at` NULL) until the client closes.
-    fn create_hermes(&self, cwd: &Path, started: OffsetDateTime) {
+    fn create_hermes(&self, cwd: &Path, started: Timestamp) {
         let db = hermes_open(&self.path);
         let prompt = format!("You are Hermes Agent, an assistant {}.", word());
         let hash = sha256_hex(&prompt);
@@ -1395,7 +1385,7 @@ impl Transcript {
             let id = short()[24..].to_owned();
             let at = tick();
             let mut message = message;
-            message["timestamp"] = json!(millis(at));
+            message["timestamp"] = json!(at.as_millisecond());
             lines.push(json!({
                 "type": "message",
                 "id": id,
@@ -1451,20 +1441,20 @@ impl Transcript {
             let (asked, answered) = (tick(), tick());
             let (user, assistant) = (format!("msg_{}", short()), format!("msg_{}", short()));
             // A part's own clock, else the time it was written, orders it.
-            let part = |message: &str, part: Value, at: OffsetDateTime| {
+            let part = |message: &str, part: Value, at: Timestamp| {
                 let mut part = part;
                 part["id"] = json!(format!("prt_{}", short()));
                 part["messageID"] = json!(message);
                 part["sessionID"] = json!(self.id);
                 (
                     "message.part.updated.1",
-                    json!({"sessionID": self.id, "part": part, "time": millis(at)}),
+                    json!({"sessionID": self.id, "part": part, "time": at.as_millisecond()}),
                 )
             };
-            let done = |at: OffsetDateTime| json!({"start": millis(at), "end": millis(tick())});
+            let done = |at: Timestamp| json!({"start": at.as_millisecond(), "end": tick().as_millisecond()});
             events.push(("message.updated.1", json!({
                 "sessionID": self.id,
-                "info": {"id": user, "sessionID": self.id, "role": "user", "time": {"created": millis(asked)}},
+                "info": {"id": user, "sessionID": self.id, "role": "user", "time": {"created": asked.as_millisecond()}},
             })));
             events.push(part(&user, json!({"type": "text", "text": turn.prompt}), asked));
             events.push((
@@ -1479,7 +1469,7 @@ impl Transcript {
                         "modelID": "claude-opus-5-5",
                         "providerID": "anthropic",
                         "path": {"cwd": cwd, "root": cwd},
-                        "time": {"created": millis(answered)},
+                        "time": {"created": answered.as_millisecond()},
                     },
                 }),
             ));
@@ -1790,10 +1780,10 @@ pub fn hermes_terminal_result(output: &str, exit_code: i64) -> String {
 }
 
 /// Unix seconds, as Hermes stamps its rows.
-fn secs(at: OffsetDateTime) -> f64 {
+fn secs(at: Timestamp) -> f64 {
     // Milliseconds since 1970 need far fewer than an f64's 53 bits: the cast is exact.
     #[allow(clippy::cast_precision_loss)]
-    let ms = millis(at) as f64;
+    let ms = at.as_millisecond() as f64;
     ms / 1000.0
 }
 

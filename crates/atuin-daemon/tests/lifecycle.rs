@@ -26,7 +26,7 @@ async fn env() -> TestEnv {
 async fn test_start_end_history(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .command("echo hello".to_string())
         .cwd("/tmp".to_string())
         .session("test-session".to_string())
@@ -64,7 +64,7 @@ async fn output_is_stored_only_for_commands_that_cannot_print_a_credential(
 ) {
     let mut client = env.history_client().await;
     let history: History = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .command(command.to_string())
         .cwd("/tmp".to_string())
         .session("test-session".to_string())
@@ -167,7 +167,7 @@ async fn disabling_output_on_a_live_daemon_stores_no_captures(
 async fn a_capture_that_lost_its_middle_round_trips(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history: History = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .command("seq 1 10000000".to_string())
         .cwd("/tmp".to_string())
         .session("test-session".to_string())
@@ -224,7 +224,7 @@ async fn a_capture_that_lost_its_middle_round_trips(#[future(awt)] env: TestEnv)
 async fn output_for_a_cancelled_command_is_not_stored(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history: History = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .command("echo hello".to_string())
         .cwd("/tmp".to_string())
         .session("test-session".to_string())
@@ -261,7 +261,7 @@ async fn output_for_an_unknown_command_is_not_stored(#[future(awt)] env: TestEnv
 async fn end_history_without_duration_derives_from_start(#[future(awt)] env: TestEnv) {
     let mut client = env.history_client().await;
     let history: History = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc() - Duration::from_millis(20))
+        .timestamp(jiff::Timestamp::now() - Duration::from_millis(20))
         .command("sleep 0".to_string())
         .cwd("/tmp".to_string())
         .session("no-duration-session".to_string())
@@ -325,7 +325,7 @@ async fn test_tail_history_streams_started_and_ended_events(#[future(awt)] env: 
     let mut stream = client.tail_history().await.unwrap();
 
     let history = History::daemon()
-        .timestamp(time::OffsetDateTime::now_utc())
+        .timestamp(jiff::Timestamp::now())
         .command("git status".to_string())
         .cwd("/tmp/repo".to_string())
         .session("tail-session".to_string())

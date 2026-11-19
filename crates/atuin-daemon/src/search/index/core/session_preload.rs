@@ -5,6 +5,7 @@ use atuin_client::history::{History, HistoryId, ShellSession};
 use atuin_common::filter::OrFilter;
 use easy_cast::Conv;
 use fixedbitset::FixedBitSet;
+use jiff::{RoundMode, TimestampRound, Unit};
 use tracing::{error, instrument};
 
 use crate::search::index::core::{CompiledFilter, IndexIdentity, SearchIndex};
@@ -37,7 +38,7 @@ impl SessionPreload {
     /// own second.
     pub fn new(session: ShellSession, index: &SearchIndex, rerun: &[String]) -> Self {
         let mut ran_before = FixedBitSet::with_capacity(index.data.len());
-        let start_second = session.start.unix_timestamp();
+        let start_second = session.start.as_second();
         for (i, data) in index.data.iter().enumerate() {
             if data.most_recent_timestamp < start_second {
                 ran_before.insert(i);
@@ -122,7 +123,12 @@ impl PendingSearch {
     pub async fn load(self, db: &Sqlite) -> LoadedSearch {
         let rerun = db
             .commands_run_since_and_before(
-                self.session.start.truncate_to_second(),
+                self.session
+                    .start
+                    .round(TimestampRound::new().smallest(Unit::Second).mode(RoundMode::Floor))
+                    .expect(
+                        "flooring to a second stays in range: Timestamp::MIN is a whole second",
+                    ),
                 self.session.start,
                 self.shells.as_slice_filter(),
             )
@@ -183,9 +189,8 @@ impl LoadedSearch {
 #[cfg(test)]
 mod tests {
     use atuin_client::history::{AuthorKind, HistoryId};
+    use jiff::Timestamp;
     use rstest::{fixture, rstest};
-    use time::OffsetDateTime;
-    use time::macros::datetime;
     use uuid::Uuid;
 
     use super::*;
@@ -197,8 +202,8 @@ mod tests {
     /// second as the start.
     #[fixture]
     fn session() -> ShellSession {
-        let start = datetime!(2024-01-01 12:00:00.5 UTC);
-        let secs = u64::try_from(start.unix_timestamp()).unwrap();
+        let start = "2024-01-01T12:00:00.5Z".parse::<Timestamp>().unwrap();
+        let secs = u64::try_from(start.as_second()).unwrap();
         let id = Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 500_000_000));
         let session = ShellSession { id, start };
         // The daemon reads the start back out of the id, so the two must agree.
@@ -209,7 +214,7 @@ mod tests {
     fn make_session_history(
         command: &str,
         session: Uuid,
-        timestamp: OffsetDateTime,
+        timestamp: Timestamp,
         author_kind: AuthorKind,
     ) -> History {
         History::import()
@@ -279,11 +284,11 @@ mod tests {
             Uuid::new_v4()
         };
         let other = Uuid::new_v4();
-        let (ms, minutes) = (time::Duration::milliseconds, time::Duration::minutes);
+        let (ms, minutes) = (jiff::SignedDuration::from_millis, jiff::SignedDuration::from_mins);
 
         let mut index = SearchIndex::default();
         for (command, session, timestamp, author_kind, saved) in [
-            ("before", other, start - time::Duration::nanoseconds(1), AuthorKind::User, true),
+            ("before", other, start - jiff::SignedDuration::from_nanos(1), AuthorKind::User, true),
             ("mine", session, start + minutes(5), AuthorKind::User, true),
             ("after", other, start, AuthorKind::User, true),
             ("before_and_after", other, start + minutes(1), AuthorKind::User, true),
@@ -324,7 +329,7 @@ mod tests {
         let start = session.start;
         let other = Uuid::new_v4();
         let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
-        let minutes = time::Duration::minutes;
+        let minutes = jiff::SignedDuration::from_mins;
 
         let mut index = SearchIndex::default();
         let old = make_session_history("old", other, start - minutes(1), AuthorKind::User);
@@ -363,7 +368,7 @@ mod tests {
         let start = session.start;
         let other = Uuid::new_v4();
         let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
-        let minutes = time::Duration::minutes;
+        let minutes = jiff::SignedDuration::from_mins;
 
         let mut index = SearchIndex::default();
         let old = make_session_history("old", other, start - minutes(1), AuthorKind::User);
@@ -401,12 +406,12 @@ mod tests {
         // a minute after it. Only the database query can tell that the first run was before the
         // start.
         let mut index = SearchIndex::default();
-        let early = start - time::Duration::milliseconds(250);
+        let early = start - jiff::SignedDuration::from_millis(250);
         let before = make_session_history("old", other, early, AuthorKind::User);
         let after = make_session_history(
             "old",
             other,
-            start + time::Duration::minutes(1),
+            start + jiff::SignedDuration::from_mins(1),
             AuthorKind::User,
         );
         for history in [&before, &after] {
@@ -421,14 +426,14 @@ mod tests {
         };
         let loaded = pending.load(&db).await;
         db.delete_rows([before.id]).await.unwrap();
-        index.sync_commands([remaining_runs(&[after], "old")], OffsetDateTime::now_utc());
+        index.sync_commands([remaining_runs(&[after], "old")], Timestamp::now());
         assert_eq!(index.finish_search(loaded).count(), 1, "its query found the deleted run");
 
         assert!(index.search("", &filter, 10).is_err(), "the stale result isn't cached");
         assert!(search_with_db(&index, "", &filter, &db).await.is_empty());
         assert!(index.search("", &filter, 10).is_ok(), "that one is cached");
 
-        index.sync_commands([remaining_runs(&[], "old")], OffsetDateTime::now_utc());
+        index.sync_commands([remaining_runs(&[], "old")], Timestamp::now());
         assert!(index.search("", &filter, 10).is_err(), "a sync drops the cache");
     }
 
@@ -451,7 +456,7 @@ mod tests {
     ) {
         let filter = IndexFilterMode::SessionPreload(session.id.as_simple().to_string());
         let other = Uuid::new_v4();
-        let minutes = time::Duration::minutes;
+        let minutes = jiff::SignedDuration::from_mins;
         let mut index = SearchIndex::default();
         for (command, session, timestamp) in [
             ("old", other, session.start - minutes(1)),

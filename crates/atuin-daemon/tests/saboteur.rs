@@ -20,15 +20,15 @@ use atuin_daemon::search::{IndexFilterMode, SearchIndex, SearchIndexSettings};
 use atuin_domain::record::{RecordId, RecordTag};
 use common::{TestEnv, history, history_at};
 use futures::StreamExt;
+use jiff::Timestamp;
 use rstest::*;
-use time::OffsetDateTime;
 
 /// Add `histories` to `index`. Frecency is computed as of now.
 fn add<H>(index: &mut SearchIndex, histories: H)
 where
     H: IntoIterator<Item: Borrow<History>>,
 {
-    index.add_history_at(histories, OffsetDateTime::now_utc());
+    index.add_history_at(histories, Timestamp::now());
 }
 
 /// Ids the index returns for `query` under no filter and a generous limit -- what the TUI shows.
@@ -125,11 +125,12 @@ fn an_empty_batch_leaves_the_index_untouched() {
 #[rstest]
 fn repeated_adds_never_inflate_the_unique_command_count() {
     let mut index = SearchIndex::default();
-    let base = time::OffsetDateTime::now_utc();
+    let base = jiff::Timestamp::now();
     // Five invocations of one command, spaced by whole seconds (the index's recency granularity),
     // so the last is unambiguously most-recent.
-    let dup: Vec<History> =
-        (0..5i64).map(|i| history_at("echo dup", base + time::Duration::seconds(i))).collect();
+    let dup: Vec<History> = (0..5i64)
+        .map(|i| history_at("echo dup", base + jiff::SignedDuration::from_secs(i)))
+        .collect();
     let other = history("echo other");
     let mut batch = dup.clone();
     batch.push(other.clone());

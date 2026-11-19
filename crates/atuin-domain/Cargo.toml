@@ -19,6 +19,7 @@ axum = { workspace = true, optional = true }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 http = { workspace = true }
+jiff = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
@@ -30,7 +31,6 @@ sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 typed-builder = { workspace = true }
 url = { workspace = true }

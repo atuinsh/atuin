@@ -17,6 +17,8 @@ use atuin_common::userio::log::{Held, Message, Severity};
 use easy_cast::Conv;
 use eyre::Result;
 use futures_util::FutureExt;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use ratatui::backend::{CrosstermBackend, FromCrossterm};
 use ratatui::crossterm::cursor::SetCursorStyle;
 use ratatui::crossterm::event::{self, Event, KeyEvent, MouseEvent};
@@ -32,7 +34,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Tabs};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use semver::Version;
-use time::{OffsetDateTime, UtcOffset};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(windows)]
 use windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
@@ -184,7 +185,7 @@ pub struct State {
     keymaps: KeymapSet,
     search: SearchState,
     engine: AnySearchEngine,
-    now: Box<dyn Fn() -> OffsetDateTime + Send>,
+    now: Box<dyn Fn() -> Timestamp + Send>,
     /// Messages for the user, shown with the warnings until the next key.
     messages: Vec<Message>,
 }
@@ -1156,12 +1157,13 @@ impl State {
                     engine: &self.engine,
                     search_input: self.search.input.as_str(),
                 };
+                let tz = settings.timezone.time_zone();
                 let results_list = Self::build_results_list(
                     style,
                     results,
                     self.keymap_mode,
                     &self.now,
-                    settings.timezone.0,
+                    &tz,
                     indicator.as_str(),
                     theme,
                     history_highlighter,
@@ -1282,8 +1284,8 @@ impl State {
     }
 
     fn build_title(&self, settings: &Settings, theme: &Theme) -> Line<'static> {
-        let today = (self.now)().to_offset(settings.timezone.0);
-        let pumpkin = if today.date().is_halloween_season() {
+        let today = settings.timezone.time_zone().to_datetime((self.now)()).date();
+        let pumpkin = if today.is_halloween_season() {
             " 🎃"
         } else {
             ""
@@ -1402,8 +1404,8 @@ impl State {
         style: StyleState,
         results: &'a [History],
         keymap_mode: KeymapMode,
-        now: &'a dyn Fn() -> OffsetDateTime,
-        tz: UtcOffset,
+        now: &'a dyn Fn() -> Timestamp,
+        tz: &'a TimeZone,
         indicator: &'a str,
         theme: &'a Theme,
         history_highlighter: HistoryHighlighter<'a>,
@@ -2028,10 +2030,10 @@ pub async fn history(
         },
         current_cursor: None,
         now: if settings.prefers_reduced_motion {
-            let now = OffsetDateTime::now_utc();
+            let now = Timestamp::now();
             Box::new(move || now)
         } else {
-            Box::new(OffsetDateTime::now_utc)
+            Box::new(Timestamp::now)
         },
         prefix: false,
         pending_vim_key: None,
@@ -2468,12 +2470,10 @@ mod tests {
     use atuin_client::theme::ThemeManager;
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
-    use atuin_common::time::UtcOffsetSpec;
     use atuin_common::userio::log::{Message, Severity};
+    use jiff::Timestamp;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rstest::{fixture, rstest};
-    use time::macros::{datetime, offset};
-    use time::{OffsetDateTime, UtcOffset};
 
     use super::{
         Compactness, InputAction, InspectingState, InspectorView, KeymapSet, SearchModeState,
@@ -2534,7 +2534,7 @@ mod tests {
                 shells: Shells::all(),
             },
             engine: engines::engine(SearchMode::Fuzzy, &Arc::new(Settings::utc())),
-            now: Box::new(OffsetDateTime::now_utc),
+            now: Box::new(Timestamp::now),
             messages: Vec::new(),
         };
         state.results_state.select(selected);
@@ -2563,20 +2563,20 @@ mod tests {
 
     /// The title wears a pumpkin through the Halloween season by the user's clock, not UTC's.
     #[rstest]
-    #[case::halloween(datetime!(2026-10-31 12:00 UTC), offset!(UTC), true)]
-    #[case::season_opens(datetime!(2026-10-17 12:00 UTC), offset!(UTC), true)]
-    #[case::day_before_the_season(datetime!(2026-10-16 12:00 UTC), offset!(UTC), false)]
-    #[case::already_the_season_east_of_utc(datetime!(2026-10-16 20:00 UTC), offset!(+9), true)]
-    #[case::still_the_season_west_of_utc(datetime!(2026-11-02 02:00 UTC), offset!(-5), true)]
-    #[case::already_over_east_of_utc(datetime!(2026-11-01 20:00 UTC), offset!(+9), false)]
+    #[case::halloween("2026-10-31T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", true)]
+    #[case::season_opens("2026-10-17T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", true)]
+    #[case::day_before_the_season("2026-10-16T12:00:00Z".parse::<Timestamp>().unwrap(), "utc", false)]
+    #[case::already_the_season_east_of_utc("2026-10-16T20:00:00Z".parse::<Timestamp>().unwrap(), "+9", true)]
+    #[case::still_the_season_west_of_utc("2026-11-02T02:00:00Z".parse::<Timestamp>().unwrap(), "-5", true)]
+    #[case::already_over_east_of_utc("2026-11-01T20:00:00Z".parse::<Timestamp>().unwrap(), "+9", false)]
     fn title_wears_a_pumpkin_in_the_halloween_season(
         mut state: State,
-        #[case] now: OffsetDateTime,
-        #[case] offset: UtcOffset,
+        #[case] now: Timestamp,
+        #[case] tz: &str,
         #[case] pumpkin: bool,
     ) {
         let mut settings = Settings::utc();
-        settings.timezone = UtcOffsetSpec(offset);
+        settings.timezone = tz.parse().unwrap();
         let mut themes = ThemeManager::builtin_only();
         let theme = themes.load_theme("default");
         state.now = Box::new(move || now);
@@ -2590,14 +2590,14 @@ mod tests {
     #[once]
     fn preview_corpus() -> Vec<History> {
         let cmd_60: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command("for i in $(seq -w 10); do echo \"item number $i - abcd\"; done")
             .cwd("/")
             .build()
             .into();
 
         let cmd_124: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(
                 "echo 'Aurea prima sata est aetas, quae vindice nullo, sponte sua, sine lege \
                  fidem rectumque colebat. Poena metusque aberant'",
@@ -2607,7 +2607,7 @@ mod tests {
             .into();
 
         let cmd_200: History = History::capture()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(
                 "CREATE USER atuin WITH ENCRYPTED PASSWORD 'supersecretpassword'; CREATE DATABASE \
                  atuin WITH OWNER = atuin; \\c atuin; REVOKE ALL PRIVILEGES ON SCHEMA public FROM \
@@ -2959,7 +2959,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         let entry: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hi")
             .cwd(on_host(cwd))
             .build()
@@ -3347,8 +3347,8 @@ mod tests {
         for i in 0..count {
             let mut entry: History = History::capture()
                 .timestamp(
-                    OffsetDateTime::UNIX_EPOCH
-                        + time::Duration::seconds(if tied {
+                    Timestamp::UNIX_EPOCH
+                        + jiff::SignedDuration::from_secs(if tied {
                             0
                         } else {
                             i64::try_from(i).unwrap()
@@ -3396,7 +3396,7 @@ mod tests {
         let mut third = entries[2].clone();
         third.id = atuin_client::history::HistoryId::new(atuin_common::utils::uuid_v7());
         third.command = "echo THIRD".into();
-        third.timestamp += time::Duration::seconds(1);
+        third.timestamp += jiff::SignedDuration::from_secs(1);
         db.save(&third).await.unwrap();
         state.tab_index = 1;
         state.inspecting_state.current = Some(entries[0].id);
@@ -3566,7 +3566,7 @@ mod tests {
         state.engine = engines::engine(SearchMode::DaemonFuzzy, &settings);
         let mut db = Sqlite::in_memory(std::time::Duration::from_secs(2)).await.unwrap();
         let history: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo query match")
             .cwd("/tmp")
             .build()

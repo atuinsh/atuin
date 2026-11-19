@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use atuin_common::path::PathBufExt as _;
 use easy_cast::Conv;
 use eyre::{Result, eyre};
-use time::{Duration, OffsetDateTime};
+use jiff::{SignedDuration, Timestamp};
 
 use super::{Importer, Loader, count_lines, unix_byte_lines};
 use crate::history::History;
@@ -84,7 +84,7 @@ impl Importer for PowerShell {
 
     async fn load(mut self, h: &mut impl Loader) -> Result<()> {
         let line_count = self.entries().await?;
-        let start = OffsetDateTime::now_utc() - Duration::milliseconds(i64::conv(line_count));
+        let start = Timestamp::now() - SignedDuration::from_millis(i64::conv(line_count));
 
         let mut counter = 0;
         let mut iter = unix_byte_lines(&self.bytes);
@@ -115,7 +115,7 @@ impl Importer for PowerShell {
                 continue;
             }
 
-            let offset = Duration::milliseconds(counter);
+            let offset = SignedDuration::from_millis(counter);
             counter += 1;
 
             let entry =

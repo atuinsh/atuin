@@ -8,10 +8,9 @@ use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -393,8 +392,8 @@ impl Listener for GrokListener {
 pub(crate) struct GrokSummary {
     pub present: bool,
     pub cwd: Option<PathBuf>,
-    pub created_at: Option<OffsetDateTime>,
-    pub updated_at: Option<OffsetDateTime>,
+    pub created_at: Option<Timestamp>,
+    pub updated_at: Option<Timestamp>,
     pub title: Option<TitleChange>,
     pub parent: Option<(SessionId, ParentKind)>,
 }
@@ -402,18 +401,18 @@ pub(crate) struct GrokSummary {
 /// Per-event timestamps extracted from `updates.jsonl` beside `chat_history.jsonl`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UpdateTimes {
-    pub prompts_by_index: HashMap<u64, OffsetDateTime>,
-    pub prompts_in_order: Vec<OffsetDateTime>,
-    pub call_starts: HashMap<String, OffsetDateTime>,
-    pub call_ends: HashMap<String, OffsetDateTime>,
-    pub turn_replies: Vec<OffsetDateTime>,
-    pub latest: Option<OffsetDateTime>,
+    pub prompts_by_index: HashMap<u64, Timestamp>,
+    pub prompts_in_order: Vec<Timestamp>,
+    pub call_starts: HashMap<String, Timestamp>,
+    pub call_ends: HashMap<String, Timestamp>,
+    pub turn_replies: Vec<Timestamp>,
+    pub latest: Option<Timestamp>,
     /// Each turn's usage (`turn_completed`), by the prompt index that started it.
     pub usage: HashMap<u64, Usage>,
     /// Each turn's last reply, by the prompt index that started it.
-    pub replies: HashMap<u64, OffsetDateTime>,
+    pub replies: HashMap<u64, Timestamp>,
     /// When each compaction happened (`compaction_checkpoint`), in order.
-    pub compactions: Vec<OffsetDateTime>,
+    pub compactions: Vec<Timestamp>,
     /// The files each call changed, by call id, where Atuin restored the session and kept them
     /// ([`ATUIN_PATCH`]).
     pub patches: HashMap<String, Vec<FilePatch>>,
@@ -422,18 +421,18 @@ pub(crate) struct UpdateTimes {
     pub edited_at: HashMap<String, Value>,
 }
 
-fn parse_unix_timestamp(raw: &Value) -> Option<OffsetDateTime> {
+fn parse_unix_timestamp(raw: &Value) -> Option<Timestamp> {
     let n = raw.as_i64()?;
     if n >= 10_000_000_000 {
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(n) * 1_000_000).ok()
+        Timestamp::from_millisecond(n).ok()
     } else {
-        OffsetDateTime::from_unix_timestamp(n).ok()
+        Timestamp::from_second(n).ok()
     }
 }
 
 /// When an `updates.jsonl` event happened: Grok Build's milliseconds (`params._meta`), else its
 /// whole seconds.
-fn event_timestamp(entry: &Value) -> Option<OffsetDateTime> {
+fn event_timestamp(entry: &Value) -> Option<Timestamp> {
     parse_unix_timestamp(&entry["params"]["_meta"]["agentTimestampMs"])
         .or_else(|| parse_unix_timestamp(&entry["timestamp"]))
 }
@@ -605,12 +604,11 @@ pub(crate) fn read_summary_beside(transcript_path: &Path) -> GrokSummary {
         return GrokSummary::default();
     };
     let cwd = raw["info"]["cwd"].as_str().filter(|s| !s.is_empty()).map(PathBuf::from);
-    let created_at =
-        raw["created_at"].as_str().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+    let created_at = raw["created_at"].as_str().and_then(|s| s.parse::<Timestamp>().ok());
     let updated_at = raw["last_active_at"]
         .as_str()
         .or_else(|| raw["updated_at"].as_str())
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .and_then(|s| s.parse::<Timestamp>().ok())
         .or(created_at);
     let title = raw["generated_title"]
         .as_str()
@@ -651,10 +649,10 @@ pub(crate) fn read_summary_beside(transcript_path: &Path) -> GrokSummary {
 /// `created_at`. Grok Build names a subagent's parent only in the parent's own `updates.jsonl`
 /// (`subagent_spawned`): one of the sessions of the same workspace started before it and active
 /// since.
-fn spawned_by(transcript_path: &Path, created_at: Option<OffsetDateTime>) -> Option<SessionId> {
+fn spawned_by(transcript_path: &Path, created_at: Option<Timestamp>) -> Option<SessionId> {
     let dir = transcript_path.parent()?;
     let id = dir.file_name()?.to_str()?;
-    let created = std::time::SystemTime::from(created_at?);
+    let created = std::time::SystemTime::try_from(created_at?).ok()?;
     std::fs::read_dir(dir.parent()?).ok()?.filter_map(Result::ok).find_map(|entry| {
         let name = entry.file_name();
         let updates = entry.path().joined(UPDATES_FILE);
@@ -840,9 +838,9 @@ struct ReaderState {
     usage_given: std::collections::HashSet<u64>,
     /// The ids of the lines before the checkpoint a read starts from.
     replayed: Vec<String>,
-    last_ts: Option<OffsetDateTime>,
+    last_ts: Option<Timestamp>,
     /// The time of the line before, which no line is timed before.
-    previous_ts: Option<OffsetDateTime>,
+    previous_ts: Option<Timestamp>,
     emitted_title: Option<TitleChange>,
     last_chain_id: Option<String>,
 }
@@ -860,7 +858,7 @@ impl ReaderState {
         let fallback_mtime = std::fs::metadata(transcript_path)
             .and_then(|m| m.modified())
             .ok()
-            .map(OffsetDateTime::from);
+            .and_then(|at| Timestamp::try_from(at).ok());
         let initial_chain = summary.present.then(|| meta_id(session_id));
         // On a checkpointed restart (`start_offset > 0`) `emitted_header` is skipped, so leave
         // `emitted_title` unset here and let `take_pending_title()` emit any title generated while
@@ -1112,7 +1110,7 @@ impl ReaderState {
         Some(resolved_id)
     }
 
-    fn timestamp_for(&mut self, msg: &GrokMessage, role: &Role) -> Option<OffsetDateTime> {
+    fn timestamp_for(&mut self, msg: &GrokMessage, role: &Role) -> Option<Timestamp> {
         match role {
             Role::User => {
                 let seq = self.prompt_seq;
@@ -1486,7 +1484,7 @@ pub struct GrokMessage {
     #[serde(skip)]
     follows_id: Option<String>,
     #[serde(skip)]
-    computed_timestamp: Option<OffsetDateTime>,
+    computed_timestamp: Option<Timestamp>,
     #[serde(skip)]
     meta_cwd: Option<PathBuf>,
     #[serde(skip)]
@@ -1513,11 +1511,7 @@ impl GrokMessage {
     }
 
     #[must_use]
-    pub(crate) fn title_info(
-        session_id: &str,
-        change: TitleChange,
-        at: Option<OffsetDateTime>,
-    ) -> Self {
+    pub(crate) fn title_info(session_id: &str, change: TitleChange, at: Option<Timestamp>) -> Self {
         let id = title_id(session_id, &change);
         Self {
             kind: "system".to_owned(),
@@ -1639,7 +1633,7 @@ impl Message for GrokMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
+    fn timestamp(&self) -> Option<Timestamp> {
         self.computed_timestamp
     }
 
@@ -2001,10 +1995,10 @@ mod tests {
         assert_eq!(msgs[1].title(), Some(expected_title));
         assert!(!msgs[1].id().unwrap().as_ref().contains("Fix login bug"));
 
-        assert_eq!(msgs[3].timestamp().unwrap().unix_timestamp(), 1_793_181_610);
-        assert_eq!(msgs[5].timestamp().unwrap().unix_timestamp(), 1_793_181_620);
-        assert_eq!(msgs[6].timestamp().unwrap().unix_timestamp(), 1_793_181_625);
-        assert_eq!(msgs[7].timestamp().unwrap().unix_timestamp(), 1_793_181_630);
+        assert_eq!(msgs[3].timestamp().unwrap().as_second(), 1_793_181_610);
+        assert_eq!(msgs[5].timestamp().unwrap().as_second(), 1_793_181_620);
+        assert_eq!(msgs[6].timestamp().unwrap().as_second(), 1_793_181_625);
+        assert_eq!(msgs[7].timestamp().unwrap().as_second(), 1_793_181_630);
         assert!(matches!(msgs[6].content().as_slice(), [Content::ToolResult(ToolResult {
             error: true,
             ..
@@ -2216,8 +2210,7 @@ mod tests {
             .unwrap();
         let summary =
             msgs.iter().find(|m| matches!(m.content().first(), Some(Content::Summary(_)))).unwrap();
-        let compacted =
-            OffsetDateTime::from_unix_timestamp_nanos(1_793_400_410_784_000_000).unwrap();
+        let compacted = Timestamp::from_nanosecond(1_793_400_410_784_000_000).unwrap();
         assert_eq!(summary.timestamp(), Some(compacted));
     }
 

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use rstest::rstest;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection, Executor};
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::continuation::tests::{CLAUDE, OPENCODE};
@@ -115,7 +115,7 @@ fn session(id: &str, title: Option<&str>, messages: Vec<RehydrateMessage>) -> Re
         original_cwd: Some(PathBuf::from("/work/proj")),
         git_branch: None,
         model: None,
-        started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
+        started_at: messages.first().map_or(Timestamp::UNIX_EPOCH, |m| m.timestamp),
         messages,
         fork_of: None,
     }
@@ -403,7 +403,7 @@ fn prompt(id: &str, parent: Option<&str>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: parent.map(str::to_owned),
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::User,
         content: vec![Content::Text(format!("said {id}"))],
         model: None,
@@ -500,7 +500,7 @@ fn a_call_is_written_on_its_provider(
     let row = RehydrateMessage {
         source_id: "prt_1".to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::Assistant,
         content: vec![Content::Text("hi".to_owned())],
         model: Some(model.to_owned()),
@@ -526,7 +526,7 @@ fn a_call_without_a_result_is_written_aborted() {
     let mut row = RehydrateMessage {
         source_id: "prt_1".to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap(),
+        timestamp: Timestamp::from_second(1_790_000_000).unwrap(),
         role: Role::Assistant,
         content: vec![Content::ToolUse(ToolUse {
             id: "call_1".to_owned().into(),

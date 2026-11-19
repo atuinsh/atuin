@@ -7,19 +7,19 @@ use std::time::Duration;
 use atuin_common::db::sqlite::{Access, Sqlite as CommonSqlite, SqliteBuilder};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::path::DisplayRichExt;
-use atuin_common::time::{OffsetDateTimeExt, UtcOffsetSpec};
+use atuin_common::time::{TimeZoneSpec, TimestampExt};
 use atuin_common::{db, utils};
 use atuin_domain::record::{CmdOrigin, UNKNOWN_USER};
 use easy_cast::{CastFloat, Conv};
 use futures::stream::BoxStream;
 use futures::{TryStreamExt as _, future};
 use itertools::Itertools;
+use jiff::Timestamp;
 use sql_builder::bind::Bind;
 use sql_builder::{SqlBuilder, SqlName, esc, quote};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Result, Row};
 use thiserror::Error;
-use time::OffsetDateTime;
 use tracing::instrument;
 
 use super::history::History;
@@ -39,7 +39,7 @@ pub struct Context {
     pub vcs_root: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct OptFilters<'a> {
     /// Include any of these exit codes. An empty slice means no restriction.
     pub exit: &'a [i64],
@@ -61,10 +61,10 @@ pub struct OptFilters<'a> {
     pub authors: OrFilter<&'a [AuthorPattern]>,
     /// Shell filter. The empty string matches commands that have no recorded shell.
     pub shells: OrFilter<&'a [String]>,
-    /// Offset that `before`/`after` strings without an explicit offset are interpreted in, and
-    /// that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
+    /// Time zone that `before`/`after` strings without an explicit offset are interpreted in,
+    /// and that relative phrases like "today" are anchored to. Pass `settings.timezone`; the
     /// `Default` is UTC.
-    pub timezone: UtcOffsetSpec,
+    pub timezone: TimeZoneSpec,
     /// Date dialect (day/month order) for parsing `before`/`after`. Pass `settings.dialect`.
     pub dialect: Dialect,
 }
@@ -393,7 +393,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
 
         Ok(Self::from_db()
             .id(row.try_get("id")?)
-            .timestamp(OffsetDateTime::from_unix_nanos_i64(row.try_get("timestamp")?))
+            .timestamp(Timestamp::from_unix_nanos_i64(row.try_get("timestamp")?))
             .duration(row.try_get("duration")?)
             .exit(row.try_get("exit")?)
             .command(row.try_get("command")?)
@@ -402,7 +402,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             .hostname(hostname)
             .author(author)
             .intent(intent)
-            .deleted_at(deleted_at.map(OffsetDateTime::from_unix_nanos_i64))
+            .deleted_at(deleted_at.map(Timestamp::from_unix_nanos_i64))
             .shell(shell)
             .author_kind(author_kind)
             .build()
@@ -504,7 +504,7 @@ impl Sqlite {
             ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(h.id)
-        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(h.timestamp.as_nanosecond()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -513,7 +513,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+        .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(&mut **tx)
@@ -557,7 +557,7 @@ impl Sqlite {
 
             builder.push_values(h.by_ref().take(rows_per_insert), |mut b, h| {
                 b.push_bind(h.id)
-                    .push_bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+                    .push_bind(i64::conv(h.timestamp.as_nanosecond()))
                     .push_bind(h.duration)
                     .push_bind(h.exit)
                     .push_bind(h.command.as_str())
@@ -566,7 +566,7 @@ impl Sqlite {
                     .push_bind(h.cmd_origin.as_str())
                     .push_bind(h.author.as_str())
                     .push_bind(h.intent.as_deref())
-                    .push_bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+                    .push_bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
                     .push_bind(h.shell.as_deref())
                     .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
             });
@@ -661,7 +661,7 @@ impl Sqlite {
                 where id = ?1",
         )
         .bind(h.id)
-        .bind(i64::conv(h.timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(h.timestamp.as_nanosecond()))
         .bind(h.duration)
         .bind(h.exit)
         .bind(h.command.as_str())
@@ -670,7 +670,7 @@ impl Sqlite {
         .bind(h.cmd_origin.as_str())
         .bind(h.author.as_str())
         .bind(h.intent.as_deref())
-        .bind(h.deleted_at.map(|t| i64::conv(t.unix_timestamp_nanos())))
+        .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
         .execute(self.sqlite.pool())
         .await?;
@@ -687,7 +687,7 @@ impl Sqlite {
         max: Option<usize>,
         unique: bool,
         include_deleted: bool,
-        range: Option<(OffsetDateTime, OffsetDateTime)>,
+        range: Option<(Timestamp, Timestamp)>,
     ) -> Result<Vec<History>> {
         debug!("listing history");
 
@@ -732,8 +732,8 @@ impl Sqlite {
         // Inclusive on both ends, matching `range()`. `stats` relies on this to count a
         // command recorded exactly on a period boundary (e.g. at midnight).
         if let Some((from, to)) = range {
-            query.and_where_ge("timestamp", i64::conv(from.unix_timestamp_nanos()));
-            query.and_where_le("timestamp", i64::conv(to.unix_timestamp_nanos()));
+            query.and_where_ge("timestamp", i64::conv(from.as_nanosecond()));
+            query.and_where_le("timestamp", i64::conv(to.as_nanosecond()));
         }
 
         let query = query.sql().expect("bug in list query. please report");
@@ -748,15 +748,15 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(from = ?from, to = ?to), err)]
-    pub async fn range(&self, from: OffsetDateTime, to: OffsetDateTime) -> Result<Vec<History>> {
+    pub async fn range(&self, from: Timestamp, to: Timestamp) -> Result<Vec<History>> {
         debug!("listing history from {:?} to {:?}", from, to);
 
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where timestamp >= ?1 and timestamp <= ?2 \
              order by timestamp asc"
         )))
-        .bind(i64::conv(from.unix_timestamp_nanos()))
-        .bind(i64::conv(to.unix_timestamp_nanos()))
+        .bind(i64::conv(from.as_nanosecond()))
+        .bind(i64::conv(to.as_nanosecond()))
         .fetch_all(self.sqlite.pool())
         .await?;
 
@@ -776,12 +776,12 @@ impl Sqlite {
     }
 
     #[instrument(level = "trace", skip_all, fields(count), err)]
-    pub async fn before(&self, timestamp: OffsetDateTime, count: i64) -> Result<Vec<History>> {
+    pub async fn before(&self, timestamp: Timestamp, count: i64) -> Result<Vec<History>> {
         let res = db::query_as::<_, History>(sqlx::AssertSqlSafe(format!(
             "select {HISTORY_COLUMNS} from history where timestamp < ?1 order by timestamp desc \
              limit ?2"
         )))
-        .bind(i64::conv(timestamp.unix_timestamp_nanos()))
+        .bind(i64::conv(timestamp.as_nanosecond()))
         .bind(count)
         .fetch_all(self.sqlite.pool())
         .await?;
@@ -915,21 +915,21 @@ impl Sqlite {
 
         filter_options.exclude_cwd.map(|exclude_cwd| sql.and_where_ne("cwd", quote(exclude_cwd)));
 
-        let now = OffsetDateTime::now_utc().to_offset(filter_options.timezone.0);
-        let dialect = filter_options.dialect.into();
+        let now = Timestamp::now().to_zoned_datetime(filter_options.timezone.time_zone());
+        let dialect = filter_options.dialect;
 
         if let Some(before) = filter_options.before {
-            let parsed = interim::parse_date_string(before, now, dialect).map_err(|e| {
+            let parsed = dialect.parse_date(before, &now).map_err(|e| {
                 sqlx::Error::Decode(format!("invalid `before` filter {before:?}: {e}").into())
             })?;
-            sql.and_where_lt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
+            sql.and_where_lt("timestamp", quote(i64::conv(parsed.timestamp().as_nanosecond())));
         }
 
         if let Some(after) = filter_options.after {
-            let parsed = interim::parse_date_string(after, now, dialect).map_err(|e| {
+            let parsed = dialect.parse_date(after, &now).map_err(|e| {
                 sqlx::Error::Decode(format!("invalid `after` filter {after:?}: {e}").into())
             })?;
-            sql.and_where_gt("timestamp", quote(i64::conv(parsed.unix_timestamp_nanos())));
+            sql.and_where_gt("timestamp", quote(i64::conv(parsed.timestamp().as_nanosecond())));
         }
 
         apply_author_filter(&mut sql, filter_options.authors);
@@ -990,14 +990,13 @@ impl Sqlite {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn commands_run_since_and_before(
         &self,
-        since: OffsetDateTime,
-        before: OffsetDateTime,
+        since: Timestamp,
+        before: Timestamp,
         shells: OrFilter<&[String]>,
     ) -> Result<Vec<String>> {
-        let (Ok(since), Ok(before)) = (
-            i64::try_from(since.unix_timestamp_nanos()),
-            i64::try_from(before.unix_timestamp_nanos()),
-        ) else {
+        let (Ok(since), Ok(before)) =
+            (i64::try_from(since.as_nanosecond()), i64::try_from(before.as_nanosecond()))
+        else {
             return Ok(Vec::new());
         };
 
@@ -1057,7 +1056,7 @@ impl Sqlite {
         );
         db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
             .bind(&history.command)
-            .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
+            .bind(i64::conv(history.timestamp.as_nanosecond()))
             .bind(history.id)
             .fetch_all(self.sqlite.pool())
             .await
@@ -1084,7 +1083,7 @@ impl Sqlite {
         );
         db::query_as::<_, History>(sqlx::AssertSqlSafe(query.as_str()))
             .bind(&history.session)
-            .bind(i64::conv(history.timestamp.unix_timestamp_nanos()))
+            .bind(i64::conv(history.timestamp.as_nanosecond()))
             .bind(history.id)
             .fetch_all(self.sqlite.pool())
             .await
@@ -1171,8 +1170,8 @@ impl Sqlite {
                 command,
                 runs,
                 failures,
-                first: OffsetDateTime::from_unix_nanos_i64(first),
-                last: OffsetDateTime::from_unix_nanos_i64(last),
+                first: Timestamp::from_unix_nanos_i64(first),
+                last: Timestamp::from_unix_nanos_i64(last),
                 cwd,
             })
             .collect())
@@ -1594,8 +1593,6 @@ mod test {
     use atuin_common::path::PathBufExt as _;
     use futures::TryStreamExt;
     use rstest::{fixture, rstest};
-    use time::format_description::well_known::Rfc3339;
-    use time::macros::datetime;
 
     use super::*;
     use crate::history::all_user_author_filter;
@@ -1629,7 +1626,7 @@ mod test {
         #[future] empty_db: Sqlite,
     ) {
         let db = empty_db.await;
-        let start = datetime!(2024-01-01 12:00 UTC);
+        let start = "2024-01-01T12:00:00Z".parse::<Timestamp>().unwrap();
         let since = start - Duration::from_secs(since_secs_before);
         let (before, between, after) =
             (start - Duration::from_secs(60), start - Duration::from_secs(10), start);
@@ -1682,7 +1679,7 @@ mod test {
             ("another import", "", false),
         ] {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH)
+                .timestamp(Timestamp::UNIX_EPOCH)
                 .command(command)
                 .cwd("/tmp")
                 .build()
@@ -1690,7 +1687,7 @@ mod test {
             entry.session = session.into();
             entry.cwd = format!("/tmp/{}", entries.len());
             if deleted {
-                entry.deleted_at = Some(OffsetDateTime::UNIX_EPOCH);
+                entry.deleted_at = Some(Timestamp::UNIX_EPOCH);
             }
             db.save(&entry).await.unwrap();
             entries.push(entry);
@@ -1722,7 +1719,7 @@ mod test {
         .enumerate()
         {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(i64::conv(i)))
+                .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(i64::conv(i)))
                 .command("echo stats")
                 .cwd("/tmp")
                 .build()
@@ -1730,7 +1727,7 @@ mod test {
             entry.duration = duration;
             entry.exit = exit;
             if deleted {
-                entry.deleted_at = Some(OffsetDateTime::UNIX_EPOCH);
+                entry.deleted_at = Some(Timestamp::UNIX_EPOCH);
             }
             db.save(&entry).await.unwrap();
             if selected.is_none() {
@@ -1752,7 +1749,7 @@ mod test {
         let mut entries = Vec::new();
         for second in 0..250 {
             let mut entry: History = History::capture()
-                .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(second))
+                .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(second))
                 .command("ls")
                 .cwd("/tmp")
                 .build()
@@ -1808,10 +1805,10 @@ mod test {
     async fn new_history_item_at(
         db: &Sqlite,
         cmd: &str,
-        timestamp: Option<OffsetDateTime>,
+        timestamp: Option<Timestamp>,
     ) -> Result<()> {
         let mut captured: History = History::capture()
-            .timestamp(timestamp.unwrap_or_else(OffsetDateTime::now_utc))
+            .timestamp(timestamp.unwrap_or_else(Timestamp::now))
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1830,7 +1827,7 @@ mod test {
 
     async fn save_history_item(db: &Sqlite, cmd: &str) -> History {
         let mut captured: History = History::capture()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command(cmd)
             .cwd("/home/ellie")
             .build()
@@ -1868,7 +1865,7 @@ mod test {
         };
 
         // One item at a fixed instant, one at `now` (far outside the window below).
-        let at = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let at = Timestamp::from_second(1_708_330_400).unwrap();
         let mut past: History = History::capture()
             .timestamp(at)
             .command("ls /home/ellie")
@@ -1935,22 +1932,22 @@ mod test {
         #[from(empty_db)]
         db: Sqlite,
     ) {
-        let run = |command: &str, timestamp: OffsetDateTime, exit: i64| -> History {
+        let run = |command: &str, timestamp: Timestamp, exit: i64| -> History {
             let mut history: History =
                 History::capture().timestamp(timestamp).command(command).cwd("/srv").build().into();
             history.exit = exit;
             history
         };
-        let mut deleted = run("svn up", datetime!(2019-01-01 0:00 UTC), 0);
-        deleted.deleted_at = Some(datetime!(2019-01-02 0:00 UTC));
-        let mut by_agent = run("svn up", datetime!(2025-01-01 0:00 UTC), 0);
+        let mut deleted = run("svn up", "2019-01-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0);
+        deleted.deleted_at = Some("2019-01-02T00:00:00Z".parse::<Timestamp>().unwrap());
+        let mut by_agent = run("svn up", "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0);
         by_agent.author_kind = Some(AuthorKind::Agent);
         db.save_bulk([
             &deleted,
             &by_agent,
-            &run("svn up", datetime!(2020-03-01 0:00 UTC), 0),
-            &run("svn up", datetime!(2023-06-01 0:00 UTC), 1),
-            &run("ls", datetime!(2026-10-29 0:00 UTC), -1),
+            &run("svn up", "2020-03-01T00:00:00Z".parse::<Timestamp>().unwrap(), 0),
+            &run("svn up", "2023-06-01T00:00:00Z".parse::<Timestamp>().unwrap(), 1),
+            &run("ls", "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(), -1),
         ])
         .await
         .unwrap();
@@ -1963,16 +1960,16 @@ mod test {
                 command: "ls".to_owned(),
                 runs: 1,
                 failures: 0,
-                first: datetime!(2026-10-29 0:00 UTC),
-                last: datetime!(2026-10-29 0:00 UTC),
+                first: "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(),
+                last: "2026-10-29T00:00:00Z".parse::<Timestamp>().unwrap(),
                 cwd: "/srv".to_owned(),
             },
             CommandRuns {
                 command: "svn up".to_owned(),
                 runs: 2,
                 failures: 1,
-                first: datetime!(2020-03-01 0:00 UTC),
-                last: datetime!(2023-06-01 0:00 UTC),
+                first: "2020-03-01T00:00:00Z".parse::<Timestamp>().unwrap(),
+                last: "2023-06-01T00:00:00Z".parse::<Timestamp>().unwrap(),
                 cwd: "/srv".to_owned(),
             },
         ]);
@@ -1989,7 +1986,7 @@ mod test {
     ) {
         let live = save_history_item(&db, "echo live").await;
         let mut tombstone = save_history_item(&db, "echo tombstone").await;
-        tombstone.deleted_at = Some(OffsetDateTime::now_utc());
+        tombstone.deleted_at = Some(Timestamp::now());
         db.update(&tombstone).await.unwrap();
         let missing = HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap());
 
@@ -2011,7 +2008,7 @@ mod test {
         let mut alpha = save_history_item(&db, "echo alpha").await;
         let bravo = save_history_item(&db, "echo bravo").await;
 
-        alpha.deleted_at = Some(OffsetDateTime::now_utc());
+        alpha.deleted_at = Some(Timestamp::now());
         alpha.command = String::new();
         db.update(&alpha).await.unwrap();
 
@@ -2111,7 +2108,7 @@ mod test {
             ..Default::default()
         };
         let results = exit_db
-            .search(mode, FilterMode::Global, &new_context(), "cargo", filters)
+            .search(mode, FilterMode::Global, &new_context(), "cargo", filters.clone())
             .await
             .unwrap();
         let mut actual: Vec<_> = results.iter().map(|h| h.exit).collect();
@@ -2119,7 +2116,7 @@ mod test {
         assert_eq!(actual, expected);
 
         let results = exit_db
-            .search(mode, FilterMode::Global, &new_context(), "unmatched", filters)
+            .search(mode, FilterMode::Global, &new_context(), "unmatched", filters.clone())
             .await
             .unwrap();
         assert!(results.is_empty());
@@ -2142,7 +2139,7 @@ mod test {
         let mut matching_ids = Vec::new();
         for (timestamp, exit) in [(1, 1), (2, 2), (3, 0)] {
             let mut entry = save_history_item(&empty_db, "cargo test").await;
-            entry.timestamp = OffsetDateTime::from_unix_timestamp(timestamp).unwrap();
+            entry.timestamp = Timestamp::from_second(timestamp).unwrap();
             entry.exit = exit;
             empty_db.update(&entry).await.unwrap();
             if exit != 0 {
@@ -2177,7 +2174,13 @@ mod test {
         let mut deleted = Vec::new();
         for _ in 0..3 {
             let results = exit_db
-                .search(DbSearchMode::FullText, FilterMode::Global, &new_context(), "", filters)
+                .search(
+                    DbSearchMode::FullText,
+                    FilterMode::Global,
+                    &new_context(),
+                    "",
+                    filters.clone(),
+                )
                 .await
                 .unwrap();
             if results.is_empty() {
@@ -2218,7 +2221,7 @@ mod test {
         #[case] expected: usize,
         #[case] expect_ellie_match: bool,
     ) {
-        let t = OffsetDateTime::from_unix_timestamp(1_708_330_400).unwrap();
+        let t = Timestamp::from_second(1_708_330_400).unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(t)).await.unwrap();
@@ -2226,7 +2229,7 @@ mod test {
 
         let context = new_context();
 
-        let stamp = |seconds: i64| (t + time::Duration::seconds(seconds)).format(&Rfc3339).unwrap();
+        let stamp = |seconds: i64| (t + jiff::SignedDuration::from_secs(seconds)).to_string();
         let (after, before) = match offsets {
             Some((after, before)) => (Some(stamp(after)), Some(stamp(before))),
             None => (None, None),
@@ -2255,7 +2258,7 @@ mod test {
     #[case::bare_string_uses_configured_offset("2026-01-12T11:00:00", "2026-01-12T12:00:00")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_search_timezone_before_after(#[case] after: &str, #[case] before: &str) {
-        let item_time = OffsetDateTime::parse("2026-01-12T11:30:05-04:00", &Rfc3339).unwrap();
+        let item_time = "2026-01-12T11:30:05-04:00".parse::<Timestamp>().unwrap();
 
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
         new_history_item_at(&db, "ls /home/ellie", Some(item_time)).await.unwrap();
@@ -2455,8 +2458,10 @@ mod test {
 
         // "corburl" is strictly newer, so an unranked query would return it first and the assertion
         // below would fail.
-        let now = OffsetDateTime::now_utc();
-        new_history_item_at(&db, "curl", Some(now - time::Duration::seconds(10))).await.unwrap();
+        let now = Timestamp::now();
+        new_history_item_at(&db, "curl", Some(now - jiff::SignedDuration::from_secs(10)))
+            .await
+            .unwrap();
         new_history_item_at(&db, "corburl", Some(now)).await.unwrap();
 
         assert_search_commands(&db, mode.closest_db_mode(), FilterMode::Global, "curl", vec![
@@ -2474,22 +2479,30 @@ mod test {
     async fn test_search_fuzzy_trailing_space(#[case] query: &str) {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let irssi = "screen irssi";
         let ls_l = "ls -l secrets/rendered";
         let ls_ld = "ls -ld secrets/rendered";
         let screen_r = "screen -r";
 
-        new_history_item_at(&db, irssi, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&db, ls_l, Some(now - time::Duration::days(4))).await.unwrap();
+        new_history_item_at(&db, irssi, Some(now - jiff::SignedDuration::from_hours(24 * 5)))
+            .await
+            .unwrap();
+        new_history_item_at(&db, ls_l, Some(now - jiff::SignedDuration::from_hours(24 * 4)))
+            .await
+            .unwrap();
         new_history_item_at(
             &db,
             ls_ld,
-            Some(now - time::Duration::days(4) + time::Duration::seconds(1)),
+            Some(
+                now - jiff::SignedDuration::from_hours(24 * 4) + jiff::SignedDuration::from_secs(1),
+            ),
         )
         .await
         .unwrap();
-        new_history_item_at(&db, screen_r, Some(now - time::Duration::hours(1))).await.unwrap();
+        new_history_item_at(&db, screen_r, Some(now - jiff::SignedDuration::from_hours(1)))
+            .await
+            .unwrap();
 
         let results =
             assert_search_eq(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, 4).await.unwrap();
@@ -2520,9 +2533,13 @@ mod test {
     ) {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
-        let now = OffsetDateTime::now_utc();
-        new_history_item_at(&db, close, Some(now - time::Duration::days(5))).await.unwrap();
-        new_history_item_at(&db, far, Some(now - time::Duration::hours(1))).await.unwrap();
+        let now = Timestamp::now();
+        new_history_item_at(&db, close, Some(now - jiff::SignedDuration::from_hours(24 * 5)))
+            .await
+            .unwrap();
+        new_history_item_at(&db, far, Some(now - jiff::SignedDuration::from_hours(1)))
+            .await
+            .unwrap();
 
         assert_search_commands(&db, DbSearchMode::Fuzzy, FilterMode::Global, query, vec![
             close, far,
@@ -2613,7 +2630,7 @@ mod test {
 
         // Tombstones that older versions wrote aren't runs.
         let mut legacy = runs[0].clone();
-        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        legacy.deleted_at = Some(Timestamp::now());
         db.update(&legacy).await.unwrap();
         let runs: Vec<_> = db.history_of_command("cargo build").try_collect().await.unwrap();
         assert_eq!(runs.len(), 2);
@@ -2665,7 +2682,7 @@ mod test {
 
         // Tombstones written by older versions are still filtered by include_deleted
         let mut legacy = all.iter().find(|h| h.command == "keep1").unwrap().clone();
-        legacy.deleted_at = Some(OffsetDateTime::now_utc());
+        legacy.deleted_at = Some(Timestamp::now());
         db.update(&legacy).await.unwrap();
 
         let mut paged = db.all_paged(10, false);
@@ -2724,7 +2741,7 @@ mod test {
             ("echo zsh2", Some("zsh")),
         ] {
             let history = History::capture()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .shell_opt(shell.map(str::to_owned))
@@ -2836,7 +2853,7 @@ mod test {
 
         for cwd in [&root, &nested, &sibling] {
             let history: History = History::import()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(format!("echo {cwd}"))
                 .cwd(cwd)
                 .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
@@ -2945,7 +2962,7 @@ mod test {
         let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
         let history = |cwd: &Path| -> History {
             History::import()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(format!("echo {}", cwd.display()))
                 .cwd(cwd.to_string_lossy().into_owned())
                 .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
@@ -2987,7 +3004,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
@@ -3036,7 +3053,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .author("pi")
@@ -3077,7 +3094,7 @@ mod test {
         let db = Sqlite::in_memory(test_local_timeout()).await.unwrap();
 
         let history: History = History::import()
-            .timestamp(OffsetDateTime::now_utc())
+            .timestamp(Timestamp::now())
             .command("echo hello")
             .cwd("/tmp")
             .cmd_origin(CmdOrigin::try_from("pi:unknown-user".to_owned()).unwrap())
@@ -3129,7 +3146,7 @@ mod test {
             ("echo claude", "claude-code", None),
         ] {
             let history = History::import()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .cmd_origin(CmdOrigin::try_from("raspberry:pi".to_owned()).unwrap())
@@ -3188,7 +3205,7 @@ mod test {
             ("echo bob1", "bob"),
         ] {
             let history = History::capture()
-                .timestamp(OffsetDateTime::now_utc())
+                .timestamp(Timestamp::now())
                 .command(command)
                 .cwd("/tmp")
                 .author(author)

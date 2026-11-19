@@ -71,10 +71,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use serde::Deserialize;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::{mpsc, watch};
 use typed_builder::TypedBuilder;
 
@@ -760,7 +759,7 @@ impl Reading {
     /// session written elsewhere, is the same row; keyed on its content ([`SYNTHETIC`]), it is
     /// no node of the session's tree (see the module docs).
     fn title_row(&self, title: TitleChange, at: Option<SystemTime>) -> CopilotMessage {
-        let at = at.map(OffsetDateTime::from);
+        let at = at.and_then(|at| Timestamp::try_from(at).ok());
         let id = format!(
             "{SYNTHETIC}title-{:016x}",
             xxhash_rust::xxh3::xxh3_64(title.text.as_deref().unwrap_or_default().as_bytes())
@@ -923,7 +922,7 @@ pub struct CopilotMessage {
     /// first row, the agent's name.
     title: Option<TitleChange>,
     /// When a title row's sidecar was written: the row's time.
-    at: Option<OffsetDateTime>,
+    at: Option<Timestamp>,
     /// On a subagent's rows, the session that spawned it; on a fork's, the session it was
     /// forked from.
     parent: Option<(SessionId, ParentKind)>,
@@ -1015,10 +1014,9 @@ impl Message for CopilotMessage {
         self.parent_row.clone().map(MessageId::from)
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.at.or_else(|| {
-            self.event.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        })
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.at
+            .or_else(|| self.event.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok()))
     }
 
     fn content(&self) -> Vec<Content> {

@@ -36,7 +36,7 @@ mod unix {
         shell: Option<&str>,
     ) -> History {
         let mut history: History = History::import()
-            .timestamp(time::OffsetDateTime::now_utc())
+            .timestamp(jiff::Timestamp::now())
             .command(command)
             .cwd(cwd)
             .cmd_origin(

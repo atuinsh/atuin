@@ -47,9 +47,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use super::session::{default_root, locate};
 use crate::harnesstools::rehydrate::{
@@ -146,10 +145,8 @@ fn base36(mut n: u32) -> String {
 }
 
 /// A timestamp as Claude Code writes one: UTC, to the millisecond.
-fn timestamp(at: OffsetDateTime) -> String {
-    let format =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
-    at.to_offset(time::UtcOffset::UTC).format(&format).unwrap_or_default()
+fn timestamp(at: Timestamp) -> String {
+    jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%S%.3fZ", at).unwrap_or_default()
 }
 
 /// The whole transcript, one JSON line per written row.

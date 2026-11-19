@@ -3,7 +3,7 @@
 use atuin_client::ai_session::{HarnessKind, HarnessSession, SearchTerms, SessionFilter};
 use atuin_client::settings::Settings;
 use eyre::Result;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 use tonic::transport::Channel;
 
 use super::{DaemonChannel, FromSettingsError};
@@ -72,7 +72,7 @@ impl AiClient {
     pub async fn rebuild_status(&mut self) -> Result<Option<(u64, u64)>> {
         // A listing filtered to the future matches nothing, so the probe costs little beyond the
         // rebuild check every read makes first.
-        let future = OffsetDateTime::now_utc() + time::Duration::days(365);
+        let future = Timestamp::now() + jiff::SignedDuration::from_hours(24 * 365);
         let filter = SessionFilter {
             updated_since: Some(future),
             ..SessionFilter::default()

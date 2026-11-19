@@ -74,9 +74,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
+use jiff::tz::Offset;
 use serde_json::{Map, Value, json};
-use time::format_description::well_known::Rfc3339;
-use time::{OffsetDateTime, UtcOffset};
 
 use super::session::{self, archive_of, session_id_of};
 use crate::harnesstools::rehydrate::{
@@ -177,11 +177,11 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
     if !is_plain_name(&session.id) {
         return Err(RehydrateError::Other(format!("{:?} is not a session id", session.id)));
     }
-    let started = session.started_at.to_offset(UtcOffset::UTC);
+    let started = Offset::UTC.to_datetime(session.started_at);
     let name = format!(
         "rollout-{:04}-{:02}-{:02}T{:02}-{:02}-{:02}-{}.jsonl",
         started.year(),
-        u8::from(started.month()),
+        started.month(),
         started.day(),
         started.hour(),
         started.minute(),
@@ -201,7 +201,7 @@ pub(crate) fn write(root: &Path, session: &RehydrateSession) -> Result<PathBuf, 
     }
     let dir = root
         .join(format!("{:04}", started.year()))
-        .joined(format!("{:02}", u8::from(started.month())))
+        .joined(format!("{:02}", started.month()))
         .joined(format!("{:02}", started.day()));
     std::fs::create_dir_all(&dir)?;
     let base = inherited_history(root, session);
@@ -230,8 +230,8 @@ pub(crate) fn create_new(path: &Path, bytes: &[u8]) -> Result<(), RehydrateError
 }
 
 /// The time as Codex stamps a line: RFC 3339 in UTC, as precise as it was captured.
-pub(crate) fn stamp(at: OffsetDateTime) -> String {
-    at.to_offset(UtcOffset::UTC).format(&Rfc3339).unwrap_or_default()
+pub(crate) fn stamp(at: Timestamp) -> String {
+    at.to_string()
 }
 
 /// A rollout line (codex-rs `RolloutLine`).
@@ -459,11 +459,10 @@ fn turns(session: &RehydrateSession, messages: &[RehydrateMessage], rows: &mut [
             &stamp(begun),
             "event_msg",
             json!({"type": "task_started", "turn_id": id, "root_turn_id": id,
-                   "started_at": begun.unix_timestamp(), "model_context_window": null}),
+                   "started_at": begun.as_second(), "model_context_window": null}),
         ));
         let item = |message: &RehydrateMessage, item: Value| {
-            let millis = i64::try_from(message.timestamp.unix_timestamp_nanos() / 1_000_000)
-                .unwrap_or_default();
+            let millis = message.timestamp.as_millisecond();
             line(
                 &stamp(message.timestamp),
                 "event_msg",
@@ -512,8 +511,8 @@ fn turns(session: &RehydrateSession, messages: &[RehydrateMessage], rows: &mut [
             &stamp(ended.timestamp),
             "event_msg",
             json!({"type": "task_complete", "turn_id": id, "last_agent_message": answer,
-                   "started_at": begun.unix_timestamp(),
-                   "completed_at": ended.timestamp.unix_timestamp()}),
+                   "started_at": begun.as_second(),
+                   "completed_at": ended.timestamp.as_second()}),
         ));
     }
 }
@@ -612,8 +611,7 @@ fn file_change(
             (file.path.clone(), change)
         })
         .collect();
-    let millis =
-        i64::try_from(message.timestamp.unix_timestamp_nanos() / 1_000_000).unwrap_or_default();
+    let millis = message.timestamp.as_millisecond();
     let item = message.source_id.strip_suffix("#patch").unwrap_or(patch.call.as_ref());
     line(
         at,
@@ -905,7 +903,7 @@ pub(crate) mod tests {
                 None => {
                     let canonical = json!([
                         session,
-                        m.timestamp().map(|at| at.unix_timestamp_nanos().to_string()),
+                        m.timestamp().map(|at| at.as_nanosecond().to_string()),
                         m.role(),
                         content,
                         m.title(),
@@ -927,7 +925,7 @@ pub(crate) mod tests {
             rows.push(RehydrateMessage {
                 source_id,
                 parent_source_id: m.parent_id().map(String::from),
-                timestamp: last.unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                timestamp: last.unwrap_or(Timestamp::UNIX_EPOCH),
                 role: m.role(),
                 content,
                 model,
@@ -963,7 +961,7 @@ pub(crate) mod tests {
             original_cwd: Some(PathBuf::from("/work")),
             git_branch: Some("main".to_owned()),
             model: None,
-            started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
+            started_at: messages.first().map_or(Timestamp::UNIX_EPOCH, |m| m.timestamp),
             messages,
             fork_of: None,
         }
@@ -1117,7 +1115,7 @@ pub(crate) mod tests {
         RehydrateMessage {
             source_id: source_id.to_owned(),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+            timestamp: Timestamp::from_second(at).unwrap(),
             role,
             content,
             model: None,
@@ -1435,7 +1433,7 @@ pub(crate) mod tests {
         // Written again, even starting on another day, it is still the same session.
         let mut again =
             session(ID, vec![row("m", 1, Role::User, vec![Content::Text("hi".into())])]);
-        again.started_at = OffsetDateTime::from_unix_timestamp(86_400 * 400).unwrap();
+        again.started_at = Timestamp::from_second(86_400 * 400).unwrap();
         assert!(matches!(
             write(root.path(), &again),
             Err(RehydrateError::AlreadyExists(path)) if path == first
@@ -1555,7 +1553,7 @@ pub(crate) mod tests {
     fn the_rollout_is_written_whole_and_in_place() {
         let root = tempfile::tempdir().unwrap();
         let mut s = session(ID, vec![]);
-        s.started_at = OffsetDateTime::from_unix_timestamp(1_790_218_068).unwrap();
+        s.started_at = Timestamp::from_second(1_790_218_068).unwrap();
         let dir = root.path().join("2026/09/24");
         std::fs::create_dir_all(&dir).unwrap();
         let name = format!("rollout-2026-09-24T02-47-48-{ID}.jsonl");

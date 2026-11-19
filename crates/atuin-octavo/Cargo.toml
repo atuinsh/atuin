@@ -20,6 +20,7 @@ eyre = { workspace = true }
 futures = { workspace = true }
 hyper-tls = { workspace = true }
 hyper-util = { workspace = true, features = ["client-legacy", "tokio"] }
+jiff = { workspace = true }
 native-tls = { workspace = true, features = ["alpn"] }
 prost = { workspace = true }
 prost-types = { workspace = true }
@@ -42,7 +43,6 @@ xxhash-rust = { workspace = true }
 [dev-dependencies]
 rstest = { workspace = true }
 tempfile = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 
 [build-dependencies]

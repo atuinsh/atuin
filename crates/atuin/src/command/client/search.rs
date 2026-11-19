@@ -28,7 +28,7 @@ pub mod keybindings;
 mod syntax;
 mod whats_new;
 
-use atuin_common::time::UtcOffsetSpec;
+use atuin_common::time::TimeZoneSpec;
 
 use crate::i18n::fl;
 
@@ -115,7 +115,7 @@ pub struct Cmd {
     // `Option<Option<T>>` field type), so let's keep supporting it to avoid breaking existing
     // scripts.
     #[arg(allow_hyphen_values = true, num_args = 0..=1)]
-    timezone: Option<UtcOffsetSpec>,
+    timezone: Option<TimeZoneSpec>,
 
     #[arg(
         long,
@@ -244,7 +244,7 @@ impl Cmd {
             // An empty `--author` / `--shell` list means no filtering on that field.
             let authors = OrFilter::from_list(self.author).unwrap_or_default();
             let shells = OrFilter::from_list(self.shell).unwrap_or_default();
-            let tz = self.timezone.unwrap_or(settings.timezone);
+            let tz = self.timezone.unwrap_or_else(|| settings.timezone.clone());
 
             let opt_filter = OptFilters {
                 exit: &self.exit,
@@ -260,11 +260,12 @@ impl Cmd {
                 include_duplicates: self.include_duplicates,
                 authors: authors.as_slice_filter(),
                 shells: shells.as_slice_filter(),
-                timezone: tz,
+                timezone: tz.clone(),
                 dialect: settings.dialect,
             };
 
-            let mut entries = run_non_interactive(&settings, opt_filter, &query, &db).await?;
+            let mut entries =
+                run_non_interactive(&settings, opt_filter.clone(), &query, &db).await?;
 
             if entries.is_empty() {
                 std::process::exit(1)
@@ -283,7 +284,8 @@ impl Cmd {
                     super::history::delete_history_entries(&settings, &history_store, &db, entries)
                         .await?;
 
-                    entries = run_non_interactive(&settings, opt_filter, &query, &db).await?;
+                    entries =
+                        run_non_interactive(&settings, opt_filter.clone(), &query, &db).await?;
                 }
             } else {
                 let format = self.format.as_deref().unwrap_or(settings.history_format.as_str());
@@ -294,7 +296,7 @@ impl Cmd {
                     Some(format),
                     self.print0,
                     true,
-                    tz,
+                    &tz,
                 );
             }
         }

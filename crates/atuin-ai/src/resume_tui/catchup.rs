@@ -35,7 +35,8 @@ use atuin_common::harnesstools::Harness as _;
 use atuin_common::harnesstools::rehydrate::RehydrateMessage;
 use atuin_common::harnesstools::session::{Content, is_substantive};
 use atuin_common::harnesstools::sync::LocalTip;
-use time::OffsetDateTime;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 
 use super::clock::When;
 use super::resumer::{ForkFrom, NotResumable, ResumePlan};
@@ -183,8 +184,8 @@ impl Branch {
     }
 
     /// The chooser's line: `fork @3f9a12bc's · +11 since they split · 20m ago`.
-    pub fn line(&self, now: OffsetDateTime) -> String {
-        let when = When::of(now, self.head.last_at, time::UtcOffset::UTC).phrase();
+    pub fn line(&self, now: Timestamp) -> String {
+        let when = When::of(now, self.head.last_at, &TimeZone::UTC).phrase();
         match self.ahead {
             0 => format!("fork {}'s · {when}", self.host),
             n => format!("fork {}'s · +{n} since they split · {when}", self.host),
@@ -249,7 +250,7 @@ pub fn switch_to<'a>(
     harness: HarnessKind,
     named: Option<&SourceId>,
     tip: &LocalTip,
-    now: OffsetDateTime,
+    now: Timestamp,
     here: &str,
 ) -> Result<&'a Head, String> {
     if harness == HarnessKind::Opencode {
@@ -397,8 +398,8 @@ pub fn branch_selector(heads: &[Head], head: &Head) -> String {
 }
 
 /// A head in a line: `@3f9a12bc · 2h · 136 msgs`.
-pub fn describe(head: &Head, now: OffsetDateTime, here: &str) -> String {
-    let when = When::of(now, head.last_at, time::UtcOffset::UTC);
+pub fn describe(head: &Head, now: Timestamp, here: &str) -> String {
+    let when = When::of(now, head.last_at, &TimeZone::UTC);
     format!("{} · {} · {} msgs", host_label(head, here), when.short(), head.messages)
 }
 
@@ -408,7 +409,7 @@ pub fn describe(head: &Head, now: OffsetDateTime, here: &str) -> String {
 pub fn pick_branch<'a>(
     heads: &'a [Head],
     selector: &str,
-    now: OffsetDateTime,
+    now: Timestamp,
     here: &str,
 ) -> Result<&'a Head, String> {
     if heads.is_empty() {
@@ -447,7 +448,7 @@ pub fn pick_branch<'a>(
 pub fn listing<'a>(
     heads: &[Head],
     shown: impl IntoIterator<Item = &'a Head>,
-    now: OffsetDateTime,
+    now: Timestamp,
     here: &str,
 ) -> String {
     let lines = shown.into_iter().map(|h| {

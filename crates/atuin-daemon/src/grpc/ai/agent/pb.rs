@@ -23,11 +23,11 @@ use atuin_common::harnesstools::session::{
     ToolCallId, ToolResult as DomainToolResult, ToolUse,
 };
 use atuin_common::string::highlighted::FromHighlightedTextProtoError;
-use atuin_common::time::{OffsetDateTimeExt, TimespecOutOfRange};
+use atuin_common::time::{TimespecOutOfRange, TimestampExt};
 use atuin_domain::record::{HostId, RecordId};
 pub use codegen::*;
+use jiff::Timestamp;
 use thiserror::Error;
-use time::OffsetDateTime;
 
 use crate::grpc::common::pb::Uuid;
 
@@ -224,10 +224,7 @@ impl From<DomainMessage> for Message {
             parent_kind: value.parent_kind.map(|kind| ParentKind::from(kind) as i32),
             source_id: value.source_id.into(),
             parent_source_id: value.parent_source_id.map(Into::into),
-            timestamp: Some(prost_types::Timestamp {
-                seconds: value.timestamp.unix_timestamp(),
-                nanos: value.timestamp.nanosecond().cast_signed(),
-            }),
+            timestamp: Some(timestamp(value.timestamp)),
             role: Role::from(value.role) as i32,
             content: value.content.into_iter().filter_map(ContentBlock::of).collect(),
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
@@ -241,6 +238,12 @@ impl From<DomainMessage> for Message {
             provider: value.provider,
         }
     }
+}
+
+/// `ts` as protobuf carries it.
+pub(crate) fn timestamp(ts: Timestamp) -> prost_types::Timestamp {
+    let (seconds, nanos) = ts.to_timespec();
+    prost_types::Timestamp { seconds, nanos }
 }
 
 fn host_repr(host: HostId) -> String {
@@ -300,10 +303,7 @@ impl TryFrom<Message> for DomainMessage {
             parent: value.parent.map(TryInto::try_into).transpose()?,
             parent_kind: domain_parent_kind(value.parent_kind),
             parent_source_id: value.parent_source_id.map(SourceId::from),
-            timestamp: OffsetDateTime::from_timespec(
-                timestamp.seconds.into(),
-                timestamp.nanos.into(),
-            )?,
+            timestamp: Timestamp::from_timespec(timestamp.seconds.into(), timestamp.nanos.into())?,
             role,
             content: value.content.into_iter().map(Content::try_from).collect::<Result<_, _>>()?,
             cwd: value.cwd.map(PathBuf::from),
@@ -330,14 +330,8 @@ impl From<DomainSession> for Session {
             cwd: value.cwd.map(|path| path.to_string_lossy().into_owned()),
             git_branch: value.git_branch,
             model: value.model,
-            started_at: Some(prost_types::Timestamp {
-                seconds: value.started_at.unix_timestamp(),
-                nanos: value.started_at.nanosecond().cast_signed(),
-            }),
-            updated_at: Some(prost_types::Timestamp {
-                seconds: value.updated_at.unix_timestamp(),
-                nanos: value.updated_at.nanosecond().cast_signed(),
-            }),
+            started_at: Some(timestamp(value.started_at)),
+            updated_at: Some(timestamp(value.updated_at)),
             message_count: value.message_count,
             tokens: Some(value.usage),
             title: value.title,
@@ -362,7 +356,7 @@ impl TryFrom<Session> for DomainSession {
     fn try_from(value: Session) -> Result<Self, Self::Error> {
         let at = |timestamp: Option<prost_types::Timestamp>, field| {
             let timestamp = timestamp.ok_or(ParseError::Missing(field))?;
-            Ok::<_, ParseError>(OffsetDateTime::from_timespec(
+            Ok::<_, ParseError>(Timestamp::from_timespec(
                 timestamp.seconds.into(),
                 timestamp.nanos.into(),
             )?)
@@ -439,11 +433,10 @@ mod tests {
         })
     }
 
-    fn arb_timestamp() -> impl Strategy<Value = OffsetDateTime> {
-        // Roughly ±6000 years around the epoch, inside what `OffsetDateTime` represents.
-        (-190_000_000_000i64..190_000_000_000, 0i32..1_000_000_000).prop_map(|(secs, nanos)| {
-            OffsetDateTime::from_timespec(secs.into(), nanos.into()).unwrap()
-        })
+    fn arb_timestamp() -> impl Strategy<Value = Timestamp> {
+        // Roughly ±6000 years around the epoch, inside what `Timestamp` represents.
+        (-190_000_000_000i64..190_000_000_000, 0i32..1_000_000_000)
+            .prop_map(|(secs, nanos)| Timestamp::from_timespec(secs.into(), nanos.into()).unwrap())
     }
 
     fn arb_usage() -> impl Strategy<Value = Usage> {
@@ -795,7 +788,7 @@ mod tests {
                 session: NativeSessionId::from("s".to_owned()),
             })
             .source_id(SourceId::from("src".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(DomainRole::Other("developer".to_owned()))
             .content(vec![Content::Text("hi".to_owned())])
             .build();

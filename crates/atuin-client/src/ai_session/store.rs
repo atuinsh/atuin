@@ -938,9 +938,9 @@ mod tests {
     use atuin_common::harnesstools::session::{Content, Role, UnknownBlock};
     use atuin_domain::record::HostId;
     use futures::TryStreamExt;
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use rstest::*;
-    use time::OffsetDateTime;
 
     use super::{
         AiSessionRecord, AiSessionStore, BuildError, DecryptedData, Host, Key, Loaded, Record,
@@ -968,7 +968,7 @@ mod tests {
                 session: NativeSessionId::from("native-session".to_owned()),
             })
             .source_id(SourceId::from("source-id".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hello".to_owned())])
             .build()
@@ -979,7 +979,7 @@ mod tests {
             .id(atuin_domain::record::RecordId(atuin_common::utils::uuid_v7()))
             .session(session.clone())
             .source_id(SourceId::from(format!("source-{index}")))
-            .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(index))
+            .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(index))
             .role(Role::User)
             .content(vec![Content::Text(text.to_owned())])
             .build()
@@ -1010,7 +1010,7 @@ mod tests {
                         session: NativeSessionId::from(native_session),
                     })
                     .source_id(SourceId::from(source_id))
-                    .timestamp(OffsetDateTime::UNIX_EPOCH)
+                    .timestamp(Timestamp::UNIX_EPOCH)
                     .role(Role::User)
                     .content(content)
                     .build()
@@ -1776,7 +1776,7 @@ mod tests {
         let after = db.get_session(&shared).await.unwrap().unwrap();
         assert_eq!(after.message_count, 2);
         assert_eq!(after.title.as_deref(), Some("alpha title"));
-        assert_eq!(after.updated_at, OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1));
+        assert_eq!(after.updated_at, Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1));
         assert_eq!(after.usage.output.unwrap_or(0), 0, "b's call went with its row");
         assert_eq!(after.host, Some(a.host_id));
         let bravo = crate::ai_session::SourceId::from("source-10".to_owned());

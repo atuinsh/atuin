@@ -34,7 +34,7 @@ impl CommandData {
     /// Returns [`None`] if the history entry has invalid UUIDs.
     pub fn new(history: &History, interner: &mut Rodeo) -> Option<Self> {
         let session = Uuid::parse_str(&history.session).ok()?;
-        let timestamp = history.timestamp.unix_timestamp();
+        let timestamp = history.timestamp.as_second();
 
         let dir_key =
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
@@ -58,7 +58,7 @@ impl CommandData {
             return false;
         };
 
-        let timestamp = history.timestamp.unix_timestamp();
+        let timestamp = history.timestamp.as_second();
 
         self.count += 1;
 
@@ -184,16 +184,19 @@ impl CommandData {
 #[cfg(test)]
 mod tests {
     use atuin_client::settings::Search;
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
-    use time::macros::datetime;
 
     use super::*;
     use crate::search::index::core::tests::make_history;
 
     /// A [`CommandData`] used `count` times, most recently at `most_recent_timestamp`.
     fn command_data(count: u32, most_recent_timestamp: i64) -> CommandData {
-        let history = make_history("git status", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let history = make_history(
+            "git status",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
         let mut data = CommandData::new(&history, &mut Rodeo::new()).unwrap();
         data.count = count;
         data.most_recent_timestamp = most_recent_timestamp;
@@ -297,13 +300,13 @@ mod tests {
     /// before the Unix epoch. A later timestamp wins even over a larger id. Runs in the same second
     /// are ordered by id.
     #[rstest]
-    #[case::after_epoch(datetime!(2024-01-01 10:00 UTC), 2, datetime!(2024-01-01 12:00 UTC), 1)]
-    #[case::before_epoch(datetime!(1960-01-01 10:00 UTC), 2, datetime!(1960-01-01 12:00 UTC), 1)]
-    #[case::same_second(datetime!(2024-01-01 10:00:00.2 UTC), 1, datetime!(2024-01-01 10:00:00.7 UTC), 2)]
+    #[case::after_epoch("2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(), 2, "2024-01-01T12:00:00Z".parse::<Timestamp>().unwrap(), 1)]
+    #[case::before_epoch("1960-01-01T10:00:00Z".parse::<Timestamp>().unwrap(), 2, "1960-01-01T12:00:00Z".parse::<Timestamp>().unwrap(), 1)]
+    #[case::same_second("2024-01-01T10:00:00.2Z".parse::<Timestamp>().unwrap(), 1, "2024-01-01T10:00:00.7Z".parse::<Timestamp>().unwrap(), 2)]
     fn command_data_add_invocation(
-        #[case] older_time: OffsetDateTime,
+        #[case] older_time: Timestamp,
         #[case] older_id: u128,
-        #[case] newer_time: OffsetDateTime,
+        #[case] newer_time: Timestamp,
         #[case] newer_id: u128,
         #[values(false, true)] newer_first: bool,
     ) {
@@ -328,12 +331,12 @@ mod tests {
         let mut data = CommandData::new(first, &mut interner).unwrap();
         assert_eq!(data.count, 1);
         assert_eq!(data.most_recent_id, first.id);
-        assert_eq!(data.most_recent_timestamp, first.timestamp.unix_timestamp());
+        assert_eq!(data.most_recent_timestamp, first.timestamp.as_second());
 
         data.add_invocation(second, &mut interner);
         assert_eq!(data.count, 2);
         assert_eq!(data.most_recent_id, newer.id);
-        assert_eq!(data.most_recent_timestamp, newer_time.unix_timestamp());
+        assert_eq!(data.most_recent_timestamp, newer_time.as_second());
     }
 
     #[rstest]
@@ -346,8 +349,10 @@ mod tests {
             ("/home/user/project", "/home/user/other")
         };
 
-        let h1 = make_history("git status", dir1, datetime!(2024-01-01 10:00 UTC));
-        let h2 = make_history("git status", dir2, datetime!(2024-01-01 12:00 UTC));
+        let h1 =
+            make_history("git status", dir1, "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap());
+        let h2 =
+            make_history("git status", dir2, "2024-01-01T12:00:00Z".parse::<Timestamp>().unwrap());
 
         let mut data = CommandData::new(&h1, &mut interner).unwrap();
         data.add_invocation(&h2, &mut interner);

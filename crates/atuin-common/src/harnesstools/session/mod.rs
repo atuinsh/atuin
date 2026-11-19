@@ -13,13 +13,13 @@ pub use checkpoint::Checkpoint;
 use enum_dispatch::enum_dispatch;
 pub use error::{CaptureError, MessageError, RuntimeError, WatchError};
 use futures::{Stream, StreamExt, TryStreamExt};
+use jiff::Timestamp;
 pub use model::{
     Content, MessageId, ParentKind, Role, SessionEvent, SessionId, StopReason, TitleChange,
     TitleSource, ToolCallId, ToolResult, ToolUse, UNREADABLE_SUMMARY, UnknownBlock, Usage,
     is_substantive, is_tool_output,
 };
 pub use patch::{Change, FilePatch, Hunk, Patch};
-use time::OffsetDateTime;
 use tokio::sync::watch;
 
 use crate::fs::tree_watcher::FileStat;
@@ -74,7 +74,7 @@ pub(crate) fn scan_sessions<S>(
 pub trait Message: Send + 'static {
     fn id(&self) -> Option<MessageId>;
     fn role(&self) -> Role;
-    fn timestamp(&self) -> Option<OffsetDateTime>;
+    fn timestamp(&self) -> Option<Timestamp>;
     fn content(&self) -> Vec<Content>;
     fn model(&self) -> Option<String> {
         None
@@ -342,8 +342,8 @@ pub mod prelude {
 mod tests {
     use std::num::NonZeroUsize;
 
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::harnesstools::ccode::session::CcodeSession;
@@ -384,7 +384,7 @@ mod tests {
         fn role(&self) -> Role {
             Role::Assistant
         }
-        fn timestamp(&self) -> Option<OffsetDateTime> {
+        fn timestamp(&self) -> Option<Timestamp> {
             None
         }
         fn content(&self) -> Vec<Content> {

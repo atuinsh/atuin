@@ -1,7 +1,6 @@
 use atuin_client::history::{AuthorPattern, History};
 use atuin_client::settings::FilterMode;
 use atuin_common::filter::OrFilter;
-use atuin_common::time::UtcOffsetExt;
 use eyre::Result;
 use serde::Deserialize;
 use strum_macros::{EnumIter, EnumString, IntoStaticStr};
@@ -156,8 +155,9 @@ impl AtuinHistoryToolCall {
         // recent commands with the letters anywhere in order, so a short query
         // like `pscale` is buried under long heredocs that happen to spell it
         // out. Fuzzy matches only fill what is left of the page.
-        let search =
-            |mode| db.search(mode, search_mode.into(), &context, &self.query, filter_options);
+        let search = |mode| {
+            db.search(mode, search_mode.into(), &context, &self.query, filter_options.clone())
+        };
         // Full-text results come back newest first; rank them as fuzzy ones
         // are, tightest match first.
         let mut results = match search(DbSearchMode::FullText).await {
@@ -213,13 +213,13 @@ impl AtuinHistoryToolCall {
             return Ok(msg);
         }
 
-        let local_offset = time::UtcOffset::local_or_utc();
+        let local_tz = jiff::tz::TimeZone::system();
 
         let mut formatted: Vec<String> = results
             .iter()
             .enumerate()
             .map(|(i, history)| {
-                crate::history_format::format_history_search_result(i + 1, history, local_offset)
+                crate::history_format::format_history_search_result(i + 1, history, &local_tz)
             })
             .collect();
         if exact < results.len() {
@@ -263,7 +263,7 @@ mod tests {
 
     fn history(command: &str) -> History {
         History::capture()
-            .timestamp(time::OffsetDateTime::UNIX_EPOCH)
+            .timestamp(jiff::Timestamp::UNIX_EPOCH)
             .command(command)
             .cwd("/")
             .build()

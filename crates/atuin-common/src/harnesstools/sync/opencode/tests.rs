@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use jiff::Timestamp;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 use sqlx::Connection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, load_projection, opencode_import};
@@ -140,7 +140,7 @@ fn prompt(id: &str, at: i64) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+        timestamp: Timestamp::from_second(at).unwrap(),
         role: Role::User,
         content: vec![Content::Text("from the other machine".to_owned())],
         model: None,

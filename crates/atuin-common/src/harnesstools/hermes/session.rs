@@ -87,8 +87,8 @@ use std::time::{Duration, SystemTime};
 
 use futures::stream::{BoxStream, SelectAll};
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use serde_json::Value;
-use time::OffsetDateTime;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 use xxhash_rust::xxh3::xxh3_64;
@@ -108,6 +108,7 @@ use crate::harnesstools::session::{
     Sessions, WatchError,
 };
 use crate::sync::BlockingPool;
+use crate::time::TimestampExt as _;
 
 /// How many rows a session reads per open of the store.
 const PAGE: u32 = 500;
@@ -395,21 +396,13 @@ pub struct HermesSession {
     changes: Option<watch::Receiver<u64>>,
 }
 
-/// `secs` (unix seconds, as Hermes stores times) as a time, `None` when out of range.
-fn time_of(secs: f64) -> Option<OffsetDateTime> {
-    if !secs.is_finite() {
-        return None;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    OffsetDateTime::from_unix_timestamp_nanos((secs * 1e9) as i128).ok()
-}
-
 impl HermesSession {
     fn new(db: Arc<Path>, row: &SessionRow, changes: Option<watch::Receiver<u64>>) -> Self {
         Self {
             id: SessionId::from(row.id.clone()),
             db,
-            touched: time_of(row.touched()).map(SystemTime::from),
+            touched: Timestamp::from_unix_secs_f64(row.touched())
+                .and_then(|at| SystemTime::try_from(at).ok()),
             changes,
         }
     }
@@ -732,7 +725,7 @@ impl HermesSession {
                             source: reading.title.as_ref().map_or(TitleSource::Named, |t| t.source),
                             text: None,
                         });
-                        let when = time_of(session.touched());
+                        let when = Timestamp::from_unix_secs_f64(session.touched());
                         yield Ok((at, HermesMessage::title_row(change, reading.titled, when, &context)));
                         reading.titled += 1;
                         reading.title = title;
@@ -799,7 +792,7 @@ enum Kind {
     Title {
         id: String,
         change: TitleChange,
-        at: Option<OffsetDateTime>,
+        at: Option<Timestamp>,
     },
 }
 
@@ -823,12 +816,7 @@ impl HermesMessage {
 
     /// The `nth` title row of a read: the same title read again from the start is the same row,
     /// and a title the session is renamed back to a new one.
-    fn title_row(
-        change: TitleChange,
-        nth: u32,
-        at: Option<OffsetDateTime>,
-        context: &Context,
-    ) -> Self {
+    fn title_row(change: TitleChange, nth: u32, at: Option<Timestamp>, context: &Context) -> Self {
         let mut keyed = change.text.as_deref().unwrap_or_default().as_bytes().to_vec();
         keyed.extend_from_slice(&nth.to_le_bytes());
         let id = format!("{SYNTHETIC}title-{:016x}", xxh3_64(&keyed));
@@ -968,9 +956,9 @@ impl Message for HermesMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
+    fn timestamp(&self) -> Option<Timestamp> {
         match &self.kind {
-            Kind::Row(row) => time_of(row.timestamp),
+            Kind::Row(row) => Timestamp::from_unix_secs_f64(row.timestamp),
             Kind::Title { at, .. } => *at,
         }
     }

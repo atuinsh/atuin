@@ -40,8 +40,6 @@ axum = "0.8"
 base64 = "0.22"
 bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
-chrono = "0.4"
-chrono-humanize = "0.2"
 clap = { version = "4", features = ["derive"] }
 clap-couture = { version = "0.1", default-features = false, features = ["derive", "markdown", "interactive-inquire"] }
 clap_complete = "4"
@@ -83,6 +81,7 @@ indicatif = "0.18"
 interim = { version = "0.2", features = ["time_0_3"] }
 ipnet = { version = "2.12", features = ["serde"] }
 itertools = "0.15"
+jiff = { version = "1.0.1", features = ["serde"] }
 lasso = "0.7"
 libc = "0.2"
 # Version range mirrors sqlx-sqlite's so cargo unifies both to a single
@@ -151,13 +150,15 @@ sha2 = "0.10"
 shellexpand = "3"
 shlex = "2"
 sql-builder = "3"
-sqlx = { version = "0.9", features = ["runtime-tokio", "time", "uuid"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "uuid"] }
 strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
 sysinfo = "0.39"
 tempfile = { version = "3" }
 thiserror = "2"
-time = { version = "0.3", features = ["serde-human-readable", "macros", "local-offset"] }
+# Only for the boundary with interim, which has no jiff 1.x support yet. Several dependencies
+# (plist, ratatui-widgets, rusty_paseto, tracing-appender) keep time in the tree regardless.
+time = "0.3"
 tiny-bip39 = "2"
 tracing = { version = "0.1", features = ["release_max_level_debug"] }
 tokio = { version = "1", features = ["full"] }

@@ -12,9 +12,10 @@
 use std::path::PathBuf;
 
 use atuin_common::string::NonNulStr;
+use atuin_common::time::TimestampExt as _;
+use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use time::OffsetDateTime;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
@@ -196,11 +197,8 @@ pub struct WireHermesEvent {
 
 impl WireHermesEvent {
     /// [`Self::called_at`] as a time, `None` when absent or out of range.
-    pub fn called_at(&self) -> Option<OffsetDateTime> {
-        let seconds = self.called_at.filter(|s| s.is_finite() && *s >= 0.0)?;
-        #[allow(clippy::cast_possible_truncation)]
-        let nanos = (seconds * 1e9) as i128;
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
+    pub fn called_at(&self) -> Option<Timestamp> {
+        self.called_at.filter(|s| *s >= 0.0).and_then(Timestamp::from_unix_secs_f64)
     }
 
     /// [`Self::duration_ms`] in nanoseconds, as history keeps durations.

@@ -41,9 +41,9 @@ use atuin_common::path::PathBufExt as _;
 use atuin_common::utils::uuid_v7;
 use atuin_domain::record::{CmdHost, CmdOrigin, CmdUser};
 use eyre::{Result, eyre};
+use jiff::Timestamp;
 use sqlx::Pool;
 use sqlx::sqlite::SqlitePool;
-use time::PrimitiveDateTime;
 
 use super::Importer;
 use crate::history::History;
@@ -57,7 +57,8 @@ pub struct HistDbEntryCount {
 #[derive(sqlx::FromRow, Debug)]
 pub struct HistDbEntry {
     pub id: i64,
-    pub start_time: PrimitiveDateTime,
+    /// Seconds since the Unix epoch.
+    pub start_time: i64,
     pub host: Vec<u8>,
     pub dir: Vec<u8>,
     pub argv: Vec<u8>,
@@ -158,9 +159,13 @@ impl Importer for ZshHistDb {
             let cmd_origin = CmdOrigin::new(&hostname, &self.username);
             let session = session_map.entry(entry.session).or_insert_with(uuid_v7);
 
+            let Ok(timestamp) = Timestamp::from_second(entry.start_time) else {
+                continue; // a start time no clock produced
+            };
+
             let imported = History::import()
                 .shell("zsh")
-                .timestamp(entry.start_time.assume_utc())
+                .timestamp(timestamp)
                 .command(command)
                 .cwd(cwd)
                 .duration(entry.duration.saturating_mul(1_000_000_000))
@@ -201,15 +206,13 @@ mod test {
     #[rstest]
     #[tokio::test]
     async fn duration_saturates_instead_of_overflowing() {
-        use time::macros::datetime;
-
         use crate::import::tests::TestLoader;
 
         // a corrupt duration column must not overflow when scaled to nanoseconds
         let histdb = ZshHistDb {
             histdb: vec![HistDbEntry {
                 id: 1,
-                start_time: datetime!(2021-12-10 19:00:32),
+                start_time: 1_639_162_832,
                 host: b"box".to_vec(),
                 dir: b"/tmp".to_vec(),
                 argv: b"echo hello".to_vec(),

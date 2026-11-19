@@ -44,6 +44,7 @@ eyre = { workspace = true }
 fs-err = { workspace = true }
 i18n-embed = { workspace = true }
 ipnet = { workspace = true }
+jiff = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
@@ -54,7 +55,6 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }

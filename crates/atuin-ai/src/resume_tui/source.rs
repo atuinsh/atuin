@@ -14,7 +14,7 @@ use atuin_client::ai_session::{
 };
 use atuin_common::harnesstools::rehydrate::RehydrateSession;
 use atuin_common::harnesstools::session::Usage;
-use time::OffsetDateTime;
+use jiff::Timestamp;
 
 /// What to list. The picker resolves its filter mode and query tokens into the database's filter,
 /// so a source never needs to know about modes or the current directory.
@@ -92,15 +92,15 @@ pub struct SessionRow {
     /// The host the session was recorded on, by id (a UUID's simple form; see
     /// [`super::simple_host_id`]).
     pub host_id: String,
-    pub started_at: OffsetDateTime,
+    pub started_at: Timestamp,
     /// The newest message in the session or any of its grouped children.
-    pub updated_at: OffsetDateTime,
+    pub updated_at: Timestamp,
     /// The newest message in the session itself, its grouped children not counted: whether it is
     /// the one still running.
-    pub active_at: OffsetDateTime,
+    pub active_at: Timestamp,
     /// The newest message in the forks and continuations listed beneath the row; `None` with
     /// none.
-    pub forks_at: Option<OffsetDateTime>,
+    pub forks_at: Option<Timestamp>,
     /// How many messages the session holds: every row stored of it
     /// ([`atuin_client::ai_session::Session::message_count`]).
     pub messages: u64,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use atuin_client::settings::Settings;
 use eyre::Result;
+use jiff::Timestamp;
 use ratatui::Frame;
 use ratatui::backend::FromCrossterm;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
@@ -10,7 +11,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 use semver::Version;
-use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 
@@ -54,7 +54,7 @@ impl WhatsNew {
 
         // If nothing has been seen and no update check has ever run, this is a fresh install.
         // Nothing is new to a fresh install, so it starts with these notes already seen.
-        if seen.is_none() && meta.last_version_check().await? == OffsetDateTime::UNIX_EPOCH {
+        if seen.is_none() && meta.last_version_check().await? == Timestamp::UNIX_EPOCH {
             meta.save_whats_new_seen(&version.to_string()).await?;
             return Ok(None);
         }

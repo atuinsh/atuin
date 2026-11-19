@@ -19,9 +19,9 @@ use atuin_common::string::StrExt;
 use easy_cast::Conv;
 use fixedbitset::FixedBitSet;
 use futures::{Stream, TryStreamExt, stream};
+use jiff::Timestamp;
 use lasso::Rodeo;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
-use time::OffsetDateTime;
 use tracing::{Level, instrument};
 
 use crate::search::index::{FrecencyMultipliers, SearchIndexSettings};
@@ -140,7 +140,7 @@ impl SearchIndex {
     pub(super) async fn load_from_db_at(
         &mut self,
         db: &Sqlite,
-        now: OffsetDateTime,
+        now: Timestamp,
         mut on_page: impl FnMut(&[History]),
     ) -> Result<(), LoadFromDbError> {
         let mut pages = pin!(Self::history_pages(db));
@@ -177,13 +177,13 @@ impl SearchIndex {
     /// Otherwise an entry that is added later is scored as older than it really is. It can then
     /// rank below an entry that is actually older but was added earlier.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_add_histories")]
-    pub fn add_history_at<H>(&mut self, histories: H, now: OffsetDateTime)
+    pub fn add_history_at<H>(&mut self, histories: H, now: Timestamp)
     where
         H: IntoIterator<Item: Borrow<History>>,
     {
         let mut total = 0;
         let mut added = 0;
-        let now = now.unix_timestamp();
+        let now = now.as_second();
 
         for history in histories {
             if self.add(history.borrow(), now) {
@@ -200,14 +200,14 @@ impl SearchIndex {
     /// The write lock is taken for each entry rather than for the whole batch. That way searches
     /// can run in between.
     #[instrument(skip_all, level = tracing::Level::TRACE, name = "index_add_histories")]
-    pub(super) fn add_history_shared<T, H>(lock: &RwLock<T>, histories: H, now: OffsetDateTime)
+    pub(super) fn add_history_shared<T, H>(lock: &RwLock<T>, histories: H, now: Timestamp)
     where
         T: AsMut<Self>,
         H: IntoIterator<Item: Borrow<History>>,
     {
         let mut total = 0;
         let mut added = 0;
-        let now = now.unix_timestamp();
+        let now = now.as_second();
 
         for history in histories {
             if lock.write().as_mut().add(history.borrow(), now) {
@@ -295,11 +295,11 @@ impl SearchIndex {
     /// the runs that it has left. A command that has no runs left is removed. The commands after
     /// it move down to fill the gap.
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "index_sync_commands")]
-    pub(super) fn sync_commands<C>(&mut self, commands: C, now: OffsetDateTime)
+    pub(super) fn sync_commands<C>(&mut self, commands: C, now: Timestamp)
     where
         C: IntoIterator<Item = RemainingRuns>,
     {
-        let now = now.unix_timestamp();
+        let now = now.as_second();
         let multipliers = self.settings.frecency_multipliers;
         let mut removed = FixedBitSet::with_capacity(self.data.len());
 
@@ -513,7 +513,7 @@ impl SearchIndex {
     /// frecency multipliers. Commands that are added later use `multipliers` too.
     #[instrument(skip_all, level = tracing::Level::DEBUG, name = "rebuild_frecency")]
     pub fn rebuild_frecency(&mut self, multipliers: FrecencyMultipliers) {
-        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let now = Timestamp::now().as_second();
         self.frecency = self.recompute_frecency(now, multipliers);
         self.settings.frecency_multipliers = multipliers;
     }
@@ -535,7 +535,7 @@ impl SearchIndex {
     ) where
         T: AsRef<Self> + AsMut<Self>,
     {
-        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let now = Timestamp::now().as_second();
 
         let state = lock.upgradable_read();
         let frecency = state.as_ref().recompute_frecency(now, multipliers);
@@ -645,7 +645,6 @@ pub(super) mod tests {
     use atuin_common::filter::OrFilter;
     use atuin_common::path::DisplayRichExt;
     use rstest::{fixture, rstest};
-    use time::macros::datetime;
     use uuid::Uuid;
 
     use super::*;
@@ -659,7 +658,7 @@ pub(super) mod tests {
     pub(in crate::search::index) fn make_history(
         command: &str,
         cwd: &str,
-        timestamp: OffsetDateTime,
+        timestamp: Timestamp,
     ) -> History {
         History::import()
             .timestamp(timestamp)
@@ -719,7 +718,7 @@ pub(super) mod tests {
 
         /// Load every history entry from `db` into this index. Frecency is computed as of now.
         pub(super) async fn load_from_db(&mut self, db: &Sqlite) -> Result<(), LoadFromDbError> {
-            self.load_from_db_at(db, OffsetDateTime::now_utc(), |_| {}).await
+            self.load_from_db_at(db, Timestamp::now(), |_| {}).await
         }
 
         /// Add history entries to the index. Frecency is computed as of now.
@@ -727,7 +726,7 @@ pub(super) mod tests {
         where
             H: IntoIterator<Item: Borrow<History>>,
         {
-            self.add_history_at(histories, OffsetDateTime::now_utc());
+            self.add_history_at(histories, Timestamp::now());
         }
     }
 
@@ -735,13 +734,21 @@ pub(super) mod tests {
     fn search_index_add_and_search() {
         let mut index = SearchIndex::default();
 
-        let h1 = make_history("git status", "/home/user/project", datetime!(2024-01-01 10:00 UTC));
+        let h1 = make_history(
+            "git status",
+            "/home/user/project",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
         let h2 = make_history(
             "git commit -m 'test'",
             "/home/user/project",
-            datetime!(2024-01-01 10:05 UTC),
+            "2024-01-01T10:05:00Z".parse::<Timestamp>().unwrap(),
         );
-        let h3 = make_history("ls -la", "/home/user/other", datetime!(2024-01-01 10:10 UTC));
+        let h3 = make_history(
+            "ls -la",
+            "/home/user/other",
+            "2024-01-01T10:10:00Z".parse::<Timestamp>().unwrap(),
+        );
 
         index.add_history([h1, h2, h3]);
 
@@ -766,14 +773,21 @@ pub(super) mod tests {
         let mut index = SearchIndex::default();
 
         // contiguous match for "foo bar", run once
-        let contiguous = make_history("foo bar --baz", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let contiguous = make_history(
+            "foo bar --baz",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
         index.add_history([&contiguous]);
 
         // scattered match (b..a..r spread over "build-analyzer-report"), run
         // 200 times so its frecency dwarfs any fuzzy score difference
         for _ in 0..200 {
-            let h =
-                make_history("foo build-analyzer-report", "/tmp", datetime!(2024-01-01 10:00 UTC));
+            let h = make_history(
+                "foo build-analyzer-report",
+                "/tmp",
+                "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+            );
             index.add_history([&h]);
         }
 
@@ -790,7 +804,7 @@ pub(super) mod tests {
     #[rstest]
     fn add_updates_frecency_without_rebuild() {
         let mut index = SearchIndex::default();
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
 
         index.add_history([make_history("echo alpha", "/tmp", now)]);
         let once = frecency(&index, "echo alpha");
@@ -813,10 +827,18 @@ pub(super) mod tests {
     fn equal_matches_order_by_frecency() {
         let mut index = SearchIndex::default();
 
-        index.add_history([make_history("echo alpha", "/tmp", datetime!(2024-01-01 10:00 UTC))]);
+        index.add_history([make_history(
+            "echo alpha",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        )]);
         // same fuzzy score for the query, much higher frecency
         for _ in 0..50 {
-            let h = make_history("echo beta", "/tmp", datetime!(2024-01-01 10:00 UTC));
+            let h = make_history(
+                "echo beta",
+                "/tmp",
+                "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+            );
             index.add_history([&h]);
         }
 
@@ -837,8 +859,16 @@ pub(super) mod tests {
     fn diacritics_normalized_for_matching() {
         let mut index = SearchIndex::default();
 
-        index.add_history([make_history("echo déjà-vu", "/tmp", datetime!(2024-01-01 10:00 UTC))]);
-        index.add_history([make_history("echo plain", "/tmp", datetime!(2024-01-01 10:00 UTC))]);
+        index.add_history([make_history(
+            "echo déjà-vu",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        )]);
+        index.add_history([make_history(
+            "echo plain",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        )]);
 
         let expected = command(&index, "echo déjà-vu").most_recent_id;
 
@@ -852,8 +882,10 @@ pub(super) mod tests {
     #[rstest]
     fn normalization_does_not_introduce_query_operators() {
         let mut index = SearchIndex::default();
-        let literal = make_history("¡\"", "/tmp", datetime!(2024-01-01 10:00 UTC));
-        let plain = make_history("plain", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let literal =
+            make_history("¡\"", "/tmp", "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap());
+        let plain =
+            make_history("plain", "/tmp", "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap());
         index.add_history([&literal]);
         index.add_history([&plain]);
 
@@ -919,7 +951,8 @@ pub(super) mod tests {
         let mut index = SearchIndex::default();
         for (i, command) in equivalence_corpus().iter().enumerate() {
             // spread timestamps so frecency scores actually differ
-            let ts = datetime!(2024-01-01 00:00 UTC) + time::Duration::minutes(i64::conv(i % 1440));
+            let ts = "2024-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
+                + jiff::SignedDuration::from_mins(i64::conv(i % 1440));
             index.add_history([make_history(command, "/tmp", ts)]);
         }
         assert!(index.command_count() > 10_000, "corpus must cross threshold");
@@ -939,7 +972,11 @@ pub(super) mod tests {
     #[rstest]
     fn long_query_truncated_not_panicking() {
         let mut index = SearchIndex::default();
-        index.add_history([make_history("echo hello", "/tmp", datetime!(2024-01-01 10:00 UTC))]);
+        index.add_history([make_history(
+            "echo hello",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        )]);
 
         let long_query = "a".repeat(5000);
         assert!(index.search_compiled(&long_query, &CompiledFilter::All, 10).next().is_none());
@@ -950,20 +987,20 @@ pub(super) mod tests {
     /// scored as older than an older entry that was added earlier.
     #[rstest]
     fn add_history_at_scores_as_of_now() {
-        let then = datetime!(2024-01-01 10:00 UTC);
+        let then = "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap();
         let mut index = SearchIndex::default();
 
         index.add_history_at([make_history("echo old", "/tmp", then)], then);
         // This entry was run after the operation started, but it is added with the same `now`. So
         // its age clamps to 0.
-        let newer = then + time::Duration::hours(2);
+        let newer = then + jiff::SignedDuration::from_hours(2);
         index.add_history_at([make_history("echo new", "/tmp", newer)], then);
         assert_eq!(frecency(&index, "echo old"), frecency(&index, "echo new"));
 
         // The same entry is much less recent when it is scored as of a month later.
         index.add_history_at(
             [make_history("echo stale", "/tmp", then)],
-            then + time::Duration::days(30),
+            then + jiff::SignedDuration::from_hours(24 * 30),
         );
         assert!(frecency(&index, "echo stale") < frecency(&index, "echo old"));
     }
@@ -973,7 +1010,7 @@ pub(super) mod tests {
     #[rstest]
     #[tokio::test]
     async fn from_db_applies_search_settings(#[future(awt)] db: Sqlite) {
-        db.save(&make_history("echo hello", "/tmp", OffsetDateTime::now_utc())).await.unwrap();
+        db.save(&make_history("echo hello", "/tmp", Timestamp::now())).await.unwrap();
 
         let default = SearchIndex::from_db(SearchIndexSettings::default(), &db).await.unwrap();
         assert!(frecency(&default, "echo hello") > 0);
@@ -991,7 +1028,7 @@ pub(super) mod tests {
     /// new settings too.
     #[rstest]
     fn rebuild_frecency_applies_settings() {
-        let now = OffsetDateTime::now_utc();
+        let now = Timestamp::now();
         let mut index = SearchIndex::default();
         index.add_history([make_history("echo before", "/tmp", now)]);
         assert!(frecency(&index, "echo before") > 0);
@@ -1014,7 +1051,8 @@ pub(super) mod tests {
             let mut run = make_history(
                 "cargo build",
                 "/tmp",
-                datetime!(2024-01-01 10:00 UTC) - time::Duration::minutes(minute),
+                "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap()
+                    - jiff::SignedDuration::from_mins(minute),
             );
             run.session = "0199b2f0aaaa7000800000000000000a".to_owned();
             db.save(&run).await.unwrap();
@@ -1052,7 +1090,7 @@ pub(super) mod tests {
             ("echo unknown4", None),
             ("echo zsh2", Some("zsh")),
         ] {
-            let mut history = make_history(command, "/tmp", OffsetDateTime::now_utc());
+            let mut history = make_history(command, "/tmp", Timestamp::now());
             history.shell = shell.map(str::to_owned);
             index.add_history([&history]);
         }
@@ -1125,7 +1163,10 @@ pub(super) mod tests {
     /// rows would.
     #[rstest]
     fn sync_commands_matches_a_reload() {
-        let at = |minutes| datetime!(2024-01-01 10:00 UTC) + time::Duration::minutes(minutes);
+        let at = |minutes| {
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap()
+                + jiff::SignedDuration::from_mins(minutes)
+        };
         let all = [
             make_history("git status", "/a", at(0)),
             make_history("cargo build", "/a", at(1)),
@@ -1144,7 +1185,7 @@ pub(super) mod tests {
         let synced = ["git status", "ls -la", "cargo build"];
         index.sync_commands(
             synced.map(|command| remaining_runs(&remaining, command)),
-            OffsetDateTime::now_utc(),
+            Timestamp::now(),
         );
 
         let reloaded = index_of(&remaining);
@@ -1165,11 +1206,13 @@ pub(super) mod tests {
     #[rstest]
     fn sync_commands_removes_a_command_without_runs() {
         let mut index = SearchIndex::default();
-        let gone = make_history("echo gone", "/tmp", datetime!(2024-01-01 10:00 UTC));
-        let kept = make_history("echo kept", "/tmp", datetime!(2024-01-01 10:01 UTC));
+        let gone =
+            make_history("echo gone", "/tmp", "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap());
+        let kept =
+            make_history("echo kept", "/tmp", "2024-01-01T10:01:00Z".parse::<Timestamp>().unwrap());
         index.add_history([&gone, &kept]);
 
-        index.sync_commands([remaining_runs(&[], "echo gone")], OffsetDateTime::now_utc());
+        index.sync_commands([remaining_runs(&[], "echo gone")], Timestamp::now());
 
         assert_eq!(index.command_count(), 1);
         let global: Vec<_> = index.search("echo", &IndexFilterMode::Global, 10).unwrap().collect();
@@ -1179,7 +1222,8 @@ pub(super) mod tests {
             IndexFilterMode::Directory("/tmp".display_rich().trailing_slash(true).to_string());
         assert_eq!(index.search("", &tmp, 10).unwrap().collect::<Vec<_>>(), vec![kept.id]);
 
-        let again = make_history("echo gone", "/tmp", datetime!(2024-01-01 10:02 UTC));
+        let again =
+            make_history("echo gone", "/tmp", "2024-01-01T10:02:00Z".parse::<Timestamp>().unwrap());
         index.add_history([&again]);
         let hits: BTreeSet<_> =
             index.search("echo", &IndexFilterMode::Global, 10).unwrap().collect();
@@ -1192,13 +1236,21 @@ pub(super) mod tests {
     #[rstest]
     fn sync_commands_ignores_runs_the_index_leaves_out() {
         let mut index = SearchIndex::default();
-        let human = make_history("make deploy", "/tmp", datetime!(2024-01-01 10:00 UTC));
-        let mut agent = make_history("make deploy", "/tmp", datetime!(2024-01-01 10:01 UTC));
+        let human = make_history(
+            "make deploy",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
+        let mut agent = make_history(
+            "make deploy",
+            "/tmp",
+            "2024-01-01T10:01:00Z".parse::<Timestamp>().unwrap(),
+        );
         agent.author_kind = Some(AuthorKind::Agent);
         index.add_history([&human, &agent]);
         assert_eq!(count(&index, "make deploy"), 1);
 
-        index.sync_commands([remaining_runs(&[agent], "make deploy")], OffsetDateTime::now_utc());
+        index.sync_commands([remaining_runs(&[agent], "make deploy")], Timestamp::now());
 
         assert_eq!(index.command_count(), 0);
         assert!(snapshot(&index).is_empty());
@@ -1213,7 +1265,11 @@ pub(super) mod tests {
         #[case] first_has_runs: bool,
         #[case] kept: bool,
     ) {
-        let run = make_history("echo twice", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let run = make_history(
+            "echo twice",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
         let entry = |has_runs: bool| {
             let runs: &[History] = if has_runs {
                 std::slice::from_ref(&run)
@@ -1229,7 +1285,7 @@ pub(super) mod tests {
             }
 
             let entries = [entry(first_has_runs), entry(!first_has_runs)];
-            index.sync_commands(entries, OffsetDateTime::now_utc());
+            index.sync_commands(entries, Timestamp::now());
 
             assert_eq!(contains(&index, "echo twice"), kept, "indexed before: {indexed}");
         }
@@ -1239,10 +1295,14 @@ pub(super) mod tests {
     #[rstest]
     fn sync_commands_adds_runs_the_index_missed() {
         let mut index = SearchIndex::default();
-        let missed = make_history("echo missed", "/tmp", datetime!(2024-01-01 10:00 UTC));
+        let missed = make_history(
+            "echo missed",
+            "/tmp",
+            "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap(),
+        );
 
         let runs = remaining_runs(std::slice::from_ref(&missed), "echo missed");
-        index.sync_commands([runs], OffsetDateTime::now_utc());
+        index.sync_commands([runs], Timestamp::now());
 
         let hits: Vec<_> = index.search("missed", &IndexFilterMode::Global, 10).unwrap().collect();
         assert_eq!(hits, vec![missed.id]);

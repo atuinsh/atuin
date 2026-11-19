@@ -96,11 +96,11 @@ use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
 use futures::{Stream, StreamExt};
+use jiff::Timestamp;
 use serde::de::Error as _;
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteRow};
 use sqlx::{Connection, Row, Sqlite, TypeInfo, ValueRef};
-use time::OffsetDateTime;
 use tokio::sync::{Mutex, MutexGuard, watch};
 use typed_builder::TypedBuilder;
 
@@ -1612,11 +1612,13 @@ impl Session for OpencodeSession {
 
     /// Once opencode has updated the session since `since`, as each row the tail wakes it for may.
     fn changed_after(mut self, since: SystemTime) -> impl Future<Output = Option<Self>> + Send {
-        let since = OffsetDateTime::from(since).unix_timestamp_nanos() / 1_000_000;
+        // A `since` past what jiff can represent can only be a broken clock; treating it as the
+        // epoch wakes on the next update rather than never.
+        let since = Timestamp::try_from(since).map_or(0, Timestamp::as_millisecond);
         async move {
             loop {
                 let updated = self.reads.updated(&self.id).await;
-                if updated.is_none_or(|at| i128::from(at) >= since) {
+                if updated.is_none_or(|at| at >= since) {
                     return Some(self);
                 }
                 self.wake.changed().await.ok()?;
@@ -2527,10 +2529,8 @@ impl Message for OpencodeMessage {
         self.role.clone()
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.time.and_then(|ms| {
-            OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()
-        })
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.time.and_then(|ms| Timestamp::from_millisecond(ms).ok())
     }
 
     fn content(&self) -> Vec<Content> {
@@ -2670,7 +2670,7 @@ mod tests {
         assert_eq!(m.role(), Role::Assistant);
         assert_eq!(m.content(), vec![Content::Text("hi".into())]);
         assert_eq!(m.id(), Some(MessageId::from("prt_1".to_owned())));
-        assert_eq!(m.timestamp().unwrap().unix_timestamp(), 1_700_000_000);
+        assert_eq!(m.timestamp().unwrap().as_second(), 1_700_000_000);
     }
 
     #[rstest]
@@ -4128,14 +4128,14 @@ mod tests {
         assert_eq!(b1.role(), Role::User);
         assert_eq!(b1.content(), vec![Content::Text("hi from B".into())]);
         assert_eq!(future.role(), Role::Other("message.part.updated".to_owned()));
-        assert_eq!(future.timestamp().unwrap().unix_timestamp(), 1_700_000_006);
+        assert_eq!(future.timestamp().unwrap().as_second(), 1_700_000_006);
         assert!(matches!(
             future.content().as_slice(),
             [Content::Other(v)] if v["part"]["kind"] == "future"
         ));
         assert_eq!(prompted.role(), Role::User);
         assert_eq!(prompted.id(), Some(MessageId::from("msgB2".to_owned())));
-        assert_eq!(prompted.timestamp().unwrap().unix_timestamp(), 1_700_000_011);
+        assert_eq!(prompted.timestamp().unwrap().as_second(), 1_700_000_011);
         assert_eq!(prompted.content(), vec![Content::Text("second prompt from B".into())]);
     }
 
@@ -4488,7 +4488,7 @@ mod tests {
             assert_eq!(failed.role(), Role::Assistant);
             assert_eq!(failed.content(), vec![Content::Error(text.to_owned())]);
             assert_eq!(failed.stop_reason(), Some(reason));
-            assert_eq!(failed.timestamp().unwrap().unix_timestamp(), 1_700_000_009);
+            assert_eq!(failed.timestamp().unwrap().as_second(), 1_700_000_009);
             assert_eq!(failed.model().as_deref(), Some("claude-sonnet-4"));
             assert_eq!(failed.parent_id(), Some(MessageId::from("msg_u1".to_owned())));
             assert_eq!(
@@ -4808,12 +4808,12 @@ mod tests {
             let title = find(&messages, &title_id("ses_W", "Mock title number 1"));
             assert_eq!(title.cwd(), Some(PathBuf::from("/work/proj")));
             // when its title changed, after the rows before it, not when the session was created
-            assert_eq!(title.timestamp().unwrap().unix_timestamp(), 1_790_218_388);
+            assert_eq!(title.timestamp().unwrap().as_second(), 1_790_218_388);
 
             let prompt = find(&messages, "prt_0d148d4bf001JaxA9TwaMgU5vE");
             assert_eq!(prompt.role(), Role::User);
             assert_eq!(prompt.content(), vec![Content::Text("\"hello there\"".into())]);
-            assert_eq!(prompt.timestamp().unwrap().unix_timestamp(), 1_790_217_606);
+            assert_eq!(prompt.timestamp().unwrap().as_second(), 1_790_217_606);
 
             let reply = find(&messages, "prt_0d148db2c001S3pTr5s7fXT3RP");
             assert_eq!(reply.role(), Role::Assistant);
@@ -4903,10 +4903,7 @@ mod tests {
                 Some("mock subtask (@general subagent)")
             );
             // the session as it stands, at its start: when it was last updated moves with reads
-            assert_eq!(
-                child.timestamp().unwrap().unix_timestamp_nanos(),
-                1_790_217_674_726_000_000
-            );
+            assert_eq!(child.timestamp().unwrap().as_nanosecond(), 1_790_217_674_726_000_000);
         }
 
         /// A session whose log holds its `session.created` row is read from the log alone, even
@@ -5035,7 +5032,7 @@ mod tests {
         ]);
 
         assert_eq!(messages[0].content(), vec![Content::Text("v2 THINK TOOL go".into())]);
-        assert_eq!(messages[0].timestamp().unwrap().unix_timestamp(), 1_790_217_981);
+        assert_eq!(messages[0].timestamp().unwrap().as_second(), 1_790_217_981);
         assert_eq!(messages[2].content(), vec![Content::Reasoning(
             "Let me think about it.".into()
         )]);

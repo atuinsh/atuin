@@ -3,9 +3,8 @@
 //! Amp 0.0.1792180867 writes. Its message ids (`protocolMessageID`) are the ones the plugin
 //! pushes, so a thread imported after the plugin captured some of it stores only what's missing.
 
+use jiff::Timestamp;
 use serde_json::Value;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::process::Command;
 
 use crate::harnesstools::session::Usage;
@@ -131,15 +130,15 @@ fn messages(thread: &Value) -> Vec<PushedMessage> {
     out
 }
 
-fn parsed(v: &Value) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(v.as_str()?, &Rfc3339).ok()
+fn parsed(v: &Value) -> Option<Timestamp> {
+    v.as_str()?.parse().ok()
 }
 
 /// When `m` was written: its `createdAt`, else its model call's time, else when it was sent.
-fn time(m: &Value) -> Option<OffsetDateTime> {
+fn time(m: &Value) -> Option<Timestamp> {
     parsed(&m["createdAt"]).or_else(|| parsed(&m["usage"]["timestamp"])).or_else(|| {
         let ms = m["meta"]["sentAt"].as_i64()?;
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(ms) * 1_000_000).ok()
+        Timestamp::from_millisecond(ms).ok()
     })
 }
 

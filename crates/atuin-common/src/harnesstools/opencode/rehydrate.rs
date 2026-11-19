@@ -67,10 +67,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection, Sqlite};
-use time::OffsetDateTime;
 
 use super::session;
 use crate::db::query_scalar;
@@ -343,11 +343,6 @@ fn export_file(export: &Value) -> Result<crate::fs::RemoveOnDropPath, RehydrateE
     unreachable!("an unbounded range always finds a free name")
 }
 
-/// Milliseconds since the epoch, opencode's clock.
-fn millis(at: OffsetDateTime) -> i64 {
-    i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or_default()
-}
-
 /// An id opencode would accept for a row it did not get one for: its prefix, then (as opencode's
 /// own ascending ids) the time it stands for in hex, then characters derived from `seed`, so the
 /// same session always mints the same ids.
@@ -356,14 +351,18 @@ fn mint(prefix: &str, at: i64, seed: &str) -> String {
 }
 
 /// A new part's id, as [`mint`] makes them: parts of one message sort in time order.
-pub(crate) fn mint_part(at: OffsetDateTime, seed: &str) -> String {
-    mint("prt", millis(at), seed)
+pub(crate) fn mint_part(at: Timestamp, seed: &str) -> String {
+    mint("prt", at.as_millisecond(), seed)
 }
 
 /// A new session's id, as opencode's own (`Identifier.descending`): [`mint`]'s, its time
 /// inverted so the newest sorts first.
-pub(crate) fn mint_session(at: OffsetDateTime, seed: &str) -> String {
-    mint_at("ses", !u64::try_from(millis(at)).unwrap_or_default().wrapping_mul(0x1000), seed)
+pub(crate) fn mint_session(at: Timestamp, seed: &str) -> String {
+    mint_at(
+        "ses",
+        !u64::try_from(at.as_millisecond()).unwrap_or_default().wrapping_mul(0x1000),
+        seed,
+    )
 }
 
 /// The digits of opencode's ids, in the order they sort in.
@@ -434,7 +433,7 @@ struct Draft {
 
 impl Draft {
     fn new(assistant: bool, row: &RehydrateMessage) -> Self {
-        let at = millis(row.timestamp);
+        let at = row.timestamp.as_millisecond();
         Self {
             id: None,
             assistant,
@@ -541,7 +540,7 @@ pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<Stri
         if draft.id.is_none() {
             draft.id.clone_from(&named);
         }
-        draft.completed = draft.completed.max(millis(row.timestamp));
+        draft.completed = draft.completed.max(row.timestamp.as_millisecond());
         if draft.model.is_none() {
             draft.model.clone_from(&row.model);
         }
@@ -627,8 +626,8 @@ pub(crate) fn export_minting(session: &RehydrateSession) -> (Value, HashSet<Stri
         messages.push(json!({"info": info, "parts": parts}));
     }
 
-    let updated = session.messages.iter().map(|m| millis(m.timestamp)).max();
-    let started = millis(session.started_at);
+    let updated = session.messages.iter().map(|m| m.timestamp.as_millisecond()).max();
+    let started = session.started_at.as_millisecond();
     if let Some(of) = &session.fork_of {
         fork(&mut messages, session, of);
         minted =
@@ -982,7 +981,7 @@ fn join_results(rows: Vec<RehydrateMessage>) -> Vec<RehydrateMessage> {
 }
 
 fn part_of(row: &RehydrateMessage, draft: &mut Draft) -> Option<Value> {
-    let at = millis(row.timestamp);
+    let at = row.timestamp.as_millisecond();
     if row.content.is_empty() {
         let usage = row.usage.as_ref()?;
         let tokens = step_tokens(row, usage);
@@ -1143,7 +1142,7 @@ pub(crate) mod tests {
     /// under its id, in the message its `messageID` names, stamped with the time of the import.
     pub async fn opencode_import(conn: &mut SqliteConnection, export: &Value, cwd: &str) {
         let info = &export["info"];
-        let now = millis(OffsetDateTime::now_utc());
+        let now = Timestamp::now().as_millisecond();
         crate::db::query::<sqlx::Sqlite>(
             "INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?1, \
              ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
@@ -1214,7 +1213,7 @@ pub(crate) mod tests {
                 rows.push(RehydrateMessage {
                     source_id: String::from(m.id().unwrap()),
                     parent_source_id: m.parent_id().map(String::from),
-                    timestamp: m.timestamp().unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                    timestamp: m.timestamp().unwrap_or(Timestamp::UNIX_EPOCH),
                     role: m.role(),
                     content: m.content(),
                     model: m.model(),
@@ -1242,7 +1241,7 @@ pub(crate) mod tests {
             original_cwd: Some(PathBuf::from("/work/proj")),
             git_branch: None,
             model: None,
-            started_at: messages.first().map_or(OffsetDateTime::UNIX_EPOCH, |m| m.timestamp),
+            started_at: messages.first().map_or(Timestamp::UNIX_EPOCH, |m| m.timestamp),
             messages,
             fork_of: None,
         }
@@ -1369,7 +1368,7 @@ pub(crate) mod tests {
         RehydrateMessage {
             source_id: source_id.to_owned(),
             parent_source_id: None,
-            timestamp: OffsetDateTime::from_unix_timestamp(at).unwrap(),
+            timestamp: Timestamp::from_second(at).unwrap(),
             role,
             content,
             model: None,

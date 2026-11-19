@@ -626,9 +626,8 @@ mod tests {
     };
     use easy_cast::Conv;
     use futures::StreamExt;
+    use jiff::SignedDuration;
     use rstest::*;
-    use time::Duration;
-    use time::macros::datetime;
 
     use super::{BUILD_BATCH_SIZE, History};
     use crate::database::{Context, Sqlite};
@@ -642,7 +641,7 @@ mod tests {
     fn sample_history() -> History {
         History {
             id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap(),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
@@ -690,7 +689,7 @@ mod tests {
     #[case::create(
         HistoryRecord::Create(History {
             id: "018cd4fe81757cd2aee65cd7861f9c81".parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap(),
             duration: 100,
             exit: 0,
             command: "ls".to_owned(),
@@ -808,8 +807,8 @@ mod tests {
     fn history_n(n: usize) -> History {
         History {
             id: format!("{n:032x}").parse().unwrap(),
-            timestamp: datetime!(2024-01-04 00:00:00.000000 +00:00)
-                + Duration::seconds(i64::conv(n)),
+            timestamp: "2024-01-04T00:00:00.000000+00:00".parse::<jiff::Timestamp>().unwrap()
+                + SignedDuration::from_secs(i64::conv(n)),
             command: format!("command {n}"),
             ..sample_history()
         }

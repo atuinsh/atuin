@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use atuin_client::history::{AuthorKind, HistoryId};
-use atuin_common::time::OffsetDateTimeExt;
+use atuin_common::time::TimestampExt;
 use atuin_common::utils::normalize_optional_string;
 use atuin_daemon::grpc::common::pb::Uuid as WireUuid;
 use atuin_daemon::grpc::history::pb::{
@@ -23,7 +23,7 @@ use tonic::Code;
 
 fn tame_request() -> StartHistoryRequest {
     StartHistoryRequest {
-        timestamp: i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos()).unwrap(),
+        timestamp: i64::try_from(jiff::Timestamp::now().as_nanosecond()).unwrap(),
         command: "echo tame".into(),
         cwd: "/tmp".into(),
         session: uuid::Uuid::now_v7().as_simple().to_string(),
@@ -94,7 +94,7 @@ proptest! {
             prop_assert_eq!(&row.session, &req.session);
             prop_assert_eq!(row.cmd_origin.as_str(), req.hostname.as_str());
             prop_assert_eq!(row.exit, exit);
-            prop_assert_eq!(row.timestamp, time::OffsetDateTime::from_unix_nanos_i64(req.timestamp));
+            prop_assert_eq!(row.timestamp, jiff::Timestamp::from_unix_nanos_i64(req.timestamp));
             // `History::new` falls back to `ATUIN_HISTORY_AUTHOR`/`ATUIN_HISTORY_INTENT` when the
             // wire field is unset, so a developer shell exporting either must not fail this test.
             let expected_intent = normalize_optional_string(Some(req.intent.clone()))

@@ -33,7 +33,7 @@ impl Message for Row {
     fn role(&self) -> Role {
         self.0.role.clone()
     }
-    fn timestamp(&self) -> Option<OffsetDateTime> {
+    fn timestamp(&self) -> Option<Timestamp> {
         None
     }
     fn content(&self) -> Vec<Content> {

@@ -6,12 +6,12 @@ use std::time::Duration;
 use atuin_client::history::{History, HistoryId};
 use atuin_client::theme::{Meaning, Theme};
 use atuin_common::string::EscapeNonPrintablePosixExt as _;
-use atuin_common::time::{DurationExt as _, OffsetDateTimeExt as _};
+use atuin_common::time::{DurationExt as _, TimestampExt as _};
 use atuin_daemon::{OutputLine, OutputMatch};
 use colored::Colorize;
 use futures_util::{Stream, StreamExt as _};
+use jiff::Timestamp;
 use serde::Serialize;
-use time::OffsetDateTime;
 use unicode_width::UnicodeWidthStr as _;
 
 /// A search match from the daemon paired with the [`History`] loaded for it locally. Owned, so a
@@ -23,7 +23,7 @@ pub(super) struct HistoryMatch {
 
 /// Rendering context shared by every match in a run, since it does not vary between them.
 pub(super) struct RenderCtx<'a> {
-    pub now: OffsetDateTime,
+    pub now: Timestamp,
     pub width: usize,
     pub theme: &'a Theme,
 }
@@ -237,7 +237,7 @@ impl MatchRenderer for JsonWriter {
                 .join("\n");
             let record = JsonRecord {
                 id: &history.id,
-                timestamp_unix_ns: history.timestamp.unix_timestamp_nanos(),
+                timestamp_unix_ns: history.timestamp.as_nanosecond(),
                 command: &history.command,
                 cwd: &history.cwd,
                 session: &history.session,
@@ -345,7 +345,7 @@ mod tests {
 
     fn hist(command: &str, duration_nanos: i64, exit: i64) -> History {
         let mut h: History = History::capture()
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .command(command)
             .cwd("/")
             .build()
@@ -433,7 +433,7 @@ mod tests {
 
     fn ctx(theme: &Theme) -> RenderCtx<'_> {
         RenderCtx {
-            now: OffsetDateTime::UNIX_EPOCH,
+            now: Timestamp::UNIX_EPOCH,
             width: 0,
             theme,
         }
@@ -532,7 +532,7 @@ mod tests {
         #[case] width: usize,
     ) {
         let (age_secs, duration_nanos) = timing;
-        let now = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(age_secs);
+        let now = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(age_secs);
         let mut manager = ThemeManager::builtin_only();
         let theme = manager.load_theme("default");
         let m = match_of(hist(command, duration_nanos, exit), &highlighted("", &[]));

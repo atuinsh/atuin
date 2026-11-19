@@ -28,19 +28,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
     use rstest::rstest;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::history::History;
 
     fn hist(command: &str) -> History {
-        History::capture()
-            .timestamp(OffsetDateTime::now_utc())
-            .command(command)
-            .cwd("/")
-            .build()
-            .into()
+        History::capture().timestamp(Timestamp::now()).command(command).cwd("/").build().into()
     }
 
     fn commands(res: Vec<History>) -> Vec<String> {

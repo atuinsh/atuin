@@ -16,7 +16,7 @@ use serde_with::{DeserializeAs, SerializeAs};
 /// Returned by [`DurationExt::try_new`] when the requested seconds/nanoseconds cannot be
 /// represented by the target `Duration` type.
 ///
-/// [`std::time::Duration::new`] and [`time::Duration::new`] both *panic* in this situation.
+/// [`std::time::Duration::new`] and [`jiff::SignedDuration::new`] both *panic* in this situation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("duration of {secs}s + {nsecs}ns is out of range")]
 pub struct DurationOverflow {
@@ -39,12 +39,14 @@ pub trait DurationExt<D> {
 
     /// Begin rendering this duration.
     ///
-    /// Pick a style with [`DurationDisplay::largest_unit`] or [`DurationDisplay::stopwatch`];
-    /// the result implements [`Display`](fmt::Display).
+    /// Pick a style with [`DurationDisplay::largest_unit`], [`DurationDisplay::stopwatch`],
+    /// [`DurationDisplay::days_ago`] or [`DurationDisplay::ago`]; the result implements
+    /// [`Display`](fmt::Display).
     ///
     /// ```ignore
     /// duration.display().stopwatch()     // 1h2m3s
     /// duration.display().largest_unit()  // 1h
+    /// duration.display().ago()           // an hour ago
     /// ```
     fn display(self) -> DurationDisplay;
 }
@@ -66,6 +68,13 @@ pub enum DurationStyle {
     /// The duration is the time since the event. Any part of a day is dropped. For example, 47
     /// hours reads `yesterday`.
     DaysAgo,
+    /// How long ago something happened, rounded to the largest unit that fits: `now`,
+    /// `45 seconds ago`, `an hour ago`, `3 weeks ago`.
+    ///
+    /// The duration is the time since the event. Anything up to ten seconds reads `now`, and a
+    /// unit takes over from the one below at about one and a half of itself. For example, 90
+    /// minutes reads `an hour ago` and 91 minutes reads `2 hours ago`.
+    Ago,
 }
 
 /// [`Display`](fmt::Display) adapter produced by [`DurationExt::display`].
@@ -95,6 +104,45 @@ impl DurationDisplay {
     pub const fn days_ago(mut self) -> Self {
         self.style = DurationStyle::DaysAgo;
         self
+    }
+
+    /// Render as [`DurationStyle::Ago`].
+    #[must_use]
+    pub const fn ago(mut self) -> Self {
+        self.style = DurationStyle::Ago;
+        self
+    }
+
+    fn fmt_ago(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const MINUTE: u64 = 60;
+        const HOUR: u64 = 60 * MINUTE;
+        const DAY: u64 = 24 * HOUR;
+        const WEEK: u64 = 7 * DAY;
+        const MONTH: u64 = 30 * DAY;
+        const YEAR: u64 = 365 * DAY;
+
+        // A unit only takes over at about 1.5 of itself, so a plural count is at least 2.
+        fn plural(f: &mut fmt::Formatter<'_>, count: u64, unit: &str) -> fmt::Result {
+            write!(f, "{} {unit}s ago", count.max(2))
+        }
+
+        // The thresholds are chrono-humanize's rough ones, so the wording stays what it was.
+        match self.duration.as_secs() {
+            0..=10 => f.write_str("now"),
+            secs @ 11..=45 => write!(f, "{secs} seconds ago"),
+            46..=90 => f.write_str("a minute ago"),
+            secs if secs <= 45 * MINUTE => plural(f, secs / MINUTE, "minute"),
+            secs if secs <= 90 * MINUTE => f.write_str("an hour ago"),
+            secs if secs <= 22 * HOUR => plural(f, secs / HOUR, "hour"),
+            secs if secs <= 36 * HOUR => f.write_str("a day ago"),
+            secs if secs <= 6 * DAY + 12 * HOUR => plural(f, secs / DAY, "day"),
+            secs if secs <= 10 * DAY + 12 * HOUR => f.write_str("a week ago"),
+            secs if secs <= 29 * DAY => plural(f, secs / WEEK, "week"),
+            secs if secs <= 45 * DAY => f.write_str("a month ago"),
+            secs if secs <= 345 * DAY => plural(f, secs / MONTH, "month"),
+            secs if secs <= 547 * DAY => f.write_str("a year ago"),
+            secs => plural(f, secs / YEAR, "year"),
+        }
     }
 
     fn fmt_largest_unit(self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -183,6 +231,7 @@ impl fmt::Display for DurationDisplay {
                 1 => f.write_str("yesterday"),
                 days => write!(f, "{days} days ago"),
             },
+            DurationStyle::Ago => self.fmt_ago(f),
         }
     }
 }
@@ -208,14 +257,14 @@ impl DurationExt<Self> for std::time::Duration {
     }
 }
 
-impl DurationExt<Self> for time::Duration {
+impl DurationExt<Self> for jiff::SignedDuration {
     fn try_new(secs: u64, nsecs: u64) -> Result<Self, DurationOverflow> {
         let std = std::time::Duration::try_new(secs, nsecs)?;
         Self::try_from(std).map_err(|_| DurationOverflow { secs, nsecs })
     }
 
     fn saturating_from_nanos_i64(nanos: i64) -> Self {
-        Self::nanoseconds(nanos.max(0))
+        Self::from_nanos(nanos.max(0))
     }
 
     fn display(self) -> DurationDisplay {
@@ -561,8 +610,7 @@ mod tests {
     fn saturating_from_nanos_i64_clamps(#[case] nanos: i64, #[case] expected: u128) {
         assert_eq!(std::time::Duration::saturating_from_nanos_i64(nanos).as_nanos(), expected);
         assert_eq!(
-            <time::Duration as DurationExt<_>>::saturating_from_nanos_i64(nanos)
-                .whole_nanoseconds(),
+            <jiff::SignedDuration as DurationExt<_>>::saturating_from_nanos_i64(nanos).as_nanos(),
             i128::conv(expected)
         );
     }
@@ -574,7 +622,7 @@ mod tests {
     fn try_new_sums_components(#[case] secs: u64, #[case] nsecs: u64, #[case] expected: u128) {
         assert_eq!(std::time::Duration::try_new(secs, nsecs).unwrap().as_nanos(), expected);
         assert_eq!(
-            <time::Duration as DurationExt<_>>::try_new(secs, nsecs).unwrap().whole_nanoseconds(),
+            <jiff::SignedDuration as DurationExt<_>>::try_new(secs, nsecs).unwrap().as_nanos(),
             i128::conv(expected)
         );
     }
@@ -593,8 +641,11 @@ mod tests {
     #[case::carry_crosses_i64(u64::conv(i64::MAX), 1_000_000_000, false)]
     #[case::past_u64_seconds(u64::MAX, 0, false)]
     #[case::carry_overflows_u64_seconds(u64::MAX, 1_000_000_000, false)]
-    fn time_try_new_range(#[case] secs: u64, #[case] nsecs: u64, #[case] representable: bool) {
-        assert_eq!(<time::Duration as DurationExt<_>>::try_new(secs, nsecs).is_ok(), representable);
+    fn signed_try_new_range(#[case] secs: u64, #[case] nsecs: u64, #[case] representable: bool) {
+        assert_eq!(
+            <jiff::SignedDuration as DurationExt<_>>::try_new(secs, nsecs).is_ok(),
+            representable
+        );
     }
 
     #[rstest]
@@ -623,6 +674,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::zero(0, "now")]
+    #[case::ten_seconds(10, "now")]
+    #[case::eleven_seconds(11, "11 seconds ago")]
+    #[case::forty_five_seconds(45, "45 seconds ago")]
+    #[case::forty_six_seconds(46, "a minute ago")]
+    #[case::ninety_seconds(90, "a minute ago")]
+    #[case::ninety_one_seconds(91, "2 minutes ago")]
+    #[case::forty_five_minutes(45 * 60, "45 minutes ago")]
+    #[case::forty_six_minutes(46 * 60, "an hour ago")]
+    #[case::ninety_one_minutes(91 * 60, "2 hours ago")]
+    #[case::twenty_three_hours(23 * 3600, "a day ago")]
+    #[case::thirty_seven_hours(37 * 3600, "2 days ago")]
+    #[case::six_days(6 * 86_400, "6 days ago")]
+    #[case::seven_days(7 * 86_400, "a week ago")]
+    #[case::eleven_days(11 * 86_400, "2 weeks ago")]
+    #[case::thirty_days(30 * 86_400, "a month ago")]
+    #[case::forty_six_days(46 * 86_400, "2 months ago")]
+    #[case::three_hundred_fifty_days(350 * 86_400, "a year ago")]
+    #[case::six_hundred_days(600 * 86_400, "2 years ago")]
+    #[case::ten_years(3_650 * 86_400, "10 years ago")]
+    fn ago_rounds_to_the_largest_fitting_unit(#[case] secs: u64, #[case] expected: &str) {
+        assert_eq!(std::time::Duration::from_secs(secs).display().ago().to_string(), expected);
+    }
+
+    #[rstest]
     #[case::zero(0, "0ms")]
     #[case::millis(5_000_000, "5ms")]
     #[case::sub_second_only(814_000_000, "814ms")]
@@ -642,7 +718,7 @@ mod tests {
 
     #[rstest]
     fn stopwatch_clamps_a_negative_time_duration() {
-        let negative = time::Duration::nanoseconds(-5_000_000_000);
+        let negative = jiff::SignedDuration::from_nanos(-5_000_000_000);
         assert_eq!(negative.display().stopwatch().to_string(), "0ms");
     }
 
@@ -663,16 +739,16 @@ mod tests {
             }
         }
 
-        /// The `time::Duration` impl delegates to the `std` one, so it must succeed
+        /// The `SignedDuration` impl delegates to the `std` one, so it must succeed
         /// on exactly the same inputs, minus those that overflow `i64` seconds.
         #[rstest]
-        fn time_try_new_tracks_std_try_new(secs in any::<u64>(), nsecs in any::<u64>()) {
+        fn signed_try_new_tracks_std_try_new(secs in any::<u64>(), nsecs in any::<u64>()) {
             let std_result = std::time::Duration::try_new(secs, nsecs);
-            let time_result = <time::Duration as DurationExt<_>>::try_new(secs, nsecs);
+            let signed_result = <jiff::SignedDuration as DurationExt<_>>::try_new(secs, nsecs);
 
-            match (std_result, time_result) {
+            match (std_result, signed_result) {
                 (Ok(s), Ok(t)) => {
-                    prop_assert_eq!(t.whole_nanoseconds(), i128::conv(s.as_nanos()));
+                    prop_assert_eq!(t.as_nanos(), i128::conv(s.as_nanos()));
                 }
                 // time is narrower: it rejects what does not fit an i64 of seconds
                 (Ok(s), Err(_)) => prop_assert!(s.as_secs() > u64::conv(i64::MAX)),

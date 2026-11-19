@@ -16,10 +16,10 @@
 
 use std::path::PathBuf;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
-use time::OffsetDateTime;
 
 use super::{
     Change, Content, FilePatch, Hunk, Message, MessageId, ParentKind, Patch, Role, SessionId,
@@ -36,8 +36,8 @@ pub struct PushedMessage {
     pub parent: Option<String>,
     /// `user`, `assistant`, `system`, `tool`, or the agent's own name for another.
     pub role: String,
-    #[serde(default, with = "time::serde::rfc3339::option")]
-    pub time: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub time: Option<Timestamp>,
     #[serde(default)]
     pub content: Vec<Block>,
     pub cwd: Option<PathBuf>,
@@ -205,7 +205,7 @@ impl Message for PushedMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
+    fn timestamp(&self) -> Option<Timestamp> {
         self.time
     }
 
@@ -439,7 +439,7 @@ pub(crate) mod tests {
             m.id(),
             m.parent_id(),
             m.role(),
-            m.timestamp().map(OffsetDateTime::unix_timestamp_nanos).map(|ns| ns.to_string()),
+            m.timestamp().map(Timestamp::as_nanosecond).map(|ns| ns.to_string()),
             m.content(),
             m.model(),
             m.provider(),

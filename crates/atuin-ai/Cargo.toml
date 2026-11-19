@@ -23,8 +23,6 @@ atuin-domain = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-chrono = { workspace = true }
-chrono-humanize = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 crossterm = { workspace = true, features = ["use-dev-tty", "event-stream"] }
 derive_more = { workspace = true }
@@ -32,7 +30,7 @@ eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 i18n-embed = { workspace = true }
-interim = { workspace = true }
+jiff = { workspace = true }
 parking_lot = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true }
@@ -46,7 +44,6 @@ serde_json = { workspace = true }
 shellexpand = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-segmentation = { workspace = true }

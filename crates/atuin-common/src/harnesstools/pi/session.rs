@@ -22,9 +22,8 @@ use std::path::{Path, PathBuf};
 
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
+use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use typed_builder::TypedBuilder;
 
@@ -774,8 +773,8 @@ impl Message for PiMessage {
         }
     }
 
-    fn timestamp(&self) -> Option<OffsetDateTime> {
-        self.entry.timestamp.as_deref().and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    fn timestamp(&self) -> Option<Timestamp> {
+        self.entry.timestamp.as_deref().and_then(|s| s.parse::<Timestamp>().ok())
     }
 
     fn content(&self) -> Vec<Content> {

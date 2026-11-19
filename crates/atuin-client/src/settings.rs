@@ -17,13 +17,15 @@ use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, Environment, File as ConfigFile, FileFormat};
 use eyre::{Context, Result, eyre};
 use fs_err::{File, create_dir_all};
+use jiff::civil::DateTime;
+use jiff::tz::Offset;
+use jiff::{Timestamp, ZonedDateTime};
 use regex::RegexSet;
 use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
-use time::OffsetDateTime;
 use tokio::sync::OnceCell;
 use tracing::instrument;
 use url::Url;
@@ -212,7 +214,76 @@ impl From<Dialect> for interim::Dialect {
     }
 }
 
-use atuin_common::time::UtcOffsetSpec;
+/// Errors returned by [`Dialect::parse_date`].
+#[derive(Debug, thiserror::Error)]
+pub enum ParseDateError {
+    #[error(transparent)]
+    Unrecognized(#[from] interim::DateError),
+    #[error("the date is out of range")]
+    OutOfRange,
+}
+
+impl Dialect {
+    /// Read an informal date such as `yesterday 3pm` or `2 weeks ago`, relative to `now` and in
+    /// its time zone unless the text carries an explicit offset.
+    ///
+    /// A date or clock time (`2026-07-01`, `yesterday 3pm`) is read in the zone on that date, so
+    /// one across a DST change from today still means its local time. A span (`3 hours ago`) is
+    /// measured exactly from `now`.
+    pub fn parse_date(
+        self,
+        text: &str,
+        now: &ZonedDateTime,
+    ) -> Result<ZonedDateTime, ParseDateError> {
+        // interim works in one fixed offset. It builds a date or clock time from wall-clock
+        // fields at that offset, and a span or an explicit offset by moving the instant. Read at
+        // two offsets a second apart, only a wall-clock result moves, and that one is resolved
+        // in the zone on its own date instead of at today's offset.
+        let offset = now.offset().seconds();
+        let nudged = if offset < Offset::MAX.seconds() {
+            offset + 1
+        } else {
+            offset - 1
+        };
+        let at = self.parse_at(text, now.timestamp(), offset)?;
+        let nudged = self.parse_at(text, now.timestamp(), nudged)?;
+
+        if at.unix_timestamp_nanos() == nudged.unix_timestamp_nanos() {
+            let at = Timestamp::from_nanosecond(at.unix_timestamp_nanos())
+                .map_err(|_| ParseDateError::OutOfRange)?;
+            return Ok(at.to_zoned_datetime(now.time_zone().clone()));
+        }
+
+        let wall = DateTime::new(
+            i16::try_from(at.year()).map_err(|_| ParseDateError::OutOfRange)?,
+            u8::from(at.month()).cast_signed(),
+            at.day().cast_signed(),
+            at.hour().cast_signed(),
+            at.minute().cast_signed(),
+            at.second().cast_signed(),
+            i32::try_from(at.nanosecond()).map_err(|_| ParseDateError::OutOfRange)?,
+        )
+        .map_err(|_| ParseDateError::OutOfRange)?;
+        wall.to_zoned_datetime(now.time_zone().clone()).map_err(|_| ParseDateError::OutOfRange)
+    }
+
+    /// `text` as interim reads it against `now`, at `offset` seconds east of UTC.
+    fn parse_at(
+        self,
+        text: &str,
+        now: Timestamp,
+        offset: i32,
+    ) -> Result<time::OffsetDateTime, ParseDateError> {
+        let offset =
+            time::UtcOffset::from_whole_seconds(offset).map_err(|_| ParseDateError::OutOfRange)?;
+        let now = time::OffsetDateTime::from_unix_timestamp_nanos(now.as_nanosecond())
+            .map_err(|_| ParseDateError::OutOfRange)?
+            .to_offset(offset);
+        Ok(interim::parse_date_string(text, now, self.into())?)
+    }
+}
+
+use atuin_common::time::TimeZoneSpec;
 
 #[derive(Clone, Debug, Deserialize, Copy, Serialize)]
 pub enum Style {
@@ -1041,7 +1112,7 @@ pub struct Settings {
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub data_dir: AbsPathBuf,
     pub dialect: Dialect,
-    pub timezone: UtcOffsetSpec,
+    pub timezone: TimeZoneSpec,
     pub style: Style,
     pub auto_sync: bool,
     pub update_check: bool,
@@ -1267,7 +1338,7 @@ impl Settings {
         self.meta_store().await?.host_id().await
     }
 
-    pub async fn last_sync(&self) -> Result<OffsetDateTime> {
+    pub async fn last_sync(&self) -> Result<Timestamp> {
         self.meta_store().await?.last_sync().await
     }
 
@@ -1275,7 +1346,7 @@ impl Settings {
         self.meta_store().await?.save_sync_time().await
     }
 
-    pub async fn last_version_check(&self) -> Result<OffsetDateTime> {
+    pub async fn last_version_check(&self) -> Result<Timestamp> {
         self.meta_store().await?.last_version_check().await
     }
 
@@ -1288,8 +1359,8 @@ impl Settings {
             return Ok(false);
         }
 
-        Ok(OffsetDateTime::now_utc() - self.last_sync().await?
-            >= time::Duration::try_from(self.sync_frequency)?)
+        Ok(Timestamp::now() - self.last_sync().await?
+            >= jiff::SignedDuration::try_from(self.sync_frequency)?)
     }
 
     pub async fn logged_in(&self) -> Result<bool> {
@@ -1422,10 +1493,10 @@ impl Settings {
     #[cfg(feature = "check-update")]
     async fn needs_update_check(&self) -> Result<bool> {
         let last_check = self.last_version_check().await?;
-        let diff = OffsetDateTime::now_utc() - last_check;
+        let diff = Timestamp::now() - last_check;
 
         // Check a max of once per hour
-        Ok(diff.whole_hours() >= 1)
+        Ok(diff.as_hours() >= 1)
     }
 
     #[cfg(feature = "check-update")]
@@ -2109,6 +2180,7 @@ mod tests {
     use atuin_common::path::{AbsPathBuf, PathBufExt as _};
     use config::{Config, ValueKind};
     use eyre::Result;
+    use jiff::ZonedDateTime;
     use rstest::{fixture, rstest};
     use url::Url;
 
@@ -2116,8 +2188,8 @@ mod tests {
     use super::ThreadUploads;
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
-        ConfigFile, DbLocation, FileFormat, FilterMode, RequestedSearchMode, SearchMode, Settings,
-        UtcOffsetSpec,
+        ConfigFile, DbLocation, Dialect, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
+        Settings, TimeZoneSpec,
     };
 
     #[rstest]
@@ -2140,9 +2212,12 @@ mod tests {
     #[case::minus_with_seconds("-01:23:45", (-1, -23, -45))]
     fn can_parse_offset_timezone_spec(
         #[case] input: &str,
-        #[case] expected: (i8, i8, i8),
+        #[case] (hours, minutes, seconds): (i32, i32, i32),
     ) -> Result<()> {
-        assert_eq!(UtcOffsetSpec::from_str(input)?.0.as_hms(), expected);
+        assert_eq!(
+            TimeZoneSpec::from_str(input)?.time_zone().to_fixed_offset()?.seconds(),
+            hours * 3600 + minutes * 60 + seconds
+        );
         Ok(())
     }
 
@@ -2151,7 +2226,45 @@ mod tests {
     #[case::bare_hour("5")]
     #[case::bare_hour_minutes("10:30")]
     fn rejects_timezone_spec_without_leading_sign(#[case] input: &str) {
-        assert!(UtcOffsetSpec::from_str(input).is_err());
+        assert!(TimeZoneSpec::from_str(input).is_err());
+    }
+
+    /// Dates and clock times mean their local time on their own date, across a DST change from
+    /// today. Spans and explicit offsets are exact.
+    #[rstest]
+    #[case::summer_date_read_in_winter(
+        "2026-01-15T12:00:00+01:00[Europe/Berlin]",
+        "2026-07-01",
+        "2026-07-01T00:00:00+02:00[Europe/Berlin]"
+    )]
+    #[case::clock_time_before_dst_began(
+        "2026-03-29T12:00:00+02:00[Europe/Berlin]",
+        "yesterday 3pm",
+        "2026-03-28T15:00:00+01:00[Europe/Berlin]"
+    )]
+    #[case::span_across_dst_is_exact(
+        "2026-03-29T03:30:00+02:00[Europe/Berlin]",
+        "2 hours ago",
+        "2026-03-29T00:30:00+01:00[Europe/Berlin]"
+    )]
+    #[case::explicit_offset_is_exact(
+        "2026-01-15T12:00:00+01:00[Europe/Berlin]",
+        "2026-07-01T00:00:00Z",
+        "2026-07-01T02:00:00+02:00[Europe/Berlin]"
+    )]
+    #[case::midnight_in_a_dst_gap_is_the_start_of_the_day(
+        "2026-09-10T12:00:00-03:00[America/Santiago]",
+        "2026-09-06",
+        "2026-09-06T01:00:00-03:00[America/Santiago]"
+    )]
+    fn parse_date_reads_dates_in_their_own_offset(
+        #[case] now: &str,
+        #[case] text: &str,
+        #[case] expected: &str,
+    ) -> Result<()> {
+        let now: ZonedDateTime = now.parse()?;
+        assert_eq!(Dialect::Uk.parse_date(text, &now)?, expected.parse::<ZonedDateTime>()?);
+        Ok(())
     }
 
     /// Forces both `LazyLock`s, so a typo in either constant fails here rather

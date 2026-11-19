@@ -7,10 +7,12 @@ use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
 };
 use atuin_common::string::highlighted::HighlightedString;
+use atuin_common::time::OffsetDateTimeTuple;
 use atuin_domain::record::{HostId, RecordId};
 use derive_more::{AsRef, Display, From, Into};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use serde_with::serde_as;
 use typed_builder::TypedBuilder;
 use uuid::{Builder, Uuid};
 
@@ -120,8 +122,8 @@ pub struct AtuinSessionId(Uuid);
 impl AtuinSessionId {
     /// A random UUIDv7 at `started_at`.
     #[must_use]
-    pub fn mint(started_at: OffsetDateTime) -> Self {
-        let millis = u64::try_from(started_at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+    pub fn mint(started_at: Timestamp) -> Self {
+        let millis = u64::try_from(started_at.as_millisecond()).unwrap_or(0);
         Self(Builder::from_unix_timestamp_millis(millis, &rand::random()).into_uuid())
     }
 
@@ -190,6 +192,7 @@ impl std::str::FromStr for AtuinSessionId {
 
 /// Records encode these fields by position: adding, removing or reordering one needs a new
 /// [record version](super::AiSessionRecord::VERSION).
+#[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct Message {
     pub id: RecordId,
@@ -205,7 +208,8 @@ pub struct Message {
     pub parent_kind: Option<ParentKind>,
     #[builder(default)]
     pub parent_source_id: Option<SourceId>,
-    pub timestamp: OffsetDateTime,
+    #[serde_as(as = "OffsetDateTimeTuple")]
+    pub timestamp: Timestamp,
     pub role: Role,
     pub content: Vec<Content>,
     #[builder(default)]
@@ -263,11 +267,15 @@ pub struct Message {
 
 impl Message {
     /// The earliest and latest [`Self::timestamp`] stored: a day inside the years
-    /// [`OffsetDateTime`] can name, so either is still a date in any offset. A harness line can
-    /// name an instant past them (Claude Code's `9999-12-31T23:59:59-23:59` is in year 10000 in
-    /// UTC), which capture and the sidecar hold to these.
-    pub const EARLIEST: OffsetDateTime = time::macros::datetime!(-9999-01-02 0:00 UTC);
-    pub const LATEST: OffsetDateTime = time::macros::datetime!(9999-12-30 0:00 UTC);
+    /// [`Timestamp`] can name, so either is still a date in any offset. A harness line can
+    /// name an instant just past them (`9999-12-30T23:00:00Z` is past [`Self::LATEST`]), which
+    /// capture and the sidecar hold to these.
+    pub const EARLIEST: Timestamp = Timestamp::constant(Self::EARLIEST_SECOND, 0);
+    pub const LATEST: Timestamp = Timestamp::constant(Self::LATEST_SECOND, 0);
+    /// `-009999-01-03T00:00:00Z`, [`Self::EARLIEST`] in seconds since the Unix epoch.
+    pub(crate) const EARLIEST_SECOND: i64 = -377_704_944_000;
+    /// `9999-12-30T00:00:00Z`, [`Self::LATEST`] in seconds since the Unix epoch.
+    pub(crate) const LATEST_SECOND: i64 = 253_402_128_000;
 }
 
 /// [`Message::parent_kind`] as a record holds it: `None` for a kind this build does not know,
@@ -320,8 +328,8 @@ pub struct Session {
     pub git_branch: Option<String>,
     #[builder(default)]
     pub model: Option<String>,
-    pub started_at: OffsetDateTime,
-    pub updated_at: OffsetDateTime,
+    pub started_at: Timestamp,
+    pub updated_at: Timestamp,
     #[builder(default)]
     pub message_count: u64,
     /// Usage attributed to this session: each model call counted once across every session
@@ -362,7 +370,7 @@ pub struct Session {
     /// The newest `updated_at` across this session and the sessions grouped under it, which is
     /// what roots-only queries order by. Only set by roots-only queries.
     #[builder(default)]
-    pub group_updated_at: Option<OffsetDateTime>,
+    pub group_updated_at: Option<Timestamp>,
     #[builder(default)]
     pub atuin_id: AtuinSessionId,
     /// The atuin id of [`Self::parent`], resolved when read: `None` while the parent is not
@@ -545,7 +553,7 @@ pub struct SessionFilter {
     /// such messages match.
     pub roles: Vec<MessageRole>,
     /// Active at or after this time (its `updated_at`).
-    pub updated_since: Option<OffsetDateTime>,
+    pub updated_since: Option<Timestamp>,
 }
 
 /// What a search looks for, and how it matches a message.
@@ -638,7 +646,7 @@ mod tests {
                 session: NativeSessionId::from("s".to_owned()),
             })
             .source_id(SourceId::from("x".to_owned()))
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![Content::Text("hi".to_owned())])
             .turn_id(Some("t".to_owned()))
@@ -793,7 +801,7 @@ mod tests {
             .source_id(SourceId::from("x".to_owned()))
             .parent(Some(session))
             .parent_kind(kind)
-            .timestamp(OffsetDateTime::UNIX_EPOCH)
+            .timestamp(Timestamp::UNIX_EPOCH)
             .role(Role::User)
             .content(vec![])
             .build()
@@ -851,8 +859,8 @@ mod tests {
             .handle(handle(id))
             .parent(Some(handle("parent")))
             .parent_kind(Some(kind))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
         assert_eq!(session.inferred_parent_kind(), Some(kind));
@@ -868,8 +876,8 @@ mod tests {
         let session = Session::builder()
             .handle(handle("copy"))
             .copy_of(Some(handle("original")))
-            .started_at(OffsetDateTime::UNIX_EPOCH)
-            .updated_at(OffsetDateTime::UNIX_EPOCH)
+            .started_at(Timestamp::UNIX_EPOCH)
+            .updated_at(Timestamp::UNIX_EPOCH)
             .usage(Usage::default())
             .build();
         assert_eq!(session.inferred_parent_kind(), Some(ParentKind::Fork));
@@ -882,8 +890,8 @@ mod tests {
         }
     }
 
-    fn at(millis: i64) -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).unwrap()
+    fn at(millis: i64) -> Timestamp {
+        Timestamp::from_millisecond(millis).unwrap()
     }
 
     fn millis_of(id: AtuinSessionId) -> i64 {

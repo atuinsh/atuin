@@ -3,13 +3,14 @@ use std::sync::Arc;
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
-use atuin_common::time::{OffsetDateTimeExt, UtcOffsetExt};
+use atuin_common::time::TimestampExt as _;
 use atuin_common::userio;
 use atuin_domain::record::RecordSeriesKey;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
-use time::OffsetDateTime;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use tracing::instrument;
 
 #[cfg(feature = "daemon")]
@@ -161,7 +162,7 @@ impl Cmd {
 
     pub async fn status(&self, settings: &Settings, store: SqliteStore) -> Result<()> {
         let host_id = settings.host_id().await?;
-        let offset = time::UtcOffset::local_or_utc();
+        let tz = TimeZone::system();
 
         let status = store.status().await?;
 
@@ -187,16 +188,18 @@ impl Cmd {
                 if let Some(first) = first {
                     println!("\t\tfirst: {}", first.id.0.as_hyphenated());
 
-                    let time =
-                        OffsetDateTime::from_unix_nanos_u64(first.timestamp).to_offset(offset);
+                    let time = Timestamp::from_unix_nanos_u64(first.timestamp)
+                        .to_zoned_datetime(tz.clone());
+                    let time = time.strftime("%Y-%m-%d %H:%M:%S%.f %:z");
                     println!("\t\t\tcreated: {time}");
                 }
 
                 if let Some(last) = last {
                     println!("\t\tlast: {}", last.id.0.as_hyphenated());
 
-                    let time =
-                        OffsetDateTime::from_unix_nanos_u64(last.timestamp).to_offset(offset);
+                    let time = Timestamp::from_unix_nanos_u64(last.timestamp)
+                        .to_zoned_datetime(tz.clone());
+                    let time = time.strftime("%Y-%m-%d %H:%M:%S%.f %:z");
                     println!("\t\t\tcreated: {time}");
                 }
             }

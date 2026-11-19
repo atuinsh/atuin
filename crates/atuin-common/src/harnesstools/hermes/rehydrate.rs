@@ -78,7 +78,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
-use time::OffsetDateTime;
 
 use super::cli::{CliOutput, HermesCli, HermesCliError, HermesCommand};
 use super::home::InstallHome;
@@ -88,6 +87,7 @@ use crate::harnesstools::rehydrate::{
     merge_uncaptured_runs, parent_order,
 };
 use crate::harnesstools::session::{Content, Role, StopReason, ToolCallId, ToolResult, ToolUse};
+use crate::time::TimestampExt as _;
 
 /// The `display_metadata` key that records the synced rows a row holds without one of their own.
 /// The module docs say when a writer records them.
@@ -390,13 +390,6 @@ fn trim_result(content: &str, tool: Option<&str>) -> String {
     TRIMMED_OUTPUT.to_owned()
 }
 
-/// Unix seconds, as Hermes stamps its rows.
-fn secs(at: OffsetDateTime) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
-    let nanos = at.unix_timestamp_nanos() as f64;
-    nanos / 1e9
-}
-
 /// The file of a Hermes home holding its settings, the profile's default model among them.
 const CONFIG_FILE: &str = "config.yaml";
 
@@ -442,11 +435,11 @@ fn session_row(
     let ended = messages
         .iter()
         .filter_map(|row| row["timestamp"].as_f64())
-        .fold(secs(session.started_at), f64::max);
+        .fold(session.started_at.to_unix_secs_f64(), f64::max);
     let mut row = json!({
         "id": session.id,
         "source": "cli",
-        "started_at": secs(session.started_at),
+        "started_at": session.started_at.to_unix_secs_f64(),
         "ended_at": ended,
         "end_reason": "cli_close",
         "messages": messages,
@@ -575,7 +568,7 @@ impl Writer {
             format!("{}#{n}", m.source_id)
         };
         row["message_uid"] = json!(uid);
-        row["timestamp"] = json!(secs(m.timestamp));
+        row["timestamp"] = json!(m.timestamp.to_unix_secs_f64());
         self.rows.push(row);
     }
 

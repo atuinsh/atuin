@@ -1,9 +1,9 @@
 use std::num::NonZeroUsize;
 
 use futures::TryStreamExt;
+use jiff::Timestamp;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
-use time::OffsetDateTime;
 
 use super::*;
 use crate::harnesstools::Harness as _;
@@ -62,7 +62,7 @@ fn restore(cwd: &Path, messages: Vec<RehydrateMessage>) -> RehydrateSession {
         original_cwd: Some(PathBuf::from("/tmp/copilot-play")),
         git_branch: Some("main".to_owned()),
         model: None,
-        started_at: OffsetDateTime::UNIX_EPOCH,
+        started_at: Timestamp::UNIX_EPOCH,
         messages,
         fork_of: None,
     }
@@ -72,7 +72,7 @@ fn row(id: &str, role: Role, content: Vec<Content>) -> RehydrateMessage {
     RehydrateMessage {
         source_id: id.to_owned(),
         parent_source_id: None,
-        timestamp: OffsetDateTime::UNIX_EPOCH,
+        timestamp: Timestamp::UNIX_EPOCH,
         role,
         content,
         model: None,

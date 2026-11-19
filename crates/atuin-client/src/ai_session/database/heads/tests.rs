@@ -1,9 +1,9 @@
 use atuin_common::harnesstools::session::{Content, Role};
 use atuin_common::harnesstools::sync::{LocalTip, Stamp};
 use atuin_domain::record::{HostId, RecordId};
+use jiff::Timestamp;
 use proptest::prelude::*;
 use rstest::rstest;
-use time::OffsetDateTime;
 
 use super::{Analysis, FastForward};
 use crate::ai_session::{
@@ -62,7 +62,7 @@ fn message(harness: HarnessKind, (id, parent, on, at, kind): Row<'_>) -> Message
         .session(handle(harness))
         .source_id(SourceId::from(id.to_owned()))
         .parent_source_id(parent.map(|p| SourceId::from(p.to_owned())))
-        .timestamp(OffsetDateTime::UNIX_EPOCH + time::Duration::milliseconds(at))
+        .timestamp(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_millis(at))
         .role(role)
         .content(content)
         .host(Some(host(on)))

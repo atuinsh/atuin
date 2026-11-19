@@ -8,9 +8,10 @@ use atuin_client::theme::{Meaning, Theme};
 use atuin_common::harnesstools::session::Usage;
 use atuin_common::string::ellipsis::{Indicator, Pos};
 use atuin_common::string::{EllipsizeExt as _, Measure};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use super::render::{is_fork_live, is_live, repo_name, shown_branch, style};
@@ -97,7 +98,7 @@ impl State {
         &self,
         row: &SessionRow,
         width: usize,
-        tz: UtcOffset,
+        tz: &TimeZone,
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let now = (self.now)();
@@ -318,8 +319,8 @@ pub fn tree_order(root: &HarnessSession, children: &[SessionRow]) -> Vec<(String
 pub fn tree_lines(
     root: &HarnessSession,
     children: &[SessionRow],
-    now: OffsetDateTime,
-    tz: UtcOffset,
+    now: Timestamp,
+    tz: &TimeZone,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
