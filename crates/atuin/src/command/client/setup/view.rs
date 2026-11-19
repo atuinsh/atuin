@@ -7,7 +7,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::ThreadUploads;
 use atuin_common::env::var_nonempty;
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
@@ -28,7 +27,7 @@ use super::agents::{AnyHarness, Harness};
 use super::form::{Form as _, Needs};
 use super::plan::{
     AgentHistory, Agents, AtuinForTeams, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan,
-    ShellHistory, Shells, Threads, UpArrow,
+    ShellHistory, Shells, ThreadUploads, Threads, UpArrow,
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
@@ -153,7 +152,7 @@ async fn drive(
 
     #[cfg(feature = "octavo")]
     if let Some(super::Teams::On { backfill }) = plan.teams() {
-        let on = super::turn_on_teams(store, backfill, &tx);
+        let on = super::turn_on_teams(store, backfill, plan.upload_threads.0, &tx);
         match drawn(terminal, &mut running, &mut updates, &mut tick, on).await? {
             Some(Some(upload)) => {
                 watch(terminal, &mut running, &mut updates, &mut tick, &upload).await?;

@@ -665,70 +665,18 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
-/// `[teams]`: Atuin for Teams, which `atuin setup --hub` turns on.
-#[cfg(feature = "octavo")]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Teams {
-    pub enabled: bool,
-    /// Whether the commands Atuin records go to Atuin for Teams too, while `enabled`. Off unless
-    /// set.
-    pub upload_history: bool,
-    /// Which agent threads go to Atuin for Teams, while `enabled`.
-    pub upload_threads: ThreadUploads,
-    /// Whether captured command output goes to Atuin for Teams too, while `enabled`,
-    /// `upload_history` and output capture are all on.
-    pub upload_output: bool,
-    #[serde(rename = "__debug__", default, skip_serializing)]
-    pub debug: TeamsDebug,
-}
-
-#[cfg(feature = "octavo")]
-impl Default for Teams {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            upload_history: false,
-            upload_threads: ThreadUploads::All,
-            upload_output: false,
-            debug: TeamsDebug::default(),
-        }
-    }
-}
-
-/// Which agent threads Atuin for Teams uploads while it's on, as `teams.upload_threads` says.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThreadUploads {
-    #[default]
-    All,
-    /// Those started in a workspace: at or under a project's config file, `.atuin.lua` say.
-    Workspaces,
-    Off,
-}
-
-impl ThreadUploads {
-    /// Its value in the config.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Workspaces => "workspaces",
-            Self::Off => "off",
-        }
-    }
-}
-
-/// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
-/// purpose.
+/// `[__debug__]`: settings kept out of the docs on purpose, for pointing Atuin for Teams at a hub
+/// other than Atuin's. Whether it's on, and what goes up, is the user's own `atuin.lua` to say
+/// (see [`crate::lua_config`]).
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct TeamsDebug {
+pub struct DebugSettings {
     /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
     /// self-hosted hub.
-    pub address: Option<Url>,
+    pub hub_address: Option<Url>,
     /// `atuin mcp` forwards thread tools to this MCP server. It is honored only while
     /// `sync_address` is a self-hosted hub.
-    pub mcp_address: Option<Url>,
+    pub hub_mcp_address: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1223,8 +1171,8 @@ pub struct Settings {
     pub output: OutputCapture,
 
     #[cfg(feature = "octavo")]
-    #[serde(default)]
-    pub teams: Teams,
+    #[serde(rename = "__debug__", default, skip_serializing)]
+    pub debug: DebugSettings,
 
     #[serde(default)]
     pub search: Search,
@@ -1887,7 +1835,7 @@ impl Settings {
     }
 
     /// The renamed keys that [`Self::with_legacy_keys`] reads under their old names.
-    const LEGACY_KEYS: [Renamed; 4] = [
+    const LEGACY_KEYS: [Renamed; 3] = [
         Renamed {
             old: "ai.capture_sessions",
             new: "threads.capture",
@@ -1900,17 +1848,13 @@ impl Settings {
             old: "ai.sessions",
             new: "threads",
         },
-        Renamed {
-            old: "octavo",
-            new: "teams",
-        },
     ];
 
     /// Keys that this build has no setting for, but that a build with other features reads, or
     /// that Atuin AI read before it was removed.
     const UNCHECKED_KEYS: &[&str] = &[
         #[cfg(not(feature = "octavo"))]
-        "teams",
+        "__debug__",
         "ai.api_token",
         "ai.capabilities",
         "ai.db_path",
@@ -1926,8 +1870,8 @@ impl Settings {
     ];
 
     /// Read renamed keys under their new names, for any key the new name doesn't set itself:
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
-    /// was `[octavo]`. The defaults are set here, under them, so they never hide a legacy value.
+    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`. The defaults
+    /// are set here, under them, so they never hide a legacy value.
     fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
@@ -1951,12 +1895,6 @@ impl Settings {
         let defaults = Config::builder()
             .set_default("threads.capture", false)?
             .set_default("threads.capture_tools", true)?;
-        #[cfg(feature = "octavo")]
-        let defaults = defaults
-            .set_default("teams.enabled", false)?
-            .set_default("teams.upload_history", false)?
-            .set_default("teams.upload_threads", "all")?
-            .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
             .try_fold(defaults.add_source(config), |builder, (key, value)| {
@@ -2185,8 +2123,6 @@ mod tests {
     use rstest::{fixture, rstest};
     use url::Url;
 
-    #[cfg(feature = "octavo")]
-    use super::ThreadUploads;
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
         ConfigFile, DbLocation, Dialect, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
@@ -2773,50 +2709,28 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::set(
-        "[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
-        Some("http://127.0.0.1:50052/")
-    )]
-    #[case::legacy(
-        "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        "[__debug__]\nhub_address = \"http://127.0.0.1:50052\"\n",
         Some("http://127.0.0.1:50052/")
     )]
     #[case::absent("", None)]
-    fn teams_debug_address_is_read_from_its_hidden_table(
+    fn the_hub_address_is_read_from_the_hidden_table(
         #[case] toml: &str,
         #[case] expected: Option<&str>,
     ) {
         let settings = parse_settings(toml);
-        assert_eq!(settings.teams.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+        assert_eq!(settings.debug.hub_address, expected.map(|url| Url::parse(url).unwrap()));
     }
 
+    /// Whether Atuin for Teams is on is the user's own `atuin.lua` to say, and its hub is in
+    /// `[__debug__]`, so `[teams]` and `[octavo]` are typos now.
     #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::unset("", false)]
-    #[case::teams("[teams]\nenabled = true\n", true)]
-    #[case::legacy("[octavo]\nenabled = true\n", true)]
-    #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
-    fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
-        assert_eq!(parse_settings(toml).teams.enabled, enabled);
-    }
-
-    #[cfg(feature = "octavo")]
-    #[rstest]
-    #[case::unset("", false, ThreadUploads::All)]
-    #[case::legacy("[octavo]\nenabled = true\n", false, ThreadUploads::All)]
-    #[case::history_on("[teams]\nupload_history = true\n", true, ThreadUploads::All)]
-    #[case::workspaces(
-        "[teams]\nupload_threads = \"workspaces\"\n",
-        false,
-        ThreadUploads::Workspaces
-    )]
-    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", false, ThreadUploads::Off)]
-    fn teams_uploads_threads_until_switched_off_and_history_once_switched_on(
-        #[case] toml: &str,
-        #[case] history: bool,
-        #[case] threads: ThreadUploads,
-    ) {
-        let teams = parse_settings(toml).teams;
-        assert_eq!((teams.upload_history, teams.upload_threads), (history, threads));
+    #[case::enabled("[teams]\nenabled = true\n", &["teams"])]
+    #[case::uploads("[teams]\nupload_threads = \"all\"\nupload_history = true\n", &["teams"])]
+    #[case::debug("[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n", &["teams"])]
+    #[case::legacy("[octavo]\nenabled = true\n", &["octavo"])]
+    fn teams_in_config_toml_is_unknown(#[case] toml: &str, #[case] expected: &[&str]) {
+        assert_unknown(&load_file(toml).unknown, expected);
     }
 
     #[rstest]
@@ -3134,17 +3048,6 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         "[threads]\nmouse_typo = true\n\n[ai.sessions]\nmouse_typo = false\n",
         &["ai.sessions.mouse_typo", "threads.mouse_typo"]
     )]
-    #[cfg_attr(
-        feature = "octavo",
-        case::under_legacy_octavo("[octavo]\nenabld = true\n", &["octavo.enabld"])
-    )]
-    #[cfg_attr(
-        feature = "octavo",
-        case::under_both_octavo_spellings(
-            "[teams]\nenabld = true\n\n[octavo]\nenabld = true\n",
-            &["octavo.enabld", "teams.enabld"]
-        )
-    )]
     fn typos_under_legacy_keys_are_reported_as_written(
         #[case] toml: &str,
         #[case] expected: &[&str],
@@ -3152,21 +3055,11 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         assert_unknown(&load_file(toml).unknown, expected);
     }
 
-    #[cfg(feature = "octavo")]
-    #[rstest]
-    fn legacy_octavo_applies_quietly() {
-        let Checked {
-            value: settings,
-            unknown,
-        } = load_file("[octavo]\nenabled = true\n");
-        assert_unknown(&unknown, &[]);
-        assert!(settings.teams.enabled);
-    }
-
     #[cfg(not(feature = "octavo"))]
     #[rstest]
-    fn teams_is_not_unknown_without_octavo() {
-        assert_unknown(&load_file("[teams]\nenabled = true\n").unknown, &[]);
+    fn the_hidden_table_is_not_unknown_without_octavo() {
+        let toml = "[__debug__]\nhub_address = \"http://127.0.0.1:50052\"\n";
+        assert_unknown(&load_file(toml).unknown, &[]);
     }
 
     fn daemon_enabled(settings: &Settings) -> bool {

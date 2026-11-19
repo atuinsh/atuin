@@ -39,20 +39,24 @@ impl Cmd {
 async fn octavo(settings: &Settings) -> Option<atuin_ai::mcp::Octavo> {
     use atuin_client::settings::{DEFAULT_HUB_URL, SyncAuth};
 
-    if !settings.teams.enabled {
+    let configs = atuin_octavo::shares::Configs::new(
+        atuin_common::dirs::try_atuin_home().ok().map(std::path::PathBuf::from),
+    );
+    let on = configs.threads_on().await.unwrap_or_else(|err| {
+        tracing::warn!(?err, "your own atuin.lua can't be run; leaving Atuin for Teams off");
+        false
+    });
+    if !on {
         return None;
     }
     let url = if settings.hub_endpoint() == *DEFAULT_HUB_URL {
         "https://mcp.atuin.sh".to_owned()
     } else {
-        settings.teams.debug.mcp_address.as_ref()?.to_string()
+        settings.debug.hub_mcp_address.as_ref()?.to_string()
     };
     let SyncAuth::Hub { token } = settings.resolve_sync_auth().await else {
         return None;
     };
-    let configs = atuin_octavo::shares::Configs::new(
-        atuin_common::dirs::try_atuin_home().ok().map(std::path::PathBuf::from),
-    );
     let orgs = match std::env::current_dir() {
         Ok(dir) => configs.orgs_of_dir(dir).await.unwrap_or_default(),
         Err(_) => Vec::new(),

@@ -1,7 +1,7 @@
 mod auto_share;
 mod engine;
 mod gate;
-mod workspaces;
+mod starts;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -9,19 +9,20 @@ use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::history::{History, HistoryId};
+use atuin_client::lua_config::Command;
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubLogin, HubSession, UserId};
-use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
 use atuin_octavo::shares::Configs;
+use atuin_octavo::{UPLOADS_HISTORY, pb};
 use auto_share::AutoSharer;
 use engine::{UploadEngine, UploadRetryLater, Uploaded};
 use gate::{Cleared, CloseHalt, Closes, Rows};
+use starts::Starts;
 use thiserror::Error;
 use tokio::sync::Notify;
-use workspaces::Workspaces;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
@@ -56,7 +57,7 @@ impl ActiveOctavoClient {
         let wake = Arc::new(Notify::new());
         // Without a home, the user has no config of their own.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
-        let workspaces = Workspaces::new(configs, sidecar);
+        let starts = Starts::new(configs, sidecar);
         let engine = UploadEngine::spawn(
             queue.clone(),
             hub.clone(),
@@ -64,7 +65,7 @@ impl ActiveOctavoClient {
             outputs,
             records,
             wake.clone(),
-            workspaces.clone(),
+            starts.clone(),
         );
 
         let uploader = Arc::new(DirectUploader {
@@ -72,7 +73,7 @@ impl ActiveOctavoClient {
             handle,
             queue,
             wake,
-            workspaces,
+            starts,
         });
 
         Ok(Self {
@@ -85,10 +86,10 @@ impl ActiveOctavoClient {
 
 impl OctavoClient for ActiveOctavoClient {
     async fn push_history(&self, history: &History, record_id: RecordId) {
-        let settings = self.uploader.handle.settings().await.clone();
-        if !(settings.teams.enabled && settings.teams.upload_history) {
+        if !UPLOADS_HISTORY {
             return;
         }
+        let settings = self.uploader.handle.settings().await.clone();
         // Read now, so the command goes to whoever was logged in as it finished.
         let Some(session) = self.uploader.session(&settings).await else {
             return;
@@ -105,11 +106,10 @@ impl OctavoClient for ActiveOctavoClient {
     }
 
     async fn push_output(&self, id: HistoryId) {
-        let settings = self.uploader.handle.settings().await.clone();
-        let teams = &settings.teams;
-        if !(teams.enabled && teams.upload_history && teams.upload_output) {
+        if !UPLOADS_HISTORY {
             return;
         }
+        let settings = self.uploader.handle.settings().await.clone();
         // Read now, so the output goes to whoever was logged in as it was captured.
         let Some(session) = self.uploader.session(&settings).await else {
             return;
@@ -133,11 +133,7 @@ impl OctavoClient for ActiveOctavoClient {
 
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
-        if !settings.teams.enabled {
-            return ThreadUpload::Nothing;
-        }
-        let uploads = settings.teams.upload_threads;
-        let messages = self.uploader.workspaces.uploads(uploads, messages.to_vec()).await;
+        let messages = self.uploader.starts.uploads(messages.to_vec()).await;
         if messages.is_empty() {
             return ThreadUpload::Nothing;
         }
@@ -204,8 +200,8 @@ struct DirectUploader {
     handle: DaemonHandle,
     queue: UploadQueue,
     wake: Arc<Notify>,
-    /// Who threads are shared with, and which started in a workspace.
-    workspaces: Workspaces,
+    /// Who threads are shared with, and which threads and commands go up.
+    starts: Starts,
 }
 
 impl DirectUploader {
@@ -219,6 +215,9 @@ impl DirectUploader {
         record_id: RecordId,
     ) {
         let id = history.id;
+        if !uploads_command(self.starts.configs(), &history).await {
+            return;
+        }
         let login = match self.hub.login_as(session, &settings) {
             Ok(login) => login,
             Err(err) => {
@@ -248,9 +247,7 @@ impl DirectUploader {
             Ok(()) => {
                 self.resume(login.user_id()).await;
                 // The entry's output may be queued already, waiting on it.
-                if settings.teams.upload_output {
-                    self.wake.notify_one();
-                }
+                self.wake.notify_one();
             }
             Err(HubCallError::OctavoOff(_)) => {
                 tracing::debug!(%id, "octavo is off for the account; dropping this history entry");
@@ -346,7 +343,7 @@ impl DirectUploader {
         messages: Vec<Message>,
     ) -> Result<Vec<Message>, CloseHalt> {
         let rows = Rows::new(&self.queue, login.user_id(), messages);
-        let closing = rows.record_dirs(self.workspaces.configs()).await?.narrow().await?;
+        let closing = rows.record_dirs(self.starts.configs()).await?.narrow().await?;
         let deadline = tokio::time::Instant::now() + engine::PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
         let Cleared { ready, waiting } = closing.clear(sent).await?;
@@ -487,6 +484,17 @@ async fn clear_off(queue: &UploadQueue, user: &UserId) -> bool {
 async fn is_off(queue: &UploadQueue, user: &UserId) -> bool {
     queue.is_off(user).await.unwrap_or_else(|err| {
         tracing::warn!(?err, "failed to read whether octavo is off for the account");
+        false
+    })
+}
+
+/// Whether the config files covering where `history` ran let it go up. One with a config file that
+/// can't be run stays here.
+async fn uploads_command(configs: &Configs, history: &History) -> bool {
+    let uploads = configs.uploads_command(Command::from(history)).await;
+    uploads.unwrap_or_else(|err| {
+        let id = history.id;
+        tracing::warn!(?err, %id, "keeping a command here, as a config file covering it can't be run");
         false
     })
 }

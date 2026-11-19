@@ -1,7 +1,6 @@
 //! What setup sets up: the choices on its first screen and their flags, and how they depend on
 //! each other.
 
-use atuin_client::settings::ThreadUploads;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches};
 
 use super::super::init::Shell;
@@ -124,12 +123,35 @@ impl Flag for Sync {
     }
 }
 
+/// Which agent threads Atuin for Teams uploads, as setup writes the user's own `atuin.lua`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ThreadUploads {
+    #[default]
+    All,
+    /// Those started in a workspace: at or under a project's config file, `.atuin.lua` say.
+    Workspaces,
+    Off,
+}
+
+impl ThreadUploads {
+    pub(super) const EACH: [Self; 3] = [Self::All, Self::Workspaces, Self::Off];
+
+    /// Its value of `--upload-threads`.
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Workspaces => "workspaces",
+            Self::Off => "off",
+        }
+    }
+}
+
 /// Which agent threads Atuin for Teams uploads while it's on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct UploadThreads(pub(super) ThreadUploads);
 
 fn parse_thread_uploads(value: &str) -> Result<ThreadUploads, String> {
-    [ThreadUploads::All, ThreadUploads::Workspaces, ThreadUploads::Off]
+    ThreadUploads::EACH
         .into_iter()
         .find(|uploads| uploads.as_str() == value)
         .ok_or_else(|| "expected all, workspaces or off".to_owned())

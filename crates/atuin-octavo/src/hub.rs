@@ -125,7 +125,7 @@ enum Target {
     Official,
     /// A self-hosted hub, which Octavo refuses: there is nowhere to upload to.
     SelfHosted,
-    /// The `teams.__debug__.address` of a self-hosted hub.
+    /// The `__debug__.hub_address` of a self-hosted hub.
     Debug(Url),
 }
 
@@ -134,7 +134,7 @@ impl Target {
         if settings.hub_endpoint() == *DEFAULT_HUB_URL {
             return Self::Official;
         }
-        match &settings.teams.debug.address {
+        match &settings.debug.hub_address {
             Some(address) => Self::Debug(address.clone()),
             None => Self::SelfHosted,
         }
@@ -163,9 +163,9 @@ pub struct HubClient {
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
         let target = Target::of(settings);
-        if settings.teams.debug.address.is_some() && matches!(target, Target::Official) {
+        if settings.debug.hub_address.is_some() && matches!(target, Target::Official) {
             warn!(
-                "teams.__debug__.address is honored only while sync_address is a self-hosted hub \
+                "__debug__.hub_address is honored only while sync_address is a self-hosted hub \
                  (sync_protocol = \"hub\"); uploading to Atuin's hub"
             );
         }
@@ -465,7 +465,7 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
 #[cfg(test)]
 mod tests {
     use atuin_client::settings::{
-        DEFAULT_SYNC_URL, DbLocation, Settings, SyncProtocol, Teams, TeamsDebug,
+        DEFAULT_SYNC_URL, DbLocation, DebugSettings, Settings, SyncProtocol,
     };
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
@@ -483,12 +483,9 @@ mod tests {
             sync_address: Url::parse(sync_address).unwrap(),
             sync_protocol: SyncProtocol::Hub,
             data_dir: AbsPathBuf::new(&dir).unwrap(),
-            teams: Teams {
-                debug: TeamsDebug {
-                    address: debug_address.map(|url| Url::parse(url).unwrap()),
-                    mcp_address: None,
-                },
-                ..Teams::default()
+            debug: DebugSettings {
+                hub_address: debug_address.map(|url| Url::parse(url).unwrap()),
+                hub_mcp_address: None,
             },
             ..Settings::default()
         };

@@ -1,35 +1,72 @@
-//! Atuin for Teams in `atuin setup`: turned on once sign-in has said the account has it.
+//! Atuin for Teams in `atuin setup`: turned on once sign-in has said the account has it, by the
+//! user's own `atuin.lua`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::history::HistoryId;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
-use atuin_client::settings::{Settings, ThreadUploads};
+use atuin_client::settings::Settings;
 use atuin_daemon::service::pidfile::Pidfile;
 use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
 use atuin_domain::caps::OctavoCap;
 use atuin_domain::record::{HostId, RecordIdx, RecordStatus, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, UserId};
-use atuin_octavo::pb;
 use atuin_octavo::queue::UploadQueue;
+use atuin_octavo::{UPLOADS_HISTORY, pb};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools as _;
-use toml_edit::Value;
 
+use super::plan::ThreadUploads;
 use super::upload::Upload;
+use super::users_file::{UsersFile, WriteError};
 use super::{Status, Step, Updates, count, names, send};
 
-/// Turn Atuin for Teams on, if the account has it, and upload what Atuin already has here if
-/// `backfill`, of what `settings` say it uploads. Returns the upload to watch, if it started one.
+/// Whether the user's own config file turns Atuin for Teams on, and for which threads. One that
+/// can't be read or run leaves it off.
+pub(super) async fn found() -> (ThreadUploads, bool) {
+    match users_file().await {
+        Ok(file) => file.uploads(),
+        Err(err) => {
+            tracing::debug!(?err, "can't read your own atuin.lua; taking Atuin for Teams as off");
+            (ThreadUploads::All, false)
+        }
+    }
+}
+
+/// The user's own config file, in `$ATUIN_HOME`.
+async fn users_file() -> Result<UsersFile> {
+    let home: PathBuf = atuin_common::dirs::try_atuin_home()?.into();
+    let read = tokio::task::spawn_blocking(move || UsersFile::read(&home));
+    Ok(read.await??)
+}
+
+/// Turn Atuin for Teams off, as far as the user's own config file lets setup.
+pub(super) async fn disable(tx: &Updates) {
+    send(tx, Step::Teams, Status::Running("Turning off Atuin for Teams".into()));
+    let failed =
+        |err: eyre::Report| Status::Failed(format!("Couldn't turn off Atuin for Teams ({err:#})"));
+    let status = match users_file().await.map(|file| file.write(ThreadUploads::Off)) {
+        Ok(Ok(())) => Status::Done("Atuin for Teams is off".into()),
+        Ok(Err(err @ WriteError::Theirs { .. })) => Status::Failed(err.to_string()),
+        Ok(Err(err @ WriteError::Write { .. })) => failed(err.into()),
+        Err(err) => failed(err),
+    };
+    send(tx, Step::Teams, status);
+}
+
+/// Turn Atuin for Teams on for `uploads`, if the account has it, and upload what Atuin already
+/// has here if `backfill`. Returns the upload to watch, if it started one.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
     store: &SqliteStore,
     backfill: bool,
+    uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<Upload> {
     send(tx, Step::Teams, Status::Running("Turning on Atuin for Teams".into()));
-    let (status, upload) = match turn_on(settings, store, backfill).await {
+    let (status, upload) = match turn_on(settings, store, backfill, uploads).await {
         Ok(on) => on,
         Err(e) => {
             let failed = format!(
@@ -48,6 +85,7 @@ async fn turn_on(
     settings: &Arc<Settings>,
     store: &SqliteStore,
     backfill: bool,
+    uploads: ThreadUploads,
 ) -> Result<(Status, Option<Upload>)> {
     let login = match HubClient::new(settings)?.login(settings).await {
         Ok(login) => login,
@@ -69,7 +107,7 @@ async fn turn_on(
     }
 
     let backfill = if backfill {
-        Backfill::read(settings, store).await?
+        Backfill::read(settings, store, uploads).await?
     } else {
         Backfill::default()
     };
@@ -90,9 +128,10 @@ async fn turn_on(
             .await
             .wrap_err("couldn't cancel an earlier upload of your threads")?;
     }
-    // As setup found it: `write_config` changes it only to turn it off.
-    if !settings.teams.enabled {
-        super::update_config_file(vec![("teams.enabled", Value::from(true))]).await?;
+    match users_file().await?.write(uploads) {
+        Ok(()) => {}
+        Err(err @ WriteError::Theirs { .. }) => return Ok((Status::Failed(err.to_string()), None)),
+        Err(err @ WriteError::Write { .. }) => return Err(err.into()),
     }
 
     // Queued before the restart, so the daemon starts on it.
@@ -108,7 +147,7 @@ async fn turn_on(
 
     let upload = uploading
         .is_some()
-        .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone(), settings));
+        .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone()));
     let uploading =
         uploading.map_or_else(String::new, |what| format!(", uploading {what} in the background"));
     let old = if old > 0 {
@@ -130,9 +169,13 @@ struct Backfill {
 }
 
 impl Backfill {
-    /// What's here of what `settings` say Atuin for Teams uploads.
-    async fn read(settings: &Arc<Settings>, store: &SqliteStore) -> Result<Self> {
-        let (history, old) = if settings.teams.upload_history {
+    /// What's here of what Atuin for Teams uploads, as it uploads `uploads`.
+    async fn read(
+        settings: &Arc<Settings>,
+        store: &SqliteStore,
+        uploads: ThreadUploads,
+    ) -> Result<Self> {
+        let (history, old) = if UPLOADS_HISTORY {
             let db = atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout);
             db.await?
                 .active_ids()
@@ -144,7 +187,7 @@ impl Backfill {
         };
         // Only of every thread: those of the account's other machines can't be told to have
         // started in a workspace here.
-        let threads = if settings.teams.upload_threads == ThreadUploads::All {
+        let threads = if uploads == ThreadUploads::All {
             StoredThreads::read(settings, store).await?
         } else {
             None

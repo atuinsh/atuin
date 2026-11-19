@@ -61,8 +61,8 @@ sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon"]
 ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
-# `atuin setup --hub` does.
+# Compiled in, but nothing reaches Atuin for Teams until the user's own atuin.lua sets
+# `upload.threads`, which `atuin setup --hub` writes.
 octavo = [
     "ai",
     "sync",

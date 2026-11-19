@@ -633,6 +633,24 @@ impl AiSessionDatabase {
         Ok(dirs.into_iter().map(PathBuf::from).collect())
     }
 
+    /// The first directory the session's rows name, as [`Self::directories`] orders them, and when
+    /// the first row naming it was written, to the millisecond.
+    pub async fn start(
+        &self,
+        session: &HarnessSession,
+    ) -> Result<Option<(PathBuf, Timestamp)>, DbError> {
+        let row: Option<(String, i64)> = db::query_as(
+            "SELECT (SELECT value FROM interned WHERE id = cwd), timestamp FROM messages WHERE \
+             session = (SELECT id FROM sessions WHERE harness = ? AND session_id = ?) AND cwd IS \
+             NOT NULL ORDER BY timestamp, rowid LIMIT 1",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_optional(self.db.pool())
+        .await?;
+        Ok(row.map(|(dir, at)| (PathBuf::from(dir), Self::time_from_millis(at))))
+    }
+
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
     /// source's current title again.
     pub async fn title_changes(
@@ -2432,7 +2450,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn directories_names_each_one_once_in_the_order_rows_reached_it() {
+    async fn directories_names_each_one_once_in_the_order_rows_reached_it_from_the_start() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         let other = handle(HarnessKind::ClaudeCode, "other");
@@ -2449,8 +2467,11 @@ mod tests {
         }
 
         let dirs = db.directories(&session).await.unwrap();
+        let start = db.start(&session).await.unwrap();
 
         assert_eq!(dirs, [PathBuf::from("/fork"), PathBuf::from("/work")]);
+        let at = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1);
+        assert_eq!(start, Some((PathBuf::from("/fork"), at)));
     }
 
     #[rstest]

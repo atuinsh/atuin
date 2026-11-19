@@ -1,12 +1,15 @@
 mod client;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
+use atuin_common::dirs;
 use atuin_domain::record::RecordId;
 pub use atuin_octavo::hub::UserId;
+use atuin_octavo::shares::Configs;
 #[cfg(test)]
 pub use client::RecordingOctavoClient;
 use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
@@ -54,6 +57,15 @@ impl ThreadUpload {
     }
 }
 
+/// Whether the user's own config file turns Atuin for Teams on. One that can't be run leaves it
+/// off.
+async fn threads_on(configs: &Configs) -> bool {
+    configs.threads_on().await.unwrap_or_else(|err| {
+        tracing::warn!(?err, "leaving Atuin for Teams off, as your own config file can't be run");
+        false
+    })
+}
+
 #[derive(Debug)]
 pub struct Octavo {
     client: AnyOctavoClient,
@@ -71,7 +83,8 @@ impl Octavo {
     ) -> Self {
         // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
         // user deletes locally leaves Octavo too.
-        if !settings.teams.enabled && !settings.octavo_queue_path().exists() {
+        let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
+        if !settings.octavo_queue_path().exists() && !threads_on(&configs).await {
             return Self::nop();
         }
 

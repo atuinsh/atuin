@@ -9,15 +9,14 @@ use std::time::Duration;
 use atuin_client::ai_session::{AiSessionStore, Loaded, Message};
 use atuin_client::history::HistoryId;
 use atuin_client::record::decode::map_parallel;
-use atuin_client::settings::{Settings, ThreadUploads};
 use atuin_common::futures::{Backoff, Debounce, Delays};
 use atuin_domain::record::{HostId, RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, HubLogin};
-use atuin_octavo::pb;
 use atuin_octavo::queue::{
     NotSent, PendingHistoryUpload, PendingOpen, PendingOutputUpload, PendingThreadMessageUpload,
     QueueError, ThreadBackfill, UploadQueue,
 };
+use atuin_octavo::{UPLOADS_HISTORY, pb};
 use futures::StreamExt;
 use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
@@ -29,10 +28,11 @@ use tonic::Code;
 use uuid::Uuid;
 
 use super::gate::{Cleared, CloseHalt, Closes, Opening, Rows};
-use super::workspaces::Workspaces;
-use super::{clear_off, forget_output, is_off, mark_off};
+use super::starts::{Goes, Sorted, Starts};
+use super::{clear_off, forget_output, is_off, mark_off, uploads_command};
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
+use crate::octavo::threads_on;
 use crate::output_capture::OutputStore;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -82,7 +82,7 @@ impl UploadEngine {
         outputs: Arc<OutputStore>,
         records: AiSessionStore,
         wake: Arc<Notify>,
-        workspaces: Workspaces,
+        starts: Starts,
     ) -> Self {
         let events = handle.subscribe();
         let inner = EngineInner {
@@ -94,7 +94,7 @@ impl UploadEngine {
             wake,
             logins: Notify::new(),
             logins_heard: AtomicU64::new(0),
-            workspaces,
+            starts,
         };
 
         Self {
@@ -157,10 +157,23 @@ enum NextPass {
     Woken,
 }
 
+impl NextPass {
+    /// When the next pass goes after work that asked for `self`, then work that asked for `after`:
+    /// once the wakes stop if `after` stopped for one, else at once if either has more.
+    const fn and(self, after: Self) -> Self {
+        match (self, after) {
+            (_, Self::Woken) => Self::Woken,
+            (Self::Waiting, Self::Waiting) => Self::Waiting,
+            (Self::Now | Self::Woken, Self::Waiting) | (_, Self::Now) => Self::Now,
+        }
+    }
+}
+
 /// What a pass that sent its live work hands on to background work.
 struct Sending {
     login: HubLogin,
-    settings: Arc<Settings>,
+    /// When the next pass goes for the live work: at once if it left threads to look up.
+    live: NextPass,
 }
 
 /// Whether background work goes in a pass: it does unless it's waiting out a [`BACKOFF`] of its
@@ -237,7 +250,12 @@ impl<'w, 'n> Budget<'w, 'n> {
         if self.wake.as_mut().enable() {
             return Some(NextPass::Woken);
         }
-        (Instant::now() >= self.deadline).then_some(NextPass::Now)
+        self.overdue().then_some(NextPass::Now)
+    }
+
+    /// Whether the run has had its time, whatever woke the engine meanwhile.
+    fn overdue(&self) -> bool {
+        Instant::now() >= self.deadline
     }
 }
 
@@ -253,8 +271,8 @@ struct EngineInner {
     logins: Notify,
     /// How many logins the engine has heard of, so background work backing off can tell one came.
     logins_heard: AtomicU64,
-    /// Who threads are shared with, and which started in a workspace.
-    workspaces: Workspaces,
+    /// Who threads are shared with, and which threads and commands go up.
+    starts: Starts,
 }
 
 impl EngineInner {
@@ -277,7 +295,10 @@ impl EngineInner {
                 DEBOUNCE.settle(|| self.wake.notified()).await;
             }
             let next = match self.send_live(woken).await {
-                Some(sending) => self.send_background(&sending, &mut background).await,
+                Some(sending) => {
+                    let next = self.send_background(&sending, &mut background).await;
+                    sending.live.and(next)
+                }
                 None => NextPass::Waiting,
             };
 
@@ -380,7 +401,7 @@ impl EngineInner {
         };
 
         self.delete_pending(&login).await?;
-        if !settings.teams.enabled {
+        if !threads_on(self.starts.configs()).await {
             return Ok(None);
         }
         // Fixed even while the account is marked off: what capture lets by then goes up direct or
@@ -393,61 +414,48 @@ impl EngineInner {
             return Ok(None);
         }
 
-        match self.send_live_uploads(&login, &settings).await {
-            Ok(()) => Ok(Some(Sending { login, settings })),
+        match self.send_live_uploads(&login).await {
+            Ok(live) => Ok(Some(Sending { login, live })),
             Err(Halt::Off) => Ok(None),
             Err(Halt::RetryLater) => Err(RetryLater),
         }
     }
 
     /// Sends `login`'s queued thread messages, then their queued thread shares, for up to
-    /// [`PASS_BUDGET`], all up to the first [`Halt::Off`]. While `settings` keep threads here, both
-    /// stay queued.
-    async fn send_live_uploads(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
-        if settings.teams.upload_threads == ThreadUploads::Off {
-            return Ok(());
-        }
-        self.send_threads(login, settings).await?;
+    /// [`PASS_BUDGET`], all up to the first [`Halt::Off`], saying whether threads were left to
+    /// look up.
+    async fn send_live_uploads(&self, login: &HubLogin) -> Result<NextPass, Halt> {
+        let threads = self.send_threads(login).await?;
         // Last, as a share waits for its thread's messages. One that may go later waits for the
         // next pass rather than backing off: a wake can't cut a backoff short, so the thread
         // messages it brings would wait it out too.
-        if matches!(self.send_thread_shares(login, settings).await, Err(Halt::Off)) {
-            return Err(Halt::Off);
-        }
-        Ok(())
+        let shares = match self.send_thread_shares(login).await {
+            Ok(next) => next,
+            Err(Halt::Off) => return Err(Halt::Off),
+            Err(Halt::RetryLater) => NextPass::Waiting,
+        };
+        Ok(threads.and(shares))
     }
 
     /// Sends a page of `login`'s first thread backfill not done, then their queued history
     /// entries, then (only after all history is done) their queued command output, all up to the
-    /// first [`Halt::Off`], saying whether more may be left. What `settings` keep here stays
+    /// first [`Halt::Off`], saying whether more may be left. What the config files keep here stays
     /// queued.
     ///
     /// History uploads and command output uploads each stop at [`Budget`].
-    async fn send_backlog(&self, Sending { login, settings }: &Sending) -> Result<NextPass, Halt> {
+    async fn send_backlog(&self, Sending { login, .. }: &Sending) -> Result<NextPass, Halt> {
         let mut wake = pin!(self.wake.notified());
-        // Only of every thread: a backfill takes the account's, from other machines too, where
-        // whether one started in a workspace can't be told.
-        let threads = if settings.teams.upload_threads == ThreadUploads::All {
-            self.backfill(login).await?
-        } else {
-            NextPass::Waiting
-        };
-        let commands = if settings.teams.upload_history {
+        let threads = self.backfill(login).await?;
+        let commands = if UPLOADS_HISTORY {
             match self.send_history(login, wake.as_mut()).await? {
-                NextPass::Waiting => self.send_outputs(login, settings, wake.as_mut()).await?,
+                NextPass::Waiting => self.send_outputs(login, wake.as_mut()).await?,
                 next @ (NextPass::Now | NextPass::Woken) => next,
             }
         } else {
             NextPass::Waiting
         };
 
-        Ok(match (threads, commands) {
-            (_, NextPass::Woken) => NextPass::Woken,
-            (NextPass::Waiting, NextPass::Waiting) => NextPass::Waiting,
-            (NextPass::Now | NextPass::Woken, NextPass::Waiting) | (_, NextPass::Now) => {
-                NextPass::Now
-            }
-        })
+        Ok(threads.and(commands))
     }
 
     /// Uploads pages of `login`'s queued history entries up to the [`Budget`] `wake` starts,
@@ -464,7 +472,7 @@ impl EngineInner {
                 tracing::warn!(?err, "failed to read the octavo upload queue; retrying later");
                 RetryLater
             })?;
-            self.send_history_page(login, page).await?;
+            self.send_history_page(login, page, &budget).await?;
             if let Some(next) = budget.spent() {
                 return Ok(next);
             }
@@ -473,10 +481,14 @@ impl EngineInner {
         Ok(NextPass::Waiting)
     }
 
+    /// Uploads `page` of `login`'s queued history entries but for those the config files keep
+    /// here, which leave the queue too. Those it hasn't looked up once `budget` is overdue stay
+    /// queued.
     async fn send_history_page(
         &self,
         login: &HubLogin,
         page: Vec<PendingHistoryUpload>,
+        budget: &Budget<'_, '_>,
     ) -> Result<(), Halt> {
         let user = login.user_id();
         let records: HashMap<_, _> =
@@ -488,22 +500,35 @@ impl EngineInner {
         })?;
 
         let mut refused = Vec::new();
+        let mut kept = Vec::new();
         let mut entries = Vec::with_capacity(loaded.len());
-        for history in loaded {
+        let mut loaded = loaded.into_iter();
+        for history in loaded.by_ref() {
             let id = history.id;
-            let record_id = records.get(&id).copied().flatten();
-            match pb::History::with_record(history, record_id) {
-                Ok(entry) => entries.push(entry),
-                Err(err) => {
-                    tracing::warn!(
-                        ?err,
-                        %id,
-                        "octavo will never accept this history entry; dropping it"
-                    );
-                    refused.push(id);
+            // Queued by `atuin setup --hub`, which doesn't ask the config files, or before one
+            // kept it here.
+            if uploads_command(self.starts.configs(), &history).await {
+                let record_id = records.get(&id).copied().flatten();
+                match pb::History::with_record(history, record_id) {
+                    Ok(entry) => entries.push(entry),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?err,
+                            %id,
+                            "octavo will never accept this history entry; dropping it"
+                        );
+                        refused.push(id);
+                    }
                 }
+            } else {
+                kept.push(id);
+            }
+            // A lookup can take seconds on a hung network mount, and the rest of the pass waits.
+            if budget.overdue() {
+                break;
             }
         }
+        let unchecked: HashSet<_> = loaded.map(|history| history.id).collect();
 
         let sent = upload(
             entries,
@@ -543,10 +568,11 @@ impl EngineInner {
             }
         }
 
-        for id in refused {
+        for id in refused.into_iter().chain(kept) {
             forget_output(&self.queue, user, id).await;
         }
-        self.queue.remove_history(user, records.into_keys()).await.map_err(|err| {
+        let settled = records.into_keys().filter(|id| !unchecked.contains(id));
+        self.queue.remove_history(user, settled).await.map_err(|err| {
             tracing::warn!(
                 ?err,
                 "failed to remove history entries from the octavo upload queue; retrying later"
@@ -565,10 +591,9 @@ impl EngineInner {
     async fn send_outputs(
         &self,
         login: &HubLogin,
-        settings: &Settings,
         wake: Pin<&mut Notified<'_>>,
     ) -> Result<NextPass, Halt> {
-        if !settings.teams.upload_output {
+        if !UPLOADS_HISTORY {
             return Ok(NextPass::Waiting);
         }
 
@@ -588,8 +613,12 @@ impl EngineInner {
         Ok(NextPass::Waiting)
     }
 
-    /// Sends the queued thread messages of `login`'s user, as `settings` say which go up.
-    async fn send_threads(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
+    /// Sends the queued thread messages of `login`'s user, as the config files say which go up.
+    /// Those of threads not looked up within [`PASS_BUDGET`] stay queued, for the next pass to go
+    /// at once.
+    async fn send_threads(&self, login: &HubLogin) -> Result<NextPass, Halt> {
+        let until = Instant::now() + PASS_BUDGET;
+        let mut next = NextPass::Waiting;
         let mut pending = self.queue.pending_thread_messages(login.user_id());
         while let Some(page) = pending.next().await {
             let ids = page
@@ -600,21 +629,22 @@ impl EngineInner {
                     tracing::warn!(?err, "failed to read the octavo thread queue; retrying later");
                     RetryLater
                 })?;
-            self.send_thread_page(login, settings, &ids).await?;
+            next = next.and(self.send_thread_page(login, &ids, until).await?);
         }
-        Ok(())
+        Ok(next)
     }
 
     /// Uploads the queued thread messages `ids`, and settles each: dequeued once uploaded or
-    /// refused, or once `settings` keep its thread here, held while this build can't read its
+    /// refused, or once the config files keep its thread here, held while this build can't read its
     /// record, and expired while its record isn't stored. Those to upload stay queued while
-    /// Octavo refuses them as off for the account.
+    /// Octavo refuses them as off for the account, as do those of threads not looked up by
+    /// `until`, for the next pass to go at once.
     async fn send_thread_page(
         &self,
         login: &HubLogin,
-        settings: &Settings,
         ids: &[RecordId],
-    ) -> Result<(), Halt> {
+        until: Instant,
+    ) -> Result<NextPass, Halt> {
         let user = login.user_id();
         let loaded = self.records.load(ids).await.map_err(|err| {
             tracing::warn!(?err, "failed to load queued thread messages; retrying later");
@@ -636,13 +666,20 @@ impl EngineInner {
                 Loaded::Missing => missing.push(id),
             }
         }
-        // Queued while every thread went up, those not from a workspace stay here once only those
-        // do.
-        let uploads = settings.teams.upload_threads;
-        let messages = self.workspaces.uploads(uploads, messages).await;
+        // Queued under another config, those that the config files keep here now stay here.
+        let Sorted {
+            going,
+            waiting: unsure,
+            overdue,
+        } = self.starts.uploads_stored(messages, until).await;
+        let next = if overdue {
+            NextPass::Now
+        } else {
+            NextPass::Waiting
+        };
         // Those that must wait stay queued for the next pass.
-        let Cleared { ready, waiting } = self.clear(login, messages).await?;
-        let waiting: HashSet<_> = waiting.into_iter().collect();
+        let Cleared { ready, waiting } = self.clear(login, going).await?;
+        let waiting: HashSet<_> = waiting.into_iter().chain(unsure).collect();
         settled.retain(|id| !waiting.contains(id));
 
         self.queue.hold_thread_messages(user, held).await.map_err(|err| {
@@ -685,21 +722,23 @@ impl EngineInner {
         })?;
 
         if sent == Uploaded::NoneStored {
-            return self.halt_if_off(login).await;
+            self.halt_if_off(login).await?;
         }
-        Ok(())
+        Ok(next)
     }
 
     /// Sends `login`'s queued thread shares for up to [`PASS_BUDGET`], up to the first that fails
     /// for a reason that may pass, as one the budget cuts short does. A share of a thread that
-    /// `settings` keep here stays queued.
+    /// the config files keep here stays queued.
     ///
     /// A share cut short goes again, which Octavo takes as a repeat even if it stored the first.
-    async fn send_thread_shares(&self, login: &HubLogin, settings: &Settings) -> Result<(), Halt> {
+    /// Says whether threads were left to look up.
+    async fn send_thread_shares(&self, login: &HubLogin) -> Result<NextPass, Halt> {
         let opening = Opening::of(&self.queue, login).await?;
-        let narrowed = opening.look_again(self.workspaces.configs()).await?.narrow().await?;
-        // Before the budget starts, as each thread's workspace may take a lookup of its own.
-        let held = self.held_shares(login, settings).await?;
+        let narrowed = opening.look_again(self.starts.configs()).await?.narrow().await?;
+        // Before the budget starts, as each thread's config files may take a lookup of their own,
+        // with a budget of its own.
+        let (held, next) = self.held_shares(login, Instant::now() + PASS_BUDGET).await?;
         // First, so no share opens to an organization one of its thread's directories keeps out.
         let deadline = Instant::now() + PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
@@ -707,23 +746,32 @@ impl EngineInner {
             let sent = tokio::time::timeout_at(deadline, self.send_thread_share(login, open)).await;
             sent.unwrap_or(Err(Halt::RetryLater))?;
         }
-        Ok(())
+        Ok(next)
     }
 
-    /// The threads of `login` queued to be opened that `settings` keep here, whose shares wait:
-    /// queued while every thread went up, those from outside a workspace wait for that again.
+    /// The threads of `login` queued to be opened that the config files keep here, whose shares
+    /// wait: queued under another config, those it keeps here wait for that again, as do those not
+    /// looked up by `until`, for the next pass to go at once.
     async fn held_shares(
         &self,
         login: &HubLogin,
-        settings: &Settings,
-    ) -> Result<HashSet<pb::HarnessSession>, Halt> {
+        until: Instant,
+    ) -> Result<(HashSet<pb::HarnessSession>, NextPass), Halt> {
         let mut held = HashSet::new();
+        let mut next = NextPass::Waiting;
         for thread in self.queue.opening_threads(login.user_id()).await? {
-            if !self.workspaces.shares(settings.teams.upload_threads, &thread).await {
-                held.insert(thread);
+            match self.starts.shares(&thread, until).await {
+                Goes::Up => {}
+                Goes::Overdue => {
+                    held.insert(thread);
+                    next = NextPass::Now;
+                }
+                Goes::Here | Goes::Later => {
+                    held.insert(thread);
+                }
             }
         }
-        Ok(held)
+        Ok((held, next))
     }
 
     async fn send_thread_share(&self, login: &HubLogin, open: PendingOpen<'_>) -> Result<(), Halt> {
@@ -774,7 +822,7 @@ impl EngineInner {
     /// [`gate`](super::gate)).
     async fn clear(&self, login: &HubLogin, messages: Vec<Message>) -> Result<Cleared, Halt> {
         let rows = Rows::new(&self.queue, login.user_id(), messages);
-        let closing = rows.record_dirs(self.workspaces.configs()).await?.narrow().await?;
+        let closing = rows.record_dirs(self.starts.configs()).await?.narrow().await?;
         let sent = Closes::of(&self.queue, login).send(Instant::now() + PASS_BUDGET).await?;
         Ok(closing.clear(sent).await?)
     }
@@ -883,8 +931,8 @@ impl EngineInner {
         Ok(NextPass::Waiting)
     }
 
-    /// Uploads `page` of a backfill, and queues its records this build can't read, held, for a
-    /// restarted daemon to upload.
+    /// Uploads `page` of a backfill but for the threads the config files keep here, and queues its
+    /// records this build can't read, held, for a restarted daemon to upload.
     async fn send_backfill_page(
         &self,
         login: &HubLogin,
@@ -900,15 +948,22 @@ impl EngineInner {
                 Loaded::Missing | Loaded::Skipped => {}
             }
         }
+        // Each page goes in a pass of its own, so those a lookup's deadline cuts off are queued
+        // like the rest that wait.
+        let Sorted {
+            going,
+            waiting: unsure,
+            ..
+        } = self.starts.uploads_stored(messages, Instant::now() + PASS_BUDGET).await;
         // Those that must wait go to the queue, which looks at them again, so the backfill moves on.
-        let Cleared { ready, waiting } = match self.clear(login, messages).await {
+        let Cleared { ready, waiting } = match self.clear(login, going).await {
             Ok(cleared) => cleared,
             Err(Halt::Off) => return Ok(Uploaded::Off),
             Err(Halt::RetryLater) => return Err(UploadRetryLater { stored: false }),
         };
 
         let queued = async {
-            self.queue.push_thread_messages(user, waiting).await?;
+            self.queue.push_thread_messages(user, waiting.into_iter().chain(unsure)).await?;
             self.queue.push_thread_messages(user, held.iter().copied()).await?;
             self.queue.hold_thread_messages(user, held).await
         };
@@ -991,8 +1046,12 @@ impl EngineInner {
 
     async fn upload_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), Halt> {
         // Octavo can't have an entry `history end` hasn't stored here; its upload wakes the engine.
-        if !matches!(self.handle.history_db().load(id).await, Ok(Some(_))) {
+        let Ok(Some(history)) = self.handle.history_db().load(id).await else {
             return Ok(self.expire_output(login, id).await?);
+        };
+        // Its entry stays here too, so Octavo would only refuse it.
+        if !uploads_command(self.starts.configs(), &history).await {
+            return Ok(self.dequeue_output(login, id).await?);
         }
 
         let capture = match self.outputs.get(id).await {
@@ -1270,6 +1329,21 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// Live work that left threads to look up has the next pass go at once, however the
+    /// background work after it went, unless that stopped for a wake.
+    #[rstest]
+    #[case::neither_has_more(NextPass::Waiting, NextPass::Waiting, NextPass::Waiting)]
+    #[case::the_live_work_has_more(NextPass::Now, NextPass::Waiting, NextPass::Now)]
+    #[case::the_background_has_more(NextPass::Waiting, NextPass::Now, NextPass::Now)]
+    #[case::the_background_was_woken(NextPass::Now, NextPass::Woken, NextPass::Woken)]
+    fn the_next_pass_goes_as_soon_as_any_work_asks(
+        #[case] live: NextPass,
+        #[case] background: NextPass,
+        #[case] expected: NextPass,
+    ) {
+        assert_eq!(live.and(background), expected);
+    }
 
     /// The first delay of [`BACKOFF`], and the factor of each after, before jitter.
     fn backoff() -> (Duration, u32) {

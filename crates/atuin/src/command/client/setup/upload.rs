@@ -7,9 +7,9 @@
 
 use std::time::{Duration, Instant};
 
-use atuin_client::settings::{Settings, ThreadUploads};
 use atuin_common::path::AbsPathBuf;
 use atuin_daemon::service::pidfile::Pidfile;
+use atuin_octavo::UPLOADS_HISTORY;
 use atuin_octavo::hub::UserId;
 use atuin_octavo::queue::{Backlog, QueueError, UploadQueue};
 
@@ -27,18 +27,13 @@ pub(super) struct Upload {
 }
 
 impl Upload {
-    /// `user`'s upload in `queue`, sent by the daemon `pidfile` names as `settings` say.
-    pub(super) fn new(
-        queue: UploadQueue,
-        user: UserId,
-        pidfile: AbsPathBuf,
-        settings: &Settings,
-    ) -> Self {
+    /// `user`'s upload in `queue`, sent by the daemon `pidfile` names.
+    pub(super) const fn new(queue: UploadQueue, user: UserId, pidfile: AbsPathBuf) -> Self {
         Self {
             queue,
             user,
             pidfile,
-            sends: Sends::of(settings),
+            sends: Sends::NOW,
         }
     }
 
@@ -57,8 +52,8 @@ impl Upload {
     }
 }
 
-/// Which of the queue's uploads the daemon sends, as `teams.upload_history` and
-/// `teams.upload_threads` say. What it doesn't send stays queued, so it isn't counted.
+/// Which of the queue's uploads the daemon sends. What it doesn't send stays queued, so it isn't
+/// counted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Sends {
     commands: bool,
@@ -66,12 +61,11 @@ pub(super) struct Sends {
 }
 
 impl Sends {
-    fn of(settings: &Settings) -> Self {
-        Self {
-            commands: settings.teams.upload_history,
-            threads: settings.teams.upload_threads != ThreadUploads::Off,
-        }
-    }
+    /// What this build's daemon sends of an upload setup started, which it did with threads on.
+    const NOW: Self = Self {
+        commands: UPLOADS_HISTORY,
+        threads: true,
+    };
 }
 
 /// `done` of `total` up.
@@ -275,8 +269,8 @@ mod tests {
         Gauge { done, total }
     }
 
-    /// What the daemon leaves queued, as history with `teams.upload_history` off, is no part of
-    /// the upload, so it ends once the rest has gone.
+    /// What the daemon leaves queued, as history while it doesn't upload any, is no part of the
+    /// upload, so it ends once the rest has gone.
     #[rstest]
     #[case::commands(Sends { commands: false, threads: true }, backlog(100, &[(40, Some(40))], 0))]
     #[case::threads(Sends { commands: true, threads: false }, backlog(0, &[(0, Some(40))], 7))]

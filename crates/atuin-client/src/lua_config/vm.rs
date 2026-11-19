@@ -8,6 +8,7 @@ use mlua::{Function, Lua, LuaOptions, LuaSerdeExt as _, StdLib, Table, Value, Vm
 use serde::Deserialize;
 
 use super::header::Version;
+use super::upload::{Rules, Upload};
 use super::{Config, ConfigFile, LoadError, Script};
 
 /// The globals a config file sees, beside `atuin`
@@ -78,17 +79,10 @@ impl Vm {
         })
     }
 
-    /// Runs the script and reads the config it sets as `atuin.config`.
-    pub fn eval(self) -> Result<ConfigFile, LoadError> {
-        let deadline = Instant::now() + TIME_LIMIT;
-        self.lua.set_interrupt(move |_| {
-            if Instant::now() < deadline {
-                Ok(VmState::Continue)
-            } else {
-                Err(mlua::Error::runtime(format!("ran past {TIME_LIMIT:?}")))
-            }
-        });
-
+    /// Runs the script and reads the config it sets as `atuin.config`, and its `upload`, which
+    /// keeps the VM to run its functions in.
+    pub fn eval(self) -> Result<(ConfigFile, Upload), LoadError> {
+        limit_to(&self.lua, TIME_LIMIT);
         if let Err(source) = self.chunk.call::<()>(()) {
             return Err(LoadError::Run {
                 path: self.path,
@@ -96,15 +90,17 @@ impl Vm {
             });
         }
 
-        let atuin = self
-            .env
-            .raw_get("atuin")
-            .and_then(|atuin: Value| self.lua.from_value::<AtuinGlobal>(atuin));
-        match atuin {
-            Ok(AtuinGlobal { config }) => Ok(ConfigFile {
-                path: self.path,
-                config,
-            }),
+        let read = self.env.raw_get("atuin").and_then(|atuin: Value| {
+            Rules::read_beside(atuin, |rest| self.lua.from_value::<AtuinGlobal>(rest))
+        });
+        match read {
+            Ok((AtuinGlobal { config }, rules)) => Ok((
+                ConfigFile {
+                    path: self.path.clone(),
+                    config,
+                },
+                Upload::new(self.path, self.lua, rules),
+            )),
             Err(source) => Err(LoadError::Invalid {
                 path: self.path,
                 source,
@@ -122,6 +118,18 @@ impl Vm {
         env.raw_set("atuin", lua.create_table()?)?;
         Ok(env)
     }
+}
+
+/// Stops whatever `lua` runs from now on once it has run for `limit`.
+pub(super) fn limit_to(lua: &Lua, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    lua.set_interrupt(move |_| {
+        if Instant::now() < deadline {
+            Ok(VmState::Continue)
+        } else {
+            Err(mlua::Error::runtime(format!("ran past {limit:?}")))
+        }
+    });
 }
 
 #[cfg(test)]
@@ -143,7 +151,8 @@ mod tests {
     }
 
     fn run(source: &str) -> Result<Config, LoadError> {
-        Ok(Vm::load(script(source))?.eval()?.config)
+        let (file, _) = Vm::load(script(source))?.eval()?;
+        Ok(file.config)
     }
 
     /// A project's file comes with a repository someone else wrote, so it gets nothing that reaches

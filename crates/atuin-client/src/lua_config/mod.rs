@@ -5,7 +5,8 @@
 //!
 //! A file sets its config, as `atuin.config = { orgs = { "acme" } }`, which [`Config`] reads and
 //! [`TYPES`] declares for an editor. A key it doesn't know fails the file, as a typo may be what
-//! keeps a project's threads to itself.
+//! keeps a project's threads to itself. Its `upload` may hold functions, which serde can't read, so
+//! [`Upload`] reads it apart, and runs them in the file's VM.
 //!
 //! A project's file comes with whatever repository the user cloned, and runs with no prompt, so
 //! each file runs in a Luau VM of its own that can build a table and nothing else: no files, no
@@ -13,6 +14,7 @@
 
 mod header;
 mod orgs;
+mod upload;
 mod vm;
 
 use std::fs::{File, OpenOptions};
@@ -25,6 +27,7 @@ use thiserror::Error;
 use self::header::Header;
 pub use self::header::HeaderError;
 pub use self::orgs::{OrgSlug, OrgSlugError, Orgs, TooManyOrgs};
+pub use self::upload::{Command, RuleName, Subject, Thread, Upload};
 use self::vm::Vm;
 
 /// The names a directory's config file may have, of which it may hold one.
@@ -105,10 +108,7 @@ impl ConfigFile {
     /// **Blocks** on the disk, for as long as a network mount under `dir` hangs, and runs the file,
     /// so call it off the async runtime.
     pub fn in_dir(dir: &Path) -> Result<Option<Self>, LoadError> {
-        let Some(source) = Source::in_dir(dir)? else {
-            return Ok(None);
-        };
-        Vm::load(source.into_script()?)?.eval().map(Some)
+        Ok(run(dir)?.map(|(file, _)| file))
     }
 
     /// The config files of the projects at and above `dir`, the nearest first, each run as it's
@@ -131,6 +131,14 @@ impl ConfigFile {
     pub fn into_config(self) -> Config {
         self.config
     }
+}
+
+/// Runs the config file in `dir`, if it has one.
+fn run(dir: &Path) -> Result<Option<(ConfigFile, Upload)>, LoadError> {
+    let Some(source) = Source::in_dir(dir)? else {
+        return Ok(None);
+    };
+    Vm::load(source.into_script()?)?.eval().map(Some)
 }
 
 #[derive(Debug, Error)]
@@ -167,6 +175,13 @@ pub enum LoadError {
         #[source]
         source: mlua::Error,
     },
+    #[error("`upload.{rule}` of {} failed", path.display())]
+    Rule {
+        path: PathBuf,
+        rule: &'static str,
+        #[source]
+        source: mlua::Error,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -195,7 +210,8 @@ impl LoadError {
             | Self::TooLarge { path }
             | Self::Header { path, .. }
             | Self::Run { path, .. }
-            | Self::Invalid { path, .. } => path,
+            | Self::Invalid { path, .. }
+            | Self::Rule { path, .. } => path,
         }
     }
 }
@@ -312,6 +328,10 @@ atuin.config = { orgs = { "acme" } }"#;
     )]
     #[case::an_empty_list_is_set_to_none(r"atuin.config = { orgs = {} }", Some(&[][..]))]
     #[case::unset(r"atuin.config = {}", None)]
+    #[case::beside_upload(
+        r#"atuin.config = { orgs = { "acme" }, upload = { threads = function() return true end } }"#,
+        Some(&["acme"][..])
+    )]
     fn a_file_sets_its_config(#[case] source: &str, #[case] expected: Option<&[&str]>) {
         let orgs = orgs(source).expect("a config");
 
@@ -321,11 +341,10 @@ atuin.config = { orgs = { "acme" } }"#;
     }
 
     /// A typo could be what keeps a project's threads to itself, so it fails the file rather than
-    /// leaving the setting to a file further up. Nor can a file switch on what only the user's own
-    /// config.toml does, as uploading their threads at all.
+    /// leaving the setting to a file further up.
     #[rstest]
     #[case::unknown_key(r#"atuin.config = { org = { "acme" } }"#)]
-    #[case::cannot_turn_uploads_on(r"atuin.config = { enabled = true, upload_output = true }")]
+    #[case::switches_config_toml_had(r"atuin.config = { enabled = true, upload_output = true }")]
     #[case::nested_under_sharing(r#"atuin.config = { sharing = { orgs = { "acme" } } }"#)]
     #[case::wrong_type(r#"atuin.config = { orgs = "acme" }"#)]
     #[case::not_a_table(r"atuin.config = 5")]

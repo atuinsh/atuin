@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime};
 
 use atuin_client::database::Sqlite;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{RequestedSearchMode, Settings, ThreadUploads};
+use atuin_client::settings::{RequestedSearchMode, Settings};
 use atuin_common::dirs::home_dir;
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
@@ -49,6 +49,8 @@ mod scroll;
 mod teams;
 #[cfg(feature = "octavo")]
 mod upload;
+#[cfg(feature = "octavo")]
+mod users_file;
 mod view;
 
 use agents::AnyHarness;
@@ -56,13 +58,11 @@ use agents::AnyHarness;
 use agents::Harness;
 use encoding::Encoding;
 use form::{Flag, Form as _};
-#[cfg(feature = "octavo")]
-use plan::UploadThreads;
 #[cfg(feature = "ai")]
 use plan::{AgentHistory, Mcp};
 use plan::{
-    Asks, AtuinForTeams, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory, Threads,
-    UpArrow,
+    Asks, AtuinForTeams, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory, ThreadUploads,
+    Threads, UpArrow,
 };
 
 use super::config::update_config_file;
@@ -111,7 +111,7 @@ impl Cmd {
             #[cfg(feature = "octavo")]
             if let Some(Teams::On { backfill }) = plan.teams() {
                 // Not watched: there's no screen to watch it on.
-                let _upload = turn_on_teams(store, backfill, &tx).await;
+                let _upload = turn_on_teams(store, backfill, plan.upload_threads.0, &tx).await;
             }
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
@@ -285,7 +285,7 @@ impl Found {
     async fn detect(settings: &Settings, db: &Sqlite) -> Self {
         let hooked = var_nonempty("ATUIN_SESSION").is_some();
         #[cfg(feature = "octavo")]
-        let (upload_threads, teams) = (settings.teams.upload_threads, settings.teams.enabled);
+        let (upload_threads, teams) = teams::found().await;
         // As a build with Atuin for Teams would read an unset config.
         #[cfg(not(feature = "octavo"))]
         let (upload_threads, teams) = (ThreadUploads::All, false);
@@ -442,6 +442,10 @@ async fn apply(
         let changed = format!("Set {} in your config", names(&changed));
         send(tx, Step::Config, Status::Done(changed));
     }
+    #[cfg(feature = "octavo")]
+    if plan.teams() == Some(Teams::Off) && found.teams {
+        teams::disable(tx).await;
+    }
     let settings = Arc::new(Settings::new()?);
     // Before anything writes records, so the daemon and sign-in agree on it.
     paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
@@ -515,10 +519,11 @@ async fn apply(
 async fn turn_on_teams(
     store: &SqliteStore,
     backfill: bool,
+    uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<upload::Upload> {
     match Settings::new() {
-        Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, tx).await,
+        Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, uploads, tx).await,
         Err(e) => {
             let failed = format!(
                 "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
@@ -862,19 +867,6 @@ fn config_changes(
             }
             Sync::Cloud | Sync::Off => {}
         }
-    }
-    // Turned on after sign-in, once the hub has said the account has it.
-    #[cfg(feature = "octavo")]
-    if plan.teams() == Some(Teams::Off) && settings.teams.enabled {
-        changes.push(("teams.enabled", Value::from(false)));
-    }
-    // Written before it's turned on, so its backfill takes only what it uploads.
-    #[cfg(feature = "octavo")]
-    if matches!(plan.teams(), Some(Teams::On { .. }))
-        && scope.covers::<UploadThreads>()
-        && plan.upload_threads.0 != settings.teams.upload_threads
-    {
-        changes.push(("teams.upload_threads", Value::from(plan.upload_threads.0.as_str())));
     }
     changes
 }
@@ -2667,13 +2659,14 @@ mod tests {
     )]
     #[cfg_attr(
         feature = "octavo",
-        case::uploads_with_teams(
+        // The user's own atuin.lua says which threads go up, not config.toml.
+        case::uploads_stay_out_of_config_toml(
             &["--only", "--hub", "--upload-threads", "workspaces"],
             |found: &mut Found, settings: &mut Settings| {
                 daemon_on(found, settings);
                 found.signed_in = true;
             },
-            &[("teams.upload_threads", "\"workspaces\"")],
+            &[],
         )
     )]
     #[cfg_attr(
