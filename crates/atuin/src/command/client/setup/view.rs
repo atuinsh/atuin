@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::tui::cursor::Cursor;
 use atuin_common::env::var_nonempty;
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
@@ -648,7 +649,7 @@ enum Chosen {
 struct Choose {
     plan: Plan,
     /// The address typed for their own server, which the plan takes once they continue.
-    server: String,
+    server: Cursor,
     row: Row,
     error: Option<&'static str>,
     /// Whether the screen may colour a row the rest rules out, which it strikes through otherwise.
@@ -690,7 +691,11 @@ impl Choose {
         plan.atuin_for_teams.0 &= teams && plan.sync == Sync::Cloud;
         Self {
             plan,
-            server: server.unwrap_or_default(),
+            server: {
+                let mut server = Cursor::from(server.unwrap_or_default());
+                server.end();
+                server
+            },
             row: Row::Shell,
             error: None,
             colour: true,
@@ -763,9 +768,18 @@ impl Choose {
             KeyCode::Enter if self.row == Row::Go => return self.next(),
             KeyCode::Enter if self.row == Row::Server => self.row = Row::Go,
             KeyCode::Backspace if self.row == Row::Server => {
-                self.server.pop();
+                self.server.back();
             }
-            KeyCode::Char(c) if self.row == Row::Server => self.server.push(c),
+            KeyCode::Delete if self.row == Row::Server => {
+                self.server.remove();
+            }
+            KeyCode::Left if self.row == Row::Server => {
+                self.server.left();
+            }
+            KeyCode::Right if self.row == Row::Server => self.server.right(),
+            KeyCode::Home if self.row == Row::Server => self.server.start(),
+            KeyCode::End if self.row == Row::Server => self.server.end(),
+            KeyCode::Char(c) if self.row == Row::Server => self.server.insert(c),
             KeyCode::Esc | KeyCode::Backspace if self.page != Page::Features => {
                 let pages = self.pages();
                 let before = pages.iter().rev().skip_while(|&&page| page != self.page).nth(1);
@@ -778,6 +792,13 @@ impl Choose {
             }
             KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
                 self.row = rows[(at + 1).min(rows.len() - 1)];
+            }
+            KeyCode::Enter if self.row.opens() => {
+                self.open = if self.open == self.row.list() {
+                    None
+                } else {
+                    self.row.list()
+                };
             }
             KeyCode::Right | KeyCode::Char('l') if self.row.opens() => self.open = self.row.list(),
             KeyCode::Left | KeyCode::Char('h') if self.row.list().is_some() => {
@@ -893,7 +914,7 @@ impl Choose {
         let moved = !to.is_where(&self.plan.sync);
         self.plan.sync = match to {
             SyncTo::Cloud => Sync::Cloud,
-            SyncTo::SelfHosted => Sync::Server(self.server.clone()),
+            SyncTo::SelfHosted => Sync::Server(self.server.as_str().to_owned()),
             SyncTo::Off => Sync::Off,
         };
         // Atuin for Teams comes only with Atuin Cloud, which `--hub` shares from as it can.
@@ -968,7 +989,7 @@ impl Choose {
     /// whether there's anything to set up at all, wait until they're `done`, on the last page.
     fn plan(&mut self, done: bool) -> Option<Plan> {
         if done && matches!(self.plan.sync, Sync::Server(_)) {
-            let address = self.server.trim();
+            let address = self.server.as_str().trim();
             if !is_address(address) {
                 self.error = Some("Enter your server's address, starting http:// or https://");
                 self.focus(Row::Server);
@@ -1127,26 +1148,32 @@ impl Choose {
         match (self.error, self.row) {
             (Some(error), _) => Line::from(Span::raw(format!("  {error}")).yellow()),
             (None, Row::Go) => hints(&[("enter", "continue"), ("↑↓", "move"), esc]),
-            (None, Row::Server) => hints(&[("enter", "next"), esc]),
+            (None, Row::Server) => hints(&[("enter", "next"), ("↑↓", "move"), esc]),
             (None, Row::SyncTo(_) | Row::Sharing(_)) => {
-                hints(&[("enter", "pick"), ("↑↓", "move"), esc])
-            }
-            (None, Row::ShellPick(_) | Row::AgentPick(_) | Row::CtrlR | Row::UpArrow) => {
-                hints(&[("enter", "toggle"), ("←", "close"), ("↑↓", "move")])
+                hints(&[("space", "pick"), ("↑↓", "move"), esc])
             }
             (None, Row::Shells | Row::Agents) if self.open == self.row.list() => {
-                hints(&[("enter", "toggle all"), ("←", "close"), ("↑↓", "move")])
+                hints(&[("space", "toggle all"), ("enter", "close"), ("↑↓", "move"), esc])
             }
             (None, Row::Shells | Row::Agents) => {
-                hints(&[("enter", "toggle all"), ("→", "open"), ("↑↓", "move")])
+                hints(&[("space", "toggle all"), ("enter", "open"), ("↑↓", "move"), esc])
             }
             (None, Row::Keys) if self.open == Some(List::Keys) => {
                 hints(&[("enter", "close"), ("↑↓", "move"), esc])
             }
             (None, Row::Keys) => hints(&[("enter", "open"), ("↑↓", "move"), esc]),
-            (None, Row::Shell | Row::Output | Row::Threads | Row::AgentHistory | Row::Backfill) => {
-                hints(&[("enter", "toggle"), ("↑↓", "move"), esc])
-            }
+            (
+                None,
+                Row::Shell
+                | Row::ShellPick(_)
+                | Row::Output
+                | Row::Threads
+                | Row::AgentHistory
+                | Row::AgentPick(_)
+                | Row::CtrlR
+                | Row::UpArrow
+                | Row::Backfill,
+            ) => hints(&[("space", "toggle"), ("↑↓", "move"), esc]),
         }
     }
 
@@ -1241,13 +1268,21 @@ impl Choose {
             Row::Server => {
                 let mut spans = lead(at, None).to_vec();
                 spans.extend([Span::raw("    "), pad(row.label(), at)]);
-                if self.server.is_empty() && !at {
+                let typed = self.server.as_str();
+                if typed.is_empty() && !at {
                     spans.push(dim("https://"));
+                } else if at {
+                    // The cursor shades the character that it's on, or a space past the end.
+                    let (before, after) = typed.split_at(self.server.position());
+                    let mut after = after.chars();
+                    let on = after.next().map_or_else(|| " ".to_owned(), String::from);
+                    spans.extend([
+                        Span::raw(before.to_owned()),
+                        Span::raw(on).reversed(),
+                        Span::raw(after.as_str().to_owned()),
+                    ]);
                 } else {
-                    spans.push(Span::raw(self.server.clone()));
-                }
-                if at {
-                    spans.push(Span::raw(" ").reversed());
+                    spans.push(Span::raw(typed.to_owned()));
                 }
                 Line::from(spans)
             }
@@ -1640,7 +1675,7 @@ impl Import {
         lines.push(if self.row == Row::Go {
             hints(&[("enter", "import"), ("↑↓", "move"), ("esc", "skip")])
         } else {
-            hints(&[("enter", "toggle"), ("↑↓", "move"), ("esc", "skip")])
+            hints(&[("space", "toggle"), ("↑↓", "move"), ("esc", "skip")])
         });
         frame.render_widget(Paragraph::new(lines), frame.area());
     }
@@ -1945,7 +1980,7 @@ fn dim(text: impl Into<String>) -> Span<'static> {
     Span::raw(text.into()).dim()
 }
 
-/// "enter toggle · ↑↓ move", the keys bold.
+/// "space toggle · ↑↓ move", the keys bold.
 fn hints(keys: &[(&'static str, &'static str)]) -> Line<'static> {
     let mut spans = vec![Span::raw("  ")];
     for (i, (key, what)) in keys.iter().enumerate() {
@@ -2193,14 +2228,14 @@ mod tests {
         let mut choose = on_the_keys(&found);
         choose.scrolled = Some(top);
         let shown = shown_on(&choose, &found, 12);
-        assert!(shown.last().is_some_and(|row| row.contains("enter toggle")), "{shown:#?}");
+        assert!(shown.last().is_some_and(|row| row.contains("space toggle")), "{shown:#?}");
     }
 
     #[rstest]
     fn the_footer_follows_a_page_that_fits(found: Found) {
         let shown = shown_on(&on_the_keys(&found), &found, 40);
         let continues = shown.iter().position(|row| row.contains("Continue")).expect("shown");
-        assert!(shown[continues + 2].contains("enter toggle"), "{shown:#?}");
+        assert!(shown[continues + 2].contains("space toggle"), "{shown:#?}");
     }
 
     #[rstest]
@@ -2336,9 +2371,21 @@ mod tests {
         choose.row = Row::Shells;
         press(&mut choose, &[KeyCode::Char(' ')]);
         assert_eq!(choose.plan.shells.0, HOOKABLE);
-        press(&mut choose, &[KeyCode::Enter]);
+        press(&mut choose, &[KeyCode::Char(' ')]);
         assert_eq!(choose.plan.shells.0, []);
         assert_eq!(choose.open, None);
+    }
+
+    #[rstest]
+    fn enter_opens_and_closes_a_list(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Shells;
+        let shells = choose.plan.shells.0.clone();
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.open, Some(List::Shells));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.open, None);
+        assert_eq!(choose.plan.shells.0, shells);
     }
 
     #[rstest]
@@ -2475,6 +2522,25 @@ mod tests {
         assert_eq!(plan.sync, Sync::Server("https://atuin.example.com".into()));
     }
 
+    #[cfg(feature = "sync")]
+    #[rstest]
+    fn the_address_can_be_edited_anywhere_in_it(found: Found) {
+        let mut choose = on_page(&found, &preset(&found), Page::Sync);
+        choose.row = Row::SyncTo(SyncTo::SelfHosted);
+        press(&mut choose, &[KeyCode::Enter]);
+        let typed = |text: &str| text.chars().map(KeyCode::Char).collect::<Vec<_>>();
+        press(&mut choose, &typed("https://example.com"));
+        press(&mut choose, &[KeyCode::Left; 11]);
+        press(&mut choose, &typed("atuin."));
+        press(&mut choose, &[KeyCode::Home, KeyCode::Delete, KeyCode::Char('H')]);
+        press(&mut choose, &[KeyCode::End, KeyCode::Left, KeyCode::Right, KeyCode::Backspace]);
+        assert_eq!(choose.server.as_str(), "Https://atuin.example.co");
+        assert_eq!(choose.row, Row::Server);
+        press(&mut choose, &[KeyCode::Left; 3]);
+        let line = drawn(&choose, &found, Row::Server);
+        assert!(line.contains("Https://atuin.example.co "), "{line}");
+    }
+
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::always(&[], Some(Teams::On { backfill: false }), ThreadUploads::All)]
@@ -2508,7 +2574,7 @@ mod tests {
         #[case] threads: ThreadUploads,
     ) {
         let mut choose = on_page(&found, &teams(&found), Page::Sync);
-        choose.server = "https://atuin.example.com".into();
+        choose.server = Cursor::from(String::from("https://atuin.example.com"));
         for &row in picked {
             choose.row = row;
             press(&mut choose, &[KeyCode::Enter]);
