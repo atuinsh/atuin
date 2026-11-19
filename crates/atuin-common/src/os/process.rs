@@ -10,7 +10,6 @@ use crate::futures::Backoff;
 use crate::os::unix;
 #[cfg(windows)]
 use crate::os::windows;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::path::AbsPathBuf;
 
 /// How often to check whether a process has exited while waiting out the graceful-shutdown period.
@@ -20,25 +19,31 @@ pub(crate) const EXIT_BACKOFF: Backoff = Backoff::Exponential {
     factor: NonZeroU32::new(2).unwrap(),
 };
 
-/// The path to the running executable.
+/// The absolute path to the running executable.
 ///
-/// # Panics
+/// On Linux, this works without `/proc`.
 ///
-/// If the OS can't say. On Linux, that takes both `/proc` being unmounted and the working directory
-/// being gone, since the kernel still passes the path it ran the executable from.
-#[must_use]
-pub fn current_exe() -> PathBuf {
+/// # Errors
+///
+/// If the OS can't say where the running executable is.
+pub fn current_exe() -> std::io::Result<PathBuf> {
     let exe = std::env::current_exe();
     // Without `/proc`, std can't read `/proc/self/exe`. `AT_EXECFN` is the path the executable was
-    // run from, relative if that was.
+    // run from.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let exe = exe.or_else(|_| {
         use std::os::unix::ffi::OsStrExt as _;
 
         let execfn = std::ffi::OsStr::from_bytes(rustix::param::linux_execfn().to_bytes());
-        AbsPathBuf::from_current_dir(execfn).map(PathBuf::from)
+        std::io::Result::Ok(PathBuf::from(execfn))
     });
-    exe.expect("the OS knows the running executable's path")
+    let exe = exe?;
+    // `AT_EXECFN` is relative if the executable was run by a relative path. A caller can hand the
+    // path to a process with another working directory, so the path is made absolute here.
+    if exe.is_absolute() {
+        return Ok(exe);
+    }
+    AbsPathBuf::from_current_dir(exe).map(PathBuf::from)
 }
 
 /// Gracefully (and then forcefully) terminate the process.

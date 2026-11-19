@@ -12,10 +12,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::super::InstallHookError;
+use super::super::{InstallHookError, plugin_with_executable};
 use super::cli::{HermesCli, HermesCommand};
 use super::home::InstallHome;
 use crate::path::PathBufExt as _;
+use crate::string::StringExt as _;
 
 const MANIFEST: &str = include_str!("../../../res/harnesstools/hermes/plugin.yaml");
 const PLUGIN: &str = include_str!("../../../res/harnesstools/hermes/__init__.py");
@@ -34,7 +35,7 @@ const NAME: &str = "atuin";
 /// this.
 ///
 /// `executable` is atuin by absolute path, since the gateway that runs hooks doesn't have the
-/// shell's `PATH`: the one `mcp::launch_path` gives, which
+/// shell's `PATH`: the one [`launch_path`](crate::atuin_exe::launch_path) gives, which
 /// outlasts a package manager's upgrade. Nor does it have the shell's `ATUIN_` settings, so the
 /// plugin runs atuin with `env` ([`atuin_env`](super::atuin_env)) on top of the gateway's own.
 pub async fn install(
@@ -135,13 +136,10 @@ fn plugin_source(
     executable: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<String, InstallHookError> {
-    let path = executable
-        .to_str()
-        .ok_or_else(|| InstallHookError::NonUtf8Executable(executable.to_owned()))?;
     let env = serde_json::to_string(env).expect("a map of strings is JSON");
-    Ok(PLUGIN
-        .replacen(ATUIN_LINE, &format!("ATUIN = {}", serde_json::Value::from(path)), 1)
-        .replacen(ENV_LINE, &format!("ATUIN_ENV = {env}"), 1))
+    let mut source = plugin_with_executable(PLUGIN, ATUIN_LINE, executable)?;
+    source.replace_within(ENV_LINE, "{}", &env).expect("the plugin has the env line");
+    Ok(source)
 }
 
 #[cfg(test)]

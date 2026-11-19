@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::session::any::{AnySessions, ObservableExt};
-use super::{Harness, InstallHookError};
+use super::{Harness, InstallHookError, TS_ATUIN_LINE, plugin_with_executable};
+use crate::atuin_exe::launch_path;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
@@ -52,14 +53,15 @@ impl Harness for Amp {
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_SOURCE: &str = include_str!("../../../res/harnesstools/amp/atuin.ts");
 
+        let source = plugin_with_executable(PLUGIN_SOURCE, TS_ATUIN_LINE, launch_path().await?)?;
         let plugins_dir = config_dir().joined("plugins");
         let plugin_path = plugins_dir.clone().joined("atuin.ts");
         let installed = tokio::fs::read_to_string(&plugin_path).await;
-        if installed.is_ok_and(|existing| existing == PLUGIN_SOURCE) {
+        if installed.is_ok_and(|existing| existing == source) {
             return Err(InstallHookError::AlreadyInstalled);
         }
         tokio::fs::create_dir_all(&plugins_dir).await?;
-        tokio::fs::write(&plugin_path, PLUGIN_SOURCE).await?;
+        tokio::fs::write(&plugin_path, source).await?;
         Ok(plugin_path)
     }
 
@@ -103,7 +105,8 @@ mod tests {
 
     use super::*;
 
-    /// The plugin goes where Amp loads plugins from, which `XDG_CONFIG_HOME` moves.
+    /// The plugin goes where Amp loads plugins from, which `XDG_CONFIG_HOME` moves, and runs atuin
+    /// by its launch path.
     #[rstest]
     #[case::default(None, ".config/amp/plugins/atuin.ts")]
     #[case::xdg(Some("xdg"), "xdg/amp/plugins/atuin.ts")]
@@ -122,7 +125,9 @@ mod tests {
         let installed = Amp.install_hooks().await.unwrap();
 
         assert_eq!(installed, home.path().join(relative));
-        assert!(installed.is_file());
+        let atuin = serde_json::Value::from(launch_path().await.unwrap().to_str().unwrap());
+        let plugin = std::fs::read_to_string(installed).unwrap();
+        assert!(plugin.contains(&format!("const ATUIN = {atuin};")), "{plugin}");
     }
 
     #[rstest]

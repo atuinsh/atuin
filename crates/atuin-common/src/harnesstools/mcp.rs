@@ -19,6 +19,7 @@ use super::hermes::{self, Hermes};
 use super::kiro::{self, Kiro};
 use super::opencode::{self, Opencode};
 use super::pi::{Flavour, Pi};
+use crate::atuin_exe;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::executable::resolve_in_path;
@@ -32,6 +33,9 @@ pub enum InstallMcpError {
         #[source]
         std::io::Error,
     ),
+
+    #[error(transparent)]
+    Executable(#[from] crate::atuin_exe::LaunchPathError),
 
     #[error("could not parse {} as JSON", .0.display())]
     Json(PathBuf, #[source] serde_json::Error),
@@ -129,7 +133,7 @@ impl InstallMcp for Amp {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         // `amp mcp add` refuses a name that's taken.
         remove(self.program(), &["mcp", "remove", "atuin"]).await;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
@@ -157,7 +161,7 @@ impl InstallMcp for Ccode {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         // `claude mcp add` refuses a name that's taken.
         remove(self.program(), &["mcp", "remove", "--scope", "user", "atuin"]).await;
         run(self.program(), &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
@@ -182,7 +186,7 @@ impl InstallMcp for Codex {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
 
@@ -203,7 +207,7 @@ impl InstallMcp for Copilot {
     /// `copilot mcp add` writes `~/.copilot/mcp-config.json`. It replaces any server that has the
     /// same name.
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
 
@@ -222,7 +226,7 @@ impl InstallMcp for Grok {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
 
@@ -242,11 +246,11 @@ impl InstallMcp for Hermes {
 
     /// Through `hermes config set` (see [`hermes::mcp::install`]), so `mcp_program` stays the
     /// default, `hermes`, with where this shell's atuin keeps its config and data in the server's
-    /// `env` ([`hermes::atuin_env`]). `executable()` already goes through `launch_path`.
+    /// `env` ([`hermes::atuin_env`]).
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let hermes = HermesCommand::new(&hermes::install_home());
         let env = hermes::atuin_env(crate::env::vars_utf8());
-        Ok(hermes::mcp::install(&hermes, &executable()?, &env).await?)
+        Ok(hermes::mcp::install(&hermes, executable().await?, &env).await?)
     }
 
     async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
@@ -283,7 +287,7 @@ impl InstallMcp for Kiro {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        install_kiro(&self.mcp_config_path(), &executable()?).await
+        install_kiro(&self.mcp_config_path(), executable().await?).await
     }
 
     async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
@@ -308,7 +312,7 @@ impl InstallMcp for Opencode {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        install_opencode(&self.mcp_config_path(), &executable()?).await
+        install_opencode(&self.mcp_config_path(), executable().await?).await
     }
 
     async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
@@ -335,7 +339,7 @@ impl InstallMcp for Pi {
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        let atuin = &executable()?;
+        let atuin = executable().await?;
         match self.mcp_program() {
             Some(program) => run(program, &["mcp", "add", "atuin", "--", atuin, "mcp"]).await,
             None => {
@@ -466,32 +470,10 @@ async fn remove(program: &str, args: &[&str]) {
 }
 
 /// The atuin for a harness to launch. Harnesses don't necessarily have the user's `PATH`, so it's
-/// an absolute path: see [`launch_path`].
-fn executable() -> Result<String, InstallMcpError> {
-    launch_path(std::env::current_exe()?)
-        .into_os_string()
-        .into_string()
-        .map_err(|path| InstallMcpError::NonUtf8Executable(path.into()))
-}
-
-/// The first atuin in an absolute `PATH` entry where that is `exe`, since a package manager's
-/// entry there (a Homebrew or Nix profile symlink) survives upgrades where the resolved path
-/// doesn't, and `exe` otherwise.
-pub(crate) fn launch_path(exe: PathBuf) -> PathBuf {
-    let on_path = crate::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .filter(|dir| dir.is_absolute())
-            .map(|dir| dir.joined(format!("atuin{}", std::env::consts::EXE_SUFFIX)))
-            .find(|candidate| candidate.is_file())
-    });
-    match on_path {
-        Some(on_path)
-            if AbsPathBuf::canonicalize(&on_path).ok() == AbsPathBuf::canonicalize(&exe).ok() =>
-        {
-            on_path
-        }
-        _ => exe,
-    }
+/// an absolute path: see [`atuin_exe::launch_path`].
+async fn executable() -> Result<&'static str, InstallMcpError> {
+    let path = atuin_exe::launch_path().await?;
+    path.to_str().ok_or_else(|| InstallMcpError::NonUtf8Executable(path.to_owned()))
 }
 
 /// Runs `program` with `args`, keeping what it prints off the terminal: a screen may be on it. The
@@ -758,37 +740,6 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "").unwrap();
         assert!(harness.has_mcp_config());
-    }
-
-    /// A Homebrew-style install: `bin/atuin` links to the real executable.
-    #[cfg(unix)]
-    #[rstest]
-    #[case::absolute_entry(false, "bin/atuin")]
-    #[case::relative_entry(true, "real/atuin")]
-    fn launch_path_takes_atuin_only_from_absolute_path_entries(
-        #[case] relative: bool,
-        #[case] want: &str,
-    ) {
-        let dir = tempfile::tempdir().unwrap();
-        let (real, bin) = (dir.path().join("real"), dir.path().join("bin"));
-        std::fs::create_dir_all(&real).unwrap();
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(real.join("atuin"), "").unwrap();
-        std::os::unix::fs::symlink(real.join("atuin"), bin.join("atuin")).unwrap();
-
-        // The same `bin`, relative to the current directory: it finds the link from here only.
-        let entry = if relative {
-            let cwd = std::env::current_dir().unwrap();
-            let up: PathBuf = std::iter::repeat_n("..", cwd.components().count() - 1).collect();
-            up.joined(bin.strip_prefix("/").unwrap())
-        } else {
-            bin
-        };
-        assert!(entry.join("atuin").is_file());
-        let env = MockEnv::install();
-        env.set("PATH", entry);
-
-        assert_eq!(launch_path(real.join("atuin")), dir.path().join(want));
     }
 
     #[cfg(unix)]

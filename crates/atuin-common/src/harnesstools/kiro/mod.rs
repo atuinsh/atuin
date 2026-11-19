@@ -60,7 +60,7 @@ impl Harness for Kiro {
 
     /// Kiro loads every `*.json` in `$KIRO_HOME/hooks` when a session starts (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        hooks::install(&kiro_home(), &std::env::current_exe()?).await
+        hooks::install(&kiro_home(), crate::atuin_exe::launch_path().await?).await
     }
 
     async fn has_hooks(&self) -> Result<bool, InstallHookError> {

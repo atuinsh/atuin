@@ -140,9 +140,9 @@ impl Harness for Hermes {
 
     /// Writes atuin's plugin to the active home's `plugins/atuin/` and enables it (see [`hooks`]).
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        let atuin = super::mcp::launch_path(std::env::current_exe()?);
+        let atuin = crate::atuin_exe::launch_path().await?;
         let env = atuin_env(crate::env::vars_utf8());
-        hooks::install(&install_home(), &atuin, &env).await
+        hooks::install(&install_home(), atuin, &env).await
     }
 
     async fn has_hooks(&self) -> Result<bool, InstallHookError> {

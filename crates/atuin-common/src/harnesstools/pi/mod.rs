@@ -2,10 +2,12 @@ use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
-use super::{Harness, InstallHookError};
+use super::{Harness, InstallHookError, TS_ATUIN_LINE, plugin_with_executable};
+use crate::atuin_exe::launch_path;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
+use crate::string::StringExt as _;
 
 pub mod rehydrate;
 pub mod session;
@@ -105,10 +107,12 @@ impl Harness for Pi {
 
         let extension_path = extensions_dir.joined(PLUGIN_NAME);
         // Commands are recorded with the harness's own name as their author.
-        let source = PLUGIN_SOURCE.replace(
-            r#"const ATUIN_AUTHOR = "pi";"#,
-            &format!(r#"const ATUIN_AUTHOR = "{}";"#, self.flavour.binary()),
-        );
+        let mut source =
+            plugin_with_executable(PLUGIN_SOURCE, TS_ATUIN_LINE, launch_path().await?)?;
+        let author = r#"const ATUIN_AUTHOR = "pi";"#;
+        source
+            .replace_within(author, "pi", self.flavour.binary())
+            .expect("the plugin has the author line");
 
         let already_installed = tokio::fs::read_to_string(&extension_path)
             .await

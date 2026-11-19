@@ -56,6 +56,8 @@ pub enum LaunchdError {
     Disabled,
     #[error(transparent)]
     AtuinHome(#[from] atuin_common::dirs::HomeError),
+    #[error(transparent)]
+    Executable(#[from] atuin_common::atuin_exe::LaunchPathError),
     #[error("could not create the daemon's working directory {}: {source}", .path.display())]
     WorkingDir {
         path: PathBuf,
@@ -407,7 +409,8 @@ impl Launchd {
 
     /// Install the agent, replacing any copy of it that is loaded, and so have launchd start it.
     async fn install(&self) -> Result<(), LaunchdError> {
-        let plist = AgentPlist::for_this_client()?;
+        let plist =
+            AgentPlist::for_this_client(atuin_common::atuin_exe::launch_path().await?.to_owned())?;
         let ctx = ServiceInstallCtx {
             label: Self::label(),
             contents: Some(plist.to_xml()?),
@@ -601,7 +604,10 @@ impl AgentPlist {
     ];
 
     /// The plist for the agent, running from the atuin home as a daemon this client forks does.
-    fn for_this_client() -> Result<Self, LaunchdError> {
+    ///
+    /// `exe` is the path that launchd runs, which should outlast upgrades: see
+    /// [`launch_path`](atuin_common::atuin_exe::launch_path).
+    fn for_this_client(exe: PathBuf) -> Result<Self, LaunchdError> {
         let working_dir = PathBuf::from(atuin_common::dirs::try_atuin_home()?);
         std::fs::create_dir_all(&working_dir).map_err(|source| LaunchdError::WorkingDir {
             path: working_dir.clone(),
@@ -616,7 +622,7 @@ impl AgentPlist {
         })?;
         let config_variables = Self::config_variables()?;
         Ok(Self {
-            exe: atuin_common::os::process::current_exe(),
+            exe,
             working_dir,
             stderr: logs.joined("daemon.stderr.log"),
             // A plist holds only UTF-8, and `vars` would panic on anything else.

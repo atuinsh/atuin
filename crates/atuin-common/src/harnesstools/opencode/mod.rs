@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
-use super::{Harness, InstallHookError};
+use super::{Harness, InstallHookError, TS_ATUIN_LINE, plugin_with_executable};
+use crate::atuin_exe::launch_path;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
 use crate::path::PathBufExt as _;
@@ -72,6 +73,7 @@ impl Harness for Opencode {
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";
         let plugin = plugin_for(rehydrate::major_version(Path::new("opencode")).await.ok());
+        let plugin = plugin_with_executable(plugin, TS_ATUIN_LINE, launch_path().await?)?;
 
         let plugins_dir = config_dir().joined("plugins");
 

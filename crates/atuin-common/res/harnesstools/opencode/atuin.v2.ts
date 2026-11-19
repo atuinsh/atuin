@@ -14,6 +14,9 @@
 import { spawn } from "node:child_process";
 
 const ATUIN_AUTHOR = "opencode";
+// Replaced with atuin's absolute path at install: a harness started outside a shell doesn't have
+// the shell's PATH.
+const ATUIN = "atuin";
 const ATUIN_TIMEOUT_MS = 10_000;
 
 const SHELL_TOOL = "shell";
@@ -81,7 +84,7 @@ function atuin(args: string[], cwd: string): Promise<AtuinResult> {
 	return new Promise((resolve) => {
 		let child: ReturnType<typeof spawn>;
 		try {
-			child = spawn("atuin", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+			child = spawn(ATUIN, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
 		} catch {
 			resolve({ code: null, stdout: "" });
 			return;

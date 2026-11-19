@@ -119,6 +119,46 @@ impl StrExt for str {
     }
 }
 
+/// Extension methods for [`String`].
+// TODO(taylordotfish): fold `TrimExt` into this trait.
+pub trait StringExt {
+    /// Replace `old` with `new` within the first occurrence of `context` in `self`, in place.
+    ///
+    /// # Errors
+    ///
+    /// If `self` doesn't contain `context`, or `context` doesn't contain `old`. `self` is then
+    /// left as it was.
+    fn replace_within(
+        &mut self,
+        context: &str,
+        old: &str,
+        new: &str,
+    ) -> Result<(), ReplaceWithinError>;
+}
+
+impl StringExt for String {
+    fn replace_within(
+        &mut self,
+        context: &str,
+        old: &str,
+        new: &str,
+    ) -> Result<(), ReplaceWithinError> {
+        let context_start = self.find(context).ok_or(ReplaceWithinError::MissingContext)?;
+        let start = context_start + context.find(old).ok_or(ReplaceWithinError::MissingOld)?;
+        self.replace_range(start..start + old.len(), new);
+        Ok(())
+    }
+}
+
+/// Error returned by [`StringExt::replace_within`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ReplaceWithinError {
+    #[error("the string doesn't contain the context")]
+    MissingContext,
+    #[error("the context doesn't contain the text to replace")]
+    MissingOld,
+}
+
 /// Extension trait for owned strings providing an empty-string fallback.
 pub trait NonEmptyOrExt: Sized {
     /// Return the string if it is non-empty, otherwise `value`.
@@ -232,7 +272,36 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::{FormatSafeUrlExt, NonEmptyOrExt, StrExt};
+    use super::{FormatSafeUrlExt, NonEmptyOrExt, ReplaceWithinError, StrExt, StringExt as _};
+
+    /// Only the text within the context changes, even when the same text comes earlier in the
+    /// string.
+    #[rstest]
+    #[case::alone("const A = \"pi\";\n", "const A = \"omp\";\n")]
+    #[case::earlier_in_the_string("pipe();\nconst A = \"pi\";\n", "pipe();\nconst A = \"omp\";\n")]
+    #[case::first_of_two_contexts(
+        "const A = \"pi\";\nconst A = \"pi\";\n",
+        "const A = \"omp\";\nconst A = \"pi\";\n"
+    )]
+    fn replace_within_changes_only_the_context(#[case] s: &str, #[case] want: &str) {
+        let mut s = s.to_owned();
+        s.replace_within(r#"const A = "pi";"#, "pi", "omp").unwrap();
+        assert_eq!(s, want);
+    }
+
+    /// Without the context, or without the old text in it, the string stays as it was.
+    #[rstest]
+    #[case::no_context(r#"const B = "pi";"#, "pi", ReplaceWithinError::MissingContext)]
+    #[case::no_old_text(r#"const A = "pi";"#, "omp", ReplaceWithinError::MissingOld)]
+    fn replace_within_without_the_text_changes_nothing(
+        #[case] context: &str,
+        #[case] old: &str,
+        #[case] want: ReplaceWithinError,
+    ) {
+        let mut s = r#"const A = "pi";"#.to_owned();
+        assert_eq!(s.replace_within(context, old, "new"), Err(want));
+        assert_eq!(s, r#"const A = "pi";"#);
+    }
 
     #[rstest]
     #[case::the_key_itself("a.b", "a.b", Some(""))]

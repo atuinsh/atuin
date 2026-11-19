@@ -23,6 +23,30 @@ impl CommandExt for std::process::Command {
     }
 }
 
+/// Kills a process group with `SIGKILL` when dropped, unless [`Self::disarm`] is called first.
+#[must_use = "the group is killed as soon as the guard is dropped"]
+#[derive(Debug)]
+pub struct KillGroupOnDrop(Option<Pid>);
+
+impl KillGroupOnDrop {
+    pub const fn new(group: Pid) -> Self {
+        Self(Some(group))
+    }
+
+    /// Consume the guard without killing the process group.
+    pub fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            let _ = process::kill_process_group(group, Signal::KILL);
+        }
+    }
+}
+
 /// Try to convert a [`u32`] PID into a typed [`Pid`].
 ///
 /// Standard library functions like [`std::process::id`] use [`u32`], but functions in this module

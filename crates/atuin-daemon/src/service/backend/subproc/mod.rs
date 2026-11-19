@@ -76,7 +76,8 @@ impl Backend for Subproc {
     }
 
     async fn launch(&self) -> Result<(), BackendError> {
-        let exe = atuin_common::os::process::current_exe();
+        let exe = atuin_common::os::process::current_exe()
+            .map_err(|err| BackendError::new(SubprocError::Launch(err)))?;
 
         let mut service = Command::new(exe);
         service

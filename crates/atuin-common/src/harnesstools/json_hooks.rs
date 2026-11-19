@@ -25,8 +25,9 @@ pub enum HookStyle {
 /// Merge atuin's command hooks into a Claude-Code-style JSON hook config at `config_path`, leaving
 /// the user's existing keys, values, and ordering intact.
 ///
-/// The hooks invoke the running executable by absolute path, since harnesses do not necessarily
-/// run them with the user's shell `PATH`.
+/// The hooks run atuin by absolute path, since harnesses do not necessarily run them with the
+/// user's shell `PATH`. The path is the one that [`launch_path`](crate::atuin_exe::launch_path)
+/// gives, which outlasts a package manager's upgrade.
 pub async fn install(
     config_path: &Path,
     matcher: &str,
@@ -44,7 +45,7 @@ pub async fn install_in(
     style: HookStyle,
     skeleton: Value,
 ) -> Result<(), InstallHookError> {
-    let hook = hook_entry(&std::env::current_exe()?, harness, style)?;
+    let hook = hook_entry(crate::atuin_exe::launch_path().await?, harness, style)?;
 
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -255,8 +256,12 @@ fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
 }
 
 /// The hook entries this atuin writes for `harness`, in each style.
+///
+/// Install writes [`crate::atuin_exe::launch_path`], which is either the running executable or an
+/// `atuin` on `PATH`. [`is_atuins`] already matches an executable named `atuin`, so the running
+/// executable is the only one to list. Using it also saves `launch_path`'s probes.
 fn this_atuins(harness: &str) -> Vec<Value> {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::os::process::current_exe() else {
         return Vec::new();
     };
     let styles = [HookStyle::Shell, HookStyle::Exec];

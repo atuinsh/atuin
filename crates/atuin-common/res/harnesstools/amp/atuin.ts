@@ -53,6 +53,9 @@ function block(b: Block): Block {
 	}
 }
 
+// Replaced with atuin's absolute path at install: a harness started outside a shell doesn't have
+// the shell's PATH.
+const ATUIN = "atuin";
 // How long a push may take: a turn it misses is left out of Threads, not held up.
 const PUSH_TIMEOUT_MS = 10_000;
 
@@ -89,7 +92,7 @@ export default function (amp: PluginAPI) {
 				parent = m.id;
 				return `${JSON.stringify(line)}\n`;
 			});
-			const push = spawn("atuin", ["threads", "push", "--harness", "amp", "--session", event.thread.id], {
+			const push = spawn(ATUIN, ["threads", "push", "--harness", "amp", "--session", event.thread.id], {
 				stdio: ["pipe", "ignore", "ignore"],
 			});
 			const done = new Promise((resolve) => {
