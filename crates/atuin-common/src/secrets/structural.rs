@@ -119,6 +119,142 @@ pub(super) static STRUCTURAL_PATTERNS: &[Pattern] = &[
             redacted: "-H 'Authorization: Basic ****'",
         }],
     },
+    // The whole value goes, because any of a header's cookies can be the session. A value without
+    // `name=` is a cookie jar's path or not a cookie at all.
+    Pattern {
+        name: "Cookie",
+        regex: concat!(
+            r#"(?:"#,
+            word_start!(),
+            r#"(?i-u:cookie)["']?[ \t]*:|(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t]+\\?["'])"#,
+            r#"[ \t\["']*(?<secret>[^\s=;"'\\]+=(?:\\?")?(?:=\\?"|\\?";|[^\r\n"'\\]){16,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "> Cookie: theme=dark; session=8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> Cookie: ****\n",
+            },
+            Test {
+                input: "< set-cookie: sid=8f2d0c1e9b7a4f6e8d2c; Path=/\n",
+                redacted: "< set-cookie: ****\n",
+            },
+            Test {
+                input: "curl -b 'sid=8f2d0c1e9b7a4f6e8d2c' https://x.test",
+                redacted: "curl -b '****' https://x.test",
+            },
+            Test {
+                input: "> Cookie: a=\"8f2d0c1e9b7a4f6e\"; sid=\"8f2d0c1e9b7a4f6e8d2c\"; b=c\n",
+                redacted: "> Cookie: ****\n",
+            },
+            Test {
+                input: r#"> Cookie: theme=dark; sid="8f2d0c1e9b7a4f6e8d2c""#,
+                redacted: r#"> Cookie: ****""#,
+            },
+            Test {
+                input: r#""Cookie: sid=\"8f2d0c1e9b7a4f6e8d2c\"\r\nb""#,
+                redacted: r#""Cookie: ****\"\r\nb""#,
+            },
+            // Escaped, in JSON.
+            Test {
+                input: r#""a\r\nCookie: sid=8f2d0c1e9b7a4f6e8d2c\r\nb""#,
+                redacted: r#""a\r\nCookie: ****\r\nb""#,
+            },
+            Test {
+                input: "curl -b /home/me/.cache/cookies.txt https://x.test",
+                redacted: "curl -b /home/me/.cache/cookies.txt https://x.test",
+            },
+            Test {
+                input: "cookie = request.cookies.get('session_identifier')",
+                redacted: "cookie = request.cookies.get('session_identifier')",
+            },
+            Test {
+                input: "> Cookie: theme=dark\n",
+                redacted: "> Cookie: theme=dark\n",
+            },
+        ],
+    },
+    // An unquoted value ends with its shell word, so the rest of the command stays.
+    Pattern {
+        name: "Unquoted curl cookie",
+        regex: r#"(?-u:\bcurl\b)[^\n]*?[ \t](?:-b|--cookie)[= \t]+(?<secret>[^\s=;"'\\]+=[^\s;"'\\]{16,})"#,
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[Test {
+            input: "curl -b sid=8f2d0c1e9b7a4f6e8d2c https://x.test",
+            redacted: "curl -b **** https://x.test",
+        }],
+    },
+    // `Authorization` and `Proxy-Authorization` are redacted by their schemes above.
+    Pattern {
+        name: "Credential header",
+        regex: concat!(
+            word_start!(),
+            r#"(?i-u:api-key|x-(?:[a-z0-9]+-)*(?:apikey|auth|token|secret))["']?[ \t]*:[ \t"']*"#,
+            r#"(?<secret>[^\s"'\\${<](?:[,;][^\s"'\\]|[^\s"'\\,;]){11,})"#
+        ),
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "> X-Api-Key: 8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "curl -H 'X-Vault-Token: 8f2d0c1e9b7a4f6e8d2c' https://x.test",
+                redacted: "curl -H 'X-Vault-Token: ****' https://x.test",
+            },
+            Test {
+                input: "> X-Api-Key: a!8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "> X-Api-Key: a,8f2d0c1e9b7a4f6e8d2c\n",
+                redacted: "> X-Api-Key: ****\n",
+            },
+            Test {
+                input: "> x-api-key: 8f2d0c1e9b7a4f6e8d2c, b",
+                redacted: "> x-api-key: ****, b",
+            },
+            Test {
+                input: "x-api-key: $API_KEY_VALUE_FROM_ENV",
+                redacted: "x-api-key: $API_KEY_VALUE_FROM_ENV",
+            },
+        ],
+    },
+    Pattern {
+        name: "Credential URL parameter",
+        regex: r#"[?&](?i-u:[a-z0-9_-]*(?:api[_-]?key|token|secret|passw(?:or)?d))=(?<secret>[^\s&"'\\<>`#${][^\s&"'\\<>`#]{11,})"#,
+        prefilter: None,
+        #[cfg(test)]
+        tests: &[
+            Test {
+                input: "https://api.test/v1?a=1&access_token=8f2d0c1e9b7a4f6e8d2c&b=2",
+                redacted: "https://api.test/v1?a=1&access_token=****&b=2",
+            },
+            Test {
+                input: "https://api.test/v1?password=ab$8f2d0c1e9b7a4f6e8d2c",
+                redacted: "https://api.test/v1?password=****",
+            },
+            Test {
+                input: "https://api.test/v1?api_key=%2F8f2d0c1e9b7a4f6e8d2c",
+                redacted: "https://api.test/v1?api_key=****",
+            },
+            Test {
+                input: "https://api.test/v1?password=%DB_PASSWORD_VALUE%",
+                redacted: "https://api.test/v1?password=%DB_PASSWORD_VALUE%",
+            },
+            Test {
+                input: "https://api.test/v1?api_key=${API_KEY_VALUE}",
+                redacted: "https://api.test/v1?api_key=${API_KEY_VALUE}",
+            },
+            Test {
+                input: "https://example.test/search?q=token&page=2",
+                redacted: "https://example.test/search?q=token&page=2",
+            },
+        ],
+    },
     // gitleaks curl-auth-user
     Pattern {
         name: "curl user password",
@@ -380,7 +516,7 @@ pub(super) fn is_placeholder(value: &str) -> bool {
     }
     let lower = value.to_ascii_lowercase();
     let reference = ["$", "%", "{{", "os.environ", "process.env", "env.", "env(", "env[", "getenv"];
-    if reference.iter().any(|r| lower.starts_with(r)) {
+    if reference.iter().any(|r| lower.starts_with(r)) && !is_percent_encoded(value) {
         return true;
     }
     if value.len() > 2
@@ -419,6 +555,13 @@ pub(super) fn is_placeholder(value: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Whether a value starts with a URL's percent escape. A value that also ends with `%` is a
+/// Windows variable reference, even when its name starts with two hex digits.
+fn is_percent_encoded(value: &str) -> bool {
+    let hex = |i| value.as_bytes().get(i).is_some_and(u8::is_ascii_hexdigit);
+    value.starts_with('%') && !value.ends_with('%') && hex(1) && hex(2)
 }
 
 /// [`is_placeholder`], or, unquoted, a type: what a name's value in code is far more often than
