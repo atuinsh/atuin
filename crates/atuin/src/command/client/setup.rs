@@ -42,7 +42,6 @@ use tracing::instrument;
 
 mod agents;
 mod encoding;
-mod example;
 mod form;
 mod plan;
 mod scroll;
@@ -522,7 +521,7 @@ async fn turn_on_teams(
         Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, tx).await,
         Err(e) => {
             let failed = format!(
-                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --teams` to try again"
+                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
             );
             send(tx, Step::Teams, Status::Failed(failed));
             None
@@ -2484,7 +2483,7 @@ mod tests {
             "--sync",
             "off",
             "--no-import",
-            "--teams",
+            "--hub",
         ];
         let parsed = Cmd::try_parse_from(std::iter::once("setup").chain(shipped));
         assert!(parsed.is_ok(), "{parsed:?}");
@@ -2511,15 +2510,15 @@ mod tests {
     #[cfg_attr(
         feature = "octavo",
         case::teams(
-            &["--teams", "--sync", "off"],
-            "`--teams` needs sync: `--sync cloud`, or your own server's address",
+            &["--hub", "--sync", "off"],
+            "`--hub` needs sync: `--sync cloud`, or your own server's address",
         )
     )]
     #[cfg_attr(
         feature = "octavo",
         case::upload_threads(
-            &["--no-teams", "--upload-threads", "workspaces"],
-            "`--upload-threads workspaces` needs Atuin for Teams: `--teams`",
+            &["--no-hub", "--upload-threads", "workspaces"],
+            "`--upload-threads workspaces` needs Atuin for Teams: `--hub`",
         )
     )]
     #[case::shells(&["--no-shell-history", "--shells", "zsh"], "`--shells zsh` needs shell history: `--shell-history`")]
@@ -2530,7 +2529,14 @@ mod tests {
             "`--mcp` needs history or threads to search: `--shell-history`, `--agent-history` or `--threads`",
         )
     )]
-    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin for Teams only with `--teams`"))]
+    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin for Teams only with `--hub`"))]
+    #[cfg_attr(
+        feature = "octavo",
+        case::backfill_of_workspaces(
+            &["--hub", "--upload-threads", "workspaces", "--backfill"],
+            "`--backfill` needs threads from outside workspaces: `--upload-threads all`",
+        )
+    )]
     fn flags_that_cannot_turn_on_say_what_they_need(
         found: Found,
         #[case] args: &[&str],
@@ -2662,7 +2668,7 @@ mod tests {
     #[cfg_attr(
         feature = "octavo",
         case::uploads_with_teams(
-            &["--only", "--teams", "--upload-threads", "workspaces"],
+            &["--only", "--hub", "--upload-threads", "workspaces"],
             |found: &mut Found, settings: &mut Settings| {
                 daemon_on(found, settings);
                 found.signed_in = true;
@@ -2673,7 +2679,7 @@ mod tests {
     #[cfg_attr(
         feature = "octavo",
         case::uploads_as_they_are(
-            &["--only", "--teams", "--upload-threads", "all"],
+            &["--only", "--hub", "--upload-threads", "all"],
             |found: &mut Found, settings: &mut Settings| {
                 daemon_on(found, settings);
                 found.signed_in = true;
@@ -2868,9 +2874,10 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::not_asked(&[], None)]
-    #[case::asked(&["--teams"], Some(Teams::On { backfill: false }))]
-    #[case::with_backfill(&["--teams", "--backfill"], Some(Teams::On { backfill: true }))]
-    #[case::turned_off(&["--no-teams"], Some(Teams::Off))]
+    #[case::asked(&["--hub"], Some(Teams::On { backfill: false }))]
+    #[case::as_18_24_8_spelled_it(&["--teams"], Some(Teams::On { backfill: false }))]
+    #[case::with_backfill(&["--hub", "--backfill"], Some(Teams::On { backfill: true }))]
+    #[case::turned_off(&["--no-hub"], Some(Teams::Off))]
     fn teams_is_asked_about_with_its_flags(
         mut found: Found,
         #[case] flags: &[&str],

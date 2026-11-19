@@ -33,7 +33,7 @@ pub(super) async fn enable(
         Ok(on) => on,
         Err(e) => {
             let failed = format!(
-                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --teams` to try again"
+                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
             );
             (Status::Failed(failed), None)
         }
@@ -52,8 +52,8 @@ async fn turn_on(
     let login = match HubClient::new(settings)?.login(settings).await {
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => {
-            let failed = "Atuin for Teams needs you signed in: run `atuin login`, then `atuin \
-                          setup --teams`";
+            let failed =
+                "Atuin for Teams needs you signed in: run `atuin login`, then `atuin setup --hub`";
             return Ok((Status::Failed(failed.into()), None));
         }
         Err(err) => return Err(err).wrap_err("couldn't ask the hub who you're signed in as"),

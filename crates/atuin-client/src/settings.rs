@@ -665,12 +665,13 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
-/// `[teams]`: Atuin for Teams, which `atuin setup --teams` turns on.
+/// `[teams]`: Atuin for Teams, which `atuin setup --hub` turns on.
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Teams {
     pub enabled: bool,
-    /// Whether the commands Atuin records go to Atuin for Teams, while `enabled`.
+    /// Whether the commands Atuin records go to Atuin for Teams too, while `enabled`. Off unless
+    /// set.
     pub upload_history: bool,
     /// Which agent threads go to Atuin for Teams, while `enabled`.
     pub upload_threads: ThreadUploads,
@@ -686,7 +687,7 @@ impl Default for Teams {
     fn default() -> Self {
         Self {
             enabled: false,
-            upload_history: true,
+            upload_history: false,
             upload_threads: ThreadUploads::All,
             upload_output: false,
             debug: TeamsDebug::default(),
@@ -1953,7 +1954,7 @@ impl Settings {
         #[cfg(feature = "octavo")]
         let defaults = defaults
             .set_default("teams.enabled", false)?
-            .set_default("teams.upload_history", true)?
+            .set_default("teams.upload_history", false)?
             .set_default("teams.upload_threads", "all")?
             .set_default("teams.upload_output", false)?;
         legacy
@@ -2800,16 +2801,16 @@ mod tests {
 
     #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::unset("", true, ThreadUploads::All)]
-    #[case::legacy("[octavo]\nenabled = true\n", true, ThreadUploads::All)]
-    #[case::history_off("[teams]\nupload_history = false\n", false, ThreadUploads::All)]
+    #[case::unset("", false, ThreadUploads::All)]
+    #[case::legacy("[octavo]\nenabled = true\n", false, ThreadUploads::All)]
+    #[case::history_on("[teams]\nupload_history = true\n", true, ThreadUploads::All)]
     #[case::workspaces(
         "[teams]\nupload_threads = \"workspaces\"\n",
-        true,
+        false,
         ThreadUploads::Workspaces
     )]
-    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", true, ThreadUploads::Off)]
-    fn teams_uploads_history_and_threads_until_switched_off(
+    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", false, ThreadUploads::Off)]
+    fn teams_uploads_threads_until_switched_off_and_history_once_switched_on(
         #[case] toml: &str,
         #[case] history: bool,
         #[case] threads: ThreadUploads,

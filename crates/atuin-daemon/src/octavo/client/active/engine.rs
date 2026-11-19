@@ -353,7 +353,7 @@ impl EngineInner {
                     self.logins_heard.fetch_add(1, Ordering::Relaxed);
                     self.logins.notify_one();
                 }
-                // `atuin setup --teams` clears the off mark before it writes the config.
+                // `atuin setup --hub` clears the off mark before it writes the config.
                 Ok(DaemonEvent::SettingsReloaded) => self.wake.notify_one(),
                 Ok(DaemonEvent::ShutdownRequested) => {}
                 Err(RecvError::Closed) => return,

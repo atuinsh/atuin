@@ -2,7 +2,9 @@
 
 use std::io::{self, Write};
 use std::ops::Range;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "octavo")]
+use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::ThreadUploads;
@@ -23,11 +25,10 @@ use ratatui::{DefaultTerminal, Frame};
 use tokio::sync::mpsc;
 
 use super::agents::{AnyHarness, Harness};
-use super::example::{Key, example};
 use super::form::{Form as _, Needs};
 use super::plan::{
-    AgentHistory, Agents, AtuinForTeams, CtrlR, HOOKABLE, OutputCapture, Plan, ShellHistory,
-    Shells, Threads, UpArrow,
+    AgentHistory, Agents, AtuinForTeams, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan,
+    ShellHistory, Shells, Threads, UpArrow,
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
@@ -176,14 +177,12 @@ async fn choose(
     let colorfgbg = var_nonempty("COLORFGBG").and_then(|value| value.into_string().ok());
     let shade = colour.then(|| row_shade(colorfgbg.as_deref()));
     let mut choose = Choose::new(found, plan).coloured(colour).shaded(shade);
-    let shown_at = Instant::now();
     // Only while they choose, because the screens after it show a sign-in link to select.
     let _mouse = match mouse {
         Mouse::Capture => Some(MouseCaptured::new()?),
         Mouse::Leave => None,
     };
     loop {
-        choose.shown_for = shown_at.elapsed();
         terminal.draw(|frame| choose.draw(frame, found))?;
         let chosen = match next_input().await? {
             Some(Input::Key(key)) => choose.handle(key),
@@ -367,14 +366,20 @@ enum Row {
     Agents,
     /// One of [`Choose::agents`], in the open list of agents.
     AgentPick(usize),
+    /// Advanced keybindings: a fold of [`Self::CtrlR`] and [`Self::UpArrow`] at the bottom of the
+    /// features.
+    Keys,
     CtrlR,
     UpArrow,
     /// A place to sync to, on the sync page.
     SyncTo(SyncTo),
     /// The address of their own server, under [`SyncTo::SelfHosted`] once it's picked.
     Server,
-    /// How Atuin Cloud shares threads, with `--teams`, under it once it's picked.
+    /// Whether Atuin Hub is on, and what it uploads, on the hub page.
     Sharing(Sharing),
+    /// Whether Atuin Hub uploads what Atuin has already, under [`Sharing::Always`] once it's
+    /// picked.
+    Backfill,
     /// The button that goes on to set it all up.
     Go,
 }
@@ -388,23 +393,23 @@ impl Row {
         Self::Agents,
         Self::AgentHistory,
         Self::Threads,
-        Self::CtrlR,
-        Self::UpArrow,
+        Self::Keys,
         Self::SyncTo(SyncTo::Cloud),
-        Self::Sharing(Sharing::Always),
-        Self::Sharing(Sharing::Workspaces),
-        Self::Sharing(Sharing::Off),
         Self::SyncTo(SyncTo::SelfHosted),
         Self::Server,
         Self::SyncTo(SyncTo::Off),
+        Self::Sharing(Sharing::Always),
+        Self::Backfill,
+        Self::Sharing(Sharing::Workspaces),
+        Self::Sharing(Sharing::Off),
         Self::Go,
     ];
 
     /// The page the row is on, `None` for the button that's on each.
     const fn page(self) -> Option<Page> {
         match self {
-            Self::CtrlR | Self::UpArrow => Some(Page::Keys),
-            Self::SyncTo(_) | Self::Server | Self::Sharing(_) => Some(Page::Sync),
+            Self::SyncTo(_) | Self::Server => Some(Page::Sync),
+            Self::Sharing(_) | Self::Backfill => Some(Page::Hub),
             Self::Go => None,
             Self::Shell
             | Self::Shells
@@ -413,27 +418,10 @@ impl Row {
             | Self::Threads
             | Self::AgentHistory
             | Self::Agents
-            | Self::AgentPick(_) => Some(Page::Features),
-        }
-    }
-
-    /// The key the row binds, if it binds one.
-    const fn key(self) -> Option<Key> {
-        match self {
-            Self::CtrlR => Some(Key::CtrlR),
-            Self::UpArrow => Some(Key::UpArrow),
-            Self::Shell
-            | Self::Shells
-            | Self::ShellPick(_)
-            | Self::Output
-            | Self::Threads
-            | Self::AgentHistory
-            | Self::Agents
             | Self::AgentPick(_)
-            | Self::SyncTo(_)
-            | Self::Server
-            | Self::Sharing(_)
-            | Self::Go => None,
+            | Self::Keys
+            | Self::CtrlR
+            | Self::UpArrow => Some(Page::Features),
         }
     }
 
@@ -442,17 +430,22 @@ impl Row {
         match self {
             Self::Shells | Self::ShellPick(_) => Some(List::Shells),
             Self::Agents | Self::AgentPick(_) => Some(List::Agents),
+            Self::Keys | Self::CtrlR | Self::UpArrow => Some(List::Keys),
             Self::Shell
             | Self::Output
             | Self::Threads
             | Self::AgentHistory
-            | Self::CtrlR
-            | Self::UpArrow
             | Self::SyncTo(_)
             | Self::Server
             | Self::Sharing(_)
+            | Self::Backfill
             | Self::Go => None,
         }
+    }
+
+    /// Whether the row opens a list under it.
+    fn opens(self) -> bool {
+        self.list().is_some_and(|list| list.row() == self)
     }
 
     /// Whether the screen shows the row for `plan`, `None` when it doesn't, and if it does, what
@@ -465,11 +458,17 @@ impl Row {
             Self::Output => plan.ask::<OutputCapture>(),
             Self::Threads => plan.ask::<Threads>(),
             Self::AgentHistory => plan.ask::<AgentHistory>(),
+            // It opens while either key can change.
+            Self::Keys => {
+                let keys = [plan.ask::<CtrlR>(), plan.ask::<UpArrow>()];
+                keys.into_iter().flatten().reduce(Result::or)
+            }
             Self::CtrlR => plan.ask::<CtrlR>(),
             Self::UpArrow => plan.ask::<UpArrow>(),
             Self::SyncTo(_) => SyncTo::state(plan),
             Self::Server => plan.ask::<Sync>().filter(|_| matches!(plan.sync, Sync::Server(_))),
             Self::Sharing(sharing) => sharing.state(plan),
+            Self::Backfill => plan.ask::<Backfill>().filter(|_| Sharing::Always.is_picked(plan)),
             Self::Go => Some(Ok(())),
         }
     }
@@ -485,21 +484,18 @@ impl Row {
             Self::AgentPick(_) => "Agent",
             Self::Output => "Command output",
             Self::Threads => "Threads",
+            Self::Keys => "Advanced keybindings",
             Self::CtrlR => "Ctrl-R",
             Self::UpArrow => "Up arrow",
             Self::SyncTo(to) => to.label(),
             Self::Server => "Address",
             Self::Sharing(sharing) => sharing.label(),
+            Self::Backfill => "Upload what Atuin has already",
             Self::Go => "Continue",
         }
     }
 
-    /// Whether the row goes with a place to sync, under it once it's picked.
-    const fn is_under_sync_to(self) -> bool {
-        matches!(self, Self::Server | Self::Sharing(_))
-    }
-
-    /// The question the row comes under.
+    /// The question the row comes under. The keys come under their fold's row instead.
     const fn heading(self) -> Option<&'static str> {
         match self {
             Self::Shell | Self::Shells | Self::ShellPick(_) | Self::Output => {
@@ -508,9 +504,9 @@ impl Row {
             Self::Agents | Self::AgentPick(_) | Self::AgentHistory | Self::Threads => {
                 Some("Agent integration")
             }
-            Self::CtrlR | Self::UpArrow => Some("Which keys should search your history?"),
-            Self::SyncTo(_) | Self::Server | Self::Sharing(_) => Some("Where should Atuin sync?"),
-            Self::Go => None,
+            Self::SyncTo(_) | Self::Server => Some("Where should Atuin sync?"),
+            Self::Sharing(_) | Self::Backfill => Some("Atuin Hub"),
+            Self::Keys | Self::CtrlR | Self::UpArrow | Self::Go => None,
         }
     }
 }
@@ -535,7 +531,7 @@ impl SyncTo {
     /// What syncing there means, if it needs saying.
     const fn about(self) -> Option<&'static str> {
         match self {
-            Self::Cloud => Some("Your data is synced E2E encrypted."),
+            Self::Cloud => Some("Atuin's official server."),
             Self::SelfHosted => Some("E2E sync through a self-hosted Atuin server you run."),
             Self::Off => None,
         }
@@ -555,8 +551,7 @@ impl SyncTo {
     }
 }
 
-/// How Atuin Cloud shares threads with `--teams`: through Atuin for Teams, every thread or those
-/// started in a workspace, or not at all.
+/// Atuin Hub with `--hub`: on for every thread or for those started in a workspace, or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sharing {
     Always,
@@ -575,20 +570,14 @@ impl Sharing {
 
     const fn about(self) -> &'static str {
         match self {
-            Self::Always => {
-                "Atuin stores your data in the cloud under our standard data policy. All threads \
-                 are uploaded."
-            }
-            Self::Workspaces => {
-                "Atuin uploads the threads started in a directory with an .atuin.lua, under the \
-                 standard data policy."
-            }
-            Self::Off => "Atuin uses only end-to-end encryption to upload your data.",
+            Self::Always => "uploads all your threads",
+            Self::Workspaces => "uploads threads in directories with a .atuin.lua file",
+            Self::Off => "disable Atuin Hub",
         }
     }
 
-    /// Whether the sync page offers it, as [`Row::state`] says: with `--teams`, once Atuin Cloud
-    /// is picked.
+    /// Whether the hub page offers it, as [`Row::state`] says: with `--hub`, once Atuin Cloud is
+    /// picked.
     fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
         let teams = plan.ask::<AtuinForTeams>()?;
         let shares = match self {
@@ -613,6 +602,8 @@ impl Sharing {
 enum List {
     Shells,
     Agents,
+    /// The keys that open Atuin's search, folded away since few change them.
+    Keys,
 }
 
 impl List {
@@ -621,6 +612,7 @@ impl List {
         match self {
             Self::Shells => Row::Shells,
             Self::Agents => Row::Agents,
+            Self::Keys => Row::Keys,
         }
     }
 }
@@ -628,22 +620,22 @@ impl List {
 /// A page of the first screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
-    /// What Atuin captures, and who searches it.
+    /// What Atuin captures, who searches it, and with which keys.
     Features,
-    /// The keys that open Atuin's search, each with an example of it.
-    Keys,
-    /// Where it syncs to, last, since sign-in follows it.
+    /// Where it syncs to, after the features since sign-in follows it.
     Sync,
+    /// Whether Atuin Hub uploads what Atuin Cloud syncs.
+    Hub,
 }
 
 impl Page {
-    const ORDER: [Self; 3] = [Self::Features, Self::Keys, Self::Sync];
+    const ORDER: [Self; 3] = [Self::Features, Self::Sync, Self::Hub];
 
     const fn name(self) -> &'static str {
         match self {
             Self::Features => "Features",
-            Self::Keys => "Keybindings",
             Self::Sync => "Sync",
+            Self::Hub => "Hub",
         }
     }
 }
@@ -667,12 +659,6 @@ struct Choose {
     /// The agents the list of agents offers: those here, and any the flags named.
     agents: Vec<AnyHarness>,
     page: Page,
-    /// How long the screen has been up, which the examples play by.
-    shown_for: Duration,
-    /// When, by [`Self::shown_for`], each key's example began, so that one turned on plays from
-    /// its start.
-    ctrl_r_from: Duration,
-    up_arrow_from: Duration,
     /// The first line shown, while they've scrolled with the mouse. A key press brings the row
     /// they're on back into sight.
     scrolled: Option<usize>,
@@ -700,7 +686,7 @@ impl Choose {
             }
         }
         let mut plan = plan.clone();
-        // The sync page offers Atuin for Teams only with Atuin Cloud, where it can be on.
+        // The hub page offers Atuin for Teams only with Atuin Cloud, where it can be on.
         let teams = matches!(plan.ask::<AtuinForTeams>(), Some(Ok(())));
         plan.atuin_for_teams.0 &= teams && plan.sync == Sync::Cloud;
         Self {
@@ -712,9 +698,6 @@ impl Choose {
             open: None,
             agents,
             page: Page::Features,
-            shown_for: Duration::ZERO,
-            ctrl_r_from: Duration::ZERO,
-            up_arrow_from: Duration::ZERO,
             scrolled: None,
             held: None,
             shade: None,
@@ -752,9 +735,11 @@ impl Choose {
             let picks = match row {
                 Row::Shells if open => (0..HOOKABLE.len()).map(Row::ShellPick).collect(),
                 Row::Agents if open => (0..self.agents.len()).map(Row::AgentPick).collect(),
+                Row::Keys if open => vec![Row::CtrlR, Row::UpArrow],
                 _ => Vec::new(),
             };
-            rows.extend(picks.into_iter().map(|pick| (pick, None)));
+            let shown = picks.into_iter().filter_map(|pick| Some((pick, pick.state(&self.plan)?)));
+            rows.extend(shown.map(|(pick, state)| (pick, state.err())));
         }
         rows
     }
@@ -795,11 +780,7 @@ impl Choose {
             KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
                 self.row = rows[(at + 1).min(rows.len() - 1)];
             }
-            KeyCode::Right | KeyCode::Char('l')
-                if matches!(self.row, Row::Shells | Row::Agents) =>
-            {
-                self.open = self.row.list();
-            }
+            KeyCode::Right | KeyCode::Char('l') if self.row.opens() => self.open = self.row.list(),
             KeyCode::Left | KeyCode::Char('h') if self.row.list().is_some() => {
                 if let Some(list) = self.row.list() {
                     self.open = None;
@@ -892,14 +873,19 @@ impl Choose {
             Row::Output => plan.output.0 = !plan.output.0,
             Row::Threads => plan.threads.0 = !plan.threads.0,
             Row::AgentHistory => plan.agent_history.0 = !plan.agent_history.0,
+            Row::Keys => {
+                self.open = if self.open == Some(List::Keys) {
+                    None
+                } else {
+                    Some(List::Keys)
+                };
+            }
             Row::CtrlR => plan.ctrl_r.0 = !plan.ctrl_r.0,
             Row::UpArrow => plan.up_arrow.0 = !plan.up_arrow.0,
             Row::SyncTo(to) => self.pick(to),
             Row::Sharing(sharing) => self.share(sharing),
+            Row::Backfill => plan.backfill.0 = !plan.backfill.0,
             Row::Server | Row::Go => {}
-        }
-        if let Some(key) = self.row.key() {
-            self.replay(key, Duration::ZERO);
         }
     }
 
@@ -911,7 +897,7 @@ impl Choose {
             SyncTo::SelfHosted => Sync::Server(self.server.clone()),
             SyncTo::Off => Sync::Off,
         };
-        // Atuin for Teams comes only with Atuin Cloud, which `--teams` shares from as it can.
+        // Atuin for Teams comes only with Atuin Cloud, which `--hub` shares from as it can.
         if moved {
             let teams = matches!(self.plan.ask::<AtuinForTeams>(), Some(Ok(())));
             self.plan.atuin_for_teams.0 = to == SyncTo::Cloud && teams;
@@ -947,38 +933,16 @@ impl Choose {
         self.page = page;
         let first = self.rows().into_iter().find(|(_, needs)| needs.is_none());
         self.row = first.map_or(Row::Go, |(row, _)| row);
-        // Out of step, so that the two examples don't move at once.
-        self.replay(Key::CtrlR, Duration::ZERO);
-        self.replay(Key::UpArrow, UP_ARROW_LAGS);
         None
     }
 
-    /// The pages with something to ask, in order. The keys page asks while shell history is on.
+    /// The pages with something to ask, in order.
     fn pages(&self) -> Vec<Page> {
         let asks = |page| {
             let on_page = Row::ORDER.into_iter().filter(|row| row.page() == Some(page));
             on_page.into_iter().any(|row| matches!(row.state(&self.plan), Some(Ok(()))))
         };
         Page::ORDER.into_iter().filter(|&page| asks(page)).collect()
-    }
-
-    /// Play the example of `key` from its start, `after` a while.
-    const fn replay(&mut self, key: Key, after: Duration) {
-        let from = self.shown_for.saturating_add(after);
-        match key {
-            Key::CtrlR => self.ctrl_r_from = from,
-            Key::UpArrow => self.up_arrow_from = from,
-        }
-    }
-
-    /// The example of `key` as it's playing, if the key is on.
-    fn example(&self, key: Key) -> Option<Vec<Line<'static>>> {
-        let from = match key {
-            Key::CtrlR => self.ctrl_r_from,
-            Key::UpArrow => self.up_arrow_from,
-        };
-        let at = self.shown_for.saturating_sub(from);
-        key.is_on(&self.plan).then(|| example(key, at, UNDER_LABEL))
     }
 
     /// The pages, the one they're on bold, when there's more than one.
@@ -1104,8 +1068,7 @@ impl Choose {
         Scroll::new(lines, height, top)
     }
 
-    /// The page's lines, and those of the row they're on: its own, then any example or
-    /// description under it.
+    /// The page's lines, and those of the row they're on: its own, then any description under it.
     fn lines(&self, found: &Found) -> (Vec<Line<'static>>, Option<Range<usize>>) {
         let mut lines = title(self.crumbs());
         if self.page == Page::Features {
@@ -1116,7 +1079,8 @@ impl Choose {
         let mut previous: Option<Row> = None;
         let mut focus = None;
         for (i, (row, needs)) in self.rows().into_iter().enumerate() {
-            if row.heading() != heading && row != Row::Server {
+            // The button stands apart from the keys too, which have no heading.
+            if (row.heading() != heading || row == Row::Go) && row != Row::Server {
                 heading = row.heading();
                 if i > 0 {
                     lines.push(Line::default());
@@ -1125,43 +1089,26 @@ impl Choose {
                     lines.push(Line::from(format!("  {heading}").bold()));
                 }
             }
-            // What comes with a place to sync stands apart from what it means.
-            if row.is_under_sync_to() && matches!(previous, Some(Row::SyncTo(_))) {
+            // The server's address stands apart from what self-hosting means.
+            if row == Row::Server && matches!(previous, Some(Row::SyncTo(_))) {
                 lines.push(Line::default());
             }
-            if matches!(row, Row::Sharing(_)) && !matches!(previous, Some(Row::Sharing(_))) {
-                let indent = Span::raw(" ".repeat(UNDER_LABEL));
-                lines.push(Line::from(vec![indent, Span::raw("Sharable threads").bold()]));
+            // What Atuin Hub is, before the ways to have it.
+            if row == Row::Sharing(Sharing::Always) {
+                let about = "Atuin Hub allows you to share your threads, visualize stats, read \
+                             your threads in the browser, and avoid storing your data on your \
+                             computer. It is not E2E encrypted.";
+                lines.extend(paragraph(about, UNDER_ARROW, Style::new()));
+                lines.push(Line::default());
             }
             let at = row == self.row;
             let line = |needs| ruled_out(row, needs, self.colour);
-            let ruled_out = needs.is_some();
             let start = lines.len();
             lines.push(needs.map_or_else(|| self.line(row, at, found), line));
             if let Row::SyncTo(to) = row
                 && let Some(about) = to.about()
             {
                 lines.extend(paragraph(about, UNDER_LABEL, Style::new().dim()));
-            }
-            if let Row::Sharing(sharing) = row {
-                let indent = UNDER_LABEL + NESTED.len();
-                lines.extend(paragraph(sharing.about(), indent, Style::new().dim()));
-            }
-            // What sharing means, once they've seen the ways to.
-            if row == Row::Sharing(Sharing::Off) {
-                let note = if self.plan.effective().atuin_for_teams.0 {
-                    "Standard data protection is not end-to-end encrypted. Your data is securely \
-                     stored on Atuin's servers, under our data policy."
-                } else {
-                    "E2E-only encryption disables thread sharing, requires you to manage your own \
-                     key, and prevents you from using Atuin's web interface."
-                };
-                lines.push(Line::default());
-                lines.extend(paragraph(note, UNDER_LABEL, Style::new().yellow()));
-                lines.push(Line::default());
-            }
-            if !ruled_out && let Some(example) = row.key().and_then(|key| self.example(key)) {
-                lines.extend(example);
             }
             if at {
                 focus = Some(start..lines.len());
@@ -1185,7 +1132,7 @@ impl Choose {
             (None, Row::SyncTo(_) | Row::Sharing(_)) => {
                 hints(&[("enter", "pick"), ("↑↓", "move"), esc])
             }
-            (None, Row::ShellPick(_) | Row::AgentPick(_)) => {
+            (None, Row::ShellPick(_) | Row::AgentPick(_) | Row::CtrlR | Row::UpArrow) => {
                 hints(&[("enter", "toggle"), ("←", "close"), ("↑↓", "move")])
             }
             (None, Row::Shells | Row::Agents) if self.open == self.row.list() => {
@@ -1194,15 +1141,22 @@ impl Choose {
             (None, Row::Shells | Row::Agents) => {
                 hints(&[("enter", "toggle all"), ("→", "open"), ("↑↓", "move")])
             }
-            (
-                None,
-                Row::Shell
-                | Row::Output
-                | Row::Threads
-                | Row::AgentHistory
-                | Row::CtrlR
-                | Row::UpArrow,
-            ) => hints(&[("enter", "toggle"), ("↑↓", "move"), esc]),
+            (None, Row::Keys) if self.open == Some(List::Keys) => {
+                hints(&[("enter", "close"), ("↑↓", "move"), esc])
+            }
+            (None, Row::Keys) => hints(&[("enter", "open"), ("↑↓", "move"), esc]),
+            (None, Row::Shell | Row::Output | Row::Threads | Row::AgentHistory | Row::Backfill) => {
+                hints(&[("enter", "toggle"), ("↑↓", "move"), esc])
+            }
+        }
+    }
+
+    /// Whether `row`'s list is open, as the arrow left of it shows.
+    fn fold(&self, row: Row) -> Fold {
+        if self.open == row.list() {
+            Fold::Open
+        } else {
+            Fold::Closed
         }
     }
 
@@ -1218,11 +1172,7 @@ impl Choose {
             n if n >= offered => Check::On,
             _ => Check::Partly,
         };
-        let fold = if self.open == row.list() {
-            Fold::Open
-        } else {
-            Fold::Closed
-        };
+        let fold = self.fold(row);
         let summary = if picked.is_empty() {
             "none".to_owned()
         } else {
@@ -1263,6 +1213,12 @@ impl Choose {
             Row::AgentHistory => {
                 choice(at, self.plan.agent_history.0, row.label(), "capture your agents' commands")
             }
+            // A fold, with no checkbox since there's nothing to choose on it. It heads the rows it
+            // opens to, so it starts a level out from them, without their margin.
+            Row::Keys => {
+                let [_margin, cursor, arrow] = lead(at, Some(self.fold(row)));
+                Line::from(vec![cursor, arrow, pad(row.label(), at)])
+            }
             Row::CtrlR => {
                 key_choice(at, self.plan.ctrl_r.0, row.label(), "opens Atuin's history search")
             }
@@ -1275,11 +1231,13 @@ impl Choose {
             Row::SyncTo(to) => {
                 let signed_in = found.syncing().is_some_and(|syncing| to.is_where(&syncing));
                 let picked = to.is_where(&self.plan.sync);
-                option(at, "", picked, to.label(), signed_in.then_some("signed in"))
+                option(at, picked, to.label(), signed_in.then_some("signed in"))
             }
             Row::Sharing(sharing) => {
-                option(at, NESTED, sharing.is_picked(&self.plan), sharing.label(), None)
+                let picked = sharing.is_picked(&self.plan);
+                option(at, picked, sharing.label(), Some(sharing.about()))
             }
+            Row::Backfill => entry(at, self.plan.backfill.0, row.label()),
             Row::Go => button(at, row.label()),
             Row::Server => {
                 let mut spans = lead(at, None).to_vec();
@@ -1699,10 +1657,9 @@ fn choice(at: bool, on: bool, label: &'static str, about: impl Into<String>) -> 
     toggle(at, None, Some(check), on, label, vec![dim(about)])
 }
 
-/// A place to sync to: a radio button, its name, and what it says about it.
+/// One of a choice of a few: a radio button, its name, and what it says about it.
 fn option(
     at: bool,
-    indent: &'static str,
     picked: bool,
     label: &'static str,
     aside: Option<&'static str>,
@@ -1713,12 +1670,12 @@ fn option(
         "( ) ".dim()
     };
     let mut spans = lead(at, None).to_vec();
-    spans.extend([Span::raw(indent), radio, pad(label, at)]);
+    spans.extend([radio, pad(label, at)]);
     spans.extend(aside.map(dim));
     Line::from(spans)
 }
 
-/// A row of the keys page: a toggle, the key, and what it does, or that the shell keeps it.
+/// A key's row: a toggle, the key, and what it does, or that the shell keeps it.
 fn key_choice(at: bool, on: bool, label: &'static str, does: &'static str) -> Line<'static> {
     let check = if on {
         Check::On
@@ -1749,26 +1706,47 @@ fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
         }
     };
     // A list's row keeps its arrow: it can open once it isn't ruled out.
-    let arrow = if row.list().is_some() {
+    let arrow = if row.opens() {
         "▸ "
     } else {
         "  "
     };
-    let box_ = if matches!(row, Row::SyncTo(_) | Row::Sharing(_)) {
-        "( ) "
-    } else {
-        "[ ] "
+    let box_ = match row {
+        Row::SyncTo(_) | Row::Sharing(_) => "( ) ",
+        Row::Keys => "",
+        Row::Shell
+        | Row::Shells
+        | Row::ShellPick(_)
+        | Row::Output
+        | Row::Threads
+        | Row::AgentHistory
+        | Row::Agents
+        | Row::AgentPick(_)
+        | Row::CtrlR
+        | Row::UpArrow
+        | Row::Server
+        | Row::Backfill
+        | Row::Go => "[ ] ",
     };
-    let indent = if row.is_under_sync_to() {
+    let indent = if matches!(row, Row::Server | Row::Backfill) {
         NESTED
     } else {
         ""
     };
+    // The fold starts a level out, as it does once it can open.
+    let margin = if row == Row::Keys {
+        ""
+    } else {
+        "  "
+    };
     let label = row.label();
-    // Apart from the name, so that the padding isn't struck through.
-    let pad = " ".repeat(LABEL_WIDTH.saturating_sub(indent.len() + label.len()));
+    // Apart from the name, so that the padding isn't struck through. What it needs lines up with
+    // the rest's, whatever is left of the name.
+    let width = "  ".len() + "[ ] ".len() + LABEL_WIDTH;
+    let left = margin.len() + indent.len() + box_.len() + label.len();
+    let pad = " ".repeat(width.saturating_sub(left));
     Line::from(vec![
-        Span::raw("  "),
+        Span::raw(margin),
         cursor(false),
         mark(arrow),
         Span::raw(indent),
@@ -1912,9 +1890,6 @@ fn row_shade(colorfgbg: Option<&str>) -> Color {
     }
 }
 
-/// How far the up arrow's example plays behind ctrl-r's, which it stays as they play as long.
-const UP_ARROW_LAGS: Duration = Duration::from_secs(2);
-
 /// Where text that runs on wraps, so that it reads in an 80-column terminal at the deepest indent.
 const WRAP_COLUMNS: usize = 62;
 
@@ -1951,6 +1926,9 @@ fn wrap(text: &str, columns: usize) -> Vec<String> {
 
 /// How much further in an entry under a row starts than the row.
 const NESTED: &str = "    ";
+
+/// The column a row's checkbox starts at, past the cursor and a list's arrow.
+const UNDER_ARROW: usize = 6;
 
 /// The column a row's name starts at, past the cursor, a list's arrow and the checkbox.
 const UNDER_LABEL: usize = 10;
@@ -2052,15 +2030,18 @@ mod tests {
         choose
     }
 
-    /// The keys page, as `atuin setup` with no flags gets to it.
+    /// The first page of `atuin setup` with no flags, on Ctrl-R in the open fold of keys.
     fn on_the_keys(found: &Found) -> Choose {
-        on_page(found, &preset(found), Page::Keys)
+        let mut choose = Choose::new(found, &preset(found));
+        choose.row = Row::Keys;
+        press(&mut choose, &[KeyCode::Enter, KeyCode::Down]);
+        choose
     }
 
-    /// The plan `atuin setup --teams` starts the screen from.
+    /// The plan `atuin setup --hub` starts the screen from.
     #[cfg(feature = "octavo")]
     fn teams(found: &Found) -> Plan {
-        super::super::Cmd::parse_from(["setup", "--teams"]).plan(found, false).unwrap()
+        super::super::Cmd::parse_from(["setup", "--hub"]).plan(found, false).unwrap()
     }
 
     /// The text of each row of the screen.
@@ -2144,7 +2125,6 @@ mod tests {
 
     #[rstest]
     #[case::features(Page::Features)]
-    #[case::keys(Page::Keys)]
     #[cfg_attr(feature = "sync", case::sync(Page::Sync))]
     fn continue_stays_in_sight_in_a_short_terminal(found: Found, #[case] page: Page) {
         let mut terminal =
@@ -2174,20 +2154,21 @@ mod tests {
     #[rstest]
     #[case::dragging_the_handle(&[
         (MouseEventKind::Down(MouseButton::Left), 0),
-        (MouseEventKind::Drag(MouseButton::Left), 11),
-        (MouseEventKind::Up(MouseButton::Left), 11),
+        (MouseEventKind::Drag(MouseButton::Left), 7),
+        (MouseEventKind::Up(MouseButton::Left), 7),
     ])]
     #[case::clicking_the_bar_under_it(&[
-        (MouseEventKind::Down(MouseButton::Left), 10),
-        (MouseEventKind::Up(MouseButton::Left), 10),
+        (MouseEventKind::Down(MouseButton::Left), 6),
+        (MouseEventKind::Up(MouseButton::Left), 6),
     ])]
     #[case::the_wheel(&[(MouseEventKind::ScrollDown, 5); 10])]
     fn the_scrollbar_scrolls_until_a_key_is_pressed(
         found: Found,
         #[case] used: &[(MouseEventKind, u16)],
     ) {
-        const SIZE: Size = Size::new(80, 12);
-        let mut choose = on_the_keys(&found);
+        // Short enough that the first row scrolls out of sight whichever rows this build offers.
+        const SIZE: Size = Size::new(80, 8);
+        let mut choose = Choose::new(&found, &preset(&found));
         for &(kind, row) in used {
             let event = MouseEvent {
                 kind,
@@ -2200,10 +2181,10 @@ mod tests {
         let shows = |choose: &Choose, text| {
             shown_on(choose, &found, SIZE.height).iter().any(|row| row.contains(text))
         };
-        assert!(shows(&choose, "Continue") && !shows(&choose, "Ctrl-R"));
+        assert!(shows(&choose, "Continue") && !shows(&choose, "all your commands"));
         // On the first row already, so Up only brings it back.
         press(&mut choose, &[KeyCode::Up]);
-        assert!(shows(&choose, "Ctrl-R"));
+        assert!(shows(&choose, "all your commands"));
     }
 
     #[rstest]
@@ -2402,76 +2383,37 @@ mod tests {
     }
 
     #[rstest]
-    fn continue_goes_on_to_the_keys_and_esc_comes_back(found: Found) {
-        let mut choose = on_the_keys(&found);
-        let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
-        assert_eq!((choose.page, choose.row), (Page::Keys, Row::CtrlR));
-        assert_eq!(rows, [Row::CtrlR, Row::UpArrow, Row::Go]);
-        assert!(shown(&choose, &found)[1].contains("Features › Keybindings"));
+    fn the_keys_open_at_the_bottom_of_the_features(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        let rows =
+            |choose: &Choose| choose.rows().into_iter().map(|(row, _)| row).collect::<Vec<_>>();
+        assert!(rows(&choose).ends_with(&[Row::Keys, Row::Go]), "{:?}", rows(&choose));
 
-        press(&mut choose, &[KeyCode::Esc]);
-        assert_eq!((choose.page, choose.row), (Page::Features, Row::Go));
-        assert!(!choose.rows().iter().any(|&(row, _)| row.key().is_some()));
+        choose.row = Row::Keys;
+        press(&mut choose, &[KeyCode::Enter]);
+        let open = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::Go];
+        assert!(rows(&choose).ends_with(&open), "{:?}", rows(&choose));
+        let line = drawn(&choose, &found, Row::Keys);
+        assert!(line.starts_with("› ▾ Advanced keybindings"), "{line}");
+
+        press(&mut choose, &[KeyCode::Down, KeyCode::Left]);
+        assert_eq!((choose.row, choose.open), (Row::Keys, None));
     }
 
     #[rstest]
     fn the_keys_wait_on_shell_history(found: Found) {
-        let mut choose = Choose::new(&found, &preset(&found));
+        let mut choose = on_the_keys(&found);
+        choose.row = Row::Shell;
         press(&mut choose, &[KeyCode::Enter]);
         assert!(!choose.plan.shell.0);
-        assert!(!shown(&choose, &found)[1].contains("Keybindings"));
-        assert!(!choose.pages().contains(&Page::Keys));
+        let rows = [Row::Keys, Row::CtrlR, Row::UpArrow];
+        assert_eq!(states(&choose, &rows), [(Row::Keys, Some("shell history"))]);
+        let line = drawn(&choose, &found, Row::Keys);
+        assert!(line.starts_with("  ▸ Advanced keybindings       needs shell history"), "{line}");
         // Something to set up without shell history.
         choose.plan.sync = Sync::Cloud;
         let plan = finish(&mut choose);
         assert!(!plan.ctrl_r.0 && !plan.up_arrow.0);
-    }
-
-    #[rstest]
-    fn an_example_plays_under_each_key_that_is_on(found: Found) {
-        let mut choose = on_the_keys(&found);
-        let examples = |choose: &Choose| {
-            let shown = shown(choose, &found);
-            let under = |label| {
-                let at =
-                    shown.iter().position(|row| row.contains(label)).expect("the key is shown");
-                shown[at + 1].contains("Example")
-            };
-            (under("Ctrl-R"), under("Up arrow"))
-        };
-        assert_eq!(examples(&choose), (true, true));
-        press(&mut choose, &[KeyCode::Enter]);
-        assert_eq!(examples(&choose), (false, true));
-        assert!(drawn(&choose, &found, Row::CtrlR).contains("left to your shell"));
-    }
-
-    /// Whether the example of `key` shows Atuin's search.
-    fn searching(choose: &Choose, key: Key) -> bool {
-        let example = choose.example(key).expect("the key is on");
-        text(&example).iter().any(|line| line.contains("[ GLOBAL ]"))
-    }
-
-    #[rstest]
-    fn the_up_arrow_plays_behind_ctrl_r(found: Found) {
-        let mut choose = on_the_keys(&found);
-        // Ctrl-R's has opened Atuin's search by now, while the up arrow's waits in the shell.
-        choose.shown_for = Duration::from_millis(1500);
-        assert_eq!(
-            (searching(&choose, Key::CtrlR), searching(&choose, Key::UpArrow)),
-            (true, false)
-        );
-    }
-
-    #[rstest]
-    fn a_key_turned_on_plays_its_example_from_the_start(found: Found) {
-        let mut choose = on_the_keys(&found);
-        // Both examples have opened Atuin's search by now.
-        choose.shown_for = Duration::from_secs(2) + UP_ARROW_LAGS;
-        press(&mut choose, &[KeyCode::Enter, KeyCode::Enter]);
-        assert_eq!(
-            (searching(&choose, Key::CtrlR), searching(&choose, Key::UpArrow)),
-            (false, true)
-        );
     }
 
     #[rstest]
@@ -2504,6 +2446,7 @@ mod tests {
     fn up_arrow_can_be_left_to_the_shell(found: Found) {
         let mut choose = on_the_keys(&found);
         press(&mut choose, &[KeyCode::Down, KeyCode::Enter]);
+        assert!(drawn(&choose, &found, Row::UpArrow).contains("left to your shell"));
         let plan = finish(&mut choose);
         assert!(plan.ctrl_r.0 && !plan.up_arrow.0);
     }
@@ -2553,6 +2496,12 @@ mod tests {
         Some(Teams::Off),
         ThreadUploads::All,
     )]
+    #[case::backfill(&[Row::Backfill], Some(Teams::On { backfill: true }), ThreadUploads::All)]
+    #[case::no_backfill_of_workspaces(
+        &[Row::Backfill, Row::Sharing(Sharing::Workspaces)],
+        Some(Teams::On { backfill: false }),
+        ThreadUploads::Workspaces,
+    )]
     fn atuin_cloud_shares_threads_as_picked(
         found: Found,
         #[case] picked: &[Row],
@@ -2571,53 +2520,48 @@ mod tests {
 
     #[cfg(feature = "sync")]
     #[rstest]
-    #[case::without_teams(false, &[
-        Row::SyncTo(SyncTo::Cloud),
-        Row::SyncTo(SyncTo::SelfHosted),
-        Row::SyncTo(SyncTo::Off),
-        Row::Go,
-    ])]
-    #[cfg_attr(feature = "octavo", case::with_teams(true, &[
-        Row::SyncTo(SyncTo::Cloud),
-        Row::Sharing(Sharing::Always),
-        Row::Sharing(Sharing::Workspaces),
-        Row::Sharing(Sharing::Off),
-        Row::SyncTo(SyncTo::SelfHosted),
-        Row::SyncTo(SyncTo::Off),
-        Row::Go,
-    ]))]
-    fn the_sync_page_offers_sharing_with_the_flag(
+    #[case::without_teams(false, SyncTo::Cloud, &[Page::Features, Page::Sync])]
+    #[cfg_attr(
+        feature = "octavo",
+        case::atuin_cloud(true, SyncTo::Cloud, &[Page::Features, Page::Sync, Page::Hub]),
+    )]
+    #[cfg_attr(
+        feature = "octavo",
+        case::self_hosted(true, SyncTo::SelfHosted, &[Page::Features, Page::Sync]),
+    )]
+    #[cfg_attr(feature = "octavo", case::disabled(true, SyncTo::Off, &[Page::Features, Page::Sync]))]
+    fn the_hub_page_follows_atuin_cloud_with_the_flag(
         found: Found,
         #[case] teams: bool,
-        #[case] expected: &[Row],
+        #[case] to: SyncTo,
+        #[case] expected: &[Page],
     ) {
         let flags: &[&str] = if teams {
-            &["setup", "--teams"]
+            &["setup", "--hub"]
         } else {
             &["setup"]
         };
         let plan = super::super::Cmd::parse_from(flags).plan(&found, false).unwrap();
-        let choose = on_page(&found, &plan, Page::Sync);
+        let mut choose = on_page(&found, &plan, Page::Sync);
         let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
-        assert_eq!(rows, expected);
+        assert_eq!(rows, [
+            Row::SyncTo(SyncTo::Cloud),
+            Row::SyncTo(SyncTo::SelfHosted),
+            Row::SyncTo(SyncTo::Off),
+            Row::Go,
+        ]);
+        choose.row = Row::SyncTo(to);
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.pages(), expected);
     }
 
     #[cfg(feature = "sync")]
     #[rstest]
-    #[case::without_teams(false)]
-    #[cfg_attr(feature = "octavo", case::with_teams(true))]
-    fn each_choice_on_the_sync_page_says_what_it_means(found: Found, #[case] teams: bool) {
-        let flags: &[&str] = if teams {
-            &["setup", "--teams"]
-        } else {
-            &["setup"]
-        };
-        let plan = super::super::Cmd::parse_from(flags).plan(&found, false).unwrap();
-        let choose = on_page(&found, &plan, Page::Sync);
+    fn each_place_to_sync_says_what_it_means(found: Found) {
+        let choose = on_page(&found, &preset(&found), Page::Sync);
         let shown = shown(&choose, &found);
         let explained = choose.rows().into_iter().filter_map(|(row, _)| match row {
             Row::SyncTo(to) => Some((to.label(), to.about()?)),
-            Row::Sharing(sharing) => Some((sharing.label(), sharing.about())),
             _ => None,
         });
         let unexplained: Vec<_> = explained
@@ -2632,21 +2576,48 @@ mod tests {
 
     #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::always(&[], "Standard data protection is not end-to-end encrypted.")]
-    #[case::workspace_only(&[Row::Sharing(Sharing::Workspaces)], "Standard data protection")]
-    #[case::disabled(&[Row::Sharing(Sharing::Off)], "E2E-only encryption disables thread")]
-    fn the_note_says_what_sharing_means(
-        found: Found,
-        #[case] picked: &[Row],
-        #[case] expected: &str,
-    ) {
-        let mut choose = on_page(&found, &teams(&found), Page::Sync);
-        for &row in picked {
-            choose.row = row;
-            press(&mut choose, &[KeyCode::Enter]);
+    fn the_hub_page_says_what_atuin_hub_is_and_what_each_choice_uploads(found: Found) {
+        let choose = on_page(&found, &teams(&found), Page::Hub);
+        let shown = shown(&choose, &found);
+        assert!(shown[1].contains("Features › Sync › Hub"), "{shown:#?}");
+        let at = shown.iter().position(|row| row.trim_end() == "  Atuin Hub").expect("a heading");
+        let intro = |row: &&String| row.contains("Atuin Hub allows you to share your threads");
+        assert!(intro(&&shown[at + 1]), "{shown:#?}");
+        assert_eq!(shown.iter().filter(intro).count(), 1, "{shown:#?}");
+
+        let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
+        assert_eq!(rows, [
+            Row::Sharing(Sharing::Always),
+            Row::Backfill,
+            Row::Sharing(Sharing::Workspaces),
+            Row::Sharing(Sharing::Off),
+            Row::Go,
+        ]);
+        for sharing in [Sharing::Always, Sharing::Workspaces, Sharing::Off] {
+            let line = choose.line(Row::Sharing(sharing), false, &found).to_string();
+            let expected = format!("{:<LABEL_WIDTH$}{}", sharing.label(), sharing.about());
+            assert!(line.contains(&expected), "{line}");
         }
-        let shown = shown(&choose, &found).join("\n");
-        assert!(shown.contains(expected), "{shown}");
+    }
+
+    #[cfg(feature = "octavo")]
+    #[rstest]
+    #[case::always(Sharing::Always, true)]
+    #[case::workspace_only(Sharing::Workspaces, false)]
+    #[case::disabled(Sharing::Off, false)]
+    fn backfill_is_asked_with_every_thread(
+        found: Found,
+        #[case] sharing: Sharing,
+        #[case] asked: bool,
+    ) {
+        let mut choose = on_page(&found, &teams(&found), Page::Hub);
+        choose.row = Row::Sharing(sharing);
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(states(&choose, &[Row::Backfill]).len() == 1, asked);
+        if asked {
+            let line = drawn(&choose, &found, Row::Backfill);
+            assert!(line.contains("        [ ] Upload what Atuin has already"), "{line}");
+        }
     }
 
     #[rstest]
@@ -2667,8 +2638,6 @@ mod tests {
     fn esc_goes_back_a_page_at_a_time(found: Found) {
         let mut choose = on_page(&found, &preset(&found), Page::Sync);
         press(&mut choose, &[KeyCode::Esc]);
-        assert_eq!((choose.page, choose.row), (Page::Keys, Row::Go));
-        press(&mut choose, &[KeyCode::Esc]);
         assert_eq!((choose.page, choose.row), (Page::Features, Row::Go));
         assert!(matches!(press(&mut choose, &[KeyCode::Esc]), Some(Chosen::Quit)));
     }
@@ -2676,8 +2645,8 @@ mod tests {
     #[cfg(feature = "sync")]
     #[rstest]
     fn the_crumbs_name_every_page(found: Found) {
-        let choose = on_the_keys(&found);
-        assert!(shown(&choose, &found)[1].contains("Features › Keybindings › Sync"));
+        let choose = Choose::new(&found, &preset(&found));
+        assert!(shown(&choose, &found)[1].contains("Features › Sync"));
     }
 
     #[rstest]

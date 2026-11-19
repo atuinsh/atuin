@@ -1,4 +1,4 @@
-//! The upload `atuin setup --teams` starts, as far as it has got: what the upload queue the daemon
+//! The upload `atuin setup --hub` starts, as far as it has got: what the upload queue the daemon
 //! drains has left of it.
 //!
 //! Each count's total is what the first read left, grown only when more is queued than it

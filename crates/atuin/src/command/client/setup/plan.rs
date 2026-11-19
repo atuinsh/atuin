@@ -17,7 +17,7 @@ pub(super) struct Asks {
     /// Agents' threads, commands and search, when there are agents here to ask about or the
     /// flags name some.
     pub(super) agents: bool,
-    /// Atuin for Teams, with `--teams` or `--no-teams`.
+    /// Atuin for Teams, with `--hub` or `--no-hub`.
     pub(super) teams: bool,
     /// Whether Atuin holds commands or threads here already, which agents can search without
     /// capturing more.
@@ -86,8 +86,8 @@ toggles! {
         on: "Run the daemon, which thread and output capture need",
         off: "Stop the daemon, and keep it off",
     }
-    // Hidden until Atuin for Teams ships.
-    AtuinForTeams("teams", "Sync"; hidden = true) {
+    // Hidden until Atuin for Teams ships. 18.24.8 shipped it as `--teams`.
+    AtuinForTeams("hub", "Sync"; hidden = true; alias = "teams") {
         on: "Turn on Atuin for Teams",
         off: "Turn off Atuin for Teams",
     }
@@ -306,7 +306,12 @@ const SOMETHING_TO_SEARCH: Needs = Needs {
 
 const TEAMS_ON: Needs = Needs {
     what: "Atuin for Teams",
-    flags: "`--teams`",
+    flags: "`--hub`",
+};
+
+const BEYOND_WORKSPACES: Needs = Needs {
+    what: "threads from outside workspaces",
+    flags: "`--upload-threads all`",
 };
 
 impl Choice<Plan> for ShellHistory {}
@@ -418,7 +423,7 @@ impl Choice<Plan> for AtuinForTeams {
         } else if plan.asks.teams {
             Ok(())
         } else {
-            Err("setup asks about Atuin for Teams only with `--teams`")
+            Err("setup asks about Atuin for Teams only with `--hub`")
         }
     }
 
@@ -438,13 +443,15 @@ impl Choice<Plan> for UploadThreads {
     }
 }
 
+/// Workspace-only uploads take nothing from before, which can't be told to come from a workspace.
 impl Choice<Plan> for Backfill {
     fn asked(plan: &Plan) -> Result<(), &'static str> {
         AtuinForTeams::asked(plan)
     }
 
     fn allowed(plan: &Plan) -> Result<(), Needs> {
-        needs(plan.atuin_for_teams.0, TEAMS_ON)
+        needs(plan.atuin_for_teams.0, TEAMS_ON)?;
+        needs(plan.upload_threads.0 != ThreadUploads::Workspaces, BEYOND_WORKSPACES)
     }
 }
 

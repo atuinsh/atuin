@@ -183,11 +183,15 @@ impl<F> Visit<F> for Check<'_, F> {
 }
 
 /// Declares choices that are on or off, each set by `--<flag>` and `--no-<flag>`, whichever comes
-/// last. Short help shows only `--<flag>`; full help, which `install.sh` reads, shows both.
+/// last. Short help shows only `--<flag>`; full help, which `install.sh` reads, shows both. An
+/// `alias` is a hidden old name for `--<flag>`.
 macro_rules! toggles {
     ($(
         $(#[$attr:meta])*
-        $name:ident($flag:literal $(, $heading:literal)? $(; hidden = $hidden:literal)?) {
+        $name:ident(
+            $flag:literal $(, $heading:literal)? $(; hidden = $hidden:literal)?
+            $(; alias = $alias:literal)?
+        ) {
             on: $on:literal,
             off: $off:literal $(,)?
         }
@@ -207,7 +211,8 @@ macro_rules! toggles {
                         .help(concat!($on, " [or --no-", $flag, "]"))
                         .long_help($on)
                         $(.help_heading($heading))?
-                        $(.hide($hidden))?,
+                        $(.hide($hidden))?
+                        $(.alias($alias))?,
                 )
                 .arg(
                     ::clap::Arg::new(NO)
