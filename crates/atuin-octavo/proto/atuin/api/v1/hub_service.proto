@@ -268,12 +268,12 @@ service HubService {
   // Count what the members of the organization with this slug did over the request's days, as
   // `TallyThreadActivity` counts a user's, together and by member.
   //
-  // Counts every thread of every member, shared or not, and names none: no titles, directories,
-  // branches or text, only the names of the harnesses, models and tools they used. Fails with
-  // `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user belongs to the organization, with
-  // `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo is off for it, with
-  // `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know, or
-  // (`INVALID_ORG_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
+  // Counts only the threads members shared with the organization, and the subagents those spawned,
+  // and names none: no titles, directories, branches or text, only the names of the harnesses,
+  // models and tools they used. Fails with `NOT_FOUND` (`ORG_NOT_FOUND`) unless the calling user
+  // belongs to the organization, with `FAILED_PRECONDITION` (`ORG_OCTAVO_NOT_ENABLED`) while Octavo
+  // is off for it, with `INVALID_ARGUMENT` (`UNKNOWN_TIME_ZONE`) for a time zone it doesn't know,
+  // or (`INVALID_ORG_ACTIVITY_REQUEST`) for a request out of the bounds below, and with
   // `DEADLINE_EXCEEDED` (`ORG_ACTIVITY_TIMEOUT`) when counting runs past its bound.
   rpc TallyOrgActivity(TallyOrgActivityRequest) returns (TallyOrgActivityResponse);
 
@@ -1102,6 +1102,7 @@ message OrgMemberActivity {
   ThreadActivityCounts counts = 2;
   // Their messages on each of `TallyOrgActivityResponse.activity.days`, in the same order.
   repeated uint64 daily_messages = 3;
-  // When their newest message was written, on any day; unset when they have none.
+  // When the newest message of their shared threads was written, on any day; unset when they have
+  // none.
   google.protobuf.Timestamp last_active_at = 4;
 }
