@@ -67,6 +67,7 @@ impl Cmd {
 
         match out_dir {
             Some(out_dir) => {
+                fs_err::create_dir_all(&out_dir)?;
                 generate_to(shell, &mut cli, env!("CARGO_PKG_NAME"), &out_dir)?;
             }
             None => {
