@@ -346,22 +346,38 @@ impl ServerHandler for AtuinMcp {
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Feedback {
+    message: String,
+    tool: Option<String>,
+}
+
+/// The longest message, in characters, that the Hub takes.
+const MAX_FEEDBACK_LEN: usize = 2000;
+
+/// Returns the feedback that `arguments` hold, or what is wrong with them.
+fn feedback(arguments: JsonObject) -> Result<Feedback, String> {
+    let feedback: Feedback = parse("atuin_submit_feedback", arguments)?;
+    let len = feedback.message.chars().count();
+    if feedback.message.trim().is_empty() || len > MAX_FEEDBACK_LEN {
+        return Err(invalid_arguments(
+            "atuin_submit_feedback",
+            format!("message must be 1 to {MAX_FEEDBACK_LEN} characters, not {len}"),
+        ));
+    }
+    Ok(feedback)
+}
+
 impl AtuinMcp {
     async fn submit_feedback(
         &self,
         arguments: JsonObject,
         caller: &Caller<'_>,
     ) -> Result<String, String> {
-        let message = arguments.get("message").and_then(Value::as_str).unwrap_or_default();
-        if message.trim().is_empty() {
-            return Err(invalid_arguments("atuin_submit_feedback", "message is required"));
-        }
-        let feedback = json!({
-            "message": message,
-            "tool": arguments.get("tool").and_then(Value::as_str),
-            "harness": caller.client,
-        });
-        atuin_client::hub::submit_mcp_feedback(&self.settings, &feedback)
+        let Feedback { message, tool } = feedback(arguments)?;
+        let body = json!({ "message": message, "tool": tool, "harness": caller.client });
+        atuin_client::hub::submit_mcp_feedback(&self.settings, &body)
             .await
             .map(|()| "Sent to the Atuin team. Thank you.".to_string())
             .map_err(|e| format!("Feedback could not be sent: {e}"))
@@ -540,7 +556,7 @@ fn tool_definitions() -> Vec<Tool> {
         "properties": {
             "message": {
                 "type": "string",
-                "maxLength": 2000,
+                "maxLength": MAX_FEEDBACK_LEN,
                 "description": "What you tried, what happened, and what you expected.",
             },
             "tool": {
@@ -691,6 +707,21 @@ mod tests {
         // comment in AtuinHistoryToolCall::try_from for why.
         let required = tools[0].input_schema.get("required").unwrap();
         assert_eq!(required, &json!(["query"]));
+    }
+
+    #[rstest]
+    fn feedback_arguments_are_checked_against_the_schema() {
+        let args = |v: Value| v.as_object().unwrap().clone();
+        assert!(feedback(args(json!({"message": "é".repeat(2000), "tool": "x"}))).is_ok());
+        for bad in [
+            json!({"message": "é".repeat(2001)}),
+            json!({"message": "  "}),
+            json!({"message": "hi", "tool": 3}),
+            json!({"message": "hi", "severity": "high"}),
+            json!({}),
+        ] {
+            assert!(feedback(args(bad.clone())).is_err(), "{bad}");
+        }
     }
 
     /// A misremembered option (`from_end`, say) is an error naming the real ones, not silently
