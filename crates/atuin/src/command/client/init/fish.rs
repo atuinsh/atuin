@@ -2,13 +2,14 @@ use atuin_client::settings::Tmux;
 
 use super::StaticInitOptions;
 
+/// Prints the `[tmux]` settings as global variables.
+///
+/// They are **not** exported, since a tmux server started from this shell would hand them to
+/// every pane, over the config each pane's shell reads.
 fn print_tmux_config(tmux: &Tmux) {
-    if tmux.enabled {
-        println!("set -gx ATUIN_TMUX_POPUP_WIDTH '{}'", tmux.width);
-        println!("set -gx ATUIN_TMUX_POPUP_HEIGHT '{}'", tmux.height);
-    } else {
-        println!("set -gx ATUIN_TMUX_POPUP false");
-    }
+    println!("set -g __atuin_tmux_popup {}", tmux.enabled);
+    println!("set -g __atuin_tmux_popup_width '{}'", tmux.width);
+    println!("set -g __atuin_tmux_popup_height '{}'", tmux.height);
 }
 
 fn print_bindings(

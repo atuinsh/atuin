@@ -9,13 +9,15 @@ mod pty;
 #[path = "common/shell.rs"]
 mod shell;
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::{Path, PathBuf};
 
 use atuin_common::path::AbsPathBuf;
 use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
-use shell::{PROMPT, Shell};
+use shell::{PROMPT, Setup, Shell};
 
 fn run_echo_marker(pty: &PtyShell, marker: &str) {
     pty.send_line(&format!("echo {marker}"));
@@ -446,4 +448,84 @@ fn cd_action_without_directory_returns_original(#[files("tests/shells/*.toml")] 
         !commands.lines().any(|l| l.ends_with(&ran) && !l.starts_with("unknown\t")),
         "entry ran:\n{commands}"
     );
+}
+
+/// A tmux 3.5 that writes the arguments `display-popup` gets to `$HOME/popup`, one per line.
+const FAKE_TMUX: &str = r#"#!/bin/sh
+case "$1" in
+-V) echo "tmux 3.5" ;;
+display-popup) printf '%s\n' "$@" >"$HOME/popup.tmp" && mv "$HOME/popup.tmp" "$HOME/popup" ;;
+esac
+"#;
+
+/// The shell at `setup`, in a pane of [`FAKE_TMUX`], with `settings` as its config and `vars` set.
+fn start_in_tmux(setup: &Path, settings: &str, vars: &[(&str, &str)]) -> Option<Shell> {
+    let setup = Setup::find(setup)?;
+    let env = FreshEnv::new();
+    env.write_config(settings);
+    let tmux = env.home().join("bin/tmux");
+    std::fs::write(&tmux, FAKE_TMUX).unwrap();
+    std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut vars: BTreeMap<String, String> =
+        vars.iter().map(|&(name, value)| (name.to_owned(), value.to_owned())).collect();
+    vars.insert("TMUX".into(), "/tmp/atuin-e2e-tmux,1,0".into());
+    Some(Shell::spawn(setup, env, vars))
+}
+
+/// Search opens in a popup of the configured size when `[tmux] enabled` is on, and
+/// `ATUIN_TMUX_POPUP=false` keeps it inline.
+#[rstest]
+#[case::enabled(true, None, true)]
+#[case::disabled(false, None, false)]
+#[case::disabled_by_env(true, Some("false"), false)]
+fn tmux_popup_follows_the_config(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[case] enabled: bool,
+    #[case] atuin_tmux_popup: Option<&str>,
+    #[case] opens: bool,
+) {
+    let config = format!("[tmux]\nenabled = {enabled}\nwidth = \"42%\"\nheight = \"24\"\n");
+    let vars: Vec<_> =
+        atuin_tmux_popup.map(|value| ("ATUIN_TMUX_POPUP", value)).into_iter().collect();
+    let Some(shell) = start_in_tmux(&setup, &config, &vars) else {
+        return;
+    };
+    let (env, pty) = (&shell.env, &shell.pty);
+    let popup = env.home().join("popup");
+
+    pty.send_ctrl_r();
+    if !opens {
+        pty.wait_for(": exit");
+        assert!(!popup.exists(), "search opened in a popup");
+        return;
+    }
+    wait_until("search opened in a popup", || popup.exists());
+    let args = std::fs::read_to_string(&popup).unwrap();
+    let args: Vec<_> = args.lines().collect();
+    assert!(
+        args.windows(4).any(|w| w == ["-w", "42%", "-h", "24"]),
+        "popup not sized from the config: {args:?}"
+    );
+}
+
+/// The shell keeps its `[tmux]` settings out of the environment of the programs it starts.
+///
+/// A tmux server started from the shell would hand them to every pane, over the config each
+/// pane's shell reads. A popup that was off when the server started then stayed off after the
+/// config turned it on.
+#[rstest]
+fn tmux_settings_stay_out_of_the_environment(
+    #[files("tests/shells/*.toml")] setup: PathBuf,
+    #[values(false, true)] enabled: bool,
+) {
+    let config = format!("[tmux]\nenabled = {enabled}\n");
+    let Some(shell) = Shell::start(&setup, Some(&config)) else {
+        return;
+    };
+    let pty = &shell.pty;
+
+    pty.send_line("env | grep '^ATUIN_TMUX'");
+    let screen = pty.screen();
+    let exported: Vec<_> = screen.lines().filter(|l| l.starts_with("ATUIN_TMUX")).collect();
+    assert!(exported.is_empty(), "the shell exported its [tmux] settings: {exported:?}");
 }

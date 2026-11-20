@@ -127,6 +127,7 @@ _atuin_zshaddhistory() {
 # Check if tmux popup is available (tmux >= 3.2)
 __atuin_tmux_popup_check() {
     [[ -n "${TMUX-}" ]] || return 1
+    [[ "${__atuin_tmux_popup-}" == "true" ]] || return 1
     [[ "${ATUIN_TMUX_POPUP:-true}" != "false" ]] || return 1
 
     # https://github.com/tmux/tmux/wiki/FAQ#how-often-is-tmux-released-what-is-the-version-number-scheme
@@ -167,11 +168,9 @@ __atuin_search_cmd() {
         done
 
         # In the popup, atuin goes to terminal, stderr goes to file
-        local cdir popup_width popup_height
+        local cdir
         cdir=$(pwd)
-        popup_width="${ATUIN_TMUX_POPUP_WIDTH:-80%}" # Keep default value anyways
-        popup_height="${ATUIN_TMUX_POPUP_HEIGHT:-60%}"
-        tmux display-popup -d "$cdir" -w "$popup_width" -h "$popup_height" -E -E -- \
+        tmux display-popup -d "$cdir" -w "$__atuin_tmux_popup_width" -h "$__atuin_tmux_popup_height" -E -E -- \
             sh -c "PATH='$PATH' ATUIN_SESSION='$ATUIN_SESSION' ATUIN_SHELL=zsh ATUIN_QUERY='$escaped_query' atuin search $escaped_args -i 2>'$result_file'"
 
         if [[ -f "$result_file" ]]; then
