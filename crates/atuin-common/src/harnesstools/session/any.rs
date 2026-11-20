@@ -17,6 +17,7 @@ use crate::harnesstools::session::{
     AnyMessage, CaptureError, Checkpoint, Listener, MessageError, Observable, RuntimeError,
     Session, SessionEvent, SessionId, Sessions, WatchError,
 };
+use crate::harnesstools::vibe::session::{VibeListener, VibeSession, VibeSessions};
 use crate::sync::BlockingPool;
 
 /// Runtime-polymorphic version of [`Observable`]: returns "Any" types instead of concrete
@@ -85,6 +86,7 @@ pub enum AnySessions {
     Kiro(KiroSessions),
     Opencode(OpencodeSessions),
     Pi(PiSessions),
+    Vibe(VibeSessions),
 }
 
 /// Runtime-polymorphic version of [`Listener`]: returns "Any" types instead of concrete
@@ -137,6 +139,7 @@ pub enum AnyListener {
     Kiro(KiroListener),
     Opencode(OpencodeListener),
     Pi(PiListener),
+    Vibe(VibeListener),
 }
 
 /// Runtime-polymorphic version of [`Session`]: returns "Any" types instead of concrete
@@ -182,6 +185,7 @@ pub enum AnySession {
     Kiro(KiroSession),
     Opencode(OpencodeSession),
     Pi(PiSession),
+    Vibe(VibeSession),
 }
 
 #[cfg(test)]

@@ -423,6 +423,7 @@ mod tests {
             Just(HarnessKind::Amp),
             Just(HarnessKind::Kiro),
             Just(HarnessKind::Hermes),
+            Just(HarnessKind::Vibe),
         ]
     }
 

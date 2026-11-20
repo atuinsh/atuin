@@ -566,6 +566,7 @@ use crate::harnesstools::kiro::session::KiroMessage;
 use crate::harnesstools::opencode::session::OpencodeMessage;
 use crate::harnesstools::pi::session::PiMessage;
 use crate::harnesstools::session::pushed::PushedMessage;
+use crate::harnesstools::vibe::session::VibeMessage;
 
 #[enum_dispatch(Message)]
 #[derive(Debug, Clone)]
@@ -578,6 +579,7 @@ pub enum AnyMessage {
     Kiro(KiroMessage),
     Opencode(OpencodeMessage),
     Pi(PiMessage),
+    Vibe(VibeMessage),
     /// A message an agent pushed (`atuin threads push`).
     Pushed(PushedMessage),
 }

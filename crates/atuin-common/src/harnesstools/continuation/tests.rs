@@ -23,7 +23,9 @@ use crate::harnesstools::pi::Pi;
 use crate::harnesstools::pi::session::PiSession;
 use crate::harnesstools::rehydrate::testing;
 use crate::harnesstools::session::{Session, SessionId, ToolCallId, ToolResult, ToolUse};
-use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi};
+use crate::harnesstools::vibe::Vibe;
+use crate::harnesstools::vibe::session::VibeSession;
+use crate::harnesstools::{ccode, codex, copilot, grok, hermes, kiro, opencode, pi, vibe};
 use crate::path::PathBufExt as _;
 use crate::sync::BlockingPool;
 
@@ -35,6 +37,7 @@ pub const HERMES: AnyHarness = AnyHarness::Hermes(Hermes);
 pub const KIRO: AnyHarness = AnyHarness::Kiro(Kiro);
 pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
+pub const VIBE: AnyHarness = AnyHarness::Vibe(Vibe);
 /// The original's atuin id, as the picker passes it.
 const ATUIN_ID: &str = "01a0d147e7457ae280000123456789ab";
 
@@ -93,6 +96,13 @@ pub async fn recorded(source: AnyHarness) -> RehydrateSession {
 async fn read(source: AnyHarness) -> RehydrateSession {
     match source {
         AnyHarness::Amp(_) => unreachable!("Amp keeps no transcript to read"),
+        AnyHarness::Vibe(_) => {
+            let root = vibe::session::tests::fixture_root();
+            let dir = root.join("unified").joined(vibe::session::tests::FIXTURE_ID);
+            let session = VibeSession::open(&root, dir, pool()).unwrap();
+            let lines: Vec<_> = session.read().try_collect().await.unwrap();
+            session_of(vibe::session::tests::FIXTURE_ID, rows_of(&lines))
+        }
         AnyHarness::Hermes(_) => {
             let dir = tempfile::tempdir().unwrap();
             let db = hermes::session::tests::probe_store(dir.path()).await;
@@ -231,7 +241,9 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
             );
         }
         AnyHarness::Kiro(_) => assert!(uuid(id.strip_prefix("sess_").unwrap_or(id)), "{id}"),
-        AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => assert!(uuid(id), "{id}"),
+        AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) | AnyHarness::Vibe(_) => {
+            assert!(uuid(id), "{id}");
+        }
         AnyHarness::Codex(_) | AnyHarness::Grok(_) => {
             assert_eq!(Uuid::parse_str(id).unwrap().get_version_num(), 7);
         }
@@ -255,7 +267,8 @@ fn assert_ids(target: AnyHarness, session: &RehydrateSession) {
             AnyHarness::ClaudeCode(_)
             | AnyHarness::Copilot(_)
             | AnyHarness::Grok(_)
-            | AnyHarness::Kiro(_) => assert!(uuid(id), "{id}"),
+            | AnyHarness::Kiro(_)
+            | AnyHarness::Vibe(_) => assert!(uuid(id), "{id}"),
             AnyHarness::Codex(_) => assert!(id.starts_with("syn-"), "{id}"),
             AnyHarness::Opencode(_) => {
                 assert!(id.starts_with("prt_") && id.len() == 30, "{id}");
@@ -318,6 +331,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     assert!(sides.iter().step_by(2).all(|r| *r == Role::User), "{sides:?}");
 
     let mut calls = HashSet::new();
+    let mut patched = Vec::new();
     for (n, m) in rows.iter().enumerate() {
         assert!(!m.content.is_empty(), "row {n} is empty");
         assert!(m.usage.is_none() && m.model.is_none());
@@ -342,6 +356,7 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
                     assert!(calls.insert(call.id.as_ref()), "{} is called twice", call.id);
                 }
                 Content::ToolResult(_) => {}
+                Content::Patch(patch) => patched.push(patch.call.to_string()),
                 other => panic!("row {n} holds {other:?}"),
             }
         }
@@ -373,7 +388,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
             AnyHarness::Grok(_)
             | AnyHarness::Hermes(_)
             | AnyHarness::Pi(_)
-            | AnyHarness::Copilot(_) => rows[n + 1..=n + called.len()]
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Vibe(_) => rows[n + 1..=n + called.len()]
                 .iter()
                 .flat_map(|r| {
                     assert_eq!(r.role, Role::Tool);
@@ -392,6 +408,10 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
     }
     let results: usize = rows.iter().map(|m| ids(m, true).len()).sum();
     assert_eq!(results, calls.len(), "every result answers a call");
+    // A carried call's changes go with it, but to Kiro and Hermes, which keep none.
+    let answered: HashSet<String> = rows.iter().flat_map(|m| ids(m, true)).collect();
+    assert!(patched.iter().all(|call| answered.contains(call)), "{patched:?}");
+    assert!(!matches!(target, AnyHarness::Kiro(_) | AnyHarness::Hermes(_)) || patched.is_empty());
 
     let times: Vec<_> = s.messages.iter().map(|m| m.timestamp).collect();
     assert!(times.windows(2).all(|w| w[0] < w[1]), "every row after the one before");
@@ -403,8 +423,8 @@ fn assert_shape(target: AnyHarness, source: AnyHarness, original: &str, s: &Rehy
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pair_continues_in_the_targets_shape(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, VIBE)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, VIBE)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;
@@ -426,6 +446,20 @@ async fn every_pair_continues_in_the_targets_shape(
     assert_ne!(continued.session.id, original.id);
     let carried = count(&continued.session);
     assert!(carried > 0, "the {} fixture's calls are carried", source.name());
+    let patches = |s: &RehydrateSession| {
+        s.messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter(|c| matches!(c, Content::Patch(_)))
+            .count()
+    };
+    if patches(&original) > 0 && !matches!(target, AnyHarness::Kiro(_) | AnyHarness::Hermes(_)) {
+        assert!(
+            patches(&continued.session) > 0,
+            "the {} fixture's patches are carried",
+            source.name()
+        );
+    }
     assert_eq!(carried + continued.flattened.tool_calls, calls);
     let notes: usize = continued
         .session
@@ -455,6 +489,18 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
     let id = SessionId::from(session.id.clone());
     match target {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        // Vibe imports the folder atuin writes, and the reader takes the rows atuin wrote to it
+        // for the imported session's (see `vibe::rehydrate`).
+        AnyHarness::Vibe(_) => {
+            let folder = vibe::rehydrate::rehydrate(root, session).await.unwrap();
+            assert_eq!(vibe::session::locate(root, &session.id), Some(folder.clone()));
+            let transcript = std::fs::read_to_string(folder.join("messages.jsonl")).unwrap();
+            let messages: Vec<Value> =
+                transcript.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            vibe::rehydrate::tests::assert_the_api_takes(&messages);
+            let rows = vibe::session::read_written(&folder).unwrap();
+            rows.into_iter().map(RehydrateMessage::from).collect()
+        }
         AnyHarness::Hermes(_) => {
             let lines = hermes::rehydrate::tests::written(root, session).await;
             assert_eq!(
@@ -540,7 +586,8 @@ async fn written(target: AnyHarness, session: &RehydrateSession) -> Vec<Rehydrat
 
 /// What a transcript says and does, in order: role and text, merged where one role speaks
 /// twice in a row (the marker is the user's turn, as every target sends it); each call, by its
-/// id, name and input; and each result, by the call it answers and its output.
+/// id, name and input; each result, by the call it answers and its output; and the files each
+/// call changed.
 fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
     let mut out: Vec<(Role, String)> = Vec::new();
     for r in rows {
@@ -568,7 +615,11 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
                     let output = tools::output_text(result);
                     out.push((Role::Tool, format!("{} -> {output}", result.call)));
                 }
-                other => panic!("only text and calls are written: {other:?}"),
+                Content::Patch(patch) => {
+                    let files: Vec<&str> = patch.files.iter().map(|f| f.path.as_str()).collect();
+                    out.push((Role::Tool, format!("{} changed {files:?}", patch.call)));
+                }
+                other => panic!("only text, calls and their changes are written: {other:?}"),
             }
         }
     }
@@ -581,8 +632,8 @@ fn conversation(rows: &[RehydrateMessage]) -> Vec<(Role, String)> {
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_target_reads_back_the_conversation_and_its_parent(
-    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] source: AnyHarness,
-    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI)] target: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, VIBE)] source: AnyHarness,
+    #[values(CLAUDE, CODEX, COPILOT, GROK, HERMES, KIRO, OPENCODE, PI, VIBE)] target: AnyHarness,
 ) {
     if source.name() == target.name() {
         return;

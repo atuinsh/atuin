@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -1606,6 +1606,7 @@ impl AiSessionDatabase {
             8 => Ok(HarnessKind::Amp),
             9 => Ok(HarnessKind::Kiro),
             10 => Ok(HarnessKind::Hermes),
+            11 => Ok(HarnessKind::Vibe),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -2955,18 +2956,23 @@ mod tests {
         assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
-    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
-    /// harness before they knew Hermes.
+    /// Migrations 6 and 7 empty the projection again, for the rows earlier builds read as an
+    /// unknown harness before they knew Hermes, and Vibe.
     #[rstest]
-    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        for migration in [
+    #[case::hermes(5)]
+    #[case::vibe(6)]
+    fn a_harness_migration_empties_the_projection_for_a_rebuild(#[case] before: usize) {
+        let migrations = [
             include_str!("migrations/0001_init.sql"),
             include_str!("migrations/0002_message_blocks.sql"),
             include_str!("migrations/0003_message_provider.sql"),
             include_str!("migrations/0004_drop_api_request_blobs.sql"),
             include_str!("migrations/0005_reproject_for_kiro.sql"),
-        ] {
+            include_str!("migrations/0006_reproject_for_hermes.sql"),
+            include_str!("migrations/0007_reproject_for_vibe.sql"),
+        ];
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in &migrations[..before] {
             conn.execute_batch(migration).unwrap();
         }
         conn.execute_batch(
@@ -2980,7 +2986,7 @@ mod tests {
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         let generation = count("SELECT generation FROM projection_state");
 
-        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
+        conn.execute_batch(migrations[before]).unwrap();
 
         assert_eq!(count("SELECT count(*) FROM sessions"), 0);
         assert_eq!(count("SELECT count(*) FROM messages"), 0);

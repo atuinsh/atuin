@@ -79,6 +79,7 @@ pub struct AiSessionResume {
     pub amp: Option<String>,
     pub kiro: Option<String>,
     pub hermes: Option<String>,
+    pub vibe: Option<String>,
 }
 
 impl AiSessionResume {
@@ -97,6 +98,7 @@ impl AiSessionResume {
             HarnessKind::Amp => self.amp.as_deref(),
             HarnessKind::Kiro => self.kiro.as_deref(),
             HarnessKind::Hermes => self.hermes.as_deref(),
+            HarnessKind::Vibe => self.vibe.as_deref(),
             HarnessKind::Unknown => None,
         }
     }

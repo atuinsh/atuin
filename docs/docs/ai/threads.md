@@ -15,7 +15,7 @@ off, and `atuin setup --only --no-threads` turns it off again.
 
 With `capture = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
-Hermes Agent, Kiro, opencode, Pi and Amp) as threads into the encrypted record
+Hermes Agent, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted record
 store, and syncs them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
@@ -126,6 +126,39 @@ Atuin still holds the whole session. A session over 10,000 messages, or still ov
 5 MiB with every tool output cut, isn't written, and Atuin says which limit
 it's over.
 
+### Mistral Vibe
+
+Every Vibe surface that runs on your machine keeps its sessions in one store:
+the `vibe` terminal UI, `vibe -p`, the editors that run `vibe-acp` (the VS Code
+extension, Zed, JetBrains IDEs and Xcode), and Vibe Desktop's local sessions.
+The store is `logs/session/unified/` in Vibe's home (`$VIBE_HOME`, else
+`~/.vibe`). Atuin captures a turn as it runs: each tool call once it has
+settled, with its output, and an edit or a file write with its diff. Vibe keeps
+token usage only for its latest turns, so a session Atuin captures long after
+it ran has no usage for its older turns. A
+subagent is a thread of its own, a child of the session that spawned it. Vibe
+Code Web's sessions live on Mistral's servers, so Atuin can't capture them.
+Atuin reads stores from Vibe 3.1.3. Vibe doesn't document its store, so a
+newer Vibe may change what Atuin can read.
+
+`atuin resume` reopens a session with `vibe --resume <id>`, in the directory the
+session worked in.
+
+Vibe's store is private to Vibe, so Atuin never writes it. To restore a
+session, fork one, or continue another agent's session in Vibe, Atuin writes
+it out as one of the session folders Vibe 2 kept, beside the store. Vibe
+imports such a folder into its store when the session is resumed, and resumes
+that import whenever the session is resumed again. Atuin reads the import as
+the session it wrote. A system message, such as a compaction summary, goes in
+as a user message, since Vibe's import drops system messages. Vibe needs a
+result for every tool call, so a call that has none is answered with a note
+that says so. Until Vibe has imported the folder, Atuin can catch it up with
+messages from your other machines. After that, Atuin can't catch up the
+session or switch its branch, so it forks instead.
+
+Vibe has no hooks that record the commands it runs, but its threads are
+captured all the same.
+
 ## What's captured
 
 Capture keeps the conversation (what you and the agent said) and its tool
@@ -136,10 +169,11 @@ in another agent (see [Resuming](#resuming)). Reasoning is kept only as a marker
 that the model reasoned.
 
 When an agent edits a file, capture also keeps the diff the agent recorded for
-the edit (Claude Code, Codex, Copilot, opencode and pi each keep one; for Grok
-Build, Atuin works it out from the file as the turn found it), so a resumed
-session shows its edits as the agent showed them, and `atuin threads show`
-prints them. A diff names its file and the lines changed, with a few lines
+the edit (Claude Code, Codex, Copilot, Mistral Vibe, opencode and pi each keep
+one; for Grok Build, Atuin works it out from the file as the turn found it), so
+a resumed session shows its edits as the agent showed them, and `atuin threads
+show` prints them. A session continued in another agent keeps its diffs too,
+except in Hermes Agent and Kiro, which have nowhere to keep them. A diff names its file and the lines changed, with a few lines
 around them, not the whole file. Search covers the names of the files a session
 changed.
 
@@ -466,7 +500,7 @@ From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
 another (`claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`,
-`opencode`, `pi` or `omp`; `claude` is short for `claude-code` wherever Atuin
+`opencode`, `pi`, `omp` or `vibe`; `claude` is short for `claude-code` wherever Atuin
 takes an agent's name, and `kiro-cli` for `kiro`). `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,

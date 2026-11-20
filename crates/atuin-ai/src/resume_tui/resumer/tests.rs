@@ -754,6 +754,7 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
         HarnessKind::Kiro,
         HarnessKind::Pi,
         HarnessKind::Omp,
+        HarnessKind::Vibe,
     ]);
 
     let err =

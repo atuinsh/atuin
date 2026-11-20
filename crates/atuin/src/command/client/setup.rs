@@ -979,6 +979,7 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
                     restart.push(agent.display_name());
                 }
             }
+            Err(InstallHookError::Unsupported) => {}
             Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
         }
     }
