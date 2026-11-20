@@ -13,6 +13,9 @@ fn print_tmux_config(tmux: &Tmux) {
 
 pub fn init_static(options: &StaticInitOptions<'_>) {
     print_tmux_config(options.tmux);
+    if !options.prepare_search_index {
+        println!("__atuin_skip_search_index=1");
+    }
     println!("{}", crate::shell::ZSH);
 
     if atuin_common::env::var("ATUIN_NOBIND").is_err() {
