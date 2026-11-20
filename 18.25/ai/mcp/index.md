@@ -1,6 +1,6 @@
 # MCP Server
 
-Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Hermes Agent, Kiro CLI, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
+Atuin ships with a built-in [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server, giving AI agents like Claude Code, Codex, Hermes Agent, Kiro CLI, Mistral Vibe, opencode, pi and Cursor access to your shell history. Your agent can look up commands you've run before, check whether they succeeded, and — with [output capture](https://docs.atuin.sh/guide/output-capture/index.md) set up — read what they printed, or search that output for something it remembers seeing.
 
 The server exposes history search, command output and output search, and search over your agent [threads](https://docs.atuin.sh/ai/threads/index.md). All tools are read-only: nothing can modify or delete your history, and all data stays on your machine.
 
@@ -12,7 +12,7 @@ Connect your agents with one command:
 atuin setup --only --mcp
 ```
 
-This registers the MCP server with every coding agent that setup finds on this machine, such as Amp, Claude Code, Codex, GitHub Copilot CLI (`copilot`), Grok Build (`grok`), Hermes Agent (`hermes`), Kiro CLI, opencode, pi and oh-my-pi (`omp`). An agent counts when its program is on your `PATH` or it has sessions here. To connect only some, name them with `--agents`, as `atuin setup --only --mcp --agents claude-code`.
+This registers the MCP server with every coding agent that setup finds on this machine, such as Amp, Claude Code, Codex, GitHub Copilot CLI (`copilot`), Grok Build (`grok`), Hermes Agent (`hermes`), Kiro CLI, Mistral Vibe (`vibe`), opencode, pi and oh-my-pi (`omp`). An agent counts when its program is on your `PATH` or it has sessions here. To connect only some, name them with `--agents`, as `atuin setup --only --mcp --agents claude-code`.
 
 Then restart the agents you connected. They can now search your shell history.
 
@@ -164,7 +164,7 @@ Like `atuin_output`, this needs output capture set up and the daemon running.
 
 ### `atuin_threads_search`, `atuin_threads_list` and `atuin_threads_read`
 
-Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro CLI, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
+Search, list and read your [threads](https://docs.atuin.sh/ai/threads/index.md): the sessions of your coding agents (Claude Code, Codex, Copilot, Hermes Agent, Kiro CLI, Mistral Vibe, opencode and pi) that Atuin has captured. An agent can pick up where another left off, or check what was decided last time, without you explaining it again.
 
 These need thread capture, which `atuin setup --only --threads --daemon` turns on.
 

@@ -39,7 +39,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See [Suppo
 | -------------------- | ---------------------------------------------------------------------- |
 | `--disable-up-arrow` | Don't bind the `Up` arrow key                                          |
 | `--disable-ctrl-r`   | Don't bind `Ctrl`+`R`                                                  |
-| `--bind-ai-resume`   | Bind `Ctrl`+`]` to `atuin resume` (zsh, bash and fish; off by default) |
+| `--bind-ai-resume`   | Bind `Ctrl`+`T` to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep `Ctrl`+`R` but leave the up arrow alone:
 
@@ -51,15 +51,15 @@ eval "$(atuin init zsh --disable-up-arrow)"
 
 ## Binding `atuin resume`
 
-`atuin init` defines widgets that open the [`atuin resume`](https://docs.atuin.sh/ai/threads/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`]` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
+`atuin init` defines widgets that open the [`atuin resume`](https://docs.atuin.sh/ai/threads/index.md) picker at the prompt and put the command it picks into your shell, but binds no key to them by default. To bind `Ctrl`+`T` in the emacs, vi-insert and vi-command keymaps, pass `--bind-ai-resume`:
 
 ```
 eval "$(atuin init zsh --bind-ai-resume)"
 ```
 
-`Ctrl`+`]` replaces a shell binding
+`Ctrl`+`T` replaces a shell binding
 
-`Ctrl`+`]` is zsh's `vi-find-next-char` (emacs keymap) and bash's `character-search`: jump to the next occurrence of the character you type next. `--bind-ai-resume` replaces it. To keep it, bind the widget to another key yourself.
+`Ctrl`+`T` is `transpose-chars` in zsh's emacs keymap and in bash: swap the character before the cursor with the one under it. `--bind-ai-resume` replaces it. To keep it, bind the widget to another key yourself.
 
 To bind a key of your choice instead, add it after the `atuin init` line:
 
