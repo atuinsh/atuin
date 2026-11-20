@@ -58,4 +58,14 @@ jobs:
 
           printf 'Submitting atuin %s with:\n' "$version"
           printf '  %s\n' "${urls[@]}"
-          ./komac update Atuinsh.Atuin --version "$version" --urls "${urls[@]}" --submit
+          out="$RUNNER_TEMP/winget"
+          ./komac update Atuinsh.Atuin --version "$version" --urls "${urls[@]}" --output "$out" --exit
+
+          # winget-pkgs moderators ask for an AppsAndFeaturesEntries
+          # DisplayVersion equal to PackageVersion to be removed. `komac update`
+          # compares it against the previous release's version, so it keeps the
+          # MSI's.
+          # TODO(markovejnovic): drop once komac dedups after bumping the version.
+          yq -i '.PackageVersion as $v | del(.. | select(key == "DisplayVersion" and . == $v))' \
+              "$out/manifests/a/Atuinsh/Atuin/$version/Atuinsh.Atuin.installer.yaml"
+          ./komac submit "$out" --yes
