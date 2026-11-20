@@ -303,6 +303,33 @@ pub async fn get_session_token(settings: &Settings) -> Result<Option<SecretStrin
     settings.meta_store().await?.hub_session_token().await
 }
 
+/// Sends an agent's feedback on atuin's MCP tools to the Hub, which posts it to the Atuin team.
+/// The Hub token goes with it when the user is logged in, so the team can see who sent it. A user
+/// who syncs to a self-hosted legacy server keeps their data off Atuin's servers, so it sends
+/// nothing for them.
+pub async fn submit_mcp_feedback(settings: &Settings, feedback: &serde_json::Value) -> Result<()> {
+    if !settings.is_hub_sync() {
+        eyre::bail!("feedback is off because this atuin syncs to a self-hosted server");
+    }
+    let url = settings.hub_endpoint().append_path("api/v0/mcp/feedback")?;
+    let mut request = reqwest::Client::new()
+        .post(url)
+        .header(USER_AGENT, APP_USER_AGENT)
+        .timeout(Duration::from_secs(10))
+        .json(feedback);
+    if let Ok(Some(token)) = get_session_token(settings).await {
+        request = request.bearer_auth(token.expose_secret());
+    }
+    let response = request.send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body: serde_json::Value = response.json().await.unwrap_or_default();
+        let reason = body["reason"].as_str().unwrap_or("no reason given");
+        eyre::bail!("the hub answered {status}: {reason}");
+    }
+    Ok(())
+}
+
 /// Link an existing CLI sync account to the current Hub user.
 ///
 /// This associates the CLI's sync records with the Hub account, enabling

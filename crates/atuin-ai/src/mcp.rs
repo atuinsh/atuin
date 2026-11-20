@@ -332,6 +332,7 @@ impl ServerHandler for AtuinMcp {
                     Err(e) => Err(e),
                 }
             }
+            "atuin_submit_feedback" => self.submit_feedback(arguments, &caller).await,
             name => {
                 return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
             }
@@ -342,6 +343,28 @@ impl ServerHandler for AtuinMcp {
             Err(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
         };
         Ok(result.into())
+    }
+}
+
+impl AtuinMcp {
+    async fn submit_feedback(
+        &self,
+        arguments: JsonObject,
+        caller: &Caller<'_>,
+    ) -> Result<String, String> {
+        let message = arguments.get("message").and_then(Value::as_str).unwrap_or_default();
+        if message.trim().is_empty() {
+            return Err(invalid_arguments("atuin_submit_feedback", "message is required"));
+        }
+        let feedback = json!({
+            "message": message,
+            "tool": arguments.get("tool").and_then(Value::as_str),
+            "harness": caller.client,
+        });
+        atuin_client::hub::submit_mcp_feedback(&self.settings, &feedback)
+            .await
+            .map(|()| "Sent to the Atuin team. Thank you.".to_string())
+            .map_err(|e| format!("Feedback could not be sent: {e}"))
     }
 }
 
@@ -512,6 +535,25 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
+    let Value::Object(feedback_schema) = json!({
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "maxLength": 2000,
+                "description": "What you tried, what happened, and what you expected.",
+            },
+            "tool": {
+                "type": "string",
+                "description": "The Atuin tool the feedback is about, if one.",
+            },
+        },
+        "required": ["message"],
+        "additionalProperties": false,
+    }) else {
+        unreachable!()
+    };
+
     vec![
         Tool::new(
             "atuin_history",
@@ -590,6 +632,23 @@ fn tool_definitions() -> Vec<Tool> {
             schema_for_type::<AtuinThreadsReadToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Read an agent thread").read_only(true)),
+        Tool::new(
+            "atuin_submit_feedback",
+            "Send feedback about these Atuin tools to the Atuin team. Call this when an Atuin \
+             tool errored or returned wrong, empty or unhelpful results, when its description or \
+             parameters confused you, when you needed something it can't do, or when you had to \
+             work around it. Notes on what worked well are welcome too. One issue per call. Be \
+             brief and factual: the tool, what you tried, what you expected. Never include \
+             secrets, command output or thread content. Returns a receipt only.",
+            feedback_schema,
+        )
+        .annotate(
+            ToolAnnotations::with_title("Send feedback on Atuin's tools")
+                .read_only(false)
+                .destructive(false)
+                .open_world(true),
+        )
+        .with_meta(always_load()),
     ]
 }
 
@@ -604,7 +663,7 @@ mod tests {
     const MAX_INSTRUCTIONS_LEN: usize = 2_000;
 
     #[rstest]
-    fn tool_definitions_list_all_tools_as_read_only() {
+    fn tool_definitions_list_all_tools_but_feedback_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert_eq!(names, [
@@ -614,9 +673,10 @@ mod tests {
             "atuin_threads_search",
             "atuin_threads_list",
             "atuin_threads_read",
+            "atuin_submit_feedback",
         ]);
 
-        for tool in &tools {
+        for tool in tools.iter().filter(|t| t.name != "atuin_submit_feedback") {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
         }
 
@@ -625,7 +685,7 @@ mod tests {
             .filter(|t| t.meta == Some(always_load()))
             .map(|t| t.name.as_ref())
             .collect();
-        assert_eq!(always_loaded, ["atuin_history"]);
+        assert_eq!(always_loaded, ["atuin_history", "atuin_submit_feedback"]);
 
         // Everything except `query` is optional — see the filter_modes
         // comment in AtuinHistoryToolCall::try_from for why.
@@ -764,6 +824,7 @@ mod tests {
             "atuin_history",
             "atuin_output",
             "atuin_output_search",
+            "atuin_submit_feedback",
             "search_threads",
             "get_thread",
         ]);
