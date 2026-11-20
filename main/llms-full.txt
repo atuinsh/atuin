@@ -5488,9 +5488,9 @@ A thread is an AI coding agent's session as Atuin captured it. To turn capture o
 atuin setup --only --threads --daemon
 ```
 
-That sets `capture = true` under `[threads]`, and turns on the daemon that capture needs if it isn't on already. `atuin setup` without `--only` offers the same, and then offers to import the sessions your agents already have. `atuin resume` offers to turn capture on each time it runs while capture is off, and `atuin setup --only --no-threads` turns it off again.
+That sets `enabled = true` under `[threads]`, and turns on the daemon that capture needs if it isn't on already. `atuin setup` without `--only` offers the same, and then offers to import the sessions your agents already have. `atuin resume` offers to turn capture on each time it runs while capture is off, and `atuin setup --only --no-threads` turns it off again.
 
-With `capture = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
+With `enabled = true` under `[threads]`, the Atuin daemon records the sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted record store, and syncs them like your history. `atuin threads` lists, shows, searches and follows them.
 
 The daemon keeps a local search index of these threads beside the record store, and brings it up to date as threads are captured, synced in from your other machines, or imported.
 
@@ -5575,7 +5575,7 @@ Tool calls can be a lot of your codebase, not just your conversations. To keep o
 
 ```
 [threads]
-capture = true
+enabled = true
 capture_tools = false
 ```
 
