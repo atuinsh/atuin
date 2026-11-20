@@ -439,6 +439,7 @@ impl HistoryJournal {
 
         history.exit = exit_code;
         history.duration = i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX);
+        history.host_id = Some(self.history_store.host_id);
         span.record("exit_code", exit_code);
         span.record("duration", history.duration);
 

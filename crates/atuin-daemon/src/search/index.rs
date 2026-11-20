@@ -19,6 +19,8 @@ pub struct SearchIndexSettings {
     pub frecency_multipliers: FrecencyMultipliers,
     /// Controls which shells' commands are included.
     pub shells: OrFilter<Vec<String>>,
+    /// Host ID backfill generation covered by this index.
+    pub host_id_generation: i64,
 }
 
 impl SearchIndexSettings {
@@ -42,6 +44,7 @@ impl Default for SearchIndexSettings {
         Self {
             frecency_multipliers: FrecencyMultipliers::default(),
             shells: OrFilter::all(),
+            host_id_generation: 0,
         }
     }
 }

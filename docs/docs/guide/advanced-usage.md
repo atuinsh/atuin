@@ -12,11 +12,17 @@ modes by pressing **ctrl-r** inside the TUI.
 | Mode             | Searches                                                                             |
 |------------------|--------------------------------------------------------------------------------------|
 | global (default) | Your full history, from every machine                                                |
-| host             | Only history from this machine                                                       |
+| host             | History matching this Atuin install or one of its known hostnames                    |
 | session          | Only history from the current shell session                                          |
 | directory        | Only history from the current directory                                              |
 | workspace        | Only history from anywhere in the current repository, Git or Jujutsu                 |
 | session-preload  | The current session, plus all global history from before the session started         |
+
+The host filter uses the current Atuin install ID and its known hostnames. It learns names from
+history tied to that ID and includes the current name, which `ATUIN_HOST_NAME` can override.
+Matching by name can bring back history after an install ID changes. It can also show commands
+from another machine that used the same name. When Atuin fills IDs for older history, it can
+only recover names that a surviving entry links to the current ID.
 
 Atuin skips `workspace` mode when you aren't inside a repository or when
 [`workspaces = false`](../configuration/config.md#workspaces).
