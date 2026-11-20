@@ -1835,10 +1835,16 @@ impl Settings {
     }
 
     /// The renamed keys that [`Self::with_legacy_keys`] reads under their old names.
-    const LEGACY_KEYS: [Renamed; 3] = [
+    ///
+    /// When several old names of one key are set, the later one in this list wins.
+    const LEGACY_KEYS: [Renamed; 4] = [
         Renamed {
             old: "ai.capture_sessions",
-            new: "threads.capture",
+            new: "threads.enabled",
+        },
+        Renamed {
+            old: "threads.capture",
+            new: "threads.enabled",
         },
         Renamed {
             old: "ai.capture_tools",
@@ -1869,9 +1875,8 @@ impl Settings {
         "ai.yolo",
     ];
 
-    /// Read renamed keys under their new names, for any key the new name doesn't set itself:
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`. The defaults
-    /// are set here, under them, so they never hide a legacy value.
+    /// Read renamed keys under their new names, when the config doesn't already set those keys
+    /// under their new names.
     fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
@@ -1893,7 +1898,7 @@ impl Settings {
         legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
 
         let defaults = Config::builder()
-            .set_default("threads.capture", false)?
+            .set_default("threads.enabled", false)?
             .set_default("threads.capture_tools", true)?;
         legacy
             .into_iter()
@@ -2736,7 +2741,7 @@ mod tests {
     #[rstest]
     fn threads_default_off_with_tools() {
         let settings = parse_settings("");
-        assert!(!settings.threads.capture);
+        assert!(!settings.threads.enabled);
         assert!(settings.threads.capture_tools);
         assert!(settings.threads.resume_chooser);
     }
@@ -2748,7 +2753,7 @@ mod tests {
              false\n\n[ai.sessions]\nresume_chooser = false\n\n[ai.sessions.resume]\npi = \"pi \
              --session {id}\"\n",
         );
-        assert!(settings.threads.capture);
+        assert!(settings.threads.enabled);
         assert!(!settings.threads.capture_tools);
         assert!(!settings.threads.resume_chooser);
         assert_eq!(settings.threads.resume.pi.as_deref(), Some("pi --session {id}"));
@@ -2758,21 +2763,32 @@ mod tests {
     fn threads_settings_win_over_legacy_ones() {
         let settings = parse_settings(
             "[ai]\ncapture_sessions = true\n\n[ai.sessions]\ninline_height = 10\nmouse = \
-             false\n\n[ai.sessions.resume]\nclaude = \"old\"\npi = \"old\"\n\n[threads]\ncapture \
+             false\n\n[ai.sessions.resume]\nclaude = \"old\"\npi = \"old\"\n\n[threads]\nenabled \
              = false\ninline_height = 20\n\n[threads.resume]\npi = \"new\"\n",
         );
-        assert!(!settings.threads.capture);
+        assert!(!settings.threads.enabled);
         assert_eq!(settings.threads.inline_height, Some(20));
         assert_eq!(settings.threads.mouse, Some(false));
         assert_eq!(settings.threads.resume.claude.as_deref(), Some("old"));
         assert_eq!(settings.threads.resume.pi.as_deref(), Some("new"));
     }
 
+    #[rstest]
+    #[case::old_name("[threads]\ncapture = true\n", true)]
+    #[case::new_name_wins("[threads]\ncapture = true\nenabled = false\n", false)]
+    #[case::old_name_wins_over_older_name(
+        "[ai]\ncapture_sessions = false\n\n[threads]\ncapture = true\n",
+        true
+    )]
+    fn threads_capture_is_read_as_enabled(#[case] toml: &str, #[case] expected: bool) {
+        assert_eq!(parse_settings(toml).threads.enabled, expected);
+    }
+
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
         let config = Settings::with_legacy_keys(config::Config::default()).unwrap();
-        assert!(!config.get_bool("threads.capture").unwrap());
+        assert!(!config.get_bool("threads.enabled").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
 
@@ -3020,6 +3036,7 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[case::legacy_keys(
         "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n"
     )]
+    #[case::threads_capture("[threads]\ncapture = true\n")]
     #[case::retired_ai_keys(
         "[ai]\nenabled = false\nmodel = \"m\"\nyolo = true\n\n[ai.opening]\nsend_cwd = true\n"
     )]

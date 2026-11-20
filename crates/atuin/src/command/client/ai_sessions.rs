@@ -124,7 +124,7 @@ pub async fn offer(settings: &Settings, term: &mut Terminal) -> Option<Settings>
 /// Turn threads on, with the daemon they need, and offer to import the threads from before.
 /// Returns the settings as they now are.
 pub async fn enable(settings: &Settings, term: &mut Terminal) -> Result<Settings> {
-    let mut changes = vec![("threads.capture", Value::from(true))];
+    let mut changes = vec![("threads.enabled", Value::from(true))];
     // A daemon on already may be managed externally (systemd, launchd), so only one this turns on
     // is left to start itself.
     if !settings.daemon.enabled {

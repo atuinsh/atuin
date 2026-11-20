@@ -128,7 +128,7 @@ pub fn shared_dir() -> TempDir {
 impl Machine {
     /// A machine on its own, syncing nowhere.
     pub fn new() -> Self {
-        Self::with_config("", "capture = true\n")
+        Self::with_config("", "enabled = true\n")
     }
 
     /// A machine syncing nowhere with the settings `top` (top-level keys, then any tables) and
@@ -170,7 +170,7 @@ impl Machine {
     /// Two machines of one account on `server`, their daemons running and syncing as often as
     /// they can.
     pub fn pair(server: &SyncServer) -> (Self, Self) {
-        Self::pair_syncing(server, 1, "capture = true\n")
+        Self::pair_syncing(server, 1, "enabled = true\n")
     }
 
     /// Two machines of one account on `server` with the `[threads]` settings `threads`, their daemons

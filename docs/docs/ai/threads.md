@@ -7,13 +7,13 @@ on, run:
 atuin setup --only --threads --daemon
 ```
 
-That sets `capture = true` under `[threads]`, and turns on the daemon that
+That sets `enabled = true` under `[threads]`, and turns on the daemon that
 capture needs if it isn't on already. `atuin setup` without `--only` offers
 the same, and then offers to import the sessions your agents already have.
 `atuin resume` offers to turn capture on each time it runs while capture is
 off, and `atuin setup --only --no-threads` turns it off again.
 
-With `capture = true` under `[threads]`, the Atuin daemon records the
+With `enabled = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
 Hermes Agent, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted record
 store, and syncs them like your history.
@@ -219,7 +219,7 @@ only the name of each tool called (and whether the call failed), and no diffs, s
 
 ```toml
 [threads]
-capture = true
+enabled = true
 capture_tools = false
 ```
 

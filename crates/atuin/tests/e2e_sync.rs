@@ -51,7 +51,7 @@ async fn search(machine: &Machine, query: &str) -> usize {
 fn synced_history_is_searchable_through_the_daemon() {
     let server = SyncServer::start();
     // The second machine's daemon never syncs on its own, so only `atuin sync` brings it anything.
-    let (one, two) = Machine::pair_syncing(&server, 0, "capture = true\n");
+    let (one, two) = Machine::pair_syncing(&server, 0, "enabled = true\n");
 
     let word = marker();
     one.env.record(&format!("echo {word}"), SESSION, one.home());

@@ -216,7 +216,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         | Cmd::Search { ref output, .. }
         | Cmd::Tail { ref output }
         | Cmd::Import { ref output, .. } => output.style.resolve(),
-        Cmd::Push { .. } if !settings.threads.capture => {
+        Cmd::Push { .. } if !settings.threads.enabled => {
             return Err(eyre!(
                 "thread capture is off; `atuin setup --only --threads --daemon` turns it on"
             ));
@@ -224,7 +224,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         Cmd::Push { .. } => Style::Plain,
     };
 
-    if !settings.threads.capture {
+    if !settings.threads.enabled {
         userio::log::warn!("threads-capture-off");
     }
 

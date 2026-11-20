@@ -78,7 +78,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
     agent: Agent,
     #[values(true, false)] capture_tools: bool,
 ) {
-    let threads = format!("capture = true\ncapture_tools = {capture_tools}\n");
+    let threads = format!("enabled = true\ncapture_tools = {capture_tools}\n");
     let mut machine = Machine::with_config("", &threads);
     machine.start_daemon();
     let secret = format!("ghp_{}{}", &word()[1..], "abcd");
@@ -134,7 +134,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
 fn capture_applies_the_history_and_output_filters_to_agent_commands(project: TempDir) {
     let top =
         "history_filter = [\"^echo dropped-\"]\n[output]\ncommand_filter = [\"^echo quiet-\"]\n";
-    let mut machine = Machine::with_config(top, "capture = true\n");
+    let mut machine = Machine::with_config(top, "enabled = true\n");
     machine.start_daemon();
     let mut turns = vec![Turn::new(), Turn::new(), Turn::new()];
     turns[0].command = format!("echo dropped-{}", word());
@@ -301,7 +301,7 @@ fn capture_starts_when_the_config_turns_it_on(
     project: TempDir,
     #[values(Agent::Claude, Agent::Hermes, Agent::Kiro)] agent: Agent,
 ) {
-    let mut machine = Machine::with_config("", "capture = false\n");
+    let mut machine = Machine::with_config("", "enabled = false\n");
     machine.start_daemon();
     let old: Vec<Turn> = (0..2).map(|_| Turn::new()).collect();
     let resumed = Transcript::create(machine.home(), agent, project.path(), &old[..1]);
@@ -312,7 +312,7 @@ fn capture_starts_when_the_config_turns_it_on(
     assert_eq!(machine.sessions(), Vec::<serde_json::Value>::new(), "captured while off");
 
     let config = machine.env.config_file();
-    let on = std::fs::read_to_string(&config).unwrap().replace("capture = false", "capture = true");
+    let on = std::fs::read_to_string(&config).unwrap().replace("enabled = false", "enabled = true");
     std::fs::write(&config, on).unwrap();
     // Longer than the daemon takes to see the config change.
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -574,7 +574,7 @@ fn a_session_from_another_machine_restores_as_the_same_session(
 #[rstest]
 fn a_session_synced_by_hand_is_listed_at_once(project: TempDir) {
     let server = SyncServer::start();
-    let (there, here) = Machine::pair_syncing(&server, 0, "capture = true\n");
+    let (there, here) = Machine::pair_syncing(&server, 0, "enabled = true\n");
     let turns = [Turn::new()];
     let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
     there.wait_until_said(&original.id, &said(&turns));
@@ -636,7 +636,7 @@ fn a_session_gone_on_with_elsewhere_catches_up_where_it_came_from(
 ) {
     let server = SyncServer::start();
     let (there, here) =
-        Machine::pair_syncing(&server, 1, "capture = true\ncapture_tools = false\n");
+        Machine::pair_syncing(&server, 1, "enabled = true\ncapture_tools = false\n");
     let mut turns = vec![Turn::new()];
     let original = Transcript::create(there.home(), agent, project.path(), &turns);
     here.wait_until_said(&original.id, &said(&turns));
@@ -790,7 +790,7 @@ fn a_restored_fork_stays_a_fork(
 #[rstest]
 fn an_imported_restored_fork_stays_a_fork(project: TempDir) {
     let server = SyncServer::start();
-    let (there, here) = Machine::pair_as(&server, 1, ["capture = true\n", "capture = false\n"]);
+    let (there, here) = Machine::pair_as(&server, 1, ["enabled = true\n", "enabled = false\n"]);
     let turns = vec![Turn::new()];
     let original = Transcript::create(there.home(), Agent::Claude, project.path(), &turns);
     there.wait_until_said(&original.id, &said(&turns));

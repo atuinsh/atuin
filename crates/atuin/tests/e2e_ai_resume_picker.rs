@@ -81,7 +81,7 @@ fn the_picker_resumes_the_session_chosen(
 ) {
     let project = shared_dir();
     let top = format!("enter_accept = {enter_accept}\n");
-    let mut machine = Machine::with_config(&top, "capture = true\n");
+    let mut machine = Machine::with_config(&top, "enabled = true\n");
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
@@ -117,7 +117,7 @@ fn the_shell_widget_resumes_the_session_chosen(
     };
     let project = shared_dir();
     let top = format!("enter_accept = {enter_accept}\n");
-    let mut machine = Machine::with_config(&top, "capture = true\n");
+    let mut machine = Machine::with_config(&top, "enabled = true\n");
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);

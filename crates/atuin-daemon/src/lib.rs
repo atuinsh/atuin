@@ -167,7 +167,7 @@ pub async fn boot(
             AiHarnessSessionCapture::open(
                 records.clone(),
                 db.clone(),
-                settings.threads.capture,
+                settings.threads.enabled,
                 session_capture::ToolCapture::from_setting(settings.threads.capture_tools),
                 session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
@@ -222,7 +222,7 @@ pub async fn boot(
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
                 #[cfg(feature = "ai")]
-                ai_session_capture.set_capture(new_settings.threads.capture);
+                ai_session_capture.set_capture(new_settings.threads.enabled);
                 watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");

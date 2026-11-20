@@ -414,7 +414,7 @@ pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
     let path = atuin_client::ai_session::sidecar_path(&settings);
     // The daemon makes it the first time it runs with sessions on.
     if !path.exists() {
-        if settings.threads.capture {
+        if settings.threads.enabled {
             bail!("no threads here yet: the Atuin daemon hasn't recorded any");
         }
         bail!("no threads here yet: turn them on with `atuin setup --only --threads --daemon`");

@@ -112,9 +112,9 @@ pub struct Threads {
     /// synced record store. Off by default: capture copies the conversation (what was said, and
     /// the tools called, see [`Self::capture_tools`]) into the encrypted store used by sync, so
     /// it is strictly opt-in.
-    pub capture: bool,
+    pub enabled: bool,
 
-    /// With [`Self::capture`], also capture what each tool call was given and what it returned
+    /// With [`Self::enabled`], also capture what each tool call was given and what it returned
     /// (commands and their output, files read and written), so a resumed thread has them too. On
     /// by default, with secrets redacted and each payload held to 64 KiB; off keeps only each
     /// tool's name.
@@ -146,7 +146,7 @@ pub struct Threads {
 impl Default for Threads {
     fn default() -> Self {
         Self {
-            capture: false,
+            enabled: false,
             capture_tools: true,
             filter_mode: None,
             inline_height: None,
@@ -173,7 +173,7 @@ mod tests {
     fn parses_every_field() {
         let parsed: Threads = toml::from_str(
             r#"
-            capture = true
+            enabled = true
             capture_tools = false
             filter_mode = "global"
             inline_height = 20
@@ -186,7 +186,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(parsed.capture);
+        assert!(parsed.enabled);
         assert!(!parsed.capture_tools);
         assert_eq!(parsed.filter_mode, Some(AiSessionFilterMode::Global));
         assert_eq!(parsed.inline_height, Some(20));

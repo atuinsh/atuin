@@ -300,7 +300,7 @@ impl Found {
             shells: shells_here(&RcDirs::here()),
             ctrl_r: settings.bind_ctrl_r,
             up_arrow: settings.bind_up_arrow,
-            capture: settings.threads.capture,
+            capture: settings.threads.enabled,
             output: settings.output.limits().is_some() && settings.pty_proxy.enabled,
             saves_output: settings.output.limits().is_some(),
             daemon: settings.daemon.enabled,
@@ -846,8 +846,8 @@ fn config_changes(
             changes.push(("bind_up_arrow", Value::from(plan.up_arrow.0)));
         }
     }
-    if scope.covers::<Threads>() && plan.threads.0 != settings.threads.capture {
-        changes.push(("threads.capture", Value::from(plan.threads.0)));
+    if scope.covers::<Threads>() && plan.threads.0 != settings.threads.enabled {
+        changes.push(("threads.enabled", Value::from(plan.threads.0)));
     }
     if scope.covers::<OutputCapture>() && found.output_changes(plan.output.0) {
         // Off, the pty proxy is left running: only `pty_proxy.enabled` says to run it.

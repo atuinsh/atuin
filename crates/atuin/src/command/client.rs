@@ -428,7 +428,7 @@ impl Cmd {
                 // on, every time.
                 #[cfg(feature = "daemon")]
                 if let atuin_ai::commands::Command::Resume(cmd) = &cli
-                    && !settings.threads.capture
+                    && !settings.threads.enabled
                     && cmd.is_interactive()
                     && let Some(mut term) = ai_sessions::Terminal::tty()
                     && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
