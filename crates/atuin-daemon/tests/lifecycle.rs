@@ -11,7 +11,7 @@ use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::{CaptureLimits, CommandFilter, OutputCapture, Search};
 use atuin_common::range::PyStyleIdxRange;
 use atuin_daemon::grpc::history::pb::tail_history_reply::Event;
-use atuin_daemon::search::IndexFilterMode;
+use atuin_daemon::search::{CaseMatching, IndexFilterMode};
 use common::{TestEnv, history};
 use regex::RegexSet;
 use rstest::*;
@@ -425,8 +425,17 @@ async fn journal_delete_removes_entry_and_rebuilds_index(#[future(awt)] env: Tes
 
     let index = env.index.read();
     assert_eq!(index.command_count(), 1, "index should be rebuilt without the deleted command");
-    assert_eq!(index.search("delete_me", &IndexFilterMode::Global, 10).unwrap().count(), 0);
-    assert_eq!(index.search("keep_me", &IndexFilterMode::Global, 10).unwrap().count(), 1);
+    assert_eq!(
+        index
+            .search("delete_me", CaseMatching::Smart, &IndexFilterMode::Global, 10)
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        index.search("keep_me", CaseMatching::Smart, &IndexFilterMode::Global, 10).unwrap().count(),
+        1
+    );
 }
 
 #[rstest]
@@ -450,6 +459,18 @@ async fn journal_rebuild_reloads_index(#[future(awt)] env: TestEnv) {
     assert_eq!(env.active_rows().await, 2);
     let index = env.index.read();
     assert_eq!(index.command_count(), 2, "rebuild should repopulate the index from the store");
-    assert_eq!(index.search("first_cmd", &IndexFilterMode::Global, 10).unwrap().count(), 1);
-    assert_eq!(index.search("second_cmd", &IndexFilterMode::Global, 10).unwrap().count(), 1);
+    assert_eq!(
+        index
+            .search("first_cmd", CaseMatching::Smart, &IndexFilterMode::Global, 10)
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(
+        index
+            .search("second_cmd", CaseMatching::Smart, &IndexFilterMode::Global, 10)
+            .unwrap()
+            .count(),
+        1
+    );
 }

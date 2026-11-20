@@ -23,10 +23,10 @@ use crate::events::DaemonEvent;
 use crate::output_capture::OutputStore;
 use crate::search::search_server::{Search as SearchSvc, SearchServer};
 use crate::search::{
-    FilterMode, FrecencyMultipliers, IndexFilterMode, OutputSearchLine, OutputSearchMatch,
-    PrepareIndexRequest, PrepareIndexResponse, RebuildIndexRequest, RebuildIndexResponse,
-    RebuiltIndex, SearchCommandOutputRequest, SearchIndex, SearchIndexSettings, SearchRequest,
-    SearchResponse, SharedSearchIndex,
+    CaseMatching, FilterMode, FrecencyMultipliers, IndexFilterMode, OutputSearchLine,
+    OutputSearchMatch, PrepareIndexRequest, PrepareIndexResponse, RebuildIndexRequest,
+    RebuildIndexResponse, RebuiltIndex, SearchCommandOutputRequest, SearchIndex,
+    SearchIndexSettings, SearchRequest, SearchResponse, SharedSearchIndex,
 };
 
 const RESULTS_LIMIT: usize = 200;
@@ -278,6 +278,7 @@ impl SearchGrpcService {
     async fn search_index(
         &self,
         query: &str,
+        case_matching: CaseMatching,
         shells: &OrFilter<Vec<String>>,
         filter: &IndexFilterMode,
     ) -> Result<Vec<Vec<u8>>, ()> {
@@ -290,7 +291,7 @@ impl SearchGrpcService {
         // the index's read lock.
         let pending = {
             let index = self.maybe_rebuild_index(shells).await?;
-            match index.search(query, filter, RESULTS_LIMIT) {
+            match index.search(query, case_matching, filter, RESULTS_LIMIT) {
                 Ok(results) => return Ok(ids(results)),
                 Err(pending) => pending,
             }
@@ -336,6 +337,8 @@ impl SearchSvc for SearchGrpcService {
                 let query_id = search_req.query_id;
                 let filter_mode: FilterMode =
                     search_req.filter_mode.try_into().unwrap_or(FilterMode::Global);
+                let case_matching: CaseMatching =
+                    search_req.case_matching.try_into().unwrap_or(CaseMatching::Smart);
                 let proto_context = search_req.context;
 
                 debug!(
@@ -352,7 +355,7 @@ impl SearchSvc for SearchGrpcService {
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
                 let history_ids = this
-                    .search_index(&query, &shells, &index_filter)
+                    .search_index(&query, case_matching, &shells, &index_filter)
                     .instrument(span!(Level::TRACE, "daemon_search_query", %query, query_id))
                     .await;
                 let Ok(history_ids) = history_ids else {

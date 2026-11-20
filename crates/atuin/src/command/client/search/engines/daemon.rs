@@ -5,7 +5,7 @@ use atuin_client::history::{History, HistoryId, all_user_author_filter};
 use atuin_client::settings::Settings;
 use atuin_common::string::StrExt as _;
 use atuin_daemon::client::{FromSettingsError, SearchClient, SearchParams};
-use atuin_daemon::search::truncate_query;
+use atuin_daemon::search::{CaseMatching as RpcCaseMatching, truncate_query};
 use easy_cast::Conv;
 use eyre::Result;
 use tracing::{Level, debug, instrument, span};
@@ -114,6 +114,7 @@ impl Search {
                     limit: Some(200),
                     authors: all_user_author_filter(),
                     shells: shells.as_filter(),
+                    case_matching: self.settings.search.case_matching,
                     ..Default::default()
                 },
             )
@@ -169,6 +170,7 @@ impl SearchEngine for Search {
                     filter_mode: state.filter_mode,
                     context: Some(state.context.clone()),
                     shells: state.shells.to_filter().to_vec_filter(),
+                    case_matching: self.settings.search.case_matching,
                 };
                 client.search(search_params).await
             })
@@ -233,7 +235,11 @@ impl SearchEngine for Search {
     fn get_highlight_indices(&self, command: &str, search_input: &str) -> Vec<usize> {
         // Use fulltext highlighting for regex queries
         if Self::contains_regex_pattern(search_input) {
-            return super::db::get_highlight_indices_fulltext(command, search_input);
+            return super::db::get_highlight_indices_fulltext(
+                command,
+                search_input,
+                self.settings.search.case_matching,
+            );
         }
 
         // Mirror the daemon's query handling: truncate before frizbee sees
@@ -242,7 +248,8 @@ impl SearchEngine for Search {
         let search_input = truncate_query(search_input).normalize_diacritics();
         let matchable = command.normalize_diacritics();
 
-        let config = frizbee::Config::default().casing(frizbee::CaseMatching::Smart);
+        let casing = RpcCaseMatching::from(self.settings.search.case_matching);
+        let config = frizbee::Config::default().casing(casing.into());
         let mut matcher = frizbee::Matcher::from_query(&search_input, &config);
         let Some(result) = matcher.match_one_indices(&matchable, 0) else {
             return Vec::new();

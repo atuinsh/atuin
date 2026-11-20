@@ -12,19 +12,19 @@ use super::cursor::Cursor;
 pub mod daemon;
 pub mod db;
 
-#[allow(unused)] // settings is only used if daemon feature is enabled
 pub fn engine(search_mode: SearchMode, settings: &Arc<Settings>) -> AnySearchEngine {
+    let case_matching = settings.search.case_matching;
     match search_mode {
         #[cfg(feature = "daemon")]
         SearchMode::DaemonFuzzy => Box::new(daemon::Search::new(Arc::clone(settings))).into(),
         #[cfg(not(feature = "daemon"))]
         SearchMode::DaemonFuzzy => {
             // Fall back to fuzzy mode if daemon feature is not enabled
-            db::Search(DbSearchMode::Fuzzy).into()
+            db::Search(DbSearchMode::Fuzzy, case_matching).into()
         }
-        SearchMode::Prefix => db::Search(DbSearchMode::Prefix).into(),
-        SearchMode::FullText => db::Search(DbSearchMode::FullText).into(),
-        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy).into(),
+        SearchMode::Prefix => db::Search(DbSearchMode::Prefix, case_matching).into(),
+        SearchMode::FullText => db::Search(DbSearchMode::FullText, case_matching).into(),
+        SearchMode::Fuzzy => db::Search(DbSearchMode::Fuzzy, case_matching).into(),
     }
 }
 

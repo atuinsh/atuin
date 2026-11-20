@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use atuin_client::database::Context;
 use atuin_client::history::{History, HistoryId};
-use atuin_client::settings::{FilterMode, Settings};
+use atuin_client::settings::{CaseMatching, FilterMode, Settings};
 use atuin_common::filter::{self, OrFilter};
 use atuin_common::range::PyStyleIdxRange;
 use atuin_common::userio::log::{Message, SINK};
@@ -33,8 +33,9 @@ use crate::grpc::versioning::{VersionMatchError, VersionedExt as _};
 use crate::output_capture::OutputMatch;
 use crate::search::search_client::SearchClient as SearchServiceClient;
 use crate::search::{
-    FilterMode as RpcFilterMode, PrepareIndexRequest, RebuildIndexRequest,
-    SearchCommandOutputRequest, SearchContext as RpcSearchContext, SearchRequest, SearchResponse,
+    CaseMatching as RpcCaseMatching, FilterMode as RpcFilterMode, PrepareIndexRequest,
+    RebuildIndexRequest, SearchCommandOutputRequest, SearchContext as RpcSearchContext,
+    SearchRequest, SearchResponse,
 };
 use crate::service::address::{ConnectError, DaemonAddress};
 use crate::service::{ActiveService, FindError};
@@ -303,6 +304,7 @@ pub struct SearchParams {
     pub filter_mode: FilterMode,
     pub context: Option<Context>,
     pub shells: OrFilter<Vec<String>>,
+    pub case_matching: CaseMatching,
 }
 
 impl From<SearchParams> for SearchRequest {
@@ -317,6 +319,7 @@ impl From<SearchParams> for SearchRequest {
                 filter::Items::All => vec![],
                 filter::Items::Some(vec) => vec,
             },
+            case_matching: RpcCaseMatching::from(params.case_matching).into(),
         }
     }
 }
@@ -417,6 +420,16 @@ impl From<FilterMode> for RpcFilterMode {
     }
 }
 
+impl From<CaseMatching> for RpcCaseMatching {
+    fn from(case_matching: CaseMatching) -> Self {
+        match case_matching {
+            CaseMatching::Smart => Self::Smart,
+            CaseMatching::Ignore => Self::Ignore,
+            CaseMatching::Respect => Self::Respect,
+        }
+    }
+}
+
 impl From<Context> for RpcSearchContext {
     fn from(context: Context) -> Self {
         Self {
@@ -437,7 +450,8 @@ mod search_tests {
     use rstest::rstest;
 
     use crate::client::{
-        Context, FilterMode, OrFilter, RpcFilterMode, SearchParams, SearchRequest,
+        CaseMatching, Context, FilterMode, OrFilter, RpcCaseMatching, RpcFilterMode, SearchParams,
+        SearchRequest,
     };
 
     #[rstest]
@@ -457,12 +471,14 @@ mod search_tests {
                 vcs_root: root.map(PathBuf::from),
             }),
             shells: OrFilter::default(),
+            case_matching: CaseMatching::Respect,
         });
 
         assert_eq!(request.query, "cargo build");
         assert_eq!(request.query_id, 42);
         assert_eq!(request.filter_mode, i32::from(RpcFilterMode::Workspace));
         assert!(request.shells.is_empty());
+        assert_eq!(request.case_matching, i32::from(RpcCaseMatching::Respect));
         let context = request.context.unwrap();
         assert_eq!(context.session_id, "session");
         assert_eq!(context.cwd, "/work/repo/sub");
