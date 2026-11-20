@@ -402,9 +402,10 @@ pub enum Status {
 #[derive(Debug)]
 pub enum Update {
     Step(Step, Status),
-    /// Sign-in is waiting on the browser, at this address.
+    /// Sign-in is waiting on the browser, at this address, showing this code.
     Browser {
         url: String,
+        code: String,
         opened: bool,
     },
     /// The account has data this machine's key can't read, so sign-in needs the right key. The
@@ -1369,6 +1370,7 @@ async fn sync(
     let opened = session.open_in_browser();
     let _ = tx.send(Update::Browser {
         url: session.auth_url.to_string(),
+        code: session.short_code().to_string(),
         opened,
     });
 

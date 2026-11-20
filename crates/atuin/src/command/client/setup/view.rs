@@ -1336,6 +1336,7 @@ enum SignIn {
     None,
     Browser {
         url: String,
+        code: String,
         opened: bool,
     },
     Key {
@@ -1374,7 +1375,9 @@ impl Running {
                 }
                 set(&mut self.steps, step, status);
             }
-            Update::Browser { url, opened } => self.sign_in = SignIn::Browser { url, opened },
+            Update::Browser { url, code, opened } => {
+                self.sign_in = SignIn::Browser { url, code, opened };
+            }
             Update::NeedKey(error) => {
                 self.sign_in = SignIn::Key {
                     entered: String::new(),
@@ -1469,7 +1472,7 @@ impl Running {
 
             match &self.sign_in {
                 SignIn::None => {}
-                SignIn::Browser { url, opened } => {
+                SignIn::Browser { url, code, opened } => {
                     let how = if *opened {
                         "Continue in your browser, or open:"
                     } else {
@@ -1480,6 +1483,10 @@ impl Running {
                     let rows = (4 + url.len()).div_ceil(usize::from(area.width.max(1)));
                     url_at = Some((area.x + 4, area.y + height(&lines, area), url.clone()));
                     lines.extend(std::iter::repeat_n(Line::default(), rows));
+                    lines.push(Line::from(vec![
+                        dim("    Check the page shows the code "),
+                        Span::raw(code.clone()).bold(),
+                    ]));
                     hint = Some(if *opened {
                         hints(&[("o", "open again"), ("s", "skip sync")])
                     } else {
