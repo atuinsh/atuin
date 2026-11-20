@@ -185,11 +185,12 @@ mod tests {
 
     /// Wait for `read` to return `expected`, then report what it last returned.
     ///
-    /// A child chdirs somewhere between fork and exec, so it may not have arrived yet.
-    fn settles_on(
-        expected: &std::path::Path,
-        mut read: impl FnMut() -> Option<PathBuf>,
-    ) -> Option<PathBuf> {
+    /// `spawn` can return before the child is fully set up. The child chdirs between fork and
+    /// exec, and the kernel renames the child late in exec, after the parent has resumed.
+    fn settles_on<T: PartialEq + ?Sized, O: std::ops::Deref<Target = T>>(
+        expected: &T,
+        mut read: impl FnMut() -> Option<O>,
+    ) -> Option<O> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let found = read();
@@ -208,7 +209,7 @@ mod tests {
         let expected = AbsPathBuf::canonicalize(dir.path()).unwrap();
         let (mut child, pid) = sleeper(dir.path());
 
-        let found = settles_on(&expected, || cwd(pid));
+        let found = settles_on(expected.as_path(), || cwd(pid));
 
         child.kill().unwrap();
         child.wait().unwrap();
@@ -224,7 +225,7 @@ mod tests {
         let (mut child, _) = sleeper(dir.path());
         let pid = child.id();
 
-        let found = settles_on(&expected, || cwd_generic(pid));
+        let found = settles_on(expected.as_path(), || cwd_generic(pid));
 
         child.kill().unwrap();
         child.wait().unwrap();
@@ -251,7 +252,8 @@ mod tests {
     #[rstest]
     fn names_a_process_by_its_executable_rather_than_its_argv0(renamed_sleep: RenamedSleep) {
         let pid = Pid::from_raw(renamed_sleep.0.id().cast_signed()).unwrap();
-        assert_eq!(name(pid).as_deref(), Some(std::ffi::OsStr::new("sleep")));
+        let expected = std::ffi::OsStr::new("sleep");
+        assert_eq!(settles_on(expected, || name(pid)).as_deref(), Some(expected));
     }
 
     #[rstest]

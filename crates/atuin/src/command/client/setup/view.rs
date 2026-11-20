@@ -35,7 +35,7 @@ use super::scroll::Scroll;
 use super::upload::{Gauge, Progress, State, Upload};
 use super::{Answer, Found, Offer, Scope, Status, Step, Sync, Update, count, is_address, names};
 
-pub(super) const ACCENT: Color = Color::Green;
+pub(super) const ACCENT: Color = Color::LightGreen;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Whether setup takes the mouse while they choose, so that the scrollbar's handle drags.
@@ -448,6 +448,11 @@ impl Row {
         self.list().is_some_and(|list| list.row() == self)
     }
 
+    /// Whether the row has a checkbox.
+    const fn checked(self) -> bool {
+        !matches!(self, Self::Keys | Self::SyncTo(_) | Self::Server | Self::Sharing(_) | Self::Go)
+    }
+
     /// Whether the screen shows the row for `plan`, `None` when it doesn't, and if it does, what
     /// the row needs while the rest of the screen rules it out.
     fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
@@ -651,6 +656,8 @@ struct Choose {
     /// The address typed for their own server, which the plan takes once they continue.
     server: Cursor,
     row: Row,
+    /// The currently selected part of a list's row, when the row has both an arrow and a checkbox.
+    part: Part,
     error: Option<&'static str>,
     /// Whether the screen may colour a row the rest rules out, which it strikes through otherwise.
     colour: bool,
@@ -697,6 +704,7 @@ impl Choose {
                 server
             },
             row: Row::Shell,
+            part: Part::Arrow,
             error: None,
             colour: true,
             open: None,
@@ -789,27 +797,24 @@ impl Choose {
             KeyCode::Esc | KeyCode::Char('q') => return Some(Chosen::Quit),
             KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
                 self.row = rows[at.saturating_sub(1)];
+                self.part = Part::Arrow;
             }
             KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
                 self.row = rows[(at + 1).min(rows.len() - 1)];
+                self.part = Part::Arrow;
             }
-            KeyCode::Enter if self.row.opens() => {
+            KeyCode::Left | KeyCode::Char('h') => self.part = Part::Arrow,
+            KeyCode::Right | KeyCode::Char('l') if self.row.opens() && self.row.checked() => {
+                self.part = Part::Check;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') if self.part() == Some(Part::Arrow) => {
                 self.open = if self.open == self.row.list() {
                     None
                 } else {
                     self.row.list()
                 };
             }
-            KeyCode::Right | KeyCode::Char('l') if self.row.opens() => self.open = self.row.list(),
-            KeyCode::Left | KeyCode::Char('h') if self.row.list().is_some() => {
-                if let Some(list) = self.row.list() {
-                    self.open = None;
-                    self.row = list.row();
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ' | 'l' | 'h') | KeyCode::Right | KeyCode::Left => {
-                self.change();
-            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.change(),
             _ => {}
         }
         None
@@ -1150,13 +1155,18 @@ impl Choose {
             (None, Row::Go) => hints(&[("enter", "continue"), ("↑↓", "move"), esc]),
             (None, Row::Server) => hints(&[("enter", "next"), ("↑↓", "move"), esc]),
             (None, Row::SyncTo(_) | Row::Sharing(_)) => {
-                hints(&[("space", "pick"), ("↑↓", "move"), esc])
+                hints(&[("enter", "pick"), ("↑↓", "move"), esc])
             }
-            (None, Row::Shells | Row::Agents) if self.open == self.row.list() => {
-                hints(&[("space", "toggle all"), ("enter", "close"), ("↑↓", "move"), esc])
+            (None, Row::Shells | Row::Agents) if self.part == Part::Check => {
+                hints(&[("enter", "toggle all"), ("↑↓", "move"), esc])
             }
             (None, Row::Shells | Row::Agents) => {
-                hints(&[("space", "toggle all"), ("enter", "open"), ("↑↓", "move"), esc])
+                let fold = if self.open == self.row.list() {
+                    "close"
+                } else {
+                    "open"
+                };
+                hints(&[("enter", fold), ("↑↓", "move"), esc])
             }
             (None, Row::Keys) if self.open == Some(List::Keys) => {
                 hints(&[("enter", "close"), ("↑↓", "move"), esc])
@@ -1173,7 +1183,18 @@ impl Choose {
                 | Row::CtrlR
                 | Row::UpArrow
                 | Row::Backfill,
-            ) => hints(&[("space", "toggle"), ("↑↓", "move"), esc]),
+            ) => hints(&[("enter", "toggle"), ("↑↓", "move"), esc]),
+        }
+    }
+
+    /// The currently selected part of the row (arrow or checkbox). This is the part that Enter acts
+    /// on.
+    fn part(&self) -> Option<Part> {
+        match (self.row.opens(), self.row.checked()) {
+            (true, true) => Some(self.part),
+            (true, false) => Some(Part::Arrow),
+            (false, true) => Some(Part::Check),
+            (false, false) => None,
         }
     }
 
@@ -1205,7 +1226,8 @@ impl Choose {
             names(picked)
         };
         let about = vec![dim(summary)];
-        toggle(at, Some(fold), Some(check), !picked.is_empty(), row.label(), about)
+        let at = at.then_some(self.part);
+        toggle(at, Some(fold), check, !picked.is_empty(), row.label(), about)
     }
 
     /// The line `row` is drawn as, `at` when it's the one they're on.
@@ -1242,8 +1264,8 @@ impl Choose {
             // A fold, with no checkbox since there's nothing to choose on it. It heads the rows it
             // opens to, so it starts a level out from them, without their margin.
             Row::Keys => {
-                let [_margin, cursor, arrow] = lead(at, Some(self.fold(row)));
-                Line::from(vec![cursor, arrow, pad(row.label(), at)])
+                let [arrow, gap] = fold_arrow(at, Some(self.fold(row)));
+                Line::from(vec![Span::raw("  "), arrow, gap, pad(row.label())])
             }
             Row::CtrlR => {
                 key_choice(at, self.plan.ctrl_r.0, row.label(), "opens Atuin's history search")
@@ -1267,7 +1289,8 @@ impl Choose {
             Row::Go => button(at, row.label()),
             Row::Server => {
                 let mut spans = lead(at, None).to_vec();
-                spans.extend([Span::raw("    "), pad(row.label(), at)]);
+                spans.push(Span::raw("    "));
+                spans.push(pad(row.label()));
                 let typed = self.server.as_str();
                 if typed.is_empty() && !at {
                     spans.push(dim("https://"));
@@ -1675,7 +1698,7 @@ impl Import {
         lines.push(if self.row == Row::Go {
             hints(&[("enter", "import"), ("↑↓", "move"), ("esc", "skip")])
         } else {
-            hints(&[("space", "toggle"), ("↑↓", "move"), ("esc", "skip")])
+            hints(&[("enter", "toggle"), ("↑↓", "move"), ("esc", "skip")])
         });
         frame.render_widget(Paragraph::new(lines), frame.area());
     }
@@ -1688,7 +1711,7 @@ fn choice(at: bool, on: bool, label: &'static str, about: impl Into<String>) -> 
     } else {
         Check::Off
     };
-    toggle(at, None, Some(check), on, label, vec![dim(about)])
+    toggle(at.then_some(Part::Check), None, check, on, label, vec![dim(about)])
 }
 
 /// One of a choice of a few: a radio button, its name, and what it says about it.
@@ -1698,13 +1721,21 @@ fn option(
     label: &'static str,
     aside: Option<&'static str>,
 ) -> Line<'static> {
-    let radio = if picked {
-        "(*) ".fg(ACCENT).bold()
+    let style = if picked {
+        Style::new().fg(ACCENT).bold()
     } else {
-        "( ) ".dim()
+        Style::new().dim()
     };
+    let dot = if picked {
+        "*"
+    } else {
+        " "
+    };
+    // Only the button's middle is underlined, so that its parentheses keep their shape.
+    let [dot, gap] = target(at, Span::styled(dot, style));
     let mut spans = lead(at, None).to_vec();
-    spans.extend([radio, pad(label, at)]);
+    spans.extend([Span::styled("(", style), dot, Span::styled(")", style), gap]);
+    spans.push(pad(label));
     spans.extend(aside.map(dim));
     Line::from(spans)
 }
@@ -1721,7 +1752,8 @@ fn key_choice(at: bool, on: bool, label: &'static str, does: &'static str) -> Li
     } else {
         "left to your shell"
     };
-    toggle(at, None, Some(check), on, label, vec![Span::raw(about).italic().dim()])
+    let about = vec![Span::raw(about).italic().dim()];
+    toggle(at.then_some(Part::Check), None, check, on, label, about)
 }
 
 /// A row the rest of the first screen rules out, with what it needs: grey, or without colour,
@@ -1781,7 +1813,7 @@ fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
     let pad = " ".repeat(width.saturating_sub(left));
     Line::from(vec![
         Span::raw(margin),
-        cursor(false),
+        Span::raw("  "),
         mark(arrow),
         Span::raw(indent),
         mark(box_),
@@ -1794,17 +1826,14 @@ fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
 /// An entry of an open list, under its row's name: a checkbox and its name.
 fn entry(at: bool, on: bool, name: &'static str) -> Line<'static> {
     let box_ = if on {
-        "[✓] ".fg(ACCENT).bold()
+        "[✓]".fg(ACCENT).bold()
     } else {
-        "[ ] ".dim()
-    };
-    let name = if at {
-        Span::raw(name).bold()
-    } else {
-        Span::raw(name)
+        "[ ]".dim()
     };
     let mut spans = lead(at, None).to_vec();
-    spans.extend([Span::raw(NESTED), box_, name]);
+    spans.push(Span::raw(NESTED));
+    spans.extend(target(at, box_));
+    spans.push(Span::raw(name));
     let line = Line::from(spans);
     if on {
         line
@@ -1841,48 +1870,66 @@ enum Fold {
     Closed,
 }
 
-/// What's left of a row's checkbox: the cursor, if `at` it, and room for a list's arrow.
-fn lead(at: bool, fold: Option<Fold>) -> [Span<'static>; 3] {
-    let arrow = match fold {
-        Some(Fold::Open) => "▾ ",
-        Some(Fold::Closed) => "▸ ",
-        None => "  ",
-    };
-    [Span::raw("  "), cursor(at), Span::raw(arrow)]
+/// A part of a row that Enter can act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    /// The arrow, which opens and closes the row's list.
+    Arrow,
+    /// The checkbox.
+    Check,
 }
 
-/// A row: a list's arrow, if `fold` is one, a checkbox, if `checked` is one, its name and what it
-/// means, dim when not `on`.
+/// What's left of a row's checkbox: the margin and room for a list's arrow.
+fn lead(at: bool, fold: Option<Fold>) -> [Span<'static>; 3] {
+    let [arrow, gap] = fold_arrow(at, fold);
+    [Span::raw("    "), arrow, gap]
+}
+
+/// A list's arrow, or room for one, and the gap after it. When the cursor is `at` the arrow, the
+/// arrow is underlined to indicate Enter acts on it.
+fn fold_arrow(at: bool, fold: Option<Fold>) -> [Span<'static>; 2] {
+    let arrow = match fold {
+        Some(Fold::Open) => "▾",
+        Some(Fold::Closed) => "▸",
+        None => return [Span::raw(" "), Span::raw(" ")],
+    };
+    target(at, Span::raw(arrow))
+}
+
+/// What Enter acts on, underlined when the cursor is `at` the item, and the gap after it.
+fn target(at: bool, mark: Span<'static>) -> [Span<'static>; 2] {
+    let mark = if at {
+        mark.underlined()
+    } else {
+        mark
+    };
+    [mark, Span::raw(" ")]
+}
+
+/// A row: a list's arrow, if `fold` is one, a checkbox, its name and what it means, dim when not
+/// `on`. `at` is the part that the cursor acts on, when the cursor is on the row.
 fn toggle(
-    at: bool,
+    at: Option<Part>,
     fold: Option<Fold>,
-    checked: Option<Check>,
+    checked: Check,
     on: bool,
     label: &'static str,
     about: Vec<Span<'static>>,
 ) -> Line<'static> {
     let box_ = match checked {
-        Some(Check::On) => "[✓] ".fg(ACCENT).bold(),
-        Some(Check::Partly) => "[-] ".fg(ACCENT).bold(),
-        Some(Check::Off) => "[ ] ".dim(),
-        None => Span::raw("    "),
+        Check::On => "[✓]".fg(ACCENT).bold(),
+        Check::Partly => "[-]".fg(ACCENT).bold(),
+        Check::Off => "[ ]".dim(),
     };
-    let mut spans = lead(at, fold).to_vec();
-    spans.extend([box_, pad(label, at)]);
+    let mut spans = lead(at == Some(Part::Arrow), fold).to_vec();
+    spans.extend(target(at == Some(Part::Check), box_));
+    spans.push(pad(label));
     spans.extend(about);
     let line = Line::from(spans);
     if on {
         line
     } else {
         line.style(Style::default().add_modifier(Modifier::DIM))
-    }
-}
-
-fn cursor(at: bool) -> Span<'static> {
-    if at {
-        "› ".fg(ACCENT).bold()
-    } else {
-        Span::raw("  ")
     }
 }
 
@@ -1961,26 +2008,22 @@ fn wrap(text: &str, columns: usize) -> Vec<String> {
 /// How much further in an entry under a row starts than the row.
 const NESTED: &str = "    ";
 
-/// The column a row's checkbox starts at, past the cursor and a list's arrow.
+/// The column a row's checkbox starts at, past the margin and a list's arrow.
 const UNDER_ARROW: usize = 6;
 
-/// The column a row's name starts at, past the cursor, a list's arrow and the checkbox.
+/// The column a row's name starts at, past the margin, a list's arrow and the checkbox.
 const UNDER_LABEL: usize = 10;
 
-fn pad(label: &'static str, at: bool) -> Span<'static> {
-    let label = Span::raw(format!("{label:<LABEL_WIDTH$}"));
-    if at {
-        label.bold()
-    } else {
-        label
-    }
+/// A row's name, padded to line up what follows it.
+fn pad(label: &'static str) -> Span<'static> {
+    Span::raw(format!("{label:<LABEL_WIDTH$}"))
 }
 
 fn dim(text: impl Into<String>) -> Span<'static> {
     Span::raw(text.into()).dim()
 }
 
-/// "space toggle · ↑↓ move", the keys bold.
+/// "enter toggle · ↑↓ move", the keys bold.
 fn hints(keys: &[(&'static str, &'static str)]) -> Line<'static> {
     let mut spans = vec![Span::raw("  ")];
     for (i, (key, what)) in keys.iter().enumerate() {
@@ -2228,14 +2271,14 @@ mod tests {
         let mut choose = on_the_keys(&found);
         choose.scrolled = Some(top);
         let shown = shown_on(&choose, &found, 12);
-        assert!(shown.last().is_some_and(|row| row.contains("space toggle")), "{shown:#?}");
+        assert!(shown.last().is_some_and(|row| row.contains("enter toggle")), "{shown:#?}");
     }
 
     #[rstest]
     fn the_footer_follows_a_page_that_fits(found: Found) {
         let shown = shown_on(&on_the_keys(&found), &found, 40);
         let continues = shown.iter().position(|row| row.contains("Continue")).expect("shown");
-        assert!(shown[continues + 2].contains("space toggle"), "{shown:#?}");
+        assert!(shown[continues + 2].contains("enter toggle"), "{shown:#?}");
     }
 
     #[rstest]
@@ -2319,7 +2362,7 @@ mod tests {
     fn a_list_opens_under_its_row_and_takes_what_is_picked(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
         choose.row = Row::Shells;
-        press(&mut choose, &[KeyCode::Right]);
+        press(&mut choose, &[KeyCode::Enter]);
         let picks = [Row::ShellPick(0), Row::ShellPick(1), Row::ShellPick(2)];
         assert_eq!(states(&choose, &picks), picks.map(|pick| (pick, None)));
 
@@ -2328,7 +2371,7 @@ mod tests {
         press(&mut choose, &[KeyCode::Up, KeyCode::Up, KeyCode::Char(' ')]);
         assert_eq!(choose.plan.shells.0, [Shell::Bash, Shell::Fish]);
 
-        press(&mut choose, &[KeyCode::Left]);
+        press(&mut choose, &[KeyCode::Up, KeyCode::Enter]);
         assert_eq!((choose.row, choose.open), (Row::Shells, None));
         assert_eq!(states(&choose, &picks), []);
     }
@@ -2366,14 +2409,81 @@ mod tests {
     }
 
     #[rstest]
+    fn space_does_what_enter_does(
+        found: Found,
+        #[values(KeyCode::Enter, KeyCode::Char(' '))] key: KeyCode,
+    ) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Shells;
+        press(&mut choose, &[key]);
+        assert_eq!(choose.open, Some(List::Shells));
+        press(&mut choose, &[KeyCode::Right, key]);
+        assert_eq!(choose.plan.shells.0, HOOKABLE);
+    }
+
+    #[rstest]
     fn toggling_a_list_takes_all_of_it_then_none(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
         choose.row = Row::Shells;
-        press(&mut choose, &[KeyCode::Char(' ')]);
+        press(&mut choose, &[KeyCode::Right, KeyCode::Enter]);
         assert_eq!(choose.plan.shells.0, HOOKABLE);
-        press(&mut choose, &[KeyCode::Char(' ')]);
+        press(&mut choose, &[KeyCode::Enter]);
         assert_eq!(choose.plan.shells.0, []);
         assert_eq!(choose.open, None);
+    }
+
+    #[rstest]
+    fn enter_toggles_all_of_a_list_once_its_checkbox_is_picked(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Shells;
+        let line = |choose: &Choose| styled(choose, &found, Row::Shells);
+        assert!(line(&choose).starts_with("    ^ "), "{}", line(&choose));
+
+        press(&mut choose, &[KeyCode::Right]);
+        assert!(line(&choose).starts_with("      ^^^ "), "{}", line(&choose));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.plan.shells.0, HOOKABLE);
+        assert_eq!(choose.open, None);
+
+        press(&mut choose, &[KeyCode::Left, KeyCode::Enter]);
+        assert_eq!(choose.open, Some(List::Shells));
+        // Moving off the row picks the arrow again for the next row.
+        press(&mut choose, &[KeyCode::Right, KeyCode::Down, KeyCode::Up]);
+        assert_eq!(choose.part, Part::Arrow);
+    }
+
+    #[rstest]
+    fn left_and_right_leave_a_checkbox_alone(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        let shell = choose.plan.shell.0;
+        press(&mut choose, &[KeyCode::Left, KeyCode::Right, KeyCode::Char('h')]);
+        assert_eq!(choose.plan.shell.0, shell);
+    }
+
+    /// Where the line that the screen draws for `row` is underlined, as `^`s.
+    fn styled(choose: &Choose, found: &Found, row: Row) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 40)).unwrap();
+        let shown = terminal.draw(|frame| choose.draw(frame, found)).unwrap().buffer.clone();
+        let lines = shown.content().chunks(80);
+        let (cells, _) = lines
+            .map(|cells| {
+                (cells, cells.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            })
+            .find(|(_, line)| line.contains(row.label()))
+            .expect("the row is drawn");
+        let underlined =
+            |cell: &ratatui::buffer::Cell| cell.modifier.contains(Modifier::UNDERLINED);
+        cells
+            .iter()
+            .map(|cell| {
+                if underlined(cell) {
+                    '^'
+                } else {
+                    ' '
+                }
+            })
+            .collect()
     }
 
     #[rstest]
@@ -2440,10 +2550,11 @@ mod tests {
         let open = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::Go];
         assert!(rows(&choose).ends_with(&open), "{:?}", rows(&choose));
         let line = drawn(&choose, &found, Row::Keys);
-        assert!(line.starts_with("› ▾ Advanced keybindings"), "{line}");
+        assert!(line.starts_with("  ▾ Advanced keybindings"), "{line}");
 
-        press(&mut choose, &[KeyCode::Down, KeyCode::Left]);
-        assert_eq!((choose.row, choose.open), (Row::Keys, None));
+        press(&mut choose, &[KeyCode::Down, KeyCode::Left, KeyCode::Right]);
+        assert_eq!((choose.row, choose.open), (Row::CtrlR, Some(List::Keys)));
+        assert!(choose.plan.ctrl_r.0);
     }
 
     #[rstest]
