@@ -1448,22 +1448,14 @@ impl Running {
         let mut url_at = None;
 
         for (step, status) in &self.steps {
-            let line = match status {
-                Status::Running(text) => Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(SPINNER[tick % SPINNER.len()]).fg(ACCENT),
-                    Span::raw(format!(" {text}")),
-                ]),
-                Status::Done(text) => {
-                    Line::from(vec![Span::raw("  "), "✓".fg(ACCENT), Span::raw(format!(" {text}"))])
+            let (marker, text) = match status {
+                Status::Running(text) => {
+                    (Span::raw(SPINNER[tick % SPINNER.len()]).fg(ACCENT), text)
                 }
-                Status::Failed(text) => Line::from(vec![
-                    Span::raw("  "),
-                    "!".yellow().bold(),
-                    Span::raw(format!(" {text}")),
-                ]),
+                Status::Done(text) => ("✓".fg(ACCENT), text),
+                Status::Failed(text) => ("!".yellow().bold(), text),
             };
-            lines.push(line);
+            lines.extend(status_lines(marker, text));
             #[cfg(feature = "octavo")]
             if *step == Step::Upload
                 && let Some(progress) = &self.upload
@@ -1578,6 +1570,21 @@ fn height(lines: &[Line<'static>], area: Rect) -> u16 {
     Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).render(area, &mut buffer);
     let blank = |y| (area.left()..area.right()).all(|x| buffer[(x, y)].symbol() == " ");
     (area.top()..area.bottom()).rfind(|&y| !blank(y)).map_or(0, |y| y + 1 - area.top())
+}
+
+/// The screen lines representing a step's status. Puts marker before the first line of `text`, and
+/// indents every subsequent line of `text` to line up.
+///
+/// A ratatui span drops line breaks, so each line of `text` needs its own [`Line`].
+fn status_lines(marker: Span<'static>, text: &str) -> impl Iterator<Item = Line<'static>> {
+    let mut marker = Some(marker);
+    text.split('\n').map(move |line| {
+        let line = Span::raw(line.to_owned());
+        match marker.take() {
+            Some(marker) => Line::from(vec![Span::raw("  "), marker, Span::raw(" "), line]),
+            None => Line::from(vec![Span::raw("    "), line]),
+        }
+    })
 }
 
 /// "atuin setup", then `after` on the same line.
@@ -2958,5 +2965,14 @@ mod tests {
             (Step::Shells, Status::Done("b".into())),
             (Step::Sync, Status::Done("c".into())),
         ]);
+    }
+
+    #[rstest]
+    #[case::one_line("Started the daemon", &["  ! Started the daemon"])]
+    #[case::two_lines("socket in use\nplease set it", &["  ! socket in use", "    please set it"])]
+    fn status_lines_puts_each_line_on_its_own_row(#[case] text: &str, #[case] expected: &[&str]) {
+        let rows: Vec<String> =
+            status_lines("!".into(), text).map(|line| line.to_string()).collect();
+        assert_eq!(rows, expected);
     }
 }

@@ -1652,11 +1652,7 @@ async fn print_summary(plan: &Plan, found: &Found, scope: Scope<'_>, steps: &[(S
     println!("  {} {}", "atuin".bold().green(), how.bold());
     println!();
     for (_, status) in steps {
-        match status {
-            Status::Done(text) => println!("  {} {text}", "✓".green()),
-            Status::Failed(text) => println!("  {} {text}", "!".yellow().bold()),
-            Status::Running(text) => println!("  {} {}", "·".dimmed(), text.dimmed()),
-        }
+        print_status(status);
     }
     if stopped {
         println!();
@@ -1733,12 +1729,35 @@ fn print_steps(steps: &[(Step, Status)]) {
         println!("  {}", "Nothing to change".dimmed());
     }
     for (_, status) in steps {
-        match status {
-            Status::Done(text) => println!("  {} {text}", "✓".green()),
-            Status::Failed(text) => println!("  {} {text}", "!".yellow().bold()),
-            Status::Running(text) => println!("  {} {}", "·".dimmed(), text.dimmed()),
+        print_status(status);
+    }
+}
+
+/// Prints the status for one step.
+fn print_status(status: &Status) {
+    match status {
+        Status::Done(text) => println!("{}", status_text("✓".green(), text, |line| line.normal())),
+        Status::Failed(text) => {
+            println!("{}", status_text("!".yellow().bold(), text, |line| line.normal()));
+        }
+        Status::Running(text) => {
+            println!("{}", status_text("·".dimmed(), text, |line| line.dimmed()));
         }
     }
+}
+
+/// The text representing a step's status. Puts `marker` before the first line of `text`, and
+/// indents every subsequent line of `text` to line up.
+fn status_text(
+    marker: impl std::fmt::Display,
+    text: &str,
+    style: impl Fn(&str) -> colored::ColoredString,
+) -> impl std::fmt::Display {
+    std::fmt::from_fn(move |f| {
+        let mut lines = text.split('\n');
+        write!(f, "  {marker} {}", style(lines.next().unwrap_or_default()))?;
+        lines.try_for_each(|line| write!(f, "\n    {}", style(line)))
+    })
 }
 
 /// Where the shells setup hooks into keep their rc files.
@@ -2123,6 +2142,13 @@ mod tests {
     #[case(&["Claude Code", "Codex", "pi"], "Claude Code, Codex and pi")]
     fn names_read_as_a_list(#[case] list: &[&str], #[case] expected: &str) {
         assert_eq!(names(list), expected);
+    }
+
+    #[rstest]
+    #[case::one_line("Started the daemon", "  ! Started the daemon")]
+    #[case::two_lines("socket in use\nplease set it", "  ! socket in use\n    please set it")]
+    fn status_text_indents_each_later_line(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(status_text("!", text, |line| line.normal()).to_string(), expected);
     }
 
     #[rstest]
