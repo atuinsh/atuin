@@ -1738,6 +1738,12 @@ struct Stdout {
     no_mouse: bool,
 }
 
+#[cfg(not(target_os = "windows"))]
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+}
+
 impl Stdout {
     pub fn new(inline_mode: bool, no_mouse: bool) -> std::io::Result<Self> {
         terminal::enable_raw_mode()?;
@@ -1754,15 +1760,9 @@ impl Stdout {
 
         execute!(writer, event::EnableBracketedPaste)?;
 
+        // REPORT_ALL_KEYS_AS_ESCAPE_CODES drops layout text because crossterm cannot request associated text.
         #[cfg(not(target_os = "windows"))]
-        execute!(
-            writer,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            ),
-        )?;
+        execute!(writer, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
 
         Ok(Self {
             writer,
@@ -2482,6 +2482,17 @@ mod tests {
     use crate::command::client::search::engines::{self, SearchState};
     use crate::command::client::search::history_list::ListState;
     use crate::command::client::search::keybindings::Action;
+
+    #[cfg(not(target_os = "windows"))]
+    #[rstest]
+    fn keyboard_enhancement_flags_omit_report_all_keys() {
+        use super::{KeyboardEnhancementFlags, keyboard_enhancement_flags};
+
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
+        assert!(!flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
+    }
 
     #[fixture]
     fn settings() -> Arc<Settings> {
