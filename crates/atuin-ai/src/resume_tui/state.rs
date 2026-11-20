@@ -1507,6 +1507,8 @@ mod tests {
         // The short form is cycled too, and comes back as the long one.
         state.input = Cursor::from("a:opencode flaky".to_owned());
         let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert_eq!(state.input.as_str(), "agent:kilo flaky");
+        let _ = state.handle_input(&s, &key(KeyCode::Char('t'), KeyModifiers::CONTROL));
         assert_eq!(state.input.as_str(), "agent:pi flaky");
         // alt-a and alt-h are unbound: they neither cycle nor type.
         for c in ['a', 'h'] {

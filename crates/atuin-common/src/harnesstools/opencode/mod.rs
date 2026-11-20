@@ -11,23 +11,170 @@ use crate::path::PathBufExt as _;
 pub mod rehydrate;
 pub mod session;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Opencode;
+/// Which opencode-shaped CLI: opencode itself, or Kilo Code, a fork of opencode that keeps
+/// opencode's session format in directories of its own. (Their data dirs are
+/// `$XDG_DATA_HOME/opencode` / `$XDG_DATA_HOME/kilo`; see `Flavour::data_dir` methods.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavour {
+    Opencode,
+    Kilo,
+}
 
-impl Opencode {
+impl Flavour {
+    /// The command that runs it, which is also its name (and its config/data dir name).
     #[must_use]
-    pub fn new() -> Self {
-        Self {}
+    pub const fn binary(self) -> &'static str {
+        match self {
+            Self::Opencode => "opencode",
+            Self::Kilo => "kilo",
+        }
+    }
+
+    /// The harness's name as people know it (`Harness::display_name`).
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Opencode => "opencode",
+            Self::Kilo => "Kilo Code",
+        }
+    }
+
+    /// The configuration directory: opencode's is XDG-compliant
+    /// (`$XDG_CONFIG_HOME/opencode`, falling back to `~/.config/opencode`); Kilo's is
+    /// `$KILO_CONFIG_DIR` if set (what Kilo itself resolves), else `$XDG_CONFIG_HOME/kilo`.
+    pub(crate) fn config_dir(self) -> PathBuf {
+        match self {
+            Self::Opencode => var_nonempty("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home_dir().joined(".config"))
+                .joined("opencode"),
+            Self::Kilo => var_nonempty("KILO_CONFIG_DIR").map_or_else(
+                || {
+                    var_nonempty("XDG_CONFIG_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| home_dir().joined(".config"))
+                        .joined("kilo")
+                },
+                PathBuf::from,
+            ),
+        }
+    }
+
+    /// The config file whose `mcp` key atuin writes (see `InstallMcp`).
+    pub(crate) const fn mcp_config_file(self) -> &'static str {
+        match self {
+            Self::Opencode => "opencode.json",
+            Self::Kilo => "kilo.json",
+        }
+    }
+
+    /// The `$schema` the mcp file of that JSON gets.
+    pub(crate) const fn mcp_schema(self) -> &'static str {
+        match self {
+            Self::Opencode => "https://opencode.ai/config.json",
+            Self::Kilo => "https://app.kilo.ai/config.json",
+        }
+    }
+
+    /// The environment variable that names its session database, as atuin finds it
+    /// (`OPENCODE_DB` / `KILO_DB`; see `OpencodeSessions::resolve_db`).
+    pub(crate) const fn db_env(self) -> &'static str {
+        match self {
+            Self::Opencode => "OPENCODE_DB",
+            Self::Kilo => "KILO_DB",
+        }
+    }
+
+    /// The environment variable that makes it write only `<stem>.db` and never a channel
+    /// database (`OPENCODE_DISABLE_CHANNEL_DB` / `KILO_DISABLE_CHANNEL_DB`).
+    pub(crate) const fn channel_db_env(self) -> &'static str {
+        match self {
+            Self::Opencode => "OPENCODE_DISABLE_CHANNEL_DB",
+            Self::Kilo => "KILO_DISABLE_CHANNEL_DB",
+        }
+    }
+
+    /// The stem of its database files (`opencode.db`, `opencode-<channel>.db`), or `kilo.db`,
+    /// `kilo-<channel>.db`. Kilo resolves its database the way opencode 1.x does
+    /// (see `getChannelPath` in `packages/opencode/src/storage/db.ts`).
+    pub(crate) const fn db_stem(self) -> &'static str {
+        match self {
+            Self::Opencode => "opencode",
+            Self::Kilo => "kilo",
+        }
+    }
+
+    /// Whether this CLI has opencode 2's session layout: `session_v2`/`session_message` rows
+    /// and `opencode session import`. Kilo never does: it writes only opencode 1.x's `session`,
+    /// `message` and `part` tables (its `session_message` table is created but left empty), so a
+    /// Kilo session is always a 1.x session, and atuin writes one out whole with `kilo import`
+    /// (the way opencode 1.x does).
+    pub(crate) const fn has_v2_session(self) -> bool {
+        matches!(self, Self::Opencode)
+    }
+
+    /// The environment kept quiet for a spawned CLI: no update check, no model catalogue
+    /// refresh, no LSP download, no external plugins — and no sharing of the session it is
+    /// asked to import. Kilo takes opencode's own flags with a `KILO_` prefix, and additionally
+    /// its local-server ingest is disabled (`KILO_DISABLE_SESSION_INGEST=1`), so importing a
+    /// session does not POST it to Kilo's cloud.
+    pub(crate) const fn quiet_env(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Opencode => OPENCODE_QUIET_ENV,
+            Self::Kilo => KILO_QUIET_ENV,
+        }
+    }
+
+    /// The environment variable that makes it share the session it imports, which atuin removes
+    /// from the child process (so a restore does not share it either).
+    pub(crate) const fn auto_share_env(self) -> &'static str {
+        match self {
+            Self::Opencode => "OPENCODE_AUTO_SHARE",
+            Self::Kilo => "KILO_AUTO_SHARE",
+        }
     }
 }
 
-/// opencode's global config directory. It is XDG-compliant: `$XDG_CONFIG_HOME/opencode`, falling
-/// back to `~/.config/opencode`.
-pub(crate) fn config_dir() -> PathBuf {
-    var_nonempty("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().joined(".config"))
-        .joined("opencode")
+/// opencode's quiet environment (see `Flavour::quiet_env`).
+const OPENCODE_QUIET_ENV: &[(&str, &str)] = &[
+    ("OPENCODE_DISABLE_AUTOUPDATE", "1"),
+    ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
+    ("OPENCODE_DISABLE_LSP_DOWNLOAD", "1"),
+    ("OPENCODE_DISABLE_DEFAULT_PLUGINS", "1"),
+    ("OPENCODE_DISABLE_SHARE", "1"),
+    ("OPENCODE_PURE", "1"),
+];
+
+/// Kilo's quiet environment (see `Flavour::quiet_env`). Kilo takes opencode's flags with a
+/// `KILO_` prefix, and sharing/ingest are disabled too (`KILO_DISABLE_SHARE`,
+/// `KILO_DISABLE_SESSION_INGEST`), so importing a session does not POST it to Kilo's cloud.
+const KILO_QUIET_ENV: &[(&str, &str)] = &[
+    ("KILO_DISABLE_AUTOUPDATE", "1"),
+    ("KILO_DISABLE_MODELS_FETCH", "1"),
+    ("KILO_DISABLE_LSP_DOWNLOAD", "1"),
+    ("KILO_DISABLE_DEFAULT_PLUGINS", "1"),
+    ("KILO_DISABLE_SHARE", "1"),
+    ("KILO_DISABLE_SESSION_INGEST", "1"),
+    ("KILO_PURE", "1"),
+];
+
+#[derive(Debug, Clone, Copy)]
+pub struct Opencode {
+    flavour: Flavour,
+}
+
+impl Opencode {
+    pub const OPENCODE: Self = Self {
+        flavour: Flavour::Opencode,
+    };
+    pub const KILO: Self = Self {
+        flavour: Flavour::Kilo,
+    };
+
+    #[must_use]
+    pub const fn flavour(self) -> Flavour {
+        self.flavour
+    }
 }
 
 /// The plugin for opencode 1.x, whose loaders (up to 1.3) call every export of a plugin file.
@@ -44,13 +191,25 @@ const fn plugin_for(major: Option<u64>) -> &'static str {
     }
 }
 
+/// The plugin a `flavour` of major version `major` loads: Kilo is 1.x-shaped, so it only ever
+/// loads 1.x's; opencode's choice depends on its own version (see `plugin_for`).
+fn plugin_flavour(flavour: Flavour, major: Option<u64>) -> String {
+    match flavour {
+        Flavour::Opencode => plugin_for(major).to_owned(),
+        // Kilo records its commands under the `kilo` author, so swap the shared template's
+        // hardcoded `opencode` author for Kilo's.
+        Flavour::Kilo => PLUGIN_1
+            .replace("const ATUIN_AUTHOR = \"opencode\";", "const ATUIN_AUTHOR = \"kilo\";"),
+    }
+}
+
 impl Harness for Opencode {
     fn name(&self) -> &'static str {
-        "opencode"
+        self.flavour.binary()
     }
 
     fn display_name(&self) -> &'static str {
-        "opencode"
+        self.flavour.display_name()
     }
 
     /// No, and it can't: opencode keeps no fork link of its own (`opencode import` writes none),
@@ -62,20 +221,45 @@ impl Harness for Opencode {
     }
 
     fn program(&self) -> &'static str {
-        "opencode"
+        self.flavour.binary()
     }
 
     fn home_vars(&self) -> &'static [&'static str] {
-        &["XDG_CONFIG_HOME", "XDG_DATA_HOME", "OPENCODE_DB", "OPENCODE_DISABLE_CHANNEL_DB"]
+        match self.flavour {
+            Flavour::Opencode => &[
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "OPENCODE_DB",
+                "OPENCODE_DISABLE_CHANNEL_DB",
+            ],
+            // Kilo takes the config directory from `KILO_CONFIG_DIR` first (see
+            // `Flavour::config_dir`), so the daemon that launchd starts has to hand it over too.
+            Flavour::Kilo => &[
+                "KILO_CONFIG_DIR",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "KILO_DB",
+                "KILO_DISABLE_CHANNEL_DB",
+            ],
+        }
     }
 
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         const PLUGIN_NAME: &str = "atuin.ts";
-        let plugin = plugin_for(rehydrate::major_version(Path::new("opencode")).await.ok());
-        let plugin = plugin_with_executable(plugin, TS_ATUIN_LINE, launch_path().await?)?;
+        // Kilo is 1.x-shaped, so it loads 1.x plugins only; opencode 2's plugin shape would
+        // simply go unloaded there. (Kilo scans `{plugin,plugins}/*.{ts,js}` either way, so the
+        // `plugins` directory is the one atuin installs into for both.)
+        let plugin = match self.flavour {
+            Flavour::Opencode => plugin_flavour(
+                self.flavour,
+                rehydrate::major_version(Path::new("opencode"), self.flavour).await.ok(),
+            ),
+            Flavour::Kilo => plugin_flavour(self.flavour, None),
+        };
+        let plugin = plugin_with_executable(&plugin, TS_ATUIN_LINE, launch_path().await?)?;
 
-        let plugins_dir = config_dir().joined("plugins");
+        let plugins_dir = self.flavour.config_dir().joined("plugins");
 
         tokio::fs::create_dir_all(&plugins_dir).await?;
 
@@ -83,23 +267,23 @@ impl Harness for Opencode {
 
         let already_installed = tokio::fs::read_to_string(&extension_path)
             .await
-            .is_ok_and(|existing| existing == plugin);
+            .is_ok_and(|existing| existing == plugin.as_str());
 
         if already_installed {
             return Err(InstallHookError::AlreadyInstalled);
         }
 
-        tokio::fs::write(&extension_path, plugin).await?;
+        tokio::fs::write(&extension_path, &plugin).await?;
 
         Ok(extension_path)
     }
 
     async fn has_hooks(&self) -> Result<bool, InstallHookError> {
-        super::own_file_exists(&config_dir().joined("plugins").joined("atuin.ts")).await
+        super::own_file_exists(&self.flavour.config_dir().joined("plugins").joined("atuin.ts")).await
     }
 
     async fn uninstall_hooks(&self) -> Result<bool, InstallHookError> {
-        super::remove_own_file(&config_dir().joined("plugins").joined("atuin.ts")).await
+        super::remove_own_file(&self.flavour.config_dir().joined("plugins").joined("atuin.ts")).await
     }
 
     /// `opencode --session <id>`. opencode looks the id up in its one global database and serves
@@ -112,11 +296,16 @@ impl Harness for Opencode {
     }
 
     async fn locate(&self, id: &str) -> Option<PathBuf> {
-        session::locate(&session::default_db()?, id).await
+        session::locate(&session::default_db(self.flavour)?, id).await
     }
 
-    async fn rehydrate(&self, session: &RehydrateSession) -> Result<Rehydrated, RehydrateError> {
-        rehydrate::rehydrate(session).await.map(Rehydrated::at)
+    async fn rehydrate(
+        &self,
+        session: &RehydrateSession,
+    ) -> Result<Rehydrated, RehydrateError> {
+        rehydrate::rehydrate(session, self.flavour)
+            .await
+            .map(Rehydrated::at)
     }
 }
 
@@ -142,6 +331,39 @@ mod tests {
             "export const AtuinPlugin: Plugin = async ({ directory }) => {"
         ]);
         assert_eq!(exports(PLUGIN_2), ["export default { id: \"atuin\", setup };"]);
+    }
+
+    /// Each flavour installs the plugin its loader takes: Kilo is 1.x-shaped (Kilo never ships
+    /// opencode 2's `session import`), so a Kilo install never takes opencode 2's plugin shape,
+    /// however high its version major is (Kilo's is 7).
+    #[rstest]
+    #[case(Flavour::Opencode)]
+    #[case(Flavour::Kilo)]
+    fn each_flavour_names_itself_and_its_binary(#[case] flavour: Flavour) {
+        let (name, program, display) = match flavour {
+            Flavour::Opencode => ("opencode", "opencode", "opencode"),
+            Flavour::Kilo => ("kilo", "kilo", "Kilo Code"),
+        };
+        assert_eq!(Opencode { flavour }.name(), name);
+        assert_eq!(Opencode { flavour }.program(), program);
+        assert_eq!(Opencode { flavour }.display_name(), display);
+    }
+
+    /// The plugin shape each flavour gets: opencode 2 a default export; opencode 1.x and Kilo
+    /// (1.x-shaped, whatever its `kilo --version` prints) a named export.
+    #[rstest]
+    fn each_flavour_gets_the_plugin_it_loads() {
+        assert_eq!(plugin_flavour(Flavour::Opencode, Some(1)), PLUGIN_1);
+        assert_eq!(plugin_flavour(Flavour::Opencode, Some(2)), PLUGIN_2);
+        let kilo = plugin_flavour(Flavour::Kilo, Some(7));
+        assert!(
+            kilo.contains("const ATUIN_AUTHOR = \"kilo\";"),
+            "Kilo plugin must record under the kilo author"
+        );
+        assert!(
+            !kilo.contains("const ATUIN_AUTHOR = \"opencode\";"),
+            "Kilo plugin must not record under the opencode author"
+        );
     }
 
     /// Whether `node` is here and runs TypeScript as it is.

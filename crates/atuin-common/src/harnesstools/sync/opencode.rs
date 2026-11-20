@@ -40,7 +40,7 @@ use super::{
     AppendOptions, AppendOutcome, Dirs, Links, Liveness, LocalTip, Processes, ReplaceOutcome, Seen,
     SessionSync, Stamp, SyncError, blocking_liveness, check_segment, require_idle,
 };
-use crate::harnesstools::opencode::Opencode;
+use crate::harnesstools::opencode::{Flavour, Opencode};
 use crate::harnesstools::opencode::rehydrate::{export_minting, run_import};
 use crate::harnesstools::opencode::session::default_db;
 use crate::harnesstools::opencode::session::projection::{Projected, projected};
@@ -48,15 +48,15 @@ use crate::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession};
 
 impl SessionSync for Opencode {
     async fn local_tip(&self, id: &str) -> Result<Option<LocalTip>, SyncError> {
-        let Some(db) = default_db().filter(|db| db.is_file()) else {
+        let Some(db) = default_db(self.flavour()).filter(|db| db.is_file()) else {
             return Ok(None);
         };
         local_tip_in(&db, id).await
     }
 
     async fn is_live(&self, id: &str, cwd: Option<&Path>) -> Liveness {
-        let db = default_db().filter(|db| db.is_file());
-        liveness_in(db.as_deref(), id, Processes::here(), cwd).await
+        let db = default_db(self.flavour()).filter(|db| db.is_file());
+        liveness_in(db.as_deref(), id, Processes::here(), cwd, self.flavour()).await
     }
 
     async fn append(
@@ -66,10 +66,11 @@ impl SessionSync for Opencode {
         lines: &[RehydrateMessage],
         options: &AppendOptions<'_>,
     ) -> Result<AppendOutcome, SyncError> {
-        require_idle(running(Processes::here(), appending(base, id, options.cwd)).await)?;
+        require_idle(running(Processes::here(), appending(base, id, options.cwd), self.flavour()).await)?;
         let into = base.native_path.clone();
+        let flavour = self.flavour();
         append_in(id, base, lines, options, move |cwd: PathBuf, export: Value| async move {
-            run_import(Path::new("opencode"), &into, &cwd, &export)
+            run_import(Path::new(flavour.binary()), &into, &cwd, &export, flavour)
                 .await
                 .map(drop)
                 .map_err(|e| SyncError::Other(e.to_string()))
@@ -100,10 +101,10 @@ const OPENCODE_2_APPEND: &str =
 pub(super) const OPENCODE_SWITCH: &str = "opencode keeps its sessions in a database, which can't \
                                           be switched to another branch; fork instead";
 
-/// Whether an opencode process may be writing the session `seen`: [`Liveness::Unknown`] while
+/// Whether a `flavour` process may be writing the session `seen`: [`Liveness::Unknown`] while
 /// any that may be runs ([`agent_running`]).
-pub(super) fn liveness(procs: &Processes, seen: &Seen) -> Liveness {
-    agent_running(procs, "opencode", &[], seen)
+pub(super) fn liveness(procs: &Processes, seen: &Seen, flavour: Flavour) -> Liveness {
+    agent_running(procs, flavour.binary(), &[], seen)
 }
 
 /// Session `id`, as [`SessionSync::append`] to the database `base` read takes it, last seen
@@ -113,8 +114,8 @@ fn appending(base: &LocalTip, id: &str, cwd: Option<&Path>) -> Seen {
 }
 
 /// [`liveness`], read off the async runtime.
-async fn running(procs: Processes, seen: Seen) -> Liveness {
-    blocking_liveness(move || liveness(&procs, &seen)).await
+async fn running(procs: Processes, seen: Seen, flavour: Flavour) -> Liveness {
+    blocking_liveness(move || liveness(&procs, &seen, flavour)).await
 }
 
 /// When opencode last updated the session `found`.
@@ -131,6 +132,7 @@ pub(super) async fn liveness_in(
     id: &str,
     procs: Processes,
     cwd: Option<&Path>,
+    flavour: Flavour,
 ) -> Liveness {
     let found = match db {
         Some(db) => projected(db, id).await,
@@ -146,7 +148,7 @@ pub(super) async fn liveness_in(
             Err(_) => true,
         },
     };
-    let running = running(procs, seen).await;
+    let running = running(procs, seen, flavour).await;
     if running == Liveness::Unknown && found.is_ok_and(|found| found.is_some_and(|f| f.replying()))
     {
         return Liveness::Live { pid: None };

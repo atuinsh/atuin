@@ -280,6 +280,7 @@ mod tests {
     #[case::claude_code("claude-code", HarnessKind::ClaudeCode)]
     #[case::codex("codex", HarnessKind::Codex)]
     #[case::opencode("opencode", HarnessKind::Opencode)]
+    #[case::kilo("kilo", HarnessKind::Kilo)]
     #[case::pi("pi", HarnessKind::Pi)]
     fn parses_each_harness(#[case] name: &str, #[case] expected: HarnessKind) {
         let input = json!({"terms": ["x"], "harness": name});

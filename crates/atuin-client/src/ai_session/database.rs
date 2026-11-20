@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -1607,6 +1607,7 @@ impl AiSessionDatabase {
             9 => Ok(HarnessKind::Kiro),
             10 => Ok(HarnessKind::Hermes),
             11 => Ok(HarnessKind::Vibe),
+            12 => Ok(HarnessKind::Kilo),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -2956,11 +2957,12 @@ mod tests {
         assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
-    /// Migrations 6 and 7 empty the projection again, for the rows earlier builds read as an
-    /// unknown harness before they knew Hermes, and Vibe.
+    /// Migrations 6, 7 and 8 empty the projection again, for the rows earlier builds read as an
+    /// unknown harness before they knew Hermes, Vibe, and Kilo.
     #[rstest]
     #[case::hermes(5)]
     #[case::vibe(6)]
+    #[case::kilo(7)]
     fn a_harness_migration_empties_the_projection_for_a_rebuild(#[case] before: usize) {
         let migrations = [
             include_str!("migrations/0001_init.sql"),
@@ -2970,6 +2972,7 @@ mod tests {
             include_str!("migrations/0005_reproject_for_kiro.sql"),
             include_str!("migrations/0006_reproject_for_hermes.sql"),
             include_str!("migrations/0007_reproject_for_vibe.sql"),
+            include_str!("migrations/0008_reproject_for_kilo.sql"),
         ];
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         for migration in &migrations[..before] {

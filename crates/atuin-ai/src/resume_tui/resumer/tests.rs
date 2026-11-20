@@ -752,6 +752,7 @@ async fn only_other_installed_harnesses_are_offered(dirs: Dirs) {
         HarnessKind::Grok,
         HarnessKind::Hermes,
         HarnessKind::Kiro,
+        HarnessKind::Kilo,
         HarnessKind::Pi,
         HarnessKind::Omp,
         HarnessKind::Vibe,

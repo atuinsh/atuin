@@ -134,7 +134,7 @@ impl Model {
                 chained: true,
                 beside: false,
             },
-            HarnessKind::Opencode => Self::Interleaving,
+            HarnessKind::Opencode | HarnessKind::Kilo => Self::Interleaving,
             HarnessKind::Unknown => Self::Linear,
         }
     }

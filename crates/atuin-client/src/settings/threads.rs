@@ -73,6 +73,7 @@ pub struct AiSessionResume {
     #[serde(alias = "grok-build", alias = "grok_build")]
     pub grok: Option<String>,
     pub opencode: Option<String>,
+    pub kilo: Option<String>,
     pub pi: Option<String>,
     pub omp: Option<String>,
     pub copilot: Option<String>,
@@ -92,6 +93,7 @@ impl AiSessionResume {
             HarnessKind::Codex => self.codex.as_deref(),
             HarnessKind::Grok => self.grok.as_deref(),
             HarnessKind::Opencode => self.opencode.as_deref(),
+            HarnessKind::Kilo => self.kilo.as_deref(),
             HarnessKind::Pi => self.pi.as_deref(),
             HarnessKind::Omp => self.omp.as_deref(),
             HarnessKind::Copilot => self.copilot.as_deref(),

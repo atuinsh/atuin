@@ -72,6 +72,7 @@ fn capture_keeps_the_conversation_and_tool_calls(
         Agent::Grok,
         Agent::Hermes,
         Agent::Kiro,
+        Agent::Kilo,
         Agent::Opencode,
         Agent::Pi
     )]
@@ -224,6 +225,7 @@ fn capture_follows_a_transcript_exactly_once_across_restarts(
         Agent::Grok,
         Agent::Hermes,
         Agent::Kiro,
+        Agent::Kilo,
         Agent::Opencode,
         Agent::Pi
     )]
@@ -341,7 +343,7 @@ fn resume_line(transcript: &Transcript, cwd: &Path) -> String {
         Agent::Grok => vec!["--resume", id],
         Agent::Hermes => vec!["-p", profile.as_deref().unwrap_or("default"), "--resume", id],
         Agent::Kiro => vec!["chat", "--resume-id", id],
-        Agent::Opencode => vec!["--session", id],
+        Agent::Opencode | Agent::Kilo => vec!["--session", id],
         Agent::Pi => vec!["--session", transcript.path.to_str().unwrap()],
     };
     let mut line =

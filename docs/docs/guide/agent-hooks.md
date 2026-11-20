@@ -1,6 +1,6 @@
 # AI Agent Hooks
 
-Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kiro CLI, opencode, pi, and omp) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
+Atuin can capture commands run by AI coding agents (like Claude Code, Codex, Copilot, Grok Build, Hermes Agent, Kilo Code, Kiro CLI, opencode, pi, and omp) alongside your regular shell history. Atuin tags each command with the agent that ran it, so you can filter your history by author.
 
 ## Quick Start
 
@@ -33,6 +33,7 @@ When setup installs an agent's hooks, it writes the agent's config file or exten
 | Grok Build | `$GROK_HOME/hooks/atuin.json` (by default `~/.grok/hooks/atuin.json`) |
 | Hermes Agent | `plugins/atuin/` in the Hermes home that `hermes` uses (by default `~/.hermes/plugins/atuin/`), enabled in its `config.yaml` |
 | Kiro CLI | `$KIRO_HOME/hooks/atuin.json` (by default `~/.kiro/hooks/atuin.json`) |
+| Kilo Code | `~/.config/kilo/plugins/atuin.ts` (or `$KILO_CONFIG_DIR/plugins`) |
 | opencode | `~/.config/opencode/plugins/atuin.ts` |
 | pi | `~/.pi/agent/extensions/atuin.ts` |
 | omp | `~/.omp/agent/extensions/atuin.ts` |
@@ -44,7 +45,7 @@ The hook lifecycle:
 
 Atuin only captures shell tool invocations (`Bash`, Kiro's `execute_bash`, or Hermes's `terminal`). It ignores other tool types (file writes, web fetches, etc.).
 
-Agents that load extensions rather than shelling out to a hook command -- opencode, pi and omp -- call `atuin history start` and `atuin history end` directly instead, but record the same thing. Hermes loads a plugin too, which passes Hermes's own events to `atuin hook hermes`.
+Agents that load extensions rather than shelling out to a hook command -- opencode, Kilo Code, pi and omp -- call `atuin history start` and `atuin history end` directly instead, but record the same thing. Hermes loads a plugin too, which passes Hermes's own events to `atuin hook hermes`.
 
 ## Filtering by Author
 
@@ -78,7 +79,7 @@ atuin search -- ''
 atuin search --author '$all-agent' -- ''
 ```
 
-Currently recognized agent names are: `amp`, `claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`, `omp`, `opencode`, and `pi`.
+Currently recognized agent names are: `amp`, `claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kilo`, `kiro`, `omp`, `opencode`, and `pi`.
 
 ## Supported Agents
 
@@ -148,6 +149,16 @@ A few details are worth knowing:
 
 - Commands you deny at the permission prompt aren't recorded. With opencode 2, a command is recorded once it has finished, so its time is when it ended, and its duration includes any wait at the permission prompt. A command that timed out is recorded with exit code 124, and one left running in the background isn't recorded.
 - Commands you run yourself in opencode -- with the `!command` prompt prefix or in a terminal pane -- aren't recorded either, since opencode didn't run them. Use Atuin's own shell integration for those.
+
+### Kilo Code
+
+```shell
+atuin hook install kilo
+```
+
+This writes Atuin's plugin to `~/.config/kilo/plugins/atuin.ts`, or to `$KILO_CONFIG_DIR/plugins/atuin.ts` if you have set `KILO_CONFIG_DIR` (or to `$XDG_CONFIG_HOME/kilo/plugins/atuin.ts` if you have set `XDG_CONFIG_HOME`). Kilo Code is a fork of opencode, so the plugin is opencode 1.x's: Kilo loads 1.x-shaped plugins only.
+
+Then restart kilo. The plugin records every shell tool command with author `kilo`, using the tool's description as the entry's intent when kilo supplies one.
 
 ### pi
 

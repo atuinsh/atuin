@@ -33,6 +33,7 @@ pub const KNOWN_AGENTS: &[&str] = &[
     "copilot",
     "grok",
     "hermes",
+    "kilo",
     "kiro",
     "omp",
     "opencode",
@@ -933,6 +934,13 @@ mod tests {
         assert!(!author_matches_filters(&pi, users.as_slice_filter()));
         assert!(!author_matches_filters(&ellie, agents.as_slice_filter()));
         assert!(author_matches_filters(&ellie, users.as_slice_filter()));
+    }
+
+    /// Kilo Code copies opencode's 1.x session format, so the keyword it records under (its
+    /// binary) must be one of the known agents, like `omp` is.
+    #[rstest]
+    fn kilocode_author_is_a_known_agent() {
+        assert!(is_known_agent("kilo"));
     }
 
     #[rstest]

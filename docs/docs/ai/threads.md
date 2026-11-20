@@ -15,7 +15,8 @@ off, and `atuin setup --only --no-threads` turns it off again.
 
 With `enabled = true` under `[threads]`, the Atuin daemon records the
 sessions of your AI coding agents (Claude Code, Codex, Copilot, Grok Build,
-Hermes Agent, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted record
+Hermes Agent, Kilo Code, Kiro, Mistral Vibe, opencode, Pi and Amp) as threads into the encrypted
+record
 store, and syncs them like your history.
 `atuin threads` lists, shows, searches and follows them.
 
@@ -305,7 +306,7 @@ Words in the query of the form `filter:value` narrow the search further, and sho
 as chips in the input:
 
 - `agent:<name>` (or `a:<name>` for short): only that agent's threads, with
-  `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`) or `pi`.
+  `claude-code` (or `claude`, `cc`), `codex` (`cx`), `opencode` (`oc`), `kilo` or `pi`.
   ++ctrl+t++ cycles through them in turn, and back to all agents.
 - `m:<model>`: only threads whose model contains this, as in `m:opus`.
 - `b:<branch>`: only threads on this git branch.
@@ -453,7 +454,7 @@ synced messages:
   These can only fork, and get no switch line: a Codex session that was
   reverted, so its history spans several files, or that Codex wrote in its
   older format; a Pi session file
-  Pi hasn't opened since version 2 of its format; and opencode sessions, which
+  Pi hasn't opened since version 2 of its format; and Kilo Code sessions and opencode sessions, which
   live in a database. Hermes Agent sessions are neither caught up nor switched,
   since Hermes takes only new sessions from Atuin: a copy behind, or gone
   another way, forks.
@@ -467,7 +468,7 @@ session as possibly open, and doesn't catch it up, while one of that agent's
 processes works in the session's directory or below it: the directory this
 copy records, or else where the session works on this machine. A process elsewhere
 counts when its command line names the session (`grok --resume <id>`,
-`opencode -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has
+`opencode -s <id>`, `kilo -s <id>`, `codex resume <id>`, `pi --session <file>`). While the session's transcript has
 changed in the last two minutes, any running process of that agent counts,
 wherever it works.
 
@@ -500,7 +501,7 @@ From the command line, `atuin resume <id>` resumes a session in its own
 agent directly (an id prefix works too), writing it out from sync first when it
 isn't on this machine, and `atuin resume <id> --in codex` continues it in
 another (`claude-code`, `codex`, `copilot`, `grok`, `hermes`, `kiro`,
-`opencode`, `pi`, `omp` or `vibe`; `claude` is short for `claude-code` wherever Atuin
+`opencode`, `kilo`, `pi`, `omp` or `vibe`; `claude` is short for `claude-code` wherever Atuin
 takes an agent's name, and `kiro-cli` for `kiro`). `atuin resume
 <id> --fork` forks it. It catches the session up with sync as the picker does, and fails
 when that needs a choice, saying which: `--as-is` resumes this copy unchanged,

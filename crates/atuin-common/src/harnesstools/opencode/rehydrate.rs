@@ -72,6 +72,7 @@ use serde_json::{Map, Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection, Sqlite};
 
+use super::Flavour;
 use super::session;
 use crate::db::query_scalar;
 use crate::harnesstools::rehydrate::{
@@ -90,15 +91,13 @@ const IMPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The environment `opencode import` runs with, on top of this process's: nothing it does on
 /// start-up may reach the network (a model catalogue refresh, an update check, an LSP download,
-/// plugins it would install) or share the session. `--pure` keeps external plugins out too.
-const QUIET_ENV: &[(&str, &str)] = &[
-    ("OPENCODE_DISABLE_AUTOUPDATE", "1"),
-    ("OPENCODE_DISABLE_MODELS_FETCH", "1"),
-    ("OPENCODE_DISABLE_LSP_DOWNLOAD", "1"),
-    ("OPENCODE_DISABLE_DEFAULT_PLUGINS", "1"),
-    ("OPENCODE_DISABLE_SHARE", "1"),
-    ("OPENCODE_PURE", "1"),
-];
+/// plugins it would install) or share the session. `--pure` keeps external plugins out too. See
+/// [`Flavour::quiet_env`]: Kilo's list is opencode's with a `KILO_` prefix, and additionally
+/// disables its local-server session ingest, so an import does not POST the session to Kilo's
+/// cloud.
+fn quiet_env(flavour: Flavour) -> &'static [(&'static str, &'static str)] {
+    flavour.quiet_env()
+}
 
 /// Import `session` into opencode's database with `opencode import` (opencode 2: `opencode
 /// session import`), into the session's directory ([`RehydrateSession::cwd`], which becomes the
@@ -119,16 +118,21 @@ const QUIET_ENV: &[(&str, &str)] = &[
 /// id is new, so what is there stays as it is and what is missing is added. A session that has
 /// been worked on since (see `Held`) is left alone, so that a message a revert deleted never comes
 /// back. opencode 2 imports a session whole or not at all.
-pub async fn rehydrate(session: &RehydrateSession) -> Result<PathBuf, RehydrateError> {
-    let db = session::default_db().ok_or(RehydrateError::NoDataDir)?;
-    import(Path::new("opencode"), &db, session).await
+pub async fn rehydrate(
+    session: &RehydrateSession,
+    flavour: Flavour,
+) -> Result<PathBuf, RehydrateError> {
+    let db = session::default_db(flavour).ok_or(RehydrateError::NoDataDir)?;
+    import(Path::new(flavour.binary()), &db, session, flavour).await
 }
 
-/// [`rehydrate`] into `db`, with the `opencode` executable `program`.
+/// [`rehydrate`] into `db`, with the CLI `program` (its `flavour.binary()`) and the quiet
+/// environment `flavour.quiet_env()`.
 pub(crate) async fn import(
     program: &Path,
     db: &Path,
     session: &RehydrateSession,
+    flavour: Flavour,
 ) -> Result<PathBuf, RehydrateError> {
     if !session.id.starts_with("ses") || session.id.contains(['/', '\\', '\0']) {
         return Err(RehydrateError::Other(format!(
@@ -149,7 +153,9 @@ pub(crate) async fn import(
             session.cwd.display()
         )));
     }
-    let stdout = if major_version(program).await? >= 2 {
+    // Kilo has no v2 session layout at all, so it always takes the 1.x path even though
+    // `kilo --version` prints a high major (7).
+    let stdout = if flavour.has_v2_session() && major_version(program, flavour).await? >= 2 {
         let args = [
             OsStr::new("session"),
             OsStr::new("import"),
@@ -157,9 +163,9 @@ pub(crate) async fn import(
             OsStr::new("--directory"),
             session.cwd.as_os_str(),
         ];
-        run(program, &args, db, &session.cwd, &v2::export(session)).await?
+        run(program, &args, db, &session.cwd, &v2::export(session), flavour).await?
     } else {
-        run_import(program, db, &session.cwd, &exported).await?
+        run_import(program, db, &session.cwd, &exported, flavour).await?
     };
     session::locate(db, &session.id).await.ok_or_else(|| {
         RehydrateError::Other(format!("opencode import did not write the session: {stdout}"))
@@ -168,11 +174,11 @@ pub(crate) async fn import(
 
 /// The major version of the `opencode` executable `program`, as `opencode --version` prints it
 /// (`1.18.32`; opencode 2: `opencode v2.0.24`).
-pub(crate) async fn major_version(program: &Path) -> Result<u64, RehydrateError> {
+pub(crate) async fn major_version(program: &Path, flavour: Flavour) -> Result<u64, RehydrateError> {
     let mut command = tokio::process::Command::new(program);
     command
         .arg("--version")
-        .envs(QUIET_ENV.iter().copied())
+        .envs(quiet_env(flavour).iter().copied())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -190,14 +196,16 @@ pub(crate) async fn major_version(program: &Path) -> Result<u64, RehydrateError>
 }
 
 /// Run `opencode import` (the executable `program`) of `export` into `db`, from `cwd` (which
-/// becomes the session's directory and project), handing back what it printed.
+/// becomes the session's directory and project), handing back what it printed. `flavour`
+/// names the environment variables under which the CLI reads the database and keeps quiet.
 pub(crate) async fn run_import(
     program: &Path,
     db: &Path,
     cwd: &Path,
     export: &Value,
+    flavour: Flavour,
 ) -> Result<String, RehydrateError> {
-    run(program, &[OsStr::new("import"), OsStr::new("--pure")], db, cwd, export).await
+    run(program, &[OsStr::new("import"), OsStr::new("--pure")], db, cwd, export, flavour).await
 }
 
 /// Run `opencode <args> <file>` (the executable `program`), `file` holding `export`, against `db`
@@ -208,6 +216,7 @@ async fn run(
     db: &Path,
     cwd: &Path,
     export: &Value,
+    flavour: Flavour,
 ) -> Result<String, RehydrateError> {
     let file = export_file(export)?;
     let mut command = tokio::process::Command::new(program);
@@ -215,9 +224,9 @@ async fn run(
         .args(args)
         .arg(&*file)
         .current_dir(cwd)
-        .env("OPENCODE_DB", db)
-        .env_remove("OPENCODE_AUTO_SHARE")
-        .envs(QUIET_ENV.iter().copied())
+        .env(flavour.db_env(), db)
+        .env_remove(flavour.auto_share_env())
+        .envs(quiet_env(flavour).iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1691,7 +1700,7 @@ pub(crate) mod tests {
         let mut s = session(SES, Some("t"), every_kind());
         s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
 
-        let err = import(&program, &db, &s).await.unwrap_err();
+        let err = import(&program, &db, &s, Flavour::Opencode).await.unwrap_err();
         assert!(matches!(&err, RehydrateError::Other(why) if why.contains("boom")), "{err}");
         let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
         let args = read("args");
@@ -1713,7 +1722,7 @@ pub(crate) mod tests {
         opencode_import(&mut conn, &export(&session(SES, None, every_kind())), "/here").await;
         conn.close().await.unwrap();
         let missing = dir.path().join("no-such-opencode");
-        let err = import(&missing, &db, &session(SES, None, vec![])).await.unwrap_err();
+        let err = import(&missing, &db, &session(SES, None, vec![]), Flavour::Opencode).await.unwrap_err();
         assert!(matches!(err, RehydrateError::AlreadyExists(path) if path == db));
     }
 
@@ -1815,13 +1824,13 @@ touch {}/ran
         let mut conn = database(&db).await;
         opencode_import(&mut conn, &exported, "/here").await;
 
-        let err = import(&program, &db, &s).await.unwrap_err();
+        let err = import(&program, &db, &s, Flavour::Opencode).await.unwrap_err();
         assert!(matches!(err, RehydrateError::AlreadyExists(ref path) if *path == db), "{err}");
         assert!(!dir.path().join("ran").exists(), "a whole session is not imported again");
 
         crate::db::query::<sqlx::Sqlite>("DELETE FROM part").execute(&mut conn).await.unwrap();
         conn.close().await.unwrap();
-        assert_eq!(import(&program, &db, &s).await.unwrap(), db);
+        assert_eq!(import(&program, &db, &s, Flavour::Opencode).await.unwrap(), db);
         assert!(dir.path().join("ran").exists(), "opencode import ran again");
     }
 
@@ -1831,7 +1840,12 @@ touch {}/ran
     #[tokio::test]
     async fn an_id_opencode_would_not_take_is_refused(#[case] id: &str) {
         let dir = tempfile::tempdir().unwrap();
-        let err = import(Path::new("opencode"), &dir.path().join("db"), &session(id, None, vec![]))
+        let err = import(
+            Path::new("opencode"),
+            &dir.path().join("db"),
+            &session(id, None, vec![]),
+            Flavour::Opencode,
+        )
             .await
             .unwrap_err();
         assert!(matches!(err, RehydrateError::Other(_)));

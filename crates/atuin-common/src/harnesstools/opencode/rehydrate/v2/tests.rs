@@ -9,6 +9,7 @@ use sqlx::{Connection, Executor};
 
 use super::*;
 use crate::harnesstools::continuation::tests::{CLAUDE, OPENCODE};
+use crate::harnesstools::opencode::Flavour;
 use crate::harnesstools::opencode::rehydrate::import;
 use crate::harnesstools::opencode::rehydrate::tests::{SES, captured, every_kind};
 use crate::harnesstools::opencode::session::projection::projected;
@@ -710,7 +711,7 @@ async fn opencode_2_imports_its_own_export() {
     let mut s = session(SES, Some("t"), every_kind());
     s.cwd = AbsPathBuf::canonicalize(dir.path()).unwrap().into_path_buf();
 
-    let err = import(&program, &db, &s).await.unwrap_err();
+    let err = import(&program, &db, &s, Flavour::Opencode).await.unwrap_err();
     assert!(matches!(&err, RehydrateError::Other(why) if why.contains("boom")), "{err}");
     let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
     let args = read("args");
@@ -734,6 +735,6 @@ async fn a_session_opencode_2_holds_is_not_imported_again() {
     session_import(&mut conn, &export(&session(SES, None, every_kind())), "/here").await;
     conn.close().await.unwrap();
     let missing = dir.path().join("no-such-opencode");
-    let err = import(&missing, &db, &session(SES, None, vec![])).await.unwrap_err();
+    let err = import(&missing, &db, &session(SES, None, vec![]), Flavour::Opencode).await.unwrap_err();
     assert!(matches!(err, RehydrateError::AlreadyExists(path) if path == db));
 }

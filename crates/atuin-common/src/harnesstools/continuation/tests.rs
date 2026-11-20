@@ -35,7 +35,7 @@ pub const COPILOT: AnyHarness = AnyHarness::Copilot(Copilot);
 pub const GROK: AnyHarness = AnyHarness::Grok(Grok);
 pub const HERMES: AnyHarness = AnyHarness::Hermes(Hermes);
 pub const KIRO: AnyHarness = AnyHarness::Kiro(Kiro);
-pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode);
+pub const OPENCODE: AnyHarness = AnyHarness::Opencode(Opencode::OPENCODE);
 pub const PI: AnyHarness = AnyHarness::Pi(Pi::PI);
 pub const VIBE: AnyHarness = AnyHarness::Vibe(Vibe);
 /// The original's atuin id, as the picker passes it.

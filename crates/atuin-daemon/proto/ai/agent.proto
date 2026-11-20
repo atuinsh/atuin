@@ -19,6 +19,7 @@ enum HarnessKind {
   HARNESS_KIND_KIRO = 9;
   HARNESS_KIND_HERMES = 10;
   HARNESS_KIND_VIBE = 11;
+  HARNESS_KIND_KILO = 12;
 }
 
 enum Role {

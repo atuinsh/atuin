@@ -44,6 +44,7 @@ impl Caller<'_> {
             "codex-mcp-client" => Some(HarnessKind::Codex),
             "grok" | "grok-cli" | "grok-build" => Some(HarnessKind::Grok),
             "opencode" => Some(HarnessKind::Opencode),
+            "kilo" => Some(HarnessKind::Kilo),
             _ => None,
         }
     }

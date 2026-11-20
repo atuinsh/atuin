@@ -111,7 +111,7 @@ use crate::db::sqlite::observe::{
 use crate::db::{query_as, query_scalar};
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
-use crate::harnesstools::opencode::Opencode;
+use crate::harnesstools::opencode::{Flavour, Opencode};
 use crate::harnesstools::session::model::{
     Content, MessageId, ParentKind, Role, StopReason, TitleChange, TitleSource, ToolCallId,
     ToolResult, ToolUse, Usage,
@@ -136,15 +136,17 @@ pub(crate) const SOURCE: &str = "atuin";
 pub struct OpencodeSessions {
     #[builder(default, setter(strip_option, into))]
     db: Option<PathBuf>,
+    #[builder(default = Flavour::Opencode)]
+    flavour: Flavour,
     #[builder(default = ReplayBehavior::All)]
     replay: ReplayBehavior,
 }
 
 impl OpencodeSessions {
-    fn data_dir() -> PathBuf {
+    fn data_dir(flavour: Flavour) -> PathBuf {
         var_nonempty("XDG_DATA_HOME")
             .map_or_else(|| home_dir().joined(".local").joined("share"), PathBuf::from)
-            .joined("opencode")
+            .joined(flavour.binary())
     }
 
     /// When a database was last written: the newer of its file and `-wal` mtimes. `-shm` is
@@ -158,9 +160,10 @@ impl OpencodeSessions {
 
     /// opencode never discovers: every release channel writes `opencode.db` and only
     /// pre-release channels write `opencode-<channel>.db`, so the former wins whenever it exists
-    /// and the newest channel database is the fallback.
-    fn discover(data: &Path) -> Option<PathBuf> {
-        let main = data.join("opencode.db");
+    /// and the newest channel database is the fallback. Kilo resolves its database the same
+    /// way with its own stem (`kilo.db`, `kilo-<channel>.db`; see `Flavour::db_stem`).
+    fn discover(data: &Path, flavour: Flavour) -> Option<PathBuf> {
+        let main = data.join(format!("{}.db", flavour.db_stem()));
         if main.is_file() {
             return Some(main);
         }
@@ -172,47 +175,55 @@ impl OpencodeSessions {
                 path.is_file()
                     && path.file_name().is_some_and(|name| {
                         let name = name.to_string_lossy();
-                        name.starts_with("opencode-") && name.ends_with(".db")
+                        name.starts_with(&format!("{}-", flavour.db_stem()))
+                            && name.ends_with(".db")
                     })
             })
             .max_by_key(|path| Self::recency(path))
     }
 
-    /// Mirrors opencode's own resolution: `OPENCODE_DB` (absolute, or relative to the data dir),
-    /// then the channel-independent `opencode.db`, then the newest channel database. The data dir
-    /// (and with it the home dir) is only resolved by the branches that need it.
+    /// Mirrors the CLI's own resolution: its database env var (`OPENCODE_DB` / `KILO_DB`,
+    /// absolute or relative to the data dir), then the channel-independent `<stem>.db`, then
+    /// the newest channel database. The data dir (and with it the home dir) is only resolved
+    /// by the branches that need it.
     fn resolve_db(&self) -> Result<PathBuf, RuntimeError> {
         if let Some(db) = &self.db {
             return Ok(db.clone());
         }
-        if let Some(env) = var_nonempty("OPENCODE_DB") {
+        let flavour = self.flavour;
+        if let Some(env) = var_nonempty(flavour.db_env()) {
             let path = PathBuf::from(env);
             if path.as_os_str() == OsStr::new(":memory:") {
                 return Err(RuntimeError::Io(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    "OPENCODE_DB=:memory: keeps opencode's database in memory; there is no file \
-                     to observe",
+                    format!(
+                        "{}=:memory: keeps {}'s database in memory; there is no file \
+                         to observe",
+                        flavour.db_env(),
+                        flavour.binary()
+                    ),
                 )));
             }
             return Ok(if path.is_absolute() {
                 path
             } else {
-                Self::data_dir().joined(path)
+                Self::data_dir(flavour).joined(path)
             });
         }
-        let data = Self::data_dir();
-        if var_nonempty("OPENCODE_DISABLE_CHANNEL_DB")
+        let data = Self::data_dir(flavour);
+        if var_nonempty(flavour.channel_db_env())
             .is_some_and(|v| matches!(v.to_str(), Some("1" | "true")))
         {
-            return Ok(data.joined("opencode.db"));
+            return Ok(data.join(format!("{}.db", flavour.db_stem())));
         }
-        Ok(Self::discover(&data).unwrap_or_else(|| data.joined("opencode.db")))
+        Ok(Self::discover(&data, flavour)
+            .unwrap_or_else(|| data.join(format!("{}.db", flavour.db_stem()))))
     }
 }
 
-/// opencode's database, resolved as opencode resolves it (see `OpencodeSessions::resolve_db`).
-pub(crate) fn default_db() -> Option<PathBuf> {
-    OpencodeSessions::builder().build().resolve_db().ok()
+/// The CLI's database, resolved as the CLI resolves it (see `OpencodeSessions::resolve_db`).
+pub(crate) fn default_db(flavour: Flavour) -> Option<PathBuf> {
+    OpencodeSessions::builder().flavour(flavour).build().resolve_db().ok()
 }
 
 /// `db` if it holds session `id`, which `opencode --session` reads from the `session` table
@@ -335,7 +346,7 @@ impl Observable for Opencode {
     /// Opencode's sessions live in one SQLite database read through async connections, so nothing
     /// runs in `_pool`.
     fn sessions(&self, _pool: BlockingPool) -> OpencodeSessions {
-        OpencodeSessions::builder().build()
+        OpencodeSessions::builder().flavour(self.flavour()).build()
     }
 }
 
@@ -3083,14 +3094,56 @@ mod tests {
         set_mtime("opencode-dev.db-wal", 3000);
         set_mtime("opencode2.db", 9000);
 
-        assert_eq!(OpencodeSessions::discover(base), Some(base.join("opencode.db")));
+        assert_eq!(
+            OpencodeSessions::discover(base, Flavour::Opencode),
+            Some(base.join("opencode.db"))
+        );
 
         std::fs::remove_file(base.join("opencode.db")).unwrap();
-        assert_eq!(OpencodeSessions::discover(base), Some(base.join("opencode-dev.db")));
+        assert_eq!(
+            OpencodeSessions::discover(base, Flavour::Opencode),
+            Some(base.join("opencode-dev.db"))
+        );
 
         std::fs::remove_dir(base.join("opencode-dir.db")).unwrap();
         std::fs::create_dir(base.join("opencode.db")).unwrap();
-        assert_eq!(OpencodeSessions::discover(base), Some(base.join("opencode-dev.db")));
+        assert_eq!(
+            OpencodeSessions::discover(base, Flavour::Opencode),
+            Some(base.join("opencode-dev.db"))
+        );
+    }
+
+    /// Kilo resolves its database the way opencode 1.x does, under its own stem: `kilo.db`
+    /// first, then the newest `kilo-<channel>.db`. Kilo never looks for `opencode.db` as its
+    /// own, even when one is beside it.
+    #[rstest]
+    fn discover_prefers_kilo_db_then_the_newest_kilo_channel_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        for name in ["kilo.db", "kilo-dev.db", "kilo-old.db", "opencode.db", "kilo2.db"] {
+            std::fs::write(base.join(name), b"").unwrap();
+        }
+        let set_mtime = |name: &str, secs: u64| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(base.join(name))
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+                .unwrap();
+        };
+        set_mtime("kilo.db", 1);
+        set_mtime("kilo-dev.db", 1000);
+        set_mtime("kilo-old.db", 2000);
+
+        assert_eq!(
+            OpencodeSessions::discover(base, Flavour::Kilo),
+            Some(base.join("kilo.db"))
+        );
+        std::fs::remove_file(base.join("kilo.db")).unwrap();
+        assert_eq!(
+            OpencodeSessions::discover(base, Flavour::Kilo),
+            Some(base.join("kilo-old.db"))
+        );
     }
 
     #[rstest]

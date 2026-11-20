@@ -23,18 +23,20 @@ pub enum Agent {
     Grok,
     Hermes,
     Kiro,
+    Kilo,
     Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Claude,
         Self::Codex,
         Self::Copilot,
         Self::Grok,
         Self::Hermes,
         Self::Kiro,
+        Self::Kilo,
         Self::Opencode,
         Self::Pi,
     ];
@@ -48,6 +50,7 @@ impl Agent {
             Self::Grok => "grok",
             Self::Hermes => "hermes",
             Self::Kiro => "kiro",
+            Self::Kilo => "kilo",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -62,6 +65,7 @@ impl Agent {
             Self::Grok => "grok",
             Self::Hermes => "hermes",
             Self::Kiro => "kiro-cli",
+            Self::Kilo => "kilo",
             Self::Opencode => "opencode",
             Self::Pi => "pi",
         }
@@ -75,7 +79,7 @@ impl Agent {
             Self::Grok => "run_terminal_command",
             Self::Hermes => "terminal",
             Self::Kiro => "execute_bash",
-            Self::Copilot | Self::Opencode | Self::Pi => "bash",
+            Self::Copilot | Self::Kilo | Self::Opencode | Self::Pi => "bash",
         }
     }
 
@@ -88,6 +92,7 @@ impl Agent {
             Self::Grok => "Grok Build",
             Self::Hermes => "Hermes Agent",
             Self::Kiro => "Kiro",
+            Self::Kilo => "Kilo Code",
             Self::Opencode => "opencode",
             Self::Pi => "Pi",
         }
@@ -101,7 +106,7 @@ impl Agent {
             // the request that opened it.
             Self::Hermes => format!("local-{}", sha256_hex(uuid.as_simple().to_string())),
             Self::Kiro => format!("sess_{}", uuid::Uuid::new_v4()),
-            Self::Opencode => format!("ses_{}", uuid.as_simple()),
+            Self::Kilo | Self::Opencode => format!("ses_{}", uuid.as_simple()),
             _ => uuid.as_hyphenated().to_string(),
         }
     }
@@ -117,6 +122,7 @@ impl Agent {
             Self::Hermes => home.join(".hermes/state.db"),
             Self::Kiro => home.join(".kiro/sessions"),
             Self::Opencode => home.join(".local/share/opencode/opencode.db"),
+            Self::Kilo => home.join(".local/share/kilo/kilo.db"),
             Self::Pi => home.join(".pi/agent/sessions"),
         }
     }
@@ -125,6 +131,7 @@ impl Agent {
     pub fn install(self, home: &Path) {
         match self {
             Self::Opencode => opencode_db(home),
+            Self::Kilo => kilo_db(home),
             Self::Hermes => hermes_db(&self.root(home)),
             // Codex keeps a lock per open thread here; with the directory present, atuin asks the
             // locks whether a session is open, rather than every `codex` process on the machine.
@@ -244,7 +251,7 @@ impl Transcript {
             Agent::Kiro => {
                 agent.root(home).joined(kiro_bucket(cwd)).joined(&id).joined("messages.jsonl")
             }
-            Agent::Hermes | Agent::Opencode => agent.root(home),
+            Agent::Hermes | Agent::Kilo | Agent::Opencode => agent.root(home),
         };
         let transcript = Self { agent, id, path };
         match agent {
@@ -340,6 +347,21 @@ impl Transcript {
                     }),
                 )]);
             }
+            Agent::Kilo => {
+                let title = format!("kilo session {}", word());
+                kilo_events(home, &[(
+                    "session.created.1",
+                    json!({
+                        "sessionID": transcript.id,
+                        "info": {
+                            "id": transcript.id,
+                            "title": title,
+                            "directory": cwd,
+                            "time": {"created": started.as_millisecond(), "updated": started.as_millisecond()},
+                        },
+                    }),
+                )]);
+            }
         }
         transcript.append(cwd, turns);
         transcript
@@ -416,7 +438,10 @@ impl Transcript {
     /// Where this agent keeps the transcript of session `id` under `home`, when it has one: for
     /// Hermes, the store of its home that holds it.
     pub fn find(home: &Path, agent: Agent, id: &str) -> Option<Self> {
-        assert_ne!(agent, Agent::Opencode, "opencode keeps every session in one database");
+        assert!(
+            !matches!(agent, Agent::Opencode | Agent::Kilo),
+            "opencode keeps every session in one database"
+        );
         if agent == Agent::Hermes {
             let path = agent.root(home);
             let held: Option<i64> = hermes_open(&path)
@@ -490,9 +515,8 @@ impl Transcript {
                 .unwrap();
             return;
         }
-        assert_eq!(
-            self.agent,
-            Agent::Opencode,
+        assert!(
+            matches!(self.agent, Agent::Opencode | Agent::Kilo),
             "only opencode's and Hermes's sessions are renamed"
         );
         let (directory, created) = rusqlite::Connection::open(&self.path)
@@ -504,7 +528,7 @@ impl Transcript {
             )
             .unwrap();
         let home = self.path.ancestors().nth(4).unwrap();
-        opencode_events(home, &[(
+        let events = [(
             "session.updated.1",
             json!({
                 "sessionID": self.id,
@@ -515,7 +539,11 @@ impl Transcript {
                     "time": {"created": created, "updated": tick().as_millisecond()},
                 },
             }),
-        )]);
+        )];
+        match self.agent {
+            Agent::Kilo => kilo_events(home, &events),
+            _ => opencode_events(home, &events),
+        }
     }
 
     /// The transcript as it stands: for Hermes, the session's rows in order, a line each.
@@ -553,6 +581,7 @@ impl Transcript {
             Agent::Kiro => self.append_kiro(cwd, turns),
             Agent::Pi => self.append_pi(turns),
             Agent::Opencode => self.append_opencode(cwd, turns),
+            Agent::Kilo => self.append_kilo(cwd, turns),
         }
     }
 
@@ -1434,7 +1463,15 @@ impl Transcript {
         write_lines(&self.path, &lines);
     }
 
+    fn append_kilo(&self, cwd: &Path, turns: &[Turn]) {
+        self.append_opencode_shaped(Agent::Kilo, cwd, turns);
+    }
+
     fn append_opencode(&self, cwd: &Path, turns: &[Turn]) {
+        self.append_opencode_shaped(Agent::Opencode, cwd, turns);
+    }
+
+    fn append_opencode_shaped(&self, agent: Agent, cwd: &Path, turns: &[Turn]) {
         let home = self.path.ancestors().nth(4).unwrap();
         let mut events = Vec::new();
         for turn in turns {
@@ -1499,7 +1536,11 @@ impl Transcript {
                 answered,
             ));
         }
-        opencode_events(home, &events);
+        match agent {
+            Agent::Kilo => kilo_events(home, &events),
+            Agent::Opencode => opencode_events(home, &events),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -1564,7 +1605,16 @@ fn claude_project(cwd: &Path) -> String {
 /// opencode's database: the event log it records sessions in, and the tables it projects them
 /// into.
 fn opencode_db(home: &Path) {
-    let path = Agent::Opencode.root(home);
+    kilo_like_db(home, Agent::Opencode);
+}
+
+/// Kilo Code's database: opencode 1.x's schema, verbatim (Kilo is an opencode fork).
+fn kilo_db(home: &Path) {
+    kilo_like_db(home, Agent::Kilo);
+}
+
+fn kilo_like_db(home: &Path, agent: Agent) {
+    let path = agent.root(home);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let db = rusqlite::Connection::open(&path).unwrap();
     db.execute_batch(
@@ -1586,7 +1636,16 @@ fn opencode_db(home: &Path) {
 /// Append `events` to opencode's event log, each continuing its session's sequence, and project
 /// them, in one transaction as opencode commits them.
 fn opencode_events(home: &Path, events: &[(&str, Value)]) {
-    let mut db = rusqlite::Connection::open(Agent::Opencode.root(home)).unwrap();
+    kilo_like_events(home, Agent::Opencode, events);
+}
+
+/// Append `events` to Kilo Code's event log, whose shape is opencode 1.x's.
+fn kilo_events(home: &Path, events: &[(&str, Value)]) {
+    kilo_like_events(home, Agent::Kilo, events);
+}
+
+fn kilo_like_events(home: &Path, agent: Agent, events: &[(&str, Value)]) {
+    let mut db = rusqlite::Connection::open(agent.root(home)).unwrap();
     db.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
     let tx = db.transaction().unwrap();
     for (kind, data) in events {

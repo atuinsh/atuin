@@ -424,6 +424,7 @@ mod tests {
             Just(HarnessKind::Kiro),
             Just(HarnessKind::Hermes),
             Just(HarnessKind::Vibe),
+            Just(HarnessKind::Kilo),
         ]
     }
 

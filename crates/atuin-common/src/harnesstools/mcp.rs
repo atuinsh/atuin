@@ -345,18 +345,21 @@ impl InstallMcp for Vibe {
 
 impl InstallMcp for Opencode {
     fn mcp_config_path(&self) -> PathBuf {
-        opencode::config_dir().joined("opencode.json")
+        self.flavour()
+            .config_dir()
+            .joined(self.flavour().mcp_config_file())
     }
 
     /// Atuin writes opencode's config itself instead of running `opencode mcp add`. In opencode
     /// 1.x, that command only prompts. In 2.0, it writes `mcp.servers`, which 2.0 doesn't load.
-    /// Both versions load `mcp.<name>`.
+    /// Both versions load `mcp.<name>`. Kilo loads the same `mcp.<name>` shape in `kilo.json`
+    /// (its own `mcp add` is the interactive one), so the same writer is used.
     fn mcp_program(&self) -> Option<&'static str> {
         None
     }
 
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
-        install_opencode(&self.mcp_config_path(), executable().await?).await
+        install_opencode(&self.mcp_config_path(), executable().await?, self.flavour()).await
     }
 
     async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
@@ -542,9 +545,14 @@ async fn run(program: &'static str, args: &[&str]) -> Result<(), InstallMcpError
 }
 
 /// Add the server to the opencode config at `path`, keeping the rest of it.
-async fn install_opencode(path: &Path, atuin: &str) -> Result<(), InstallMcpError> {
+/// Kilo takes opencode's `mcp.<name>` shape too (in its own config file, `kilo.json`).
+async fn install_opencode(
+    path: &Path,
+    atuin: &str,
+    flavour: opencode::Flavour,
+) -> Result<(), InstallMcpError> {
     let server = json!({"type": "local", "command": [atuin, "mcp"], "enabled": true});
-    let new = json!({"$schema": "https://opencode.ai/config.json"});
+    let new = json!({"$schema": flavour.mcp_schema()});
     add_to_config(path, new, "mcp", server).await
 }
 
@@ -797,7 +805,7 @@ mod tests {
         std::fs::write(&target, "{}").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        install_opencode(&link, "/bin/atuin").await.unwrap();
+        install_opencode(&link, "/bin/atuin", opencode::Flavour::Opencode).await.unwrap();
 
         assert!(link.symlink_metadata().unwrap().is_symlink());
         let config: Value =
@@ -811,7 +819,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode").joined("opencode.json");
 
-        install_opencode(&path, "/bin/atuin").await.unwrap();
+        install_opencode(&path, "/bin/atuin", opencode::Flavour::Opencode).await.unwrap();
 
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(config["mcp"]["atuin"]["command"], json!(["/bin/atuin", "mcp"]));
@@ -863,8 +871,8 @@ mod tests {
         let path = dir.path().join("opencode.json");
         std::fs::write(&path, r#"{"theme": "x", "mcp": {"other": {"type": "remote"}}}"#).unwrap();
 
-        install_opencode(&path, "/bin/atuin").await.unwrap();
-        install_opencode(&path, "/opt/atuin").await.unwrap();
+        install_opencode(&path, "/bin/atuin", opencode::Flavour::Opencode).await.unwrap();
+        install_opencode(&path, "/opt/atuin", opencode::Flavour::Opencode).await.unwrap();
 
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(

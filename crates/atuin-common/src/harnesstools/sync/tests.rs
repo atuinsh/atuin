@@ -125,7 +125,7 @@ fn a_switch_resumes_from_the_head(
 #[tokio::test]
 async fn opencode_is_never_switched() {
     let backups = tempfile::tempdir().unwrap();
-    let harness = AnyHarness::Opencode(crate::harnesstools::opencode::Opencode);
+    let harness = AnyHarness::Opencode(crate::harnesstools::opencode::Opencode::OPENCODE);
     let options = AppendOptions::default();
     let (base, branch) = (base(), [row("a", None)]);
     let replaced = harness.replace("ses_1", &base, &branch, &options, backups.path());

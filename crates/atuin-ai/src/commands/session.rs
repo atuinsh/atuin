@@ -148,6 +148,9 @@ pub enum HarnessArg {
     #[value(alias = "kiro-cli")]
     #[serde(alias = "kiro-cli")]
     Kiro,
+    #[value(alias = "kilocode")]
+    #[serde(alias = "kilocode")]
+    Kilo,
     Opencode,
     Pi,
     Omp,
@@ -166,6 +169,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::Grok => Self::Grok,
             HarnessArg::Hermes => Self::Hermes,
             HarnessArg::Kiro => Self::Kiro,
+            HarnessArg::Kilo => Self::Kilo,
             HarnessArg::Opencode => Self::Opencode,
             HarnessArg::Pi => Self::Pi,
             HarnessArg::Omp => Self::Omp,
@@ -1211,6 +1215,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
         HarnessKind::Kiro => Ansi::White,
         HarnessKind::Hermes => Ansi::Yellow,
         HarnessKind::Vibe => Ansi::Red,
+        HarnessKind::Kilo => Ansi::Cyan,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
         HarnessKind::Omp => Ansi::Red,
@@ -1285,6 +1290,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::Kiro => "kiro",
         HarnessKind::Hermes => "hermes",
         HarnessKind::Vibe => "vibe",
+        HarnessKind::Kilo => "kilo",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",

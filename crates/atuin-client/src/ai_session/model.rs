@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use atuin_common::harnesstools::AnyHarness;
-use atuin_common::harnesstools::pi::Flavour;
+use atuin_common::harnesstools::opencode::Flavour;
+use atuin_common::harnesstools::pi::Flavour as PiFlavour;
 use atuin_common::harnesstools::rehydrate::{RehydrateMessage, RehydrateSession, parent_order};
 use atuin_common::harnesstools::session::{
     Content, ParentKind, Role, StopReason, TitleChange, TitleSource, Usage, is_tool_output,
@@ -18,7 +19,8 @@ use uuid::{Builder, Uuid};
 
 /// Records name the harness (the variant's name), and a name this build doesn't know reads as
 /// [`Self::Unknown`]. A new variant needs no new record version. It does need a sidecar migration
-/// that rebuilds the projection from the record store, as `0007_reproject_for_vibe.sql` does.
+/// that rebuilds the projection from the record store, as `0007_reproject_for_vibe.sql` and
+/// `0008_reproject_for_kilo.sql` do.
 /// Rows projected while the harness was unknown are then projected again under its name.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -35,6 +37,7 @@ pub enum HarnessKind {
     Kiro = 9,
     Hermes = 10,
     Vibe = 11,
+    Kilo = 12,
     /// No harness atuin knows: unstated, or one a newer atuin added, whose records name it.
     #[serde(other)]
     Unknown = 0,
@@ -50,11 +53,14 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::Grok(_) => Self::Grok,
             AnyHarness::Hermes(_) => Self::Hermes,
             AnyHarness::Kiro(_) => Self::Kiro,
-            AnyHarness::Opencode(_) => Self::Opencode,
+            AnyHarness::Opencode(opencode) => match opencode.flavour() {
+                Flavour::Opencode => Self::Opencode,
+                Flavour::Kilo => Self::Kilo,
+            },
             AnyHarness::Vibe(_) => Self::Vibe,
             AnyHarness::Pi(pi) => match pi.flavour() {
-                Flavour::Pi => Self::Pi,
-                Flavour::Omp => Self::Omp,
+                PiFlavour::Pi => Self::Pi,
+                PiFlavour::Omp => Self::Omp,
             },
         }
     }
@@ -76,7 +82,8 @@ impl HarnessKind {
             Self::Grok => Some(AnyHarness::Grok(grok::Grok)),
             Self::Hermes => Some(AnyHarness::Hermes(hermes::Hermes)),
             Self::Kiro => Some(AnyHarness::Kiro(kiro::Kiro)),
-            Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
+            Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode::OPENCODE)),
+            Self::Kilo => Some(AnyHarness::Opencode(opencode::Opencode::KILO)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
             Self::Vibe => Some(AnyHarness::Vibe(vibe::Vibe)),

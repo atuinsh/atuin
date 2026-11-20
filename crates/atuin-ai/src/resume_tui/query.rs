@@ -59,6 +59,7 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
         "codex" | "cx" => Some(HarnessKind::Codex),
         "grok" | "grok-build" | "gk" => Some(HarnessKind::Grok),
         "opencode" | "oc" => Some(HarnessKind::Opencode),
+        "kilo" | "kl" => Some(HarnessKind::Kilo),
         "pi" => Some(HarnessKind::Pi),
         "omp" | "om" => Some(HarnessKind::Omp),
         "copilot" | "cp" => Some(HarnessKind::Copilot),
@@ -71,10 +72,11 @@ pub fn parse_harness(s: &str) -> Option<HarnessKind> {
 }
 
 /// The harnesses ctrl-t cycles through, after "all".
-const HARNESS_CYCLE: [HarnessKind; 11] = [
+const HARNESS_CYCLE: [HarnessKind; 12] = [
     HarnessKind::ClaudeCode,
     HarnessKind::Codex,
     HarnessKind::Opencode,
+    HarnessKind::Kilo,
     HarnessKind::Pi,
     HarnessKind::Omp,
     HarnessKind::Copilot,
@@ -328,7 +330,11 @@ mod tests {
     #[case("flaky ", "flaky agent:claude-code")]
     #[case("agent:claude flaky", "agent:codex flaky")]
     #[case("flaky agent:codex", "flaky agent:opencode")]
-    #[case("agent:opencode", "agent:pi")]
+    #[case("agent:opencode", "agent:kilo")]
+    #[case("agent:kilo", "agent:pi")]
+    #[case("a:oc", "agent:kilo")]
+    #[case("a:kilo", "agent:pi")]
+    #[case("a:kl", "agent:pi")]
     #[case("agent:pi", "agent:omp")]
     #[case("agent:omp", "agent:copilot")]
     #[case("agent:copilot", "agent:grok")]

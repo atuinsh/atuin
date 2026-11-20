@@ -8,6 +8,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use tempfile::TempDir;
 
 use super::*;
+use crate::harnesstools::opencode::Flavour;
 use crate::harnesstools::opencode::rehydrate::tests::{captured, load_projection, opencode_import};
 use crate::harnesstools::opencode::session::projection::ProjectedMessage;
 use crate::harnesstools::rehydrate::testing;
@@ -335,7 +336,7 @@ fn any_opencode_running_may_be_writing(
     #[case] expected: Liveness,
 ) {
     let procs = procs(dir.path(), &[Fake::running(9, cmdline, "1")]);
-    assert_eq!(liveness(&procs, &Seen::default()), expected);
+    assert_eq!(liveness(&procs, &Seen::default(), Flavour::Opencode), expected);
 }
 
 const UNFINISHED: &str = "UPDATE message SET data = json_remove(data, '$.time.completed') WHERE \
@@ -368,7 +369,7 @@ async fn a_reply_still_being_written_is_live(
             &[]
         },
     );
-    assert_eq!(liveness_in(Some(&db), &id, procs, None).await, expected);
+    assert_eq!(liveness_in(Some(&db), &id, procs, None, Flavour::Opencode).await, expected);
 }
 
 /// A copy that stopped in the middle of a reply it holds unfinished, with no opencode running:
@@ -381,7 +382,7 @@ async fn a_copy_left_mid_reply_is_not_live_but_forked(dir: TempDir) {
     execute(&db, &format!("DELETE FROM part WHERE id = '{LAST}'")).await;
     execute(&db, UNFINISHED).await;
     let procs = procs(dir.path(), &[]);
-    assert_eq!(liveness_in(Some(&db), &id, procs, None).await, Liveness::NotLive);
+    assert_eq!(liveness_in(Some(&db), &id, procs, None, Flavour::Opencode).await, Liveness::NotLive);
     let base = local_tip_in(&db, &id).await.unwrap().unwrap();
     let all = synced(&full, &id).await;
     let at = all.iter().position(|r| Some(&r.source_id) == base.tip_source_id.as_ref()).unwrap();
@@ -424,8 +425,8 @@ async fn an_opencode_elsewhere_counts_when_named_or_writing(
         cwd: Some(dir.path().join("other")),
         ..live::entry(9, "opencode", cmd, 1)
     }]);
-    assert_eq!(liveness(&procs, &appending(&base, &id, Some(&proj))), expected);
-    assert_eq!(liveness_in(Some(&db), &id, procs, Some(&proj)).await, expected);
+    assert_eq!(liveness(&procs, &appending(&base, &id, Some(&proj)), Flavour::Opencode), expected);
+    assert_eq!(liveness_in(Some(&db), &id, procs, Some(&proj), Flavour::Opencode).await, expected);
 }
 
 const V2: &str = "ses_ee1b7b1dfffe46nQL0NuU68GcR";
