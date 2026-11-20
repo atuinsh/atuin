@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.25.1
+
+### Bug Fixes
+
+- *(config)* Rename `threads.capture` to `threads.enabled` ([#4785](https://github.com/atuinsh/atuin/issues/4785))
+- *(setup)* Contrast on default Terminal.app ([#4780](https://github.com/atuinsh/atuin/issues/4780))
+- *(setup)* Preserve line breaks in error messages ([#4784](https://github.com/atuinsh/atuin/issues/4784))
+- *(setup)* Show the sign-in code to match against the Hub ([#4791](https://github.com/atuinsh/atuin/issues/4791))
+- *(setup,common)* Keep stray log lines off the setup screen
+
+
+### Features
+
+- *(threads)* Support Mistral Vibe threads and MCP ([#4778](https://github.com/atuinsh/atuin/issues/4778))
+- *(threads)* Change ctrl-] binding to ctrl-t ([#4786](https://github.com/atuinsh/atuin/issues/4786))
+
+
+### Miscellaneous Tasks
+
+- Enable `debug-embed` in `rust-embed` ([#4777](https://github.com/atuinsh/atuin/issues/4777))
+- Update AGENTS.md disclosure instructions ([#4789](https://github.com/atuinsh/atuin/issues/4789))
+- Fix/debug macOS tests ([#4790](https://github.com/atuinsh/atuin/issues/4790))
+
+
+### Refactor
+
+- *(deps)* Bump rmcp from 3.9.0 to 3.10.0 ([#4752](https://github.com/atuinsh/atuin/issues/4752))
+- *(deps)* Bump tonic-prost from 0.14.6 to 0.14.9 ([#4750](https://github.com/atuinsh/atuin/issues/4750))
+
+
 ## 18.25.0
 
 ### Bug Fixes
