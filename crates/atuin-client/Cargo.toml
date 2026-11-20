@@ -92,6 +92,7 @@ crossterm = { workspace = true, features = ["serde"] }
 palette = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+terminal-colorsaurus = { workspace = true }
 
 # packfiles, and ai-session record bodies
 zstd = { workspace = true }

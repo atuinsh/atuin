@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::tui::background::Background;
 use atuin_client::tui::cursor::Cursor;
 use atuin_common::env::var_nonempty;
 use atuin_common::userio::log::{Held, SINK};
@@ -55,12 +56,19 @@ pub(super) async fn run(
     mouse: Mouse,
     store: &SqliteStore,
 ) -> Result<()> {
+    // Colour, unless `NO_COLOR` says not to. The background is asked for before the screen goes up,
+    // because the terminal answers on the input that the screen reads.
+    let shade = match var_nonempty("NO_COLOR") {
+        None => Some(row_shade(tokio::task::spawn_blocking(Background::detect).await?)),
+        Some(_) => None,
+    };
     let mut terminal = ratatui::try_init()?;
     // A message written while the screen is up would land in the middle of it, so messages wait
     // until the screen is gone.
     let held = Held::default();
     let holding = SINK.push(held.clone());
-    let result = Box::pin(drive(&mut terminal, &found, plan, ask_import, mouse, store)).await;
+    let result =
+        Box::pin(drive(&mut terminal, &found, plan, ask_import, mouse, shade, store)).await;
     // Back on the screen they ran it from, for the summary.
     ratatui::restore();
     drop(holding);
@@ -82,9 +90,10 @@ async fn drive(
     plan: &Plan,
     ask_import: bool,
     mouse: Mouse,
+    shade: Option<Color>,
     store: &SqliteStore,
 ) -> Result<Option<(Plan, Vec<(Step, Status)>)>> {
-    let Some(plan) = choose(terminal, found, plan, mouse).await? else {
+    let Some(plan) = choose(terminal, found, plan, mouse, shade).await? else {
         return Ok(None);
     };
 
@@ -174,18 +183,16 @@ async fn drive(
     Ok(Some(outcome(&plan, running, &mut updates)))
 }
 
-/// What they choose to set up, starting from `plan`, or `None` if they quit.
+/// What they choose to set up, starting from `plan`, or `None` if they quit. The screen is in
+/// colour when there's a `shade` for the row that they're on.
 async fn choose(
     terminal: &mut DefaultTerminal,
     found: &Found,
     plan: &Plan,
     mouse: Mouse,
+    shade: Option<Color>,
 ) -> Result<Option<Plan>> {
-    // Colour, unless `NO_COLOR` says not to.
-    let colour = var_nonempty("NO_COLOR").is_none();
-    let colorfgbg = var_nonempty("COLORFGBG").and_then(|value| value.into_string().ok());
-    let shade = colour.then(|| row_shade(colorfgbg.as_deref()));
-    let mut choose = Choose::new(found, plan).coloured(colour).shaded(shade);
+    let mut choose = Choose::new(found, plan).coloured(shade.is_some()).shaded(shade);
     // Only while they choose, because the screens after it show a sign-in link to select.
     let _mouse = match mouse {
         Mouse::Capture => Some(MouseCaptured::new()?),
@@ -1968,15 +1975,12 @@ fn fits(lines: usize, height: u16) -> bool {
 const SHADE_ON_DARK: Color = Color::Indexed(236);
 const SHADE_ON_LIGHT: Color = Color::Indexed(254);
 
-/// The shade under the row they're on, for a terminal whose background `colorfgbg` gives, as
-/// `COLORFGBG` does in the terminals that set it. Most don't, so a dark one is taken.
-fn row_shade(colorfgbg: Option<&str>) -> Color {
-    // "fg;bg", or "fg;default;bg", in the 16 ANSI colours, of which 7 and 15 are white.
-    let background = colorfgbg.and_then(|value| value.rsplit(';').next());
-    if matches!(background, Some("7" | "15")) {
-        SHADE_ON_LIGHT
-    } else {
-        SHADE_ON_DARK
+/// The shade under the row they're on, for the terminal's `background`. A terminal that doesn't
+/// say is taken to be dark.
+fn row_shade(background: Option<Background>) -> Color {
+    match background {
+        Some(Background::Light) => SHADE_ON_LIGHT,
+        Some(Background::Dark) | None => SHADE_ON_DARK,
     }
 }
 
@@ -2319,16 +2323,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset(None, SHADE_ON_DARK)]
-    #[case::dark("15;0", SHADE_ON_DARK)]
-    #[case::light("0;15", SHADE_ON_LIGHT)]
-    #[case::light_with_default("0;default;7", SHADE_ON_LIGHT)]
-    #[case::unreadable("light", SHADE_ON_DARK)]
+    #[case::unknown(None, SHADE_ON_DARK)]
+    #[case::dark(Some(Background::Dark), SHADE_ON_DARK)]
+    #[case::light(Some(Background::Light), SHADE_ON_LIGHT)]
     fn the_shade_suits_the_terminal(
-        #[case] colorfgbg: impl Into<Option<&'static str>>,
+        #[case] background: Option<Background>,
         #[case] expected: Color,
     ) {
-        assert_eq!(row_shade(colorfgbg.into()), expected);
+        assert_eq!(row_shade(background), expected);
     }
 
     #[cfg(all(feature = "ai", feature = "daemon"))]

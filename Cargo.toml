@@ -155,6 +155,7 @@ strum = { version = "0.27", features = ["strum_macros"] }
 strum_macros = "0.28"
 sysinfo = "0.39"
 tempfile = { version = "3" }
+terminal-colorsaurus = "1"
 thiserror = "2"
 # Only for the boundary with interim, which has no jiff 1.x support yet. Several dependencies
 # (plist, ratatui-widgets, rusty_paseto, tracing-appender) keep time in the tree regardless.
