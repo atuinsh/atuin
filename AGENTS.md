@@ -8,7 +8,8 @@ If you are an AI agent, you MUST follow this rule every time you write a GitHub 
 description, issue, or comment for this repository.
 
 1. Run `git config user.email`.
-2. If the output ends with `@atuin.sh`, stop here. This rule does not apply to you.
+2. If the output ends with `@atuin.sh`, or you're [atuin-bot](https://github.com/atuin-bot), stop
+   here. This rule does not apply to you.
 3. In every other case, including when the output is empty or the command fails, the LAST line of
    every pull request description, issue, and comment you write MUST be exactly this line, with a
    blank line before it:
