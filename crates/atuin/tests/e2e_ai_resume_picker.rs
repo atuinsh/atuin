@@ -122,8 +122,8 @@ fn the_shell_widget_resumes_the_session_chosen(
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
     let (pty, _) = setup.spawn(&machine.env, vars, "--bind-ai-resume");
-    // ctrl-]
-    pty.send(b"\x1d");
+    // ctrl-t
+    pty.send(b"\x14");
     pick(&pty, &turn);
     pty.send_enter();
     pty.wait_for_line(&ran(Agent::Claude, &format!("--resume {}", session.id), project.path()));

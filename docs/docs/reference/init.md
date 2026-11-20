@@ -49,7 +49,7 @@ Supported shells: `zsh`, `bash`, `fish`, `nu`, `xonsh`, `powershell`. See
 |------|-------------|
 | `--disable-up-arrow` | Don't bind the ++up++ arrow key |
 | `--disable-ctrl-r` | Don't bind ++ctrl+r++ |
-| `--bind-ai-resume` | Bind ++ctrl+bracket-right++ to `atuin resume` (zsh, bash and fish; off by default) |
+| `--bind-ai-resume` | Bind ++ctrl+t++ to `atuin resume` (zsh, bash and fish; off by default) |
 
 For example, to keep ++ctrl+r++ but leave the up arrow alone:
 
@@ -66,16 +66,16 @@ settings, and leave the `atuin init` line as it is.
 
 `atuin init` defines widgets that open the [`atuin resume`](../ai/threads.md)
 picker at the prompt and put the command it picks into your shell, but binds no
-key to them by default. To bind ++ctrl+bracket-right++ in the emacs, vi-insert and
+key to them by default. To bind ++ctrl+t++ in the emacs, vi-insert and
 vi-command keymaps, pass `--bind-ai-resume`:
 
 ```shell
 eval "$(atuin init zsh --bind-ai-resume)"
 ```
 
-!!! note "++ctrl+bracket-right++ replaces a shell binding"
-    ++ctrl+bracket-right++ is zsh's `vi-find-next-char` (emacs keymap) and bash's
-    `character-search`: jump to the next occurrence of the character you type next.
+!!! note "++ctrl+t++ replaces a shell binding"
+    ++ctrl+t++ is `transpose-chars` in zsh's emacs keymap and in bash: swap the
+    character before the cursor with the one under it.
     `--bind-ai-resume` replaces it. To keep it, bind the widget to another key yourself.
 
 To bind a key of your choice instead, add it after the `atuin init` line:

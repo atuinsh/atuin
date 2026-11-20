@@ -250,32 +250,32 @@ your threads. It works like the history search: type to search, ++ctrl+o++
 inspects the selected thread, and ++esc++ leaves. `atuin threads resume` is the
 same command, under its longer name.
 
-No key opens it by default. To open it with ++ctrl+bracket-right++ (which
-replaces the shell's own character search on that key), pass `--bind-ai-resume`
+No key opens it by default. To open it with ++ctrl+t++ (which
+replaces the shell's own transpose-chars on that key), pass `--bind-ai-resume`
 to `atuin init`; or bind the widget to a key of your choice after the
 `atuin init` line:
 
 === "zsh"
 
     ```shell
-    bindkey -M emacs '^]' atuin-ai-resume
-    bindkey -M viins '^]' atuin-ai-resume-viins
-    bindkey -M vicmd '^]' atuin-ai-resume-vicmd
+    bindkey -M emacs '^T' atuin-ai-resume
+    bindkey -M viins '^T' atuin-ai-resume-viins
+    bindkey -M vicmd '^T' atuin-ai-resume-vicmd
     ```
 
 === "bash"
 
     ```shell
-    atuin-bind -m emacs      '\C-]' atuin-ai-resume-emacs
-    atuin-bind -m vi-insert  '\C-]' atuin-ai-resume-viins
-    atuin-bind -m vi-command '\C-]' atuin-ai-resume-vicmd
+    atuin-bind -m emacs      '\C-t' atuin-ai-resume-emacs
+    atuin-bind -m vi-insert  '\C-t' atuin-ai-resume-viins
+    atuin-bind -m vi-command '\C-t' atuin-ai-resume-vicmd
     ```
 
 === "fish"
 
     ```fish
-    bind ctrl-] _atuin_ai_resume
-    bind -M insert ctrl-] _atuin_ai_resume
+    bind ctrl-t _atuin_ai_resume
+    bind -M insert ctrl-t _atuin_ai_resume
     ```
 
 Through the widget, the command it picks lands in your shell, as with the

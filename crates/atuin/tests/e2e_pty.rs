@@ -272,8 +272,8 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     };
     let pty = &shell.pty;
     let bind = match shell.config.shell.as_str() {
-        "bash" => r"atuin-bind '\C-]' atuin-ai-resume",
-        "zsh" => "bindkey '^]' atuin-ai-resume",
+        "bash" => r"atuin-bind '\C-t' atuin-ai-resume",
+        "zsh" => "bindkey '^T' atuin-ai-resume",
         // Fish's widget closes the descriptor itself (`3>&-`), and the stand-in below is a
         // POSIX function fish can't run.
         _ => return,
@@ -290,7 +290,7 @@ fn ai_resume_widget_returns_while_a_process_it_left_runs(
     ));
     pty.send_line(bind);
     pty.send_line("clear");
-    pty.send(&[0x1d]);
+    pty.send(&[0x14]);
     // Within the wait's timeout, well before the process left behind exits.
     pty.wait_for_line(&format!("{marker}-resumed"));
 }

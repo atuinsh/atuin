@@ -68,8 +68,8 @@ impl Shell {
 struct StaticInitOptions<'a> {
     pub enable_up_arrow: bool,
     pub enable_ctrl_r: bool,
-    /// Bind ctrl-] to `atuin threads resume`. Off unless asked for: it replaces the shell's own
-    /// binding (character search). The widgets are defined either way.
+    /// Bind ctrl-t to `atuin threads resume`. Off unless asked for: it replaces the shell's own
+    /// binding (transpose-chars). The widgets are defined either way.
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai_resume: bool,
     pub tmux: &'a Tmux,
@@ -165,7 +165,7 @@ mod tests {
 
     use super::Cmd;
 
-    /// ctrl-] stays the shell's own unless `--bind-ai-resume` asks for the resume picker.
+    /// ctrl-t stays the shell's own unless `--bind-ai-resume` asks for the resume picker.
     #[rstest]
     #[case::default(&[], false)]
     #[case::asked(&["--bind-ai-resume"], true)]
