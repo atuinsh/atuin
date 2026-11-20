@@ -312,7 +312,9 @@ steps:
       RUST_TOOLCHAIN: nightly-2026-10-09
       RUST_COMPONENTS: rustfmt
     command:
+      - .buildkite/scripts/cache-restore.sh --name apt_debs
       - *toolchain
+      - .buildkite/scripts/cache-save.sh --name apt_debs
       - 'section ":art: cargo fmt --check" cargo fmt -- --check'
 
   - label: ":no_entry: cargo-deny"
