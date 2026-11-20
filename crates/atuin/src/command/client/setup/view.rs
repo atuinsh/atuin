@@ -9,6 +9,7 @@ use std::time::Instant;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::tui::cursor::Cursor;
 use atuin_common::env::var_nonempty;
+use atuin_common::userio::log::{Held, SINK};
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -55,9 +56,17 @@ pub(super) async fn run(
     store: &SqliteStore,
 ) -> Result<()> {
     let mut terminal = ratatui::try_init()?;
+    // A message written while the screen is up would land in the middle of it, so messages wait
+    // until the screen is gone.
+    let held = Held::default();
+    let holding = SINK.push(held.clone());
     let result = Box::pin(drive(&mut terminal, &found, plan, ask_import, mouse, store)).await;
     // Back on the screen they ran it from, for the summary.
     ratatui::restore();
+    drop(holding);
+    for message in held.take() {
+        SINK.show(message);
+    }
 
     match result? {
         Some((plan, steps)) => super::print_summary(&plan, &found, Scope::All, &steps).await,

@@ -43,45 +43,45 @@ const _: () = assert!(
     "userio::log's info!, warn! and error! must not be compiled out by `max_level_*` features"
 );
 
+/// `$level!` for a message from the calling crate's catalogue, on the [`USER`] target.
+#[doc(hidden)]
+#[macro_export]
+#[expect(clippy::crate_in_macro_def, reason = "the message is in the calling crate's catalogue")]
+macro_rules! __atuin_log {
+    ($level:ident, $message_id:literal $(, $($args:tt)+)?) => {{
+        // Looked up before the event because the catalogue logs on its first lookup.
+        // tracing-subscriber keeps one set of per-layer filter verdicts per thread, so an event
+        // logged while this one is dispatched would overwrite them, and the stderr log would show
+        // this message too.
+        let message = $crate::i18n::fl!(crate::i18n::LOADER; $message_id $(, $($args)+)?);
+        $crate::userio::log::__tracing::$level!(target: $crate::userio::log::USER, "{}", message)
+    }};
+}
+
 /// [`tracing::info!`] for a message from the calling crate's catalogue, on the [`USER`] target:
 /// `info!("message-id", name = value)`.
 ///
 /// TODO(markovejnovic): At some point we should consolidate all the catalogues.
 #[macro_export]
-#[expect(clippy::crate_in_macro_def, reason = "the message is in the calling crate's catalogue")]
 macro_rules! __atuin_log_info {
     ($message_id:literal $(, $($args:tt)+)?) => {
-        $crate::userio::log::__tracing::info!(
-            target: $crate::userio::log::USER,
-            "{}",
-            $crate::i18n::fl!(crate::i18n::LOADER; $message_id $(, $($args)+)?)
-        )
+        $crate::__atuin_log!(info, $message_id $(, $($args)+)?)
     };
 }
 
 /// [`tracing::warn!`] for a message from the calling crate's catalogue; see [`info!`].
 #[macro_export]
-#[expect(clippy::crate_in_macro_def, reason = "the message is in the calling crate's catalogue")]
 macro_rules! __atuin_log_warn {
     ($message_id:literal $(, $($args:tt)+)?) => {
-        $crate::userio::log::__tracing::warn!(
-            target: $crate::userio::log::USER,
-            "{}",
-            $crate::i18n::fl!(crate::i18n::LOADER; $message_id $(, $($args)+)?)
-        )
+        $crate::__atuin_log!(warn, $message_id $(, $($args)+)?)
     };
 }
 
 /// [`tracing::error!`] for a message from the calling crate's catalogue; see [`info!`].
 #[macro_export]
-#[expect(clippy::crate_in_macro_def, reason = "the message is in the calling crate's catalogue")]
 macro_rules! __atuin_log_error {
     ($message_id:literal $(, $($args:tt)+)?) => {
-        $crate::userio::log::__tracing::error!(
-            target: $crate::userio::log::USER,
-            "{}",
-            $crate::i18n::fl!(crate::i18n::LOADER; $message_id $(, $($args)+)?)
-        )
+        $crate::__atuin_log!(error, $message_id $(, $($args)+)?)
     };
 }
 
