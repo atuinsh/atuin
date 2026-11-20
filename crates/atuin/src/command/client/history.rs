@@ -1429,6 +1429,9 @@ mod tests {
         settings.daemon.enabled = daemon_enabled;
         settings.daemon.autostart = false;
         settings.daemon.socket_path = AbsPathBuf::new(tmp.path().join("no-daemon-here.sock")).ok();
+        // Set the pidfile path; otherwise we could connect to the user's own daemon.
+        settings.daemon.pidfile_path =
+            AbsPathBuf::new(tmp.path().join("no-daemon-here.pid")).unwrap();
         let entries: Vec<History> = ["echo one", "echo two"]
             .into_iter()
             .map(|cmd| {

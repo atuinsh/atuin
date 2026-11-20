@@ -50,4 +50,8 @@ export NEXTEST_COMMAND="cargo-nextest nextest run --archive-file $archive --work
 if [ "${BUILDKITE_PARALLEL_JOB_COUNT:-1}" -eq 1 ]; then
   export BUILDKITE_TEST_ENGINE_TEST_CMD="python3 .buildkite/scripts/nextest-bktec.py all"
 fi
-bktec run || { .buildkite/scripts/proptest-regressions.sh; exit 1; }
+bktec run || {
+  .buildkite/scripts/proptest-regressions.sh
+  .buildkite/scripts/pty-report.sh
+  exit 1
+}
