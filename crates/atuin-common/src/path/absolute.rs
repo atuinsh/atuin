@@ -277,6 +277,20 @@ impl_cmp!(<> AbsPath, Path);
 impl_cmp!(<> AbsPath, PathBuf);
 impl_cmp!(<'a> &'a AbsPath, PathBuf);
 
+impl schemars::JsonSchema for AbsPathBuf {
+    fn schema_name() -> Cow<'static, str> {
+        "AbsPathBuf".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string" })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

@@ -212,7 +212,7 @@ arg-history-start-author-kind = Whether a human or an AI agent ran this command
     .long = 
         Whether a human or an AI agent ran this command
 
-        {"["}`Option::None`] will cause us to perform a best-guess effort.
+        Without it, Atuin makes a best guess.
 arg-history-start-intent = Optional intent/rationale for running this command
 arg-history-hook = Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and to minimize the amount of time the command takes to run
 cmd-history-end = Finishes a new command in the history (adds time, exit code)

@@ -134,7 +134,7 @@ runtime-format = "0.1"
 rusqlite = { version = "0.32", features = ["unlock_notify"] }
 rust-embed = { version = "8", features = ["debug-embed"] }
 rustix = { version = "1", features = ["event", "fs", "net", "param", "process", "pty", "stdio", "termios"] }
-schemars = "1"
+schemars = { version = "1", features = ["url2"] }
 secrecy = { version = "0.10", features = ["serde"] }
 rusty_paserk = { version = "0.5", default-features = false, features = ["v4", "serde"] }
 # rusty_paserk 0.5.0 (latest) requires rusty_paseto 0.8.0 unfortunately
@@ -144,7 +144,8 @@ serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_regex = "1"
-serde_with = "3"
+# schemars_1 lets `#[serde_as]` fields describe themselves in the config JSON Schema.
+serde_with = { version = "3", features = ["schemars_1"] }
 service-manager = { package = "atuin-service-manager", version = "0.12", default-features = false }
 sha2 = "0.10"
 shellexpand = "3"

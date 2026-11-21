@@ -1,12 +1,13 @@
 use atuin_common::units::{ByteSize, Percent};
 use derive_more::From;
 use regex::RegexSet;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::DiskUsageLimit;
 
 /// The `[output]` section of `config.toml`: capturing and storing command output.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(from = "OutputCaptureConfig", into = "OutputCaptureConfig")]
 pub enum OutputCapture {
     /// `enabled = false`: nothing is captured, and the other keys are ignored but for
@@ -84,9 +85,13 @@ impl Default for CaptureLimits {
 
 /// Unanchored regular expressions matched against a command line (`^cat `), like
 /// `history_filter`.
-#[derive(Clone, Debug, Default, From, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, From, Deserialize, Serialize, JsonSchema)]
 #[serde(transparent)]
-pub struct CommandFilter(#[serde(with = "serde_regex")] RegexSet);
+pub struct CommandFilter(
+    #[serde(with = "serde_regex")]
+    #[schemars(with = "Vec<String>")]
+    RegexSet,
+);
 
 impl CommandFilter {
     /// Whether any expression matches `command`.
@@ -110,12 +115,23 @@ impl PartialEq for CommandFilter {
 ///
 /// The reason I went with a flattened representation is to enable the `atuin config set
 /// output.enabled false` convention.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct OutputCaptureConfig {
+    /// Capture and store the output of the commands you run. Turning it on takes a daemon restart
+    /// and a new shell; `atuin setup --only --output-capture --daemon` does both.
     pub(crate) enabled: bool,
+    /// The most output kept for one command, such as `512KB`. Past it, the start and the end are
+    /// kept and the middle dropped.
+    #[schemars(with = "String")]
     pub(crate) max_output_size: ByteSize,
+    /// Reserved for syncing output between machines, which isn't implemented: output never leaves
+    /// your machine.
     pub(crate) sync: bool,
+    /// The most disk space captured output may use: a size such as `10GB`, a share of the disk
+    /// such as `10%`, or `unlimited`. Past it, the oldest output is deleted first.
     pub(crate) max_disk_usage: DiskUsageLimit,
+    /// Regular expressions of commands whose output is never stored, such as `"^cat "`. Those
+    /// commands are still recorded in your history.
     #[serde(default)]
     pub(crate) command_filter: CommandFilter,
 }

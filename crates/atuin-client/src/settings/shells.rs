@@ -1,4 +1,7 @@
+use std::borrow::Cow;
+
 use atuin_common::filter::{self, OrFilter};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Controls which shells' commands are included in interactive search.
@@ -77,6 +80,21 @@ impl ShellFilter<'_> {
     #[must_use]
     pub fn to_vec_filter(&self) -> OrFilter<Vec<String>> {
         self.as_filter().to_vec_filter()
+    }
+}
+
+impl JsonSchema for Shells {
+    fn schema_name() -> Cow<'static, str> {
+        "Shells".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "anyOf": [
+                { "enum": ["all", "auto"] },
+                { "type": "array", "items": { "type": "string" } },
+            ],
+        })
     }
 }
 

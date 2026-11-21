@@ -4,6 +4,8 @@
 pub mod ansi;
 #[cfg(feature = "os")]
 pub mod atuin_exe;
+#[cfg(feature = "cli-reference")]
+pub mod cli_reference;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "db")]

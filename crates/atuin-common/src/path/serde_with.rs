@@ -12,7 +12,9 @@ use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+use schemars::{Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde_with::schemars_1::JsonSchemaAs;
 use serde_with::{DeserializeAs, SerializeAs};
 
 use crate::path::AbsPathBuf;
@@ -128,6 +130,41 @@ impl<'de, A: PathAnchor> DeserializeAs<'de, AbsPathBuf> for RelativeTo<A> {
 impl<A> SerializeAs<AbsPathBuf> for RelativeTo<A> {
     fn serialize_as<S: Serializer>(source: &AbsPathBuf, serializer: S) -> Result<S::Ok, S::Error> {
         source.serialize(serializer)
+    }
+}
+
+impl JsonSchemaAs<PathBuf> for ShellExpanded {
+    fn schema_name() -> Cow<'static, str> {
+        "ShellExpandedPath".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": "A path. `~` and environment variables expand.",
+        })
+    }
+}
+
+impl<A> JsonSchemaAs<AbsPathBuf> for RelativeTo<A> {
+    fn schema_name() -> Cow<'static, str> {
+        "ConfigPath".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": "A path. `~` and environment variables expand, and a relative path \
+                            resolves against the directory of the file that sets it.",
+        })
     }
 }
 

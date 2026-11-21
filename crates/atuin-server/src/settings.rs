@@ -4,12 +4,15 @@ use std::path::Path;
 
 use atuin_common::units::ByteSize;
 use axum::http::HeaderName;
+use config::builder::DefaultState;
 use config::{
-    Config, ConfigError, Environment, File as ConfigFile, FileFormat, Map, Source, Value, ValueKind,
+    Config, ConfigBuilder, ConfigError, Environment, File as ConfigFile, FileFormat, Map, Source,
+    Value, ValueKind,
 };
 use eyre::{Result, eyre};
 use fs_err::{File, create_dir_all};
 use ipnet::IpNet;
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use url::Url;
 
@@ -17,7 +20,7 @@ use crate::db::DbSettings;
 
 static EXAMPLE_CONFIG: &str = include_str!("../server.toml");
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Metrics {
     #[serde(alias = "enabled")]
     pub enable: bool,
@@ -35,12 +38,13 @@ impl Default for Metrics {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Settings {
     pub host: String,
     pub port: u16,
     pub path: String,
     pub open_registration: bool,
+    #[schemars(with = "String")]
     pub max_record_size: ByteSize,
     pub register_webhook_url: Option<url::Url>,
     pub register_webhook_username: String,
@@ -49,6 +53,7 @@ pub struct Settings {
     /// Networks of reverse proxies whose `X-Forwarded-For` header is trusted when reporting the
     /// client address. Requests from anywhere else are attributed to their TCP peer.
     #[serde(default, deserialize_with = "deserialize_trusted_proxies")]
+    #[schemars(with = "Vec<String>")]
     pub trusted_proxies: Vec<IpNet>,
 
     /// The header a trusted proxy reports the client address in, such as `X-Forwarded-For` or
@@ -58,6 +63,7 @@ pub struct Settings {
         deserialize_with = "deserialize_header_name",
         serialize_with = "serialize_header_name"
     )]
+    #[schemars(with = "String")]
     pub trusted_proxy_header: HeaderName,
 
     /// Advertise a version that is not what we are _actually_ running
@@ -96,7 +102,22 @@ impl Settings {
             .ignore_empty(true)
             .source(env);
 
-        let config = Config::builder()
+        let config = Self::defaults()?
+            .add_source(ConfigFile::from(config_file).format(FileFormat::Toml))
+            .add_source(WithoutServiceLinks(env))
+            .build()?;
+
+        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
+    }
+
+    /// The JSON Schema of `server.toml`, with each setting's built-in default.
+    pub fn config_schema() -> Result<serde_json::Value> {
+        let defaults: serde_json::Value = Self::defaults()?.build()?.try_deserialize()?;
+        Ok(atuin_common::json::schema::with_defaults(schemars::schema_for!(Self), &defaults))
+    }
+
+    fn defaults() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
+        Config::builder()
             .set_default("host", "127.0.0.1")?
             .set_default("port", 8888)?
             .set_default("open_registration", false)?
@@ -105,12 +126,7 @@ impl Settings {
             .set_default("register_webhook_username", "")?
             .set_default("metrics.enable", false)?
             .set_default("metrics.host", "127.0.0.1")?
-            .set_default("metrics.port", 9001)?
-            .add_source(ConfigFile::from(config_file).format(FileFormat::Toml))
-            .add_source(WithoutServiceLinks(env))
-            .build()?;
-
-        config.try_deserialize().map_err(|e| eyre!("failed to deserialize: {}", e))
+            .set_default("metrics.port", 9001)
     }
 }
 
