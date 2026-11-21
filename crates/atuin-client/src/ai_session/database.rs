@@ -583,6 +583,14 @@ impl AiSessionDatabase {
         .await
     }
 
+    /// Whether the database holds any session.
+    pub async fn has_sessions(&self) -> Result<bool, DbError> {
+        let found: bool = db::query_scalar("SELECT EXISTS (SELECT 1 FROM sessions)")
+            .fetch_one(self.db.pool())
+            .await?;
+        Ok(found)
+    }
+
     pub async fn contains_message(
         &self,
         session: &HarnessSession,
@@ -2265,6 +2273,15 @@ mod tests {
             _ => panic!("expected Content::Text"),
         };
         assert_eq!(text, long_text);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn has_sessions_once_a_message_is_stored() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        assert!(!db.has_sessions().await.unwrap());
+        db.append(&sample_message()).await.unwrap();
+        assert!(db.has_sessions().await.unwrap());
     }
 
     #[rstest]

@@ -25,6 +25,16 @@ pub fn sidecar_path(settings: &Settings) -> PathBuf {
     }
 }
 
+/// Whether the sidecar holds any thread to resume. The daemon makes the sidecar whether or not
+/// capture is on, so the sidecar can exist and still hold none.
+pub async fn sidecar_has_threads(settings: &Settings) -> Result<bool, DbError> {
+    let path = sidecar_path(settings);
+    if !path.exists() {
+        return Ok(false);
+    }
+    AiSessionDatabase::open_read_only(path).await?.has_sessions().await
+}
+
 /// Rename a legacy `ai_session_sidecar.db` to `threads.db`, for the daemon to call before it
 /// opens the sidecar. The WAL and shared-memory files move first and the database last, so a
 /// crash midway leaves the legacy database to finish moving on the next start.

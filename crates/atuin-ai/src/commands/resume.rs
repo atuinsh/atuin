@@ -61,6 +61,7 @@ use jiff::tz::TimeZone;
 
 use super::session::{HarnessArg, one_line};
 use crate::resume_tui::catchup::{self, CatchUp, Held};
+use crate::resume_tui::rebuild::{DaemonProbe, RebuildProbe};
 use crate::resume_tui::resumer::{HarnessResumer, NotResumable, Resume, quote, shell_line};
 use crate::resume_tui::sidecar::SidecarSource;
 use crate::resume_tui::source::{Relation, harness_arg, harness_label};
@@ -395,6 +396,24 @@ async fn direct_target(
         )
     });
     Ok(Some((row, note)))
+}
+
+/// Whether resume could find any thread here: the sidecar holds some, or the daemon is rebuilding
+/// the sidecar and may yet bring some back.
+///
+/// A sidecar that can't be read counts as holding threads. For example, a daemon of an older build
+/// keeps the sidecar at an older schema, which this build can't read. Resume replaces that daemon
+/// before it reads the sidecar, and the new daemon brings the schema up to date.
+pub async fn has_anything_to_resume(settings: &Settings) -> bool {
+    has_anything_to_resume_with(settings, &DaemonProbe::new(settings)).await
+}
+
+/// [`has_anything_to_resume`], asking `probe` whether the daemon is rebuilding.
+async fn has_anything_to_resume_with(settings: &Settings, probe: &dyn RebuildProbe) -> bool {
+    match atuin_client::ai_session::sidecar_has_threads(settings).await {
+        Ok(true) | Err(_) => true,
+        Ok(false) => probe.rebuilding().await.is_some(),
+    }
 }
 
 pub async fn run(cmd: Cmd, mut settings: Settings) -> Result<()> {
@@ -818,6 +837,7 @@ mod tests {
 
     use super::*;
     use crate::resume_tui::fake::{self, FakeResumer, FakeSource};
+    use crate::resume_tui::rebuild::Rebuilding;
 
     #[derive(Parser)]
     struct Cli {
@@ -1425,5 +1445,45 @@ mod tests {
 
         let cli = Cli::try_parse_from(["resume", "--shell-widget"]).unwrap();
         assert_eq!(cli.cmd.output(), Output::Widget);
+    }
+
+    /// Says whether the daemon is rebuilding, as it was told.
+    struct Rebuild(Option<Rebuilding>);
+
+    #[async_trait::async_trait]
+    impl RebuildProbe for Rebuild {
+        async fn rebuilding(&self) -> Option<Rebuilding> {
+            self.0
+        }
+    }
+
+    /// Settings whose data, the sidecar included, lives in `dir`.
+    fn settings_in(dir: &std::path::Path) -> Settings {
+        let mut settings = Settings::utc();
+        settings.data_dir = atuin_common::path::AbsPathBuf::new(dir.to_owned()).unwrap();
+        settings
+    }
+
+    #[rstest]
+    #[case::idle(None, false)]
+    #[case::rebuilding(Some(Rebuilding { progress: (1, 10) }), true)]
+    #[tokio::test]
+    async fn without_a_sidecar_only_a_rebuild_may_bring_threads(
+        #[case] rebuilding: Option<Rebuilding>,
+        #[case] expected: bool,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = settings_in(dir.path());
+        let found = has_anything_to_resume_with(&settings, &Rebuild(rebuilding)).await;
+        assert_eq!(found, expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_sidecar_that_cant_be_read_may_hold_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = settings_in(dir.path());
+        std::fs::write(settings.threads_db_path(), "not a database").unwrap();
+        assert!(has_anything_to_resume_with(&settings, &Rebuild(None)).await);
     }
 }

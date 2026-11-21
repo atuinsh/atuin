@@ -6,7 +6,7 @@ use clap::Subcommand;
 pub(crate) mod resume;
 pub(crate) mod session;
 
-pub use resume::Cmd as ResumeCmd;
+pub use resume::{Cmd as ResumeCmd, has_anything_to_resume};
 pub use session::{Cmd as ThreadsCmd, Recent, import_all, one_line, recent};
 
 #[derive(Subcommand, Debug)]

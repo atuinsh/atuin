@@ -10,6 +10,7 @@ use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::tui::background::Background;
 use atuin_client::tui::cursor::Cursor;
 use atuin_common::env::var_nonempty;
+use atuin_common::string::wrap;
 use atuin_common::userio::log::{Held, SINK};
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
@@ -2004,32 +2005,12 @@ const WRAP_COLUMNS: usize = 62;
 /// `text`, wrapped, each line `indent` columns in and in `style`.
 fn paragraph(text: &str, indent: usize, style: Style) -> Vec<Line<'static>> {
     let indent = " ".repeat(indent);
-    let lines = wrap(text, WRAP_COLUMNS).into_iter();
+    let lines = wrap(text, WRAP_COLUMNS);
     lines
-        .map(|line| Line::from(vec![Span::raw(indent.clone()), Span::styled(line, style)]))
+        .map(|line| {
+            Line::from(vec![Span::raw(indent.clone()), Span::styled(line.to_owned(), style)])
+        })
         .collect()
-}
-
-/// `text` in lines at most `columns` wide, broken between words. A word longer than that has a
-/// line to itself.
-fn wrap(text: &str, columns: usize) -> Vec<String> {
-    use unicode_width::UnicodeWidthStr as _;
-
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && line.width() + 1 + word.width() > columns {
-            lines.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        lines.push(line);
-    }
-    lines
 }
 
 /// How much further in an entry under a row starts than the row.
@@ -2768,9 +2749,9 @@ mod tests {
         });
         let unexplained: Vec<_> = explained
             .filter(|(label, about)| {
-                let first = wrap(about, WRAP_COLUMNS).into_iter().next().unwrap_or_default();
+                let first = wrap(about, WRAP_COLUMNS).next().unwrap_or_default();
                 let at = shown.iter().position(|row| row.contains(&format!(") {label}")));
-                at.is_none_or(|at| !shown[at + 1].contains(&first))
+                at.is_none_or(|at| !shown[at + 1].contains(first))
             })
             .collect();
         assert_eq!(unexplained, [], "{shown:#?}");
@@ -2820,19 +2801,6 @@ mod tests {
             let line = drawn(&choose, &found, Row::Backfill);
             assert!(line.contains("        [ ] Upload what Atuin has already"), "{line}");
         }
-    }
-
-    #[rstest]
-    #[case::fits("a few words", 20, &["a few words"])]
-    #[case::between_words("one two three", 7, &["one two", "three"])]
-    #[case::a_long_word_alone("a extraordinarily b", 5, &["a", "extraordinarily", "b"])]
-    #[case::nothing("", 5, &[])]
-    fn wrap_breaks_between_words(
-        #[case] text: &str,
-        #[case] columns: usize,
-        #[case] expected: &[&str],
-    ) {
-        assert_eq!(wrap(text, columns), expected);
     }
 
     #[cfg(feature = "sync")]

@@ -14,6 +14,8 @@ pub mod bounded_buffer;
 pub mod ellipsis;
 pub mod highlighted;
 pub mod trim;
+#[cfg(feature = "unicode")]
+mod wrap;
 
 mod auto_os_string;
 mod bounded;
@@ -36,6 +38,8 @@ pub use non_blank::{Blank, NonBlank, NonBlankString};
 pub use non_nul_str::{ContainsNul, NonNulStr};
 pub use normalize::normalize;
 pub use trim::TrimExt;
+#[cfg(feature = "unicode")]
+pub use wrap::{Wrap, wrap};
 
 pub trait StrExt {
     /// Like [`str::lines`], but also returns the byte index of each line.
