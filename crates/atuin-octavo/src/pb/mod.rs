@@ -4,14 +4,11 @@ mod codegen {
 }
 
 mod batch;
-mod history;
 mod threads;
 
-use atuin_client::history::HistoryId;
 use atuin_domain::record::{HostId as DomainHostId, RecordId};
-pub use batch::{Batch, HistoryBatch, ThreadBatch};
+pub use batch::{Batch, ThreadBatch};
 pub use codegen::*;
-pub use history::{HistoryConversionError, OutputTooLarge};
 use thiserror::Error;
 pub use threads::{Field, KeyError, ThreadMessageConversionError};
 use uuid::{Uuid, Version};
@@ -32,14 +29,6 @@ impl TryFrom<Uuid> for UuidV7 {
         Ok(Self {
             value: uuid.into_bytes().to_vec(),
         })
-    }
-}
-
-impl TryFrom<HistoryId> for UuidV7 {
-    type Error = NotUuidV7<HistoryId>;
-
-    fn try_from(id: HistoryId) -> Result<Self, Self::Error> {
-        Uuid::from_bytes(id.into_bytes()).try_into().map_err(|_| NotUuidV7(id))
     }
 }
 

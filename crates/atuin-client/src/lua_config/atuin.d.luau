@@ -13,24 +13,6 @@ type Thread = {
 	workspace: string?,
 }
 
---- A command that ran.
-type Command = {
-	command: string,
-	--- The directory it ran in.
-	dir: string,
-	exit: number,
-	--- How long it ran, in nanoseconds.
-	duration: number,
-	author: string,
-	--- Whether an agent ran it.
-	agent: boolean,
-	--- Why the agent that ran it said it did.
-	intent: string?,
-	shell: string?,
-	--- As a thread's.
-	workspace: string?,
-}
-
 --- Whether something goes up: for all of it, or for each one the function takes.
 type Upload<T> = boolean | (T) -> boolean
 
@@ -45,8 +27,8 @@ type AtuinConfig = {
 	upload: {
 		--- Upload threads to the Hub?
 		threads: Upload<Thread>?,
-    --- Upload history to the Hub?
-		history: Upload<Command>?,
+		--- @deprecated v18.25.2 -- The Hub takes threads only, so this decides nothing.
+		history: Upload<any>?,
 	}?,
 }
 

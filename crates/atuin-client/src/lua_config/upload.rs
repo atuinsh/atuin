@@ -1,9 +1,9 @@
 //! What a config file lets go up to Atuin for Teams, as its `upload` says: `threads` rules on
-//! each thread, by where it started, and `history` on each command. Either is a boolean, or a
-//! function that takes the [`Thread`] or [`Command`] and returns one.
+//! each thread, by where it started. It is a boolean, or a function that takes the [`Thread`] and
+//! returns one.
 //!
-//! The user's own file turns uploading on, so there an unset rule keeps everything here. A
-//! project's file can only keep things here, so there an unset rule lets everything go.
+//! The user's own file turns uploading on, so there an unset rule keeps every thread here. A
+//! project's file can only keep threads here, so there an unset rule lets every thread go.
 //!
 //! A function runs in the VM its file ran in, so it sees what the file left there, under the same
 //! memory limit and a time limit of its own.
@@ -19,7 +19,6 @@ use thiserror::Error;
 
 use super::{LoadError, run, vm};
 use crate::ai_session::HarnessSession;
-use crate::history::History;
 
 /// The longest one call of a rule may run: a rule compares a few strings, so this only stops one
 /// that never ends, without holding up the capture that asks it for long.
@@ -86,7 +85,6 @@ impl Upload {
     const fn rule(&self, name: RuleName) -> Option<&Rule> {
         match name {
             RuleName::Threads => self.rules.threads.as_ref(),
-            RuleName::History => self.rules.history.as_ref(),
         }
     }
 
@@ -106,7 +104,6 @@ impl Upload {
 #[derive(Debug, Default)]
 pub(super) struct Rules {
     threads: Option<Rule>,
-    history: Option<Rule>,
 }
 
 impl Rules {
@@ -142,15 +139,12 @@ impl Rules {
     fn read(upload: &Table) -> mlua::Result<Self> {
         let mut rules = Self::default();
         upload.for_each(|key: String, value: Value| {
-            let name = match key.as_str() {
-                "threads" => RuleName::Threads,
-                "history" => RuleName::History,
+            match key.as_str() {
+                "threads" => rules.threads = Some(Rule::read(RuleName::Threads, value)?),
+                // 18.25.1 shipped `history`, so a file that sets it must still load. It rules on
+                // nothing.
+                "history" => {}
                 _ => return Err(mlua::Error::external(RuleError::UnknownKey(key))),
-            };
-            let rule = Some(Rule::read(name, value)?);
-            match name {
-                RuleName::Threads => rules.threads = rule,
-                RuleName::History => rules.history = rule,
             }
             Ok(())
         })?;
@@ -181,7 +175,6 @@ impl Rule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleName {
     Threads,
-    History,
 }
 
 impl RuleName {
@@ -189,7 +182,6 @@ impl RuleName {
     pub const fn key(self) -> &'static str {
         match self {
             Self::Threads => "threads",
-            Self::History => "history",
         }
     }
 }
@@ -198,7 +190,7 @@ impl RuleName {
 enum RuleError {
     #[error("`upload` must be a table, not a {0}")]
     NotATable(&'static str),
-    #[error("`upload` has no `{0}`; it takes `threads` and `history`")]
+    #[error("`upload` has no `{0}`; it takes `threads`")]
     UnknownKey(String),
     #[error("`upload.{key}` must be a boolean or a function, not a {type_name}")]
     NotARule {
@@ -263,53 +255,6 @@ impl Subject for Thread {
     }
 }
 
-/// A command, as `upload.history` sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Command {
-    command: String,
-    dir: PathBuf,
-    exit: i64,
-    /// How long it ran, in nanoseconds.
-    duration: i64,
-    author: String,
-    /// Whether an agent ran it.
-    agent: bool,
-    intent: Option<String>,
-    shell: Option<String>,
-    /// As [`Thread`]'s.
-    workspace: Option<PathBuf>,
-}
-
-impl From<&History> for Command {
-    fn from(history: &History) -> Self {
-        Self {
-            command: history.command.clone(),
-            dir: PathBuf::from(&history.cwd),
-            exit: history.exit,
-            duration: history.duration,
-            author: history.author.clone(),
-            agent: history.is_agent(),
-            intent: history.intent.clone(),
-            shell: history.shell.clone(),
-            workspace: None,
-        }
-    }
-}
-
-impl sealed::Sealed for Command {}
-
-impl Subject for Command {
-    const RULE: RuleName = RuleName::History;
-
-    fn dir(&self) -> Option<&Path> {
-        Some(&self.dir)
-    }
-
-    fn set_workspace(&mut self, workspace: PathBuf) {
-        self.workspace = Some(workspace);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -319,7 +264,6 @@ mod tests {
 
     use super::*;
     use crate::ai_session::{HarnessKind, NativeSessionId};
-    use crate::history::AuthorKind;
 
     #[fixture]
     fn root() -> TempDir {
@@ -341,25 +285,12 @@ mod tests {
         Thread::new(&session, dir.map(PathBuf::from))
     }
 
-    fn command(command: &str, author: AuthorKind) -> Command {
-        let history: History = History::import()
-            .timestamp(jiff::Timestamp::UNIX_EPOCH)
-            .command(command)
-            .cwd("/work")
-            .build()
-            .into();
-        let history = History {
-            author_kind: Some(author),
-            ..history
-        };
-        Command::from(&history)
-    }
-
     #[rstest]
     #[case::unset("{}", None)]
     #[case::allowed("{ threads = true }", Some(true))]
     #[case::denied("{ threads = false }", Some(false))]
-    #[case::unset_for_the_other("{ history = false }", None)]
+    #[case::history_rules_on_nothing("{ history = true }", None)]
+    #[case::a_history_function_rules_on_nothing("{ history = function() return false end }", None)]
     #[case::by_harness(r#"{ threads = function(t) return t.harness == "codex" end }"#, Some(false))]
     #[case::by_dir(
         r#"{ threads = function(t) return string.find(t.dir, "^/work") ~= nil end }"#,
@@ -380,7 +311,7 @@ mod tests {
     #[case::off("{ threads = false }", false)]
     #[case::on("{ threads = true }", true)]
     #[case::by_function("{ threads = function() return false end }", true)]
-    #[case::only_the_other("{ history = true }", false)]
+    #[case::only_history("{ history = true }", false)]
     fn a_rule_switches_on_when_it_may_let_something_go(
         root: TempDir,
         #[case] rules: &str,
@@ -417,53 +348,11 @@ mod tests {
         assert_eq!(allows.expect("a decision"), Some(true));
     }
 
-    #[rstest]
-    #[case::unset("{}", "ls", AuthorKind::User, None)]
-    #[case::denied("{ history = false }", "ls", AuthorKind::User, Some(false))]
-    #[case::unset_for_the_other("{ threads = false }", "ls", AuthorKind::User, None)]
-    #[case::by_command(
-        r#"{ history = function(c) return string.find(c.command, "secret", 1, true) == nil end }"#,
-        "cat secret.txt",
-        AuthorKind::User,
-        Some(false)
-    )]
-    #[case::by_author(
-        "{ history = function(c) return not c.agent end }",
-        "ls",
-        AuthorKind::Agent,
-        Some(false)
-    )]
-    #[case::by_dir(
-        r#"{ history = function(c) return c.dir == "/work" end }"#,
-        "ls",
-        AuthorKind::User,
-        Some(true)
-    )]
-    #[case::by_its_own_upload(
-        "{ threads = false, history = function() return atuin.config.upload.threads end }",
-        "ls",
-        AuthorKind::User,
-        Some(false)
-    )]
-    fn a_rule_decides_a_command(
-        root: TempDir,
-        #[case] rules: &str,
-        #[case] run: &str,
-        #[case] author: AuthorKind,
-        #[case] expected: Option<bool>,
-    ) {
-        let upload = upload(&root, rules).expect("an upload");
-
-        let allows = upload.allows(&command(run, author));
-
-        assert_eq!(allows.expect("a decision"), expected);
-    }
-
     /// A typo could be what keeps a thread here, so an `upload` atuin can't read fails the file.
     #[rstest]
     #[case::not_a_table("true")]
     #[case::unknown_key("{ thread = false }")]
-    #[case::output_follows_history("{ output = false }")]
+    #[case::output("{ output = false }")]
     #[case::not_a_rule(r#"{ threads = "no" }"#)]
     #[case::a_list("{ false }")]
     fn an_upload_atuin_cant_read_fails_the_file(root: TempDir, #[case] rules: &str) {

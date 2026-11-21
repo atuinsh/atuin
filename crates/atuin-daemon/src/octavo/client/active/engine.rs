@@ -1,27 +1,23 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
-use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionStore, Loaded, Message};
-use atuin_client::history::HistoryId;
 use atuin_client::record::decode::map_parallel;
 use atuin_common::futures::{Backoff, Debounce, Delays};
 use atuin_domain::record::{HostId, RecordId, RecordIdx, RecordSeriesKey, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, HubLogin};
+use atuin_octavo::pb;
 use atuin_octavo::queue::{
-    NotSent, PendingHistoryUpload, PendingOpen, PendingOutputUpload, PendingThreadMessageUpload,
-    QueueError, ThreadBackfill, UploadQueue,
+    NotSent, PendingOpen, PendingThreadMessageUpload, QueueError, ThreadBackfill, UploadQueue,
 };
-use atuin_octavo::{UPLOADS_HISTORY, pb};
 use futures::StreamExt;
 use tokio::sync::Notify;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::futures::Notified;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tonic::Code;
@@ -29,11 +25,10 @@ use uuid::Uuid;
 
 use super::gate::{Cleared, CloseHalt, Closes, Opening, Rows};
 use super::starts::{Goes, Sorted, Starts};
-use super::{clear_off, forget_output, is_off, mark_off, uploads_command};
+use super::{clear_off, is_off, mark_off};
 use crate::daemon::DaemonHandle;
 use crate::events::DaemonEvent;
 use crate::octavo::threads_on;
-use crate::output_capture::OutputStore;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const BACKOFF: Backoff = Backoff::Exponential {
@@ -42,16 +37,13 @@ const BACKOFF: Backoff = Backoff::Exponential {
     factor: NonZeroU32::new(2).unwrap(),
 };
 
-/// How long a queued output, a queued thread message or a queued thread share waits to reach Octavo
-/// before it's dropped.
+/// How long a queued thread message or a queued thread share waits to reach Octavo before it's
+/// dropped.
 ///
-/// An output waits while its entry is unfinished on this machine or missing from Octavo. The
-/// entry is then in flight on the direct path, which gives up after `network_timeout` (30s by
-/// default), or never coming: refused, stored under another login, or never uploaded. An output
-/// that cannot be read from local storage waits out the same hour. A thread message waits while
-/// its record isn't stored: capture queues it just before the push, which may fail. A thread share
-/// waits while its thread isn't stored, whose messages normally go ahead of it, so that thread's
-/// were refused or dropped, or the user deleted it; its next message queues the share afresh.
+/// A thread message waits while its record isn't stored: capture queues it just before the push,
+/// which may fail. A thread share waits while its thread isn't stored, whose messages normally go
+/// ahead of it, so that thread's were refused or dropped, or the user deleted it; its next message
+/// queues the share afresh.
 const ORPHAN_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// How a woken pass waits for the wakes to stop. Capture stores a Claude Code reply as a row per
@@ -65,8 +57,8 @@ const DEBOUNCE: Debounce = Debounce {
 /// The most records one pass reads of a backfill: as many as one `InsertThreadMessages` takes.
 const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_ITEMS.get() as u64;
 
-/// How long one pass can spend on thread shares, history uploads or command output uploads, each,
-/// so none holds up the rest for long.
+/// How long one pass can spend on thread messages or thread shares, each, so neither holds up the
+/// rest for long.
 pub(super) const PASS_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
@@ -79,7 +71,6 @@ impl UploadEngine {
         queue: UploadQueue,
         hub: HubClient,
         handle: DaemonHandle,
-        outputs: Arc<OutputStore>,
         records: AiSessionStore,
         wake: Arc<Notify>,
         starts: Starts,
@@ -89,7 +80,6 @@ impl UploadEngine {
             queue,
             hub,
             handle,
-            outputs,
             records,
             wake,
             logins: Notify::new(),
@@ -151,20 +141,17 @@ enum NextPass {
     /// Once something wakes the engine, at a login, at the poll interval, or once background work
     /// is through a backoff.
     Waiting,
-    /// At once: more backfill, queued history, or queued outputs exist.
+    /// At once: more backfill exists, or threads were left to look up.
     Now,
-    /// Once the wakes stop: background work stopped for one.
-    Woken,
 }
 
 impl NextPass {
     /// When the next pass goes after work that asked for `self`, then work that asked for `after`:
-    /// once the wakes stop if `after` stopped for one, else at once if either has more.
+    /// at once if either has more.
     const fn and(self, after: Self) -> Self {
         match (self, after) {
-            (_, Self::Woken) => Self::Woken,
             (Self::Waiting, Self::Waiting) => Self::Waiting,
-            (Self::Now | Self::Woken, Self::Waiting) | (_, Self::Now) => Self::Now,
+            (Self::Now, _) | (_, Self::Now) => Self::Now,
         }
     }
 }
@@ -240,42 +227,10 @@ impl Background {
     }
 }
 
-/// How long a run of background pages goes on: for up to [`PASS_BUDGET`], or until a wake, so what
-/// the wake brings waits for at most the backfill page and one more. It's asked after each page, so
-/// each run sends one, and constant wakes can't starve it.
-struct Budget<'w, 'n> {
-    deadline: Instant,
-    /// Takes the next wake, which the run's caller then acts on.
-    wake: Pin<&'w mut Notified<'n>>,
-}
-
-impl<'w, 'n> Budget<'w, 'n> {
-    fn new(wake: Pin<&'w mut Notified<'n>>) -> Self {
-        Self {
-            deadline: Instant::now() + PASS_BUDGET,
-            wake,
-        }
-    }
-
-    /// When the next pass goes, if the run stops here.
-    fn spent(&mut self) -> Option<NextPass> {
-        if self.wake.as_mut().enable() {
-            return Some(NextPass::Woken);
-        }
-        self.overdue().then_some(NextPass::Now)
-    }
-
-    /// Whether the run has had its time, whatever woke the engine meanwhile.
-    fn overdue(&self) -> bool {
-        Instant::now() >= self.deadline
-    }
-}
-
 struct EngineInner {
     queue: UploadQueue,
     hub: HubClient,
     handle: DaemonHandle,
-    outputs: Arc<OutputStore>,
     /// Where queued thread messages are read from.
     records: AiSessionStore,
     wake: Arc<Notify>,
@@ -283,7 +238,7 @@ struct EngineInner {
     logins: Notify,
     /// How many logins the engine has heard of, so background work backing off can tell one came.
     logins_heard: AtomicU64,
-    /// Who threads are shared with, and which threads and commands go up.
+    /// Who threads are shared with, and which threads go up.
     starts: Starts,
 }
 
@@ -316,7 +271,6 @@ impl EngineInner {
 
             woken = match next {
                 NextPass::Now => false,
-                NextPass::Woken => true,
                 NextPass::Waiting => tokio::select! {
                     () = self.wake.notified() => true,
                     () = self.logins.notified() => false,
@@ -360,7 +314,7 @@ impl EngineInner {
             return NextPass::Waiting;
         }
 
-        match self.send_backlog(sending).await {
+        match self.backfill(&sending.login).await {
             Ok(next) => {
                 background.went();
                 next
@@ -394,14 +348,17 @@ impl EngineInner {
         }
     }
 
-    /// Sends the logged-in user's queued deletions, then, while Octavo is on here, their queued
-    /// thread messages and thread shares, returning what their background work (see
-    /// [`Self::send_backlog`]) goes on with, if it may. What other users queued waits for them to
-    /// log in again.
+    /// Sends the logged-in user's queued thread messages and thread shares while Octavo is on
+    /// here, returning what [`Self::backfill`] goes on with, if it may. What other users queued
+    /// waits for them to log in again.
     ///
     /// While the account is marked off, a woken pass sends none of the uploads, and any other is a
     /// probe: it goes on past the first upload Octavo answers only if the answer finds Octavo on.
     async fn send_pending(&self, woken: bool) -> Result<Option<Sending>, RetryLater> {
+        if !threads_on(self.starts.configs()).await {
+            return Ok(None);
+        }
+
         let settings = self.handle.settings().await.clone();
         let login = match self.hub.login(&settings).await {
             Ok(login) => login,
@@ -412,10 +369,6 @@ impl EngineInner {
             }
         };
 
-        self.delete_pending(&login).await?;
-        if !threads_on(self.starts.configs()).await {
-            return Ok(None);
-        }
         // Before the bounds are fixed, so that only this host's backfill gets a bound and counts in
         // setup's gauge.
         self.drop_other_hosts_backfills(&login).await?;
@@ -450,182 +403,6 @@ impl EngineInner {
             Err(Halt::RetryLater) => NextPass::Waiting,
         };
         Ok(threads.and(shares))
-    }
-
-    /// Sends a page of `login`'s first thread backfill not done, then their queued history
-    /// entries, then (only after all history is done) their queued command output, all up to the
-    /// first [`Halt::Off`], saying whether more may be left. What the config files keep here stays
-    /// queued.
-    ///
-    /// History uploads and command output uploads each stop at [`Budget`].
-    async fn send_backlog(&self, Sending { login, .. }: &Sending) -> Result<NextPass, Halt> {
-        let mut wake = pin!(self.wake.notified());
-        let threads = self.backfill(login).await?;
-        let commands = if UPLOADS_HISTORY {
-            match self.send_history(login, wake.as_mut()).await? {
-                NextPass::Waiting => self.send_outputs(login, wake.as_mut()).await?,
-                next @ (NextPass::Now | NextPass::Woken) => next,
-            }
-        } else {
-            NextPass::Waiting
-        };
-
-        Ok(threads.and(commands))
-    }
-
-    /// Uploads pages of `login`'s queued history entries up to the [`Budget`] `wake` starts,
-    /// saying whether more may be left.
-    async fn send_history(
-        &self,
-        login: &HubLogin,
-        wake: Pin<&mut Notified<'_>>,
-    ) -> Result<NextPass, Halt> {
-        let mut budget = Budget::new(wake);
-        let mut pending = self.queue.pending_history(login.user_id());
-        while let Some(page) = pending.next().await {
-            let page = page.into_iter().collect::<Result<Vec<_>, _>>().map_err(|err| {
-                tracing::warn!(?err, "failed to read the octavo upload queue; retrying later");
-                RetryLater
-            })?;
-            self.send_history_page(login, page, &budget).await?;
-            if let Some(next) = budget.spent() {
-                return Ok(next);
-            }
-        }
-
-        Ok(NextPass::Waiting)
-    }
-
-    /// Uploads `page` of `login`'s queued history entries but for those the config files keep
-    /// here, which leave the queue too. Those it hasn't looked up once `budget` is overdue stay
-    /// queued.
-    async fn send_history_page(
-        &self,
-        login: &HubLogin,
-        page: Vec<PendingHistoryUpload>,
-        budget: &Budget<'_, '_>,
-    ) -> Result<(), Halt> {
-        let user = login.user_id();
-        let records: HashMap<_, _> =
-            page.iter().map(|upload| (upload.history_id, upload.record_id)).collect();
-        let loaded = self.handle.history_db().load_active(records.keys().copied()).await;
-        let loaded = loaded.map_err(|err| {
-            tracing::warn!(?err, "failed to load queued history entries; retrying later");
-            RetryLater
-        })?;
-
-        let mut refused = Vec::new();
-        let mut kept = Vec::new();
-        let mut entries = Vec::with_capacity(loaded.len());
-        let mut loaded = loaded.into_iter();
-        for history in loaded.by_ref() {
-            let id = history.id;
-            // Queued by `atuin setup --hub`, which doesn't ask the config files, or before one
-            // kept it here.
-            if uploads_command(self.starts.configs(), &history).await {
-                let record_id = records.get(&id).copied().flatten();
-                match pb::History::with_record(history, record_id) {
-                    Ok(entry) => entries.push(entry),
-                    Err(err) => {
-                        tracing::warn!(
-                            ?err,
-                            %id,
-                            "octavo will never accept this history entry; dropping it"
-                        );
-                        refused.push(id);
-                    }
-                }
-            } else {
-                kept.push(id);
-            }
-            // A lookup can take seconds on a hung network mount, and the rest of the pass waits.
-            if budget.overdue() {
-                break;
-            }
-        }
-        let unchecked: HashSet<_> = loaded.map(|history| history.id).collect();
-
-        let sent = upload(
-            entries,
-            "history entries",
-            |batch| login.upload_history(batch),
-            |entry, err| {
-                let id = history_id(entry);
-                tracing::warn!(
-                    ?err,
-                    ?id,
-                    "octavo will never accept this history entry; dropping it"
-                );
-                refused.extend(id);
-            },
-        )
-        .await;
-        let sent = match sent {
-            Ok(sent) => sent,
-            Err(UploadRetryLater { stored }) => {
-                if stored {
-                    clear_off(&self.queue, user).await;
-                }
-                return Err(Halt::RetryLater);
-            }
-        };
-        match sent {
-            Uploaded::Stored => {
-                clear_off(&self.queue, user).await;
-            }
-            Uploaded::NoneStored | Uploaded::Nothing => {}
-            Uploaded::Off => {
-                tracing::debug!(
-                    "octavo is off for the account; leaving its history entries queued"
-                );
-                mark_off(&self.queue, user).await;
-                return Err(Halt::Off);
-            }
-        }
-
-        for id in refused.into_iter().chain(kept) {
-            forget_output(&self.queue, user, id).await;
-        }
-        let settled = records.into_keys().filter(|id| !unchecked.contains(id));
-        self.queue.remove_history(user, settled).await.map_err(|err| {
-            tracing::warn!(
-                ?err,
-                "failed to remove history entries from the octavo upload queue; retrying later"
-            );
-            RetryLater
-        })?;
-
-        if sent == Uploaded::NoneStored {
-            return self.halt_if_off(login).await;
-        }
-        Ok(())
-    }
-
-    /// Uploads `login`'s queued outputs up to the [`Budget`] `wake` starts, saying whether more may
-    /// be left.
-    async fn send_outputs(
-        &self,
-        login: &HubLogin,
-        wake: Pin<&mut Notified<'_>>,
-    ) -> Result<NextPass, Halt> {
-        if !UPLOADS_HISTORY {
-            return Ok(NextPass::Waiting);
-        }
-
-        let mut budget = Budget::new(wake);
-        let mut pending = self.queue.pending_outputs(login.user_id()).items();
-        while let Some(output) = pending.next().await {
-            let PendingOutputUpload { history_id } = output.map_err(|err| {
-                tracing::warn!(?err, "failed to read the octavo output queue; retrying later");
-                RetryLater
-            })?;
-            self.upload_output(login, history_id).await?;
-            if let Some(next) = budget.spent() {
-                return Ok(next);
-            }
-        }
-
-        Ok(NextPass::Waiting)
     }
 
     /// Sends the queued thread messages of `login`'s user, as the config files say which go up.
@@ -1039,136 +816,6 @@ impl EngineInner {
         })
     }
 
-    async fn delete_pending(&self, login: &HubLogin) -> Result<(), RetryLater> {
-        loop {
-            let ids = self.queue.pending_deletions(login.user_id()).await.map_err(|err| {
-                tracing::warn!(?err, "failed to read the octavo deletion queue; retrying later");
-                RetryLater
-            })?;
-            if ids.is_empty() {
-                return Ok(());
-            }
-
-            for id in ids {
-                self.delete(login, id).await?;
-            }
-        }
-    }
-
-    async fn delete(&self, login: &HubLogin, id: HistoryId) -> Result<(), RetryLater> {
-        match login.delete(id).await {
-            Ok(()) => {}
-            Err(err) if err.is_permanent() => {
-                tracing::warn!(
-                    ?err,
-                    %id,
-                    "octavo refused to delete this history entry; dropping the deletion"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    %id,
-                    "failed to delete a history entry from octavo; retrying later"
-                );
-                return Err(RetryLater);
-            }
-        }
-
-        self.queue.remove_deletion(login.user_id(), id).await.map_err(|err| {
-            tracing::warn!(
-                ?err,
-                %id,
-                "failed to remove a deletion from the octavo queue; retrying later"
-            );
-            RetryLater
-        })
-    }
-
-    async fn upload_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), Halt> {
-        // Octavo can't have an entry `history end` hasn't stored here; its upload wakes the engine.
-        let Ok(Some(history)) = self.handle.history_db().load(id).await else {
-            return Ok(self.expire_output(login, id).await?);
-        };
-        // Its entry stays here too, so Octavo would only refuse it.
-        if !uploads_command(self.starts.configs(), &history).await {
-            return Ok(self.dequeue_output(login, id).await?);
-        }
-
-        let capture = match self.outputs.get(id).await {
-            Ok(capture) => capture,
-            Err(err) => {
-                tracing::warn!(?err, %id, "failed to read a queued output; skipping it");
-                return Ok(self.expire_output(login, id).await?);
-            }
-        };
-        // Deleted or collected locally, or not stored yet. A late output whose insert lands
-        // between `outputs.get` and `remove_output` is lost: two local statements wide, and only
-        // on the re-enable path.
-        let Some(capture) = capture else {
-            return Ok(self.dequeue_output(login, id).await?);
-        };
-
-        match login.upload_output(id, capture).await {
-            Ok(()) => {
-                clear_off(&self.queue, login.user_id()).await;
-            }
-            Err(HubCallError::HistoryNotStored(_)) => {
-                // Octavo refuses an account with it off before it looks for the entry, so this
-                // answer finds Octavo on, as a stored output does.
-                clear_off(&self.queue, login.user_id()).await;
-                tracing::debug!(%id, "octavo has not stored this output's entry yet");
-                return Ok(self.expire_output(login, id).await?);
-            }
-            Err(HubCallError::OctavoOff(_)) => {
-                tracing::debug!(%id, "octavo is off for the account; leaving this output queued");
-                mark_off(&self.queue, login.user_id()).await;
-                return Err(Halt::Off);
-            }
-            Err(err) if err.is_permanent() => {
-                tracing::warn!(?err, %id, "octavo will never accept this output; dropping it");
-                self.dequeue_output(login, id).await?;
-                return self.halt_if_off(login).await;
-            }
-            Err(err) => {
-                tracing::warn!(?err, %id, "failed to upload an output to octavo; retrying later");
-                return Err(Halt::RetryLater);
-            }
-        }
-
-        Ok(self.dequeue_output(login, id).await?)
-    }
-
-    /// Leaves the output of `id` queued to wait for its entry, unless it has waited
-    /// [`ORPHAN_AFTER`].
-    async fn expire_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), RetryLater> {
-        match self.queue.expire_output(login.user_id(), id, ORPHAN_AFTER).await {
-            Ok(true) => {
-                tracing::warn!(
-                    %id,
-                    "dropping an output that waited an hour without reaching octavo"
-                );
-                Ok(())
-            }
-            Ok(false) => Ok(()),
-            Err(err) => {
-                tracing::warn!(?err, %id, "failed to expire a queued output; retrying later");
-                Err(RetryLater)
-            }
-        }
-    }
-
-    async fn dequeue_output(&self, login: &HubLogin, id: HistoryId) -> Result<(), RetryLater> {
-        self.queue.remove_output(login.user_id(), id).await.map_err(|err| {
-            tracing::warn!(
-                ?err,
-                %id,
-                "failed to remove an output from the octavo upload queue; retrying later"
-            );
-            RetryLater
-        })
-    }
-
     /// Ends the pass, as [`Halt::Off`], while `login`'s account is marked off: Octavo answered an
     /// upload without storing it, which doesn't say whether the account has Octavo again.
     async fn halt_if_off(&self, login: &HubLogin) -> Result<(), Halt> {
@@ -1354,11 +1001,6 @@ impl UploadFailure {
     }
 }
 
-fn history_id(entry: &pb::History) -> Option<HistoryId> {
-    let id = entry.id.as_ref()?;
-    Uuid::from_slice(&id.value).ok().map(HistoryId::new)
-}
-
 /// The id of the record `message` was converted from.
 fn record_id(message: &pb::CapturedThreadMessage) -> Option<Uuid> {
     let id = message.message.as_ref()?.id.as_ref()?;
@@ -1372,12 +1014,11 @@ mod tests {
     use super::*;
 
     /// Live work that left threads to look up has the next pass go at once, however the
-    /// background work after it went, unless that stopped for a wake.
+    /// background work after it went.
     #[rstest]
     #[case::neither_has_more(NextPass::Waiting, NextPass::Waiting, NextPass::Waiting)]
     #[case::the_live_work_has_more(NextPass::Now, NextPass::Waiting, NextPass::Now)]
     #[case::the_background_has_more(NextPass::Waiting, NextPass::Now, NextPass::Now)]
-    #[case::the_background_was_woken(NextPass::Now, NextPass::Woken, NextPass::Woken)]
     fn the_next_pass_goes_as_soon_as_any_work_asks(
         #[case] live: NextPass,
         #[case] background: NextPass,
@@ -1461,42 +1102,5 @@ mod tests {
         assert!(first.is_ok(), "the backoff never ran out");
         let second = tokio::time::timeout(POLL_INTERVAL, background.backed_off()).await;
         assert!(second.is_err(), "the backoff ended a second wait");
-    }
-
-    #[tokio::test]
-    async fn a_wake_spends_the_budget() {
-        let wakes = Notify::new();
-        let mut wake = pin!(wakes.notified());
-        let mut budget = Budget::new(wake.as_mut());
-        assert_eq!(budget.spent(), None);
-
-        wakes.notify_one();
-        assert_eq!(budget.spent(), Some(NextPass::Woken));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn the_time_spends_the_budget() {
-        let wakes = Notify::new();
-        let mut wake = pin!(wakes.notified());
-        let mut budget = Budget::new(wake.as_mut());
-
-        tokio::time::advance(PASS_BUDGET).await;
-        assert_eq!(budget.spent(), Some(NextPass::Now));
-    }
-
-    /// The engine waits for the next wake once background work is done: one that came while it ran,
-    /// after its last page, must still end that wait.
-    #[tokio::test]
-    async fn a_wake_the_budget_doesnt_take_stays() {
-        let wakes = Notify::new();
-        {
-            let mut wake = pin!(wakes.notified());
-            let mut budget = Budget::new(wake.as_mut());
-            assert_eq!(budget.spent(), None);
-            wakes.notify_one();
-        }
-
-        let woken = tokio::time::timeout(Duration::from_secs(1), wakes.notified()).await;
-        assert!(woken.is_ok(), "the wake was lost");
     }
 }

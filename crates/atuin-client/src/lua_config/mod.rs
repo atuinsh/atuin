@@ -27,7 +27,7 @@ use thiserror::Error;
 use self::header::Header;
 pub use self::header::HeaderError;
 pub use self::orgs::{OrgSlug, OrgSlugError, Orgs, TooManyOrgs};
-pub use self::upload::{Command, RuleName, Subject, Thread, Upload};
+pub use self::upload::{RuleName, Subject, Thread, Upload};
 use self::vm::Vm;
 
 /// The names a directory's config file may have, of which it may hold one.

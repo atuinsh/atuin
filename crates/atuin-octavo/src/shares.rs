@@ -4,17 +4,15 @@
 //! [`atuin_client::lua_config`]), else of the user's own. A share holds the whole thread, so a
 //! thread's are those every directory it ran in has in common.
 //!
-//! A thread or command goes up only if each config file covering it lets it, by its `upload`:
-//! every project's at and above where it started or ran, and the user's own. A project's file comes
-//! with whatever the user cloned, so it can only keep things here. The user's own turns uploading
-//! on, so without a rule there nothing goes.
+//! A thread goes up only if each config file covering it lets it, by its `upload`: every project's
+//! at and above where it started, and the user's own. A project's file comes with whatever the user
+//! cloned, so it can only keep threads here. The user's own turns uploading on, so without a rule
+//! there nothing goes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use atuin_client::lua_config::{
-    Command, ConfigFile, LoadError, OrgSlug, RuleName, Subject, Thread, Upload,
-};
+use atuin_client::lua_config::{ConfigFile, LoadError, OrgSlug, RuleName, Subject, Thread, Upload};
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -59,12 +57,6 @@ impl Configs {
     /// be read or run fails, as it may be what keeps the thread here.
     pub async fn uploads_thread(&self, thread: Thread) -> Result<bool, LookupError> {
         self.off_runtime(move |configs| configs.uploads(thread)).await
-    }
-
-    /// Whether each config file covering where `command` ran lets it go up. Fails as
-    /// [`Self::uploads_thread`] does.
-    pub async fn uploads_command(&self, command: Command) -> Result<bool, LookupError> {
-        self.off_runtime(move |configs| configs.uploads(command)).await
     }
 
     /// Runs `look_up` on a blocking thread, as a hung network mount hangs it.
@@ -155,7 +147,6 @@ mod tests {
     use std::fs;
 
     use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
-    use atuin_client::history::History;
     use atuin_common::path::PathBufExt as _;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -331,33 +322,6 @@ mod tests {
 
         assert_eq!(err.path(), broken);
         assert!(!uploads(root.path(), "private").expect("the lookup"));
-    }
-
-    #[rstest]
-    #[case::let_go("ls", true)]
-    #[case::kept("cat secret.txt", false)]
-    fn a_command_goes_by_the_directory_it_ran_in(
-        root: TempDir,
-        #[case] command: &str,
-        #[case] expected: bool,
-    ) {
-        write(root.path(), "home/atuin.lua", r"atuin.config = { upload = { history = true } }");
-        write(
-            root.path(),
-            "projects/work/atuin.lua",
-            r#"atuin.config = { upload = { history = function(c) return not string.find(c.command, "secret", 1, true) end } }"#,
-        );
-        let dir = root.path().join("projects/work/src");
-        let history: History = History::import()
-            .timestamp(jiff::Timestamp::UNIX_EPOCH)
-            .command(command)
-            .cwd(dir.to_str().expect("a UTF-8 temp dir"))
-            .build()
-            .into();
-
-        let uploads = configs(root.path()).uploads(Command::from(&history));
-
-        assert_eq!(uploads.expect("the lookup"), expected);
     }
 
     #[rstest]

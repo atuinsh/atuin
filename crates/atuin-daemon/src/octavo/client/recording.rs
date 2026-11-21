@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
-use atuin_client::history::{History, HistoryId};
-use atuin_domain::record::RecordId;
 use parking_lot::Mutex;
 
 use super::OctavoClient;
@@ -24,12 +22,6 @@ impl RecordingOctavoClient {
 }
 
 impl OctavoClient for RecordingOctavoClient {
-    async fn push_history(&self, _history: &History, _record_id: RecordId) {}
-
-    async fn push_output(&self, _id: HistoryId) {}
-
-    async fn delete_history(&self, _ids: &[HistoryId]) {}
-
     async fn queue_thread_messages(&self, _messages: &[Message]) -> ThreadUpload {
         ThreadUpload::Queued {
             wake: Arc::default(),

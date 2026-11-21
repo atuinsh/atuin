@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::lua_config::OrgSlug;
 use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
 use hyper_tls::HttpsConnector;
@@ -17,7 +16,6 @@ use url::Url;
 
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
-use crate::pb::{NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
@@ -33,12 +31,6 @@ pub enum ConnectError {
 
 #[derive(Debug, Error)]
 pub enum HubCallError {
-    #[error("history {0}")]
-    Id(#[from] NotUuidV7<HistoryId>),
-    #[error(transparent)]
-    OutputTooLarge(#[from] OutputTooLarge),
-    #[error("the hub has not stored the history entry yet")]
-    HistoryNotStored(#[source] tonic::Status),
     #[error("the hub has not stored the thread yet")]
     ThreadNotStored(#[source] tonic::Status),
     #[error("Atuin for Teams needs a hub login; run `atuin login`")]
@@ -84,7 +76,6 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Id(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser
@@ -93,7 +84,6 @@ impl HubCallError {
             | Self::SelfHostedHub(_)
             | Self::HubChanged(_)
             | Self::InvalidToken(_)
-            | Self::HistoryNotStored(_)
             | Self::ThreadNotStored(_)
             | Self::NoUserId
             // Until the account has Octavo again.
@@ -289,46 +279,6 @@ pub struct HubLogin {
 impl HubLogin {
     pub fn user_id(&self) -> &UserId {
         &self.user_id
-    }
-
-    pub async fn upload_history(&self, batch: pb::HistoryBatch) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::InsertHistoryRequest::from(batch));
-
-        self.caller.service.clone().insert_history(request).await.map_err(HubCallError::from)?;
-        Ok(())
-    }
-
-    /// Stores `capture` as the output of the entry with `id`.
-    ///
-    /// Fails with [`HubCallError::HistoryNotStored`] until the entry itself is stored.
-    pub async fn upload_output(
-        &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::InsertHistoryOutputRequest {
-            id: Some(id.try_into()?),
-            output: Some(capture.try_into()?),
-        });
-
-        match self.caller.service.clone().insert_history_output(request).await {
-            Ok(_) => Ok(()),
-            Err(status) if status.code() == Code::AlreadyExists => Ok(()),
-            Err(status) if status.code() == Code::NotFound => {
-                Err(HubCallError::HistoryNotStored(status))
-            }
-            Err(status) => Err(status.into()),
-        }
-    }
-
-    /// Deletes the entry with `id`, and keeps it from being stored again.
-    pub async fn delete(&self, id: HistoryId) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::DeleteHistoryRequest {
-            id: Some(id.try_into()?),
-        });
-
-        self.caller.service.clone().delete_history(request).await.map_err(HubCallError::from)?;
-        Ok(())
     }
 
     /// Stores `batch`'s messages, all or none.

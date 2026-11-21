@@ -34,7 +34,7 @@ use super::plan::{
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
-use super::upload::{Gauge, Progress, State, Upload};
+use super::upload::{Gauge, Progress, State, Tracker, Upload};
 use super::{Answer, Found, Offer, Scope, Status, Step, Sync, Update, count, is_address, names};
 
 pub(super) const ACCENT: Color = Color::LightGreen;
@@ -273,7 +273,7 @@ async fn watch(
     }
     let uploading = Status::Running("Uploading to Atuin for Teams".into());
     running.update(Update::Step(Step::Upload, uploading));
-    let mut tracker = upload.tracker();
+    let mut tracker = Tracker::default();
     let mut read_at: Option<Instant> = None;
     let summary = loop {
         if read_at.is_none_or(|at| at.elapsed() >= READ_EVERY) {
@@ -1526,9 +1526,6 @@ impl Running {
 #[cfg(feature = "octavo")]
 fn upload_lines(progress: &Progress) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if progress.commands.total > 0 {
-        lines.push(gauge_line("Commands", progress.commands));
-    }
     match progress.threads {
         Some(threads) if threads.total > 0 => lines.push(gauge_line("Threads", threads)),
         Some(_) => {}
@@ -2908,23 +2905,17 @@ mod tests {
         State::Stalled { daemon_running: true },
         Some("    Nothing's gone up for a while: the daemon keeps trying"),
     )]
-    fn the_upload_shows_a_bar_per_count_and_why_it_stalled(
-        #[case] state: State,
-        #[case] why: Option<&str>,
-    ) {
+    fn the_upload_shows_a_bar_and_why_it_stalled(#[case] state: State, #[case] why: Option<&str>) {
         let progress = Progress {
-            commands: Gauge {
+            threads: Some(Gauge {
                 done: 4_210,
                 total: 6_000,
-            },
-            threads: None,
+            }),
             held: 0,
             state,
         };
-        let mut expected = vec![
-            format!("    Commands  {}{}  4,210 of 6,000", "█".repeat(16), "░".repeat(8)),
-            "    Threads   counting…".to_owned(),
-        ];
+        let mut expected =
+            vec![format!("    Threads   {}{}  4,210 of 6,000", "█".repeat(16), "░".repeat(8))];
         expected.extend(why.map(str::to_owned));
         assert_eq!(text(&upload_lines(&progress)), expected);
     }
@@ -2937,7 +2928,6 @@ mod tests {
         let running = Running {
             steps: vec![(Step::Upload, Status::Running("Uploading to Atuin for Teams".into()))],
             upload: Some(Progress {
-                commands: Gauge { done: 0, total: 0 },
                 threads: Some(Gauge { done: 1, total: 4 }),
                 held: 0,
                 state: State::Uploading,

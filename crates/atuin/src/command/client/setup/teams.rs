@@ -5,7 +5,6 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use atuin_client::history::HistoryId;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::record::sync::{ClientSource, SyncSession};
 use atuin_client::settings::Settings;
@@ -15,14 +14,13 @@ use atuin_domain::caps::OctavoCap;
 use atuin_domain::record::{HostId, RecordStatus, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, UserId};
 use atuin_octavo::queue::UploadQueue;
-use atuin_octavo::{UPLOADS_HISTORY, pb};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools as _;
 
 use super::plan::ThreadUploads;
 use super::upload::Upload;
 use super::users_file::{UsersFile, WriteError};
-use super::{Status, Step, Updates, count, names, send};
+use super::{Status, Step, Updates, count, send};
 
 /// Whether the user's own config file turns Atuin for Teams on, and for which threads. One that
 /// can't be read or run leaves it off.
@@ -57,8 +55,8 @@ pub(super) async fn disable(tx: &Updates) {
     send(tx, Step::Teams, status);
 }
 
-/// Turn Atuin for Teams on for `uploads`, if the account has it, and upload what Atuin already
-/// has here if `backfill`. Returns the upload to watch, if it started one.
+/// Turn Atuin for Teams on for `uploads`, if the account has it, and upload the threads Atuin
+/// already has if `backfill`. Returns the upload to watch, if it started one.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
     store: &SqliteStore,
@@ -107,10 +105,13 @@ async fn turn_on(
         return Ok((Status::Failed(failed), None));
     }
 
-    let backfill = if backfill {
-        Backfill::read(settings, store, uploads).await?
+    // Only with every thread going up, because threads stay local with uploads off, and setup
+    // allows `--backfill` only when uploads aren't limited to workspaces (see
+    // `impl Choice<Plan> for Backfill` in `plan.rs`).
+    let threads = if backfill && uploads == ThreadUploads::All {
+        StoredThreads::read(settings, store).await?
     } else {
-        Backfill::default()
+        StoredThreads::default()
     };
 
     // Opened before the config says it's on, so a queue that can't be opened leaves it off.
@@ -123,7 +124,7 @@ async fn turn_on(
     // An unfixed backfill from an earlier setup would be fixed at the tail on the daemon's next
     // pass with it on, taking threads captured while it was off. Dropped before the config turns
     // it on, so that pass can't come first.
-    backfill.drop_earlier_unfixed(&queue, user).await?;
+    threads.drop_earlier_unfixed(&queue, user).await?;
     match users_file().await?.write(uploads) {
         Ok(()) => {}
         Err(err @ WriteError::Theirs { .. }) => return Ok((Status::Failed(err.to_string()), None)),
@@ -131,34 +132,26 @@ async fn turn_on(
     }
 
     // Queued before the restart, so the daemon starts on it.
-    let queued = backfill.queue(&queue, user).await;
+    let queued = threads.queue(&queue, user).await;
     // Even with it on already, or the queue refusing: a daemon started before the upload queue
     // existed uploads nothing until it restarts, and the config can't say whether one did.
     let restarted = restart_daemon(settings).await;
-    let Queued {
-        uploading,
-        old,
-        other_machines,
-    } = queued?;
+    let messages = queued?;
     if let Err(instruction) = restarted {
         let failed = format!("Atuin for Teams is on once the daemon restarts: {instruction}");
         return Ok((Status::Failed(failed), None));
     }
 
-    let upload = uploading
+    let upload = messages
         .is_some()
         .then(|| Upload::new(queue, user.clone(), settings.daemon.pidfile_path.clone()));
-    let uploading =
-        uploading.map_or_else(String::new, |what| format!(", uploading {what} in the background"));
-    let old = if old > 0 {
-        format!(". {} commands from before Atuin v14 can't go up", count(old))
-    } else {
-        String::new()
-    };
+    let uploading = messages.map_or_else(String::new, |messages| {
+        format!(", uploading {} thread messages in the background", count(messages))
+    });
     Ok((
         Status::Done(format!(
-            "Atuin for Teams is on{uploading}{old}{}",
-            OtherMachines(other_machines)
+            "Atuin for Teams is on{uploading}{}",
+            OtherMachines(threads.other_machines)
         )),
         upload,
     ))
@@ -188,107 +181,8 @@ impl fmt::Display for OtherMachines {
     }
 }
 
-/// What Atuin already has here, to upload.
-#[derive(Default)]
-struct Backfill {
-    history: Vec<HistoryId>,
-    /// The commands left out of `history`, recorded before Atuin v14 with ids Atuin for Teams
-    /// can't take.
-    old: usize,
-    threads: Option<StoredThreads>,
-}
-
-/// What `Backfill::queue` queued, and what it left out.
-struct Queued {
-    /// What goes up, if anything.
-    uploading: Option<String>,
-    /// How many commands stay out.
-    old: usize,
-    /// How many other machines hold threads that only those machines upload.
-    other_machines: usize,
-}
-
-impl Backfill {
-    /// Whether this backfill queues this machine's threads.
-    fn requests_own_threads(&self) -> bool {
-        self.threads.as_ref().is_some_and(|threads| threads.own.is_some())
-    }
-
-    /// Drops `user`'s unfixed backfills from an earlier setup, unless this backfill queues this
-    /// machine's threads again.
-    async fn drop_earlier_unfixed(&self, queue: &UploadQueue, user: &UserId) -> Result<()> {
-        if !self.requests_own_threads() {
-            queue
-                .drop_unfixed_thread_backfills(user)
-                .await
-                .wrap_err("couldn't cancel an earlier upload of your threads")?;
-        }
-        Ok(())
-    }
-
-    /// What's here of what Atuin for Teams uploads, as it uploads `uploads`.
-    async fn read(
-        settings: &Arc<Settings>,
-        store: &SqliteStore,
-        uploads: ThreadUploads,
-    ) -> Result<Self> {
-        let (history, old) = if UPLOADS_HISTORY {
-            let db = atuin_client::database::Sqlite::new(&settings.db_path, settings.local_timeout);
-            db.await?
-                .active_ids()
-                .await?
-                .into_iter()
-                .partition(|&id| pb::UuidV7::try_from(id).is_ok())
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        // Only with every thread going up, because threads stay local with uploads off, and setup
-        // allows `--backfill` only when uploads aren't limited to workspaces (see
-        // `impl Choice<Plan> for Backfill` in `plan.rs`).
-        let threads = if uploads == ThreadUploads::All {
-            Some(StoredThreads::read(settings, store).await?)
-        } else {
-            None
-        };
-        Ok(Self {
-            history,
-            old: old.len(),
-            threads,
-        })
-    }
-
-    /// Queue the uploads for `user`.
-    async fn queue(self, queue: &UploadQueue, user: &UserId) -> Result<Queued> {
-        let mut going = Vec::new();
-        if !self.history.is_empty() {
-            let queued = queue
-                .push_many_history(user, self.history)
-                .await
-                .wrap_err("couldn't queue your history for upload")?;
-            going.push(format!("{} commands", count(queued)));
-        }
-        let StoredThreads {
-            own,
-            other_machines,
-        } = self.threads.unwrap_or_default();
-        // The daemon fixes this machine's bound at its tail as of when it sees Atuin for Teams on.
-        if let Some(OwnThreads { host, messages }) = own {
-            queue
-                .request_thread_backfill(user, [(host, None)])
-                .await
-                .wrap_err("couldn't queue your threads for upload")?;
-            going.push(format!("{} thread messages", count(messages)));
-        }
-        let going: Vec<&str> = going.iter().map(String::as_str).collect();
-        Ok(Queued {
-            uploading: (!going.is_empty()).then(|| names(&going)),
-            old: self.old,
-            other_machines,
-        })
-    }
-}
-
-/// The account's thread records, as setup splits them between this machine and the others.
+/// The account's thread records, as setup splits them between this machine and the others. The
+/// default backfills nothing.
 #[derive(Default)]
 struct StoredThreads {
     /// This machine's series, if it has one.
@@ -353,6 +247,33 @@ impl StoredThreads {
             }
         }
         threads
+    }
+
+    /// Drops `user`'s unfixed backfills from an earlier setup, unless this machine's threads are
+    /// queued again.
+    async fn drop_earlier_unfixed(&self, queue: &UploadQueue, user: &UserId) -> Result<()> {
+        if self.own.is_none() {
+            queue
+                .drop_unfixed_thread_backfills(user)
+                .await
+                .wrap_err("couldn't cancel an earlier upload of your threads")?;
+        }
+        Ok(())
+    }
+
+    /// Queue the upload of this machine's threads for `user`. Returns how many thread messages go
+    /// up, if any.
+    ///
+    /// The daemon fixes this machine's bound at its tail as of when it sees Atuin for Teams on.
+    async fn queue(&self, queue: &UploadQueue, user: &UserId) -> Result<Option<u64>> {
+        let Some(OwnThreads { host, messages }) = &self.own else {
+            return Ok(None);
+        };
+        queue
+            .request_thread_backfill(user, [(*host, None)])
+            .await
+            .wrap_err("couldn't queue your threads for upload")?;
+        Ok(Some(*messages))
     }
 }
 
@@ -449,19 +370,16 @@ mod tests {
         let user = UserId::new("alice");
         queue.request_thread_backfill(&user, [(HERE, None)]).await.expect("request");
         queue.advance_thread_backfill(&user, HERE, 3).await.expect("advance");
-        let backfill = Backfill {
-            threads: Some(StoredThreads {
-                own: messages.map(|messages| OwnThreads {
-                    host: HERE,
-                    messages,
-                }),
-                other_machines: 1,
+        let threads = StoredThreads {
+            own: messages.map(|messages| OwnThreads {
+                host: HERE,
+                messages,
             }),
-            ..Backfill::default()
+            other_machines: 1,
         };
 
-        backfill.drop_earlier_unfixed(&queue, &user).await.expect("drop");
-        backfill.queue(&queue, &user).await.expect("queue");
+        threads.drop_earlier_unfixed(&queue, &user).await.expect("drop");
+        threads.queue(&queue, &user).await.expect("queue");
 
         assert_eq!(queue.thread_backfills(&user).await.expect("read"), expected);
     }

@@ -19,12 +19,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     tonic_prost_build::configure()
         .build_server(false)
         .extern_path(".atuin.api.v1.TokenUsage", "::atuin_common::harnesstools::session::Usage")
-        // The heartbeat beside a whole History or Thread is empty, so these events are always
-        // lopsided, and boxing the entry would only add an allocation to each one streamed.
-        .type_attribute(
-            ".atuin.api.v1.WatchHistoryResponse.event",
-            "#[allow(clippy::large_enum_variant)]",
-        )
+        // The heartbeat beside a whole Thread is empty, so these events are always lopsided, and
+        // boxing the thread would only add an allocation to each one streamed.
         .type_attribute(
             ".atuin.api.v1.WatchThreadsResponse.event",
             "#[allow(clippy::large_enum_variant)]",

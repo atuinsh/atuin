@@ -2,7 +2,6 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::time::Duration;
 
-use atuin_client::history::HistoryId;
 use atuin_common::db;
 use atuin_common::db::sqlite::{Sqlite, SqliteOpenOrCreateError};
 use atuin_common::futures::stream::ChunkedStream;
@@ -21,7 +20,6 @@ mod shares;
 pub use self::shares::{NotSent, PendingClose, PendingOpen, QueuedThread, SentClose, SentOpen};
 
 const PAGE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();
-const HISTORY_PAGE_SIZE: NonZeroU32 = pb::HistoryBatch::MAX_ITEMS;
 /// As many as one `InsertThreadMessages` takes, so a page of small messages is one request.
 const THREAD_PAGE_SIZE: NonZeroU32 = pb::ThreadBatch::MAX_ITEMS;
 
@@ -33,17 +31,6 @@ pub enum QueueError {
     Migrate(#[from] MigrateError),
     #[error("an upload queue query failed")]
     Query(#[from] sqlx::Error),
-}
-
-#[derive(Debug, Clone, Copy, sqlx::FromRow)]
-pub struct PendingHistoryUpload {
-    pub history_id: HistoryId,
-    pub record_id: Option<RecordId>,
-}
-
-#[derive(Debug, Clone, Copy, sqlx::FromRow)]
-pub struct PendingOutputUpload {
-    pub history_id: HistoryId,
 }
 
 #[derive(Debug, Clone, Copy, sqlx::FromRow)]
@@ -65,8 +52,6 @@ pub struct ThreadBackfill {
 /// What is left of a user's uploads, as one read of the queue saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backlog {
-    /// Queued history entries.
-    pub history: u64,
     /// Queued thread messages, less the held ones a restarted daemon uploads.
     pub thread_messages: u64,
     /// Held thread messages: stored, but under a key or from a build this daemon can't read.
@@ -87,65 +72,6 @@ impl UploadQueue {
         let db = Sqlite::builder(path.as_ref().as_os_str()).restrict_permissions().open().await?;
         db::migrate!(db.pool(), "./migrations").await?;
         Ok(Self { db })
-    }
-
-    /// Queues `user`'s entry `id` for upload.
-    pub async fn push_history(
-        &self,
-        user: &UserId,
-        id: HistoryId,
-        record_id: RecordId,
-    ) -> Result<(), QueueError> {
-        db::query(
-            "INSERT OR IGNORE INTO history_uploads (user_id, history_id, record_id) VALUES (?1, \
-             ?2, ?3)",
-        )
-        .bind(user.as_str())
-        .bind(id)
-        .bind(record_id)
-        .execute(self.db.pool())
-        .await?;
-        Ok(())
-    }
-
-    pub async fn push_many_history(
-        &self,
-        user: &UserId,
-        ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<u64, QueueError> {
-        self.insert_ids("history_uploads", "history_id", user, ids).await
-    }
-
-    /// Queues the deletion of `user`'s entries `ids` from Octavo, returning how many were not
-    /// queued already.
-    pub async fn push_deletions(
-        &self,
-        user: &UserId,
-        ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<u64, QueueError> {
-        self.insert_ids("history_deletions", "history_id", user, ids).await
-    }
-
-    /// The first page of `user`'s queued deletions, in id order.
-    pub async fn pending_deletions(&self, user: &UserId) -> Result<Vec<HistoryId>, QueueError> {
-        let ids = db::query_scalar(
-            "SELECT history_id FROM history_deletions WHERE user_id = ?1 ORDER BY history_id \
-             LIMIT ?2",
-        )
-        .bind(user.as_str())
-        .bind(PAGE_SIZE.get())
-        .fetch_all(self.db.pool())
-        .await?;
-        Ok(ids)
-    }
-
-    pub async fn remove_deletion(&self, user: &UserId, id: HistoryId) -> Result<(), QueueError> {
-        db::query("DELETE FROM history_deletions WHERE user_id = ?1 AND history_id = ?2")
-            .bind(user.as_str())
-            .bind(id)
-            .execute(self.db.pool())
-            .await?;
-        Ok(())
     }
 
     async fn insert_ids<I>(
@@ -174,87 +100,6 @@ impl UploadQueue {
 
         tx.commit().await?;
         Ok(queued)
-    }
-
-    /// `user`'s queued uploads, in id order.
-    pub fn pending_history(
-        &self,
-        user: &UserId,
-    ) -> ChunkedStream<Result<PendingHistoryUpload, QueueError>> {
-        self.paged(
-            user,
-            HISTORY_PAGE_SIZE,
-            "SELECT history_id, record_id FROM history_uploads WHERE user_id = ?1 AND (?2 IS NULL \
-             OR history_id > ?2) ORDER BY history_id LIMIT ?3",
-            |upload: &PendingHistoryUpload| upload.history_id,
-        )
-    }
-
-    pub async fn remove_history(
-        &self,
-        user: &UserId,
-        ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<(), QueueError> {
-        self.run_over_ids(user, "history_id", ids, |statement| {
-            statement.push("DELETE FROM history_uploads WHERE");
-        })
-        .await?;
-        Ok(())
-    }
-
-    /// Queues the upload of the output of `user`'s entry `id`.
-    pub async fn push_output(&self, user: &UserId, id: HistoryId) -> Result<(), QueueError> {
-        db::query("INSERT OR IGNORE INTO output_uploads (user_id, history_id) VALUES (?1, ?2)")
-            .bind(user.as_str())
-            .bind(id)
-            .execute(self.db.pool())
-            .await?;
-        Ok(())
-    }
-
-    /// `user`'s queued output uploads, in id order.
-    pub fn pending_outputs(
-        &self,
-        user: &UserId,
-    ) -> ChunkedStream<Result<PendingOutputUpload, QueueError>> {
-        self.paged(
-            user,
-            PAGE_SIZE,
-            "SELECT history_id FROM output_uploads WHERE user_id = ?1 AND (?2 IS NULL OR \
-             history_id > ?2) ORDER BY history_id LIMIT ?3",
-            |upload: &PendingOutputUpload| upload.history_id,
-        )
-    }
-
-    pub async fn remove_output(&self, user: &UserId, id: HistoryId) -> Result<(), QueueError> {
-        db::query("DELETE FROM output_uploads WHERE user_id = ?1 AND history_id = ?2")
-            .bind(user.as_str())
-            .bind(id)
-            .execute(self.db.pool())
-            .await?;
-        Ok(())
-    }
-
-    /// Removes `user`'s queued output upload for `id` if it was queued at least `after` ago, to
-    /// the second, returning whether it did.
-    pub async fn expire_output(
-        &self,
-        user: &UserId,
-        id: HistoryId,
-        after: Duration,
-    ) -> Result<bool, QueueError> {
-        let after = i64::try_from(after.as_secs()).unwrap_or(i64::MAX);
-        let expired = db::query(
-            "DELETE FROM output_uploads WHERE user_id = ?1 AND history_id = ?2 AND queued_at <= \
-             unixepoch() - ?3",
-        )
-        .bind(user.as_str())
-        .bind(id)
-        .bind(after)
-        .execute(self.db.pool())
-        .await?
-        .rows_affected();
-        Ok(expired == 1)
     }
 
     /// Queues the upload of `user`'s thread messages stored as the records `ids`, returning how
@@ -500,9 +345,6 @@ impl UploadQueue {
         let mut tx = self.db.pool().begin().await?;
         let count =
             |sql: &'static str| db::query_scalar::<sqlx::Sqlite, i64>(sql).bind(user.as_str());
-        let history = count("SELECT COUNT(*) FROM history_uploads WHERE user_id = ?1")
-            .fetch_one(&mut *tx)
-            .await?;
         let thread_messages =
             count("SELECT COUNT(*) FROM thread_message_uploads WHERE user_id = ?1 AND held = 0")
                 .fetch_one(&mut *tx)
@@ -525,7 +367,6 @@ impl UploadQueue {
         // `COUNT(*)` is never negative.
         let unsigned = |n: i64| u64::try_from(n).unwrap_or_default();
         Ok(Backlog {
-            history: unsigned(history),
             thread_messages: unsigned(thread_messages),
             held_thread_messages: unsigned(held_thread_messages),
             backfills,
@@ -622,77 +463,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("a temp dir");
         let queue = UploadQueue::open(dir.path().join("octavo.db")).await.expect("queue opens");
         TempQueue { queue, _dir: dir }
-    }
-
-    /// Ids in the order `uuid_v7` made them, which is their sort order.
-    fn ids(count: usize) -> Vec<HistoryId> {
-        (0..count).map(|_| HistoryId::from(uuid_v7())).collect()
-    }
-
-    async fn pending(queue: &UploadQueue, user: &UserId) -> Vec<HistoryId> {
-        queue
-            .pending_outputs(user)
-            .items()
-            .map_ok(|pending| pending.history_id)
-            .try_collect()
-            .await
-            .expect("the queue reads")
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn pending_outputs_are_each_users_own_in_id_order(#[future(awt)] queue: TempQueue) {
-        let (alice, bob) = (UserId::new("alice"), UserId::new("bob"));
-        let ids = ids(3);
-        for (user, id) in [(&alice, ids[1]), (&bob, ids[2]), (&alice, ids[0]), (&alice, ids[1])] {
-            queue.queue.push_output(user, id).await.expect("push");
-        }
-
-        assert_eq!(pending(&queue.queue, &alice).await, ids[..2]);
-        assert_eq!(pending(&queue.queue, &bob).await, ids[2..]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn pending_outputs_pages_through_more_than_a_page(#[future(awt)] queue: TempQueue) {
-        let user = UserId::new("alice");
-        let ids = ids(usize::try_from(PAGE_SIZE.get()).expect("fits") * 2 + 1);
-        for &id in &ids {
-            queue.queue.push_output(&user, id).await.expect("push");
-        }
-
-        assert_eq!(pending(&queue.queue, &user).await, ids);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn remove_output_takes_only_that_users_row(#[future(awt)] queue: TempQueue) {
-        let (alice, bob) = (UserId::new("alice"), UserId::new("bob"));
-        let id = HistoryId::from(uuid_v7());
-        queue.queue.push_output(&alice, id).await.expect("push");
-        queue.queue.push_output(&bob, id).await.expect("push");
-
-        queue.queue.remove_output(&alice, id).await.expect("remove");
-
-        assert_eq!(pending(&queue.queue, &alice).await, vec![]);
-        assert_eq!(pending(&queue.queue, &bob).await, vec![id]);
-    }
-
-    #[rstest]
-    #[case::fresh(Duration::from_secs(60 * 60), false)]
-    #[case::due(Duration::ZERO, true)]
-    #[tokio::test]
-    async fn expire_output_removes_only_a_row_queued_that_long_ago(
-        #[future(awt)] queue: TempQueue,
-        #[case] after: Duration,
-        #[case] expired: bool,
-    ) {
-        let user = UserId::new("alice");
-        let id = HistoryId::from(uuid_v7());
-        queue.queue.push_output(&user, id).await.expect("push");
-
-        assert_eq!(queue.queue.expire_output(&user, id, after).await.expect("expire"), expired);
-        assert_eq!(pending(&queue.queue, &user).await.is_empty(), expired);
     }
 
     /// Ids in the order `uuid_v7` made them, which is their sort order.
@@ -896,8 +666,6 @@ mod tests {
     async fn backlog_counts_what_is_left_of_each_users_uploads(#[future(awt)] queue: TempQueue) {
         let (alice, bob) = (UserId::new("alice"), UserId::new("bob"));
         let host = HostId(uuid_v7());
-        queue.queue.push_many_history(&alice, ids(3)).await.expect("push");
-        queue.queue.push_many_history(&bob, ids(1)).await.expect("push");
         let messages = record_ids(3);
         queue.queue.push_thread_messages(&alice, messages.iter().copied()).await.expect("push");
         queue.queue.hold_thread_messages(&alice, [messages[0]]).await.expect("hold");
@@ -906,7 +674,6 @@ mod tests {
         queue.queue.mark_off(&alice).await.expect("mark");
 
         assert_eq!(queue.queue.backlog(&alice).await.expect("read"), Backlog {
-            history: 3,
             thread_messages: 2,
             held_thread_messages: 1,
             backfills: vec![ThreadBackfill {
@@ -917,7 +684,6 @@ mod tests {
             off: true,
         });
         assert_eq!(queue.queue.backlog(&bob).await.expect("read"), Backlog {
-            history: 1,
             thread_messages: 0,
             held_thread_messages: 0,
             backfills: Vec::new(),

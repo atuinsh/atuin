@@ -3,7 +3,6 @@ syntax = "proto3";
 package atuin.api.v1;
 
 import "atuin/api/v1/common.proto";
-import "atuin/api/v1/history.proto";
 import "atuin/api/v1/share.proto";
 import "atuin/api/v1/threads.proto";
 import "buf/validate/validate.proto";
@@ -11,54 +10,6 @@ import "google/protobuf/timestamp.proto";
 
 // The hub's user-facing API.
 service HubService {
-  // Store the calling user's finished commands that their history doesn't hold yet.
-  //
-  // The history keeps one entry per id, the first stored, so a client can repeat a request or send
-  // entries another install already sent. Entries the user deleted are accepted and dropped. Fails
-  // with `INVALID_ARGUMENT` (`INVALID_HISTORY`), naming the first field at fault and storing none
-  // of the request, and with `RESOURCE_EXHAUSTED` when the request body, gRPC framing included, is
-  // over 10 MiB.
-  rpc InsertHistory(InsertHistoryRequest) returns (InsertHistoryResponse);
-
-  // Return one page of the calling user's history entries that match the filter, newest first by
-  // start time, then by id.
-  //
-  // Pass `next_page_token` back as `page_token`, with the same filter and within a day, for the
-  // next page; any other token fails with `INVALID_ARGUMENT` (`INVALID_PAGE_TOKEN`). An empty
-  // `next_page_token` means there are no more pages.
-  rpc SearchHistory(SearchHistoryRequest) returns (SearchHistoryResponse);
-
-  // Count the calling user's history entries that match the filter, and their most common hosts,
-  // authors and working directories.
-  //
-  // Each list holds the top five values, most common first, ties broken by value, and ignores the
-  // filter's own field for it: under `host: "devbox"`, `hosts` still names the other hosts.
-  rpc TallyHistory(TallyHistoryRequest) returns (TallyHistoryResponse);
-
-  // Stream the calling user's entries that match the filter as they are stored.
-  //
-  // Sends a heartbeat once subscribed and after every 25 seconds without a message. Entries
-  // stored before the call are not sent.
-  rpc WatchHistory(WatchHistoryRequest) returns (stream WatchHistoryResponse);
-
-  // Delete the calling user's history entry with this id, and keep it from being stored again.
-  //
-  // An id that names no stored entry is still remembered as deleted, so a client can repeat a
-  // deletion, or send it before the upload it races.
-  rpc DeleteHistory(DeleteHistoryRequest) returns (DeleteHistoryResponse);
-
-  // Store the output of the calling user's history entry with this id, if it has none yet.
-  //
-  // Fails with `NOT_FOUND` (`HISTORY_NOT_FOUND`) until the entry is stored, and with
-  // `ALREADY_EXISTS` (`HISTORY_OUTPUT_ALREADY_EXISTS`) once it has output, keeping what was
-  // stored. Output for an entry the user deleted is accepted and dropped.
-  rpc InsertHistoryOutput(InsertHistoryOutputRequest) returns (InsertHistoryOutputResponse);
-
-  // The output of the calling user's history entry with this id.
-  //
-  // Fails with `NOT_FOUND` (`HISTORY_OUTPUT_NOT_FOUND`) when none is stored.
-  rpc GetHistoryOutput(GetHistoryOutputRequest) returns (GetHistoryOutputResponse);
-
   // Store the calling user's thread messages that their threads don't hold yet, with the threads
   // they name.
   //
@@ -345,106 +296,6 @@ service HubService {
   // Count the threads that `SearchOrgThreads` finds, and their most common values. The count works
   // as `TallyThreads` does for the calling user's threads. Fails as `SearchOrgThreads` does.
   rpc TallyOrgThreads(TallyOrgThreadsRequest) returns (TallyOrgThreadsResponse);
-}
-
-message InsertHistoryRequest {
-  // At most 500. An empty request stores nothing.
-  repeated History entries = 1 [(buf.validate.field).repeated.max_items = 500];
-}
-
-message InsertHistoryResponse {}
-
-message SearchHistoryRequest {
-  // Which entries to return.
-  HistoryFilter filter = 1;
-  // The most entries to return in one page. At most 200; larger values are rejected. 0 means 50.
-  uint32 page_size = 2 [(buf.validate.field).uint32.lte = 200];
-  // Opaque. Copy the `next_page_token` of the previous page, or leave empty for the first page.
-  string page_token = 3;
-}
-
-message SearchHistoryResponse {
-  // The entries on this page.
-  repeated History entries = 1;
-  // Opaque. Empty on the last page.
-  string next_page_token = 2;
-}
-
-message TallyHistoryRequest {
-  // Which entries to count.
-  HistoryFilter filter = 1;
-}
-
-message TallyHistoryResponse {
-  // How many entries match the filter.
-  uint64 total = 1;
-  // How many matching entries did not exit with status 0.
-  uint64 failed = 2;
-  // How many matching entries were decided by an agent.
-  uint64 by_agents = 3;
-  // The top five hosts among the entries the filter matches without its `host`, most common
-  // first, ties broken by value.
-  repeated HistoryTally hosts = 4;
-  // The top five authors among the entries the filter matches without its `author`, most common
-  // first, ties broken by value.
-  repeated HistoryTally authors = 5;
-  // The top five working directories among the entries the filter matches without its `cwd`,
-  // most common first, ties broken by value.
-  repeated HistoryTally cwds = 6;
-}
-
-// One value and how many matching entries have it.
-message HistoryTally {
-  // The value, such as a host name or a directory.
-  string value = 1;
-  // How many matching entries have this value.
-  uint64 count = 2;
-}
-
-message WatchHistoryRequest {
-  // Which entries to stream.
-  HistoryFilter filter = 1;
-}
-
-// One message on a `WatchHistory` stream.
-message WatchHistoryResponse {
-  oneof event {
-    option (buf.validate.oneof).required = true;
-
-    // An entry the user stored that matches the filter.
-    History history = 1;
-    // Shows the stream is still open.
-    WatchHistoryHeartbeat heartbeat = 2;
-  }
-}
-
-// Sent to show the stream is still open.
-message WatchHistoryHeartbeat {}
-
-message DeleteHistoryRequest {
-  // The id of the entry to delete, as `History.id` gave it.
-  UuidV7 id = 1 [(buf.validate.field).required = true];
-}
-
-message DeleteHistoryResponse {}
-
-message InsertHistoryOutputRequest {
-  // The entry the output is of, as `History.id` gave it.
-  UuidV7 id = 1 [(buf.validate.field).required = true];
-  // Logically required.
-  HistoryOutput output = 2 [(buf.validate.field).required = true];
-}
-
-message InsertHistoryOutputResponse {}
-
-message GetHistoryOutputRequest {
-  // The entry whose output to get, as `History.id` gave it.
-  UuidV7 id = 1 [(buf.validate.field).required = true];
-}
-
-message GetHistoryOutputResponse {
-  // Logically required.
-  HistoryOutput output = 1 [(buf.validate.field).required = true];
 }
 
 message InsertThreadMessagesRequest {

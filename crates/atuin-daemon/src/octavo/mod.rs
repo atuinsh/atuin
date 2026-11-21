@@ -4,10 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
-use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
-use atuin_domain::record::RecordId;
 pub use atuin_octavo::hub::UserId;
 use atuin_octavo::shares::Configs;
 #[cfg(test)]
@@ -16,7 +14,6 @@ use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient}
 use tokio::sync::Notify;
 
 use crate::daemon::DaemonHandle;
-use crate::output_capture::OutputStore;
 
 /// Thread messages taken for Octavo before capture stores their records: they go once
 /// [`Self::start`] says the records are stored, so no upload reads the queue ahead of them.
@@ -72,23 +69,20 @@ pub struct Octavo {
 }
 
 impl Octavo {
-    /// Opens the client for `settings`, reading queued outputs from `outputs`, queued thread
-    /// messages from `records`, and where threads started from `sidecar`, if there is one.
+    /// Opens the client for `settings`, reading queued thread messages from `records`, and where
+    /// threads started from `sidecar`, if there is one.
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
-        outputs: Arc<OutputStore>,
         records: AiSessionStore,
         sidecar: Option<AiSessionDatabase>,
     ) -> Self {
-        // Once Octavo has been on here, deletions keep reaching it with uploads off, so what the
-        // user deletes locally leaves Octavo too.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
-        if !settings.octavo_queue_path().exists() && !threads_on(&configs).await {
+        if !threads_on(&configs).await {
             return Self::nop();
         }
 
-        let client = client::ActiveOctavoClient::open(settings, handle, outputs, records, sidecar);
+        let client = client::ActiveOctavoClient::open(settings, handle, records, sidecar);
         match client.await {
             Ok(client) => Self {
                 client: client.into(),
@@ -112,19 +106,6 @@ impl Octavo {
         Self {
             client: client.into(),
         }
-    }
-
-    pub async fn push_history(&self, history: &History, record_id: RecordId) {
-        self.client.push_history(history, record_id).await;
-    }
-
-    /// Queues the upload of the output captured for `id`, which goes once its entry is stored.
-    pub async fn push_output(&self, id: HistoryId) {
-        self.client.push_output(id).await;
-    }
-
-    pub async fn delete_history(&self, ids: &[HistoryId]) {
-        self.client.delete_history(ids).await;
     }
 
     /// Queues the upload of `messages`, captured on this host, which goes once their records are
