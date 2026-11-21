@@ -1,6 +1,8 @@
-use std::path::PathBuf;
 #[cfg(unix)]
-use std::{borrow::Cow, path::Path};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 #[cfg(unix)]
 use atuin_common::os::unix::{SecureTempDirError, create_secure_temp_dir};

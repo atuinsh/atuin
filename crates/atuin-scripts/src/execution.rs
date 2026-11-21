@@ -79,23 +79,31 @@ fn script_command(
     program: impl AsRef<OsStr>,
     child_umask: Option<Umask>,
 ) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(program);
-
     #[cfg(unix)]
-    if let Some(mask) = child_umask {
-        // SAFETY: the closure only calls `Umask::install_raw`, which is async-signal-safe.
-        unsafe {
-            cmd.pre_exec(move || {
-                mask.install_raw();
-                Ok(())
-            });
+    {
+        let mut cmd = tokio::process::Command::new(program);
+
+        if let Some(mask) = child_umask {
+            // SAFETY: the closure only calls `Umask::install_raw`, which is async-signal-safe.
+            unsafe {
+                cmd.pre_exec(move || {
+                    mask.install_raw();
+                    Ok(())
+                });
+            }
         }
+
+        cmd
     }
 
     #[cfg(not(unix))]
-    let _ = child_umask;
+    {
+        let cmd = tokio::process::Command::new(program);
 
-    cmd
+        let _ = child_umask;
+
+        cmd
+    }
 }
 
 /// Execute a script interactively, allowing for ongoing stdin/stdout interaction
