@@ -5,12 +5,31 @@ use eyre::{Result, bail};
 use crate::i18n::fl;
 
 pub async fn run(settings: &Settings) -> Result<()> {
+    // Normalize any mis-stored tokens before deciding there is nothing to
+    // link. A legacy CLI token left in the hub_session slot (from an earlier
+    // token-storage bug) is moved to the session slot by resolve_sync_auth().
+    let _ = settings.resolve_sync_auth().await;
+
     let meta = settings.meta_store().await?;
 
     let cli_token = meta.session_token().await?;
     let hub_token = meta.hub_session_token().await?;
 
     let Some(cli_token) = cli_token else {
+        // No CLI (sync) session to link. If the user is already authenticated
+        // with Hub — e.g. they logged in through the browser flow with
+        // `atuin login` — their Hub identity is already their account, so
+        // there is no separate CLI session to associate.
+        if let Some(hub_token) = &hub_token {
+            if atuin_client::meta::is_hub_token(hub_token) {
+                userio::log::info!("link-hub-authenticated");
+                return Ok(());
+            }
+            // A non-Hub token in hub_session (e.g. a misplaced CLI token
+            // that resolve_sync_auth() couldn't move, such as on a full
+            // disk) is not a Hub session — fall through to the error below.
+        }
+
         bail!(fl!("link-no-cli-session"));
     };
 
