@@ -9,8 +9,19 @@ use std::time::{Duration, Instant};
 use atuin_common::path::PathBufExt as _;
 use tempfile::TempDir;
 
-pub const TIMEOUT: Duration = Duration::from_secs(30);
-pub const LOCAL_TIMEOUT: Duration = Duration::from_secs(15);
+// Tight enough for a typical developer machine; Raspberry Pi-class
+// aarch64-linux builders need several times as long or timing-sensitive e2e
+// tests flake (https://github.com/atuinsh/atuin/issues/4673).
+pub const TIMEOUT: Duration = if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+    Duration::from_secs(180)
+} else {
+    Duration::from_secs(30)
+};
+pub const LOCAL_TIMEOUT: Duration = if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+    Duration::from_secs(60)
+} else {
+    Duration::from_secs(15)
+};
 pub const SESSION: &str = "b9c063b7b7204f81a50e3e0d51031f01";
 
 /// A temporary home with the built binary on PATH and isolated Atuin data.
