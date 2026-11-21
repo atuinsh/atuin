@@ -1,4 +1,4 @@
-//! Which threads Atuin for Teams uploads: those that the config files covering where each started
+//! Which threads Atuin Hub uploads: those that the config files covering where each started
 //! let go (see [`atuin_octavo::shares`]).
 //!
 //! Where a thread started is the first directory its rows in the sidecar name. Rows as captured

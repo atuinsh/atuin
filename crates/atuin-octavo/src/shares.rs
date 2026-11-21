@@ -40,7 +40,7 @@ impl Configs {
         self.off_runtime(move |configs| configs.common(&dirs)).await
     }
 
-    /// Whether the user's own config file turns Atuin for Teams on, by an `upload.threads` that may
+    /// Whether the user's own config file turns Atuin Hub on, by an `upload.threads` that may
     /// let a thread go.
     pub async fn threads_on(&self) -> Result<bool, LookupError> {
         self.off_runtime(|configs| {

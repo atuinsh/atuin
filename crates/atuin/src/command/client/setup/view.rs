@@ -29,8 +29,8 @@ use tokio::sync::mpsc;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Form as _, Needs};
 use super::plan::{
-    AgentHistory, Agents, AtuinForTeams, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan,
-    ShellHistory, Shells, ThreadUploads, Threads, UpArrow,
+    AgentHistory, Agents, AtuinHub, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan, ShellHistory,
+    Shells, ThreadUploads, Threads, UpArrow,
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
@@ -170,8 +170,8 @@ async fn drive(
     }
 
     #[cfg(feature = "octavo")]
-    if let Some(super::Teams::On { backfill }) = plan.teams() {
-        let on = super::turn_on_teams(store, backfill, plan.upload_threads.0, &tx);
+    if let Some(super::Hub::On { backfill }) = plan.hub() {
+        let on = super::turn_on_hub(store, backfill, plan.upload_threads.0, &tx);
         match drawn(terminal, &mut running, &mut updates, &mut tick, on).await? {
             Some(Some(upload)) => {
                 watch(terminal, &mut running, &mut updates, &mut tick, &upload).await?;
@@ -271,7 +271,7 @@ async fn watch(
     while let Ok(update) = updates.try_recv() {
         running.update(update);
     }
-    let uploading = Status::Running("Uploading to Atuin for Teams".into());
+    let uploading = Status::Running("Uploading to Atuin Hub".into());
     running.update(Update::Step(Step::Upload, uploading));
     let mut tracker = Tracker::default();
     let mut read_at: Option<Instant> = None;
@@ -300,7 +300,7 @@ async fn watch(
         {
             let summary = running.upload.as_ref().map(Progress::summary);
             break Status::Done(
-                summary.unwrap_or_else(|| "Uploading to Atuin for Teams in the background".into()),
+                summary.unwrap_or_else(|| "Uploading to Atuin Hub in the background".into()),
             );
         }
     };
@@ -600,9 +600,9 @@ impl Sharing {
     /// Whether the hub page offers it, as [`Row::state`] says: with `--hub`, once Atuin Cloud is
     /// picked.
     fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
-        let teams = plan.ask::<AtuinForTeams>()?;
+        let hub = plan.ask::<AtuinHub>()?;
         let shares = match self {
-            Self::Always | Self::Workspaces => teams,
+            Self::Always | Self::Workspaces => hub,
             Self::Off => Ok(()),
         };
         (plan.sync == Sync::Cloud).then_some(shares)
@@ -611,9 +611,9 @@ impl Sharing {
     fn is_picked(self, plan: &Plan) -> bool {
         let threads = plan.upload_threads.0;
         match self {
-            Self::Always => plan.atuin_for_teams.0 && threads == ThreadUploads::All,
-            Self::Workspaces => plan.atuin_for_teams.0 && threads == ThreadUploads::Workspaces,
-            Self::Off => !plan.atuin_for_teams.0,
+            Self::Always => plan.atuin_hub.0 && threads == ThreadUploads::All,
+            Self::Workspaces => plan.atuin_hub.0 && threads == ThreadUploads::Workspaces,
+            Self::Off => !plan.atuin_hub.0,
         }
     }
 }
@@ -709,9 +709,9 @@ impl Choose {
             }
         }
         let mut plan = plan.clone();
-        // The hub page offers Atuin for Teams only with Atuin Cloud, where it can be on.
-        let teams = matches!(plan.ask::<AtuinForTeams>(), Some(Ok(())));
-        plan.atuin_for_teams.0 &= teams && plan.sync == Sync::Cloud;
+        // The hub page offers Atuin Hub only with Atuin Cloud, where it can be on.
+        let hub = matches!(plan.ask::<AtuinHub>(), Some(Ok(())));
+        plan.atuin_hub.0 &= hub && plan.sync == Sync::Cloud;
         Self {
             plan,
             server: {
@@ -938,10 +938,10 @@ impl Choose {
             SyncTo::SelfHosted => Sync::Server(self.server.as_str().to_owned()),
             SyncTo::Off => Sync::Off,
         };
-        // Atuin for Teams comes only with Atuin Cloud, which `--hub` shares from as it can.
+        // Atuin Hub comes only with Atuin Cloud, which `--hub` shares from as it can.
         if moved {
-            let teams = matches!(self.plan.ask::<AtuinForTeams>(), Some(Ok(())));
-            self.plan.atuin_for_teams.0 = to == SyncTo::Cloud && teams;
+            let hub = matches!(self.plan.ask::<AtuinHub>(), Some(Ok(())));
+            self.plan.atuin_hub.0 = to == SyncTo::Cloud && hub;
         }
         if to == SyncTo::SelfHosted {
             self.row = Row::Server;
@@ -952,14 +952,14 @@ impl Choose {
     const fn share(&mut self, sharing: Sharing) {
         match sharing {
             Sharing::Always => {
-                self.plan.atuin_for_teams.0 = true;
+                self.plan.atuin_hub.0 = true;
                 self.plan.upload_threads.0 = ThreadUploads::All;
             }
             Sharing::Workspaces => {
-                self.plan.atuin_for_teams.0 = true;
+                self.plan.atuin_hub.0 = true;
                 self.plan.upload_threads.0 = ThreadUploads::Workspaces;
             }
-            Sharing::Off => self.plan.atuin_for_teams.0 = false,
+            Sharing::Off => self.plan.atuin_hub.0 = false,
         }
     }
 
@@ -1358,7 +1358,7 @@ struct Running {
     sign_in: SignIn,
     /// Where the sign-in link was written, last frame.
     link_at: Option<(u16, u16)>,
-    /// How far the Atuin for Teams upload has got, while setup watches it.
+    /// How far the Atuin Hub upload has got, while setup watches it.
     #[cfg(feature = "octavo")]
     upload: Option<Progress>,
 }
@@ -1534,7 +1534,7 @@ fn upload_lines(progress: &Progress) -> Vec<Line<'static>> {
     let why = match progress.state {
         State::Uploading | State::Done => None,
         State::Paused => {
-            Some(Span::raw("    Paused while your account has Atuin for Teams off").yellow())
+            Some(Span::raw("    Paused while your account has Atuin Hub off").yellow())
         }
         State::Stalled {
             daemon_running: false,
@@ -2070,7 +2070,7 @@ mod tests {
 
     use super::super::super::init::Shell;
     #[cfg(feature = "octavo")]
-    use super::super::Teams;
+    use super::super::Hub;
     use super::super::plan::{Asks, Backfill, Mcp, UploadThreads};
     use super::super::{SYNC, THREADS};
     use super::*;
@@ -2097,7 +2097,7 @@ mod tests {
             server: None,
             upload_threads: ThreadUploads::All,
             connections: Vec::new(),
-            teams: false,
+            hub: false,
         }
     }
 
@@ -2141,7 +2141,7 @@ mod tests {
 
     /// The plan `atuin setup --hub` starts the screen from.
     #[cfg(feature = "octavo")]
-    fn teams(found: &Found) -> Plan {
+    fn hub(found: &Found) -> Plan {
         super::super::Cmd::parse_from(["setup", "--hub"]).plan(found, false).unwrap()
     }
 
@@ -2199,7 +2199,7 @@ mod tests {
         assert_eq!(finish(&mut choose), Plan {
             asks: Asks {
                 agents: true,
-                teams: false,
+                hub: false,
                 searchable: false,
                 unhooks: false,
             },
@@ -2218,7 +2218,7 @@ mod tests {
             } else {
                 Sync::Off
             },
-            atuin_for_teams: AtuinForTeams(false),
+            atuin_hub: AtuinHub(false),
             upload_threads: UploadThreads(ThreadUploads::All),
             backfill: Backfill(false),
         });
@@ -2676,49 +2676,49 @@ mod tests {
 
     #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::always(&[], Some(Teams::On { backfill: false }), ThreadUploads::All)]
+    #[case::always(&[], Some(Hub::On { backfill: false }), ThreadUploads::All)]
     #[case::workspace_only(
         &[Row::Sharing(Sharing::Workspaces)],
-        Some(Teams::On { backfill: false }),
+        Some(Hub::On { backfill: false }),
         ThreadUploads::Workspaces,
     )]
-    #[case::disabled(&[Row::Sharing(Sharing::Off)], Some(Teams::Off), ThreadUploads::All)]
-    #[case::self_hosted(&[Row::SyncTo(SyncTo::SelfHosted)], Some(Teams::Off), ThreadUploads::All)]
+    #[case::disabled(&[Row::Sharing(Sharing::Off)], Some(Hub::Off), ThreadUploads::All)]
+    #[case::self_hosted(&[Row::SyncTo(SyncTo::SelfHosted)], Some(Hub::Off), ThreadUploads::All)]
     #[case::back_to_atuin_cloud(
         &[Row::SyncTo(SyncTo::Off), Row::SyncTo(SyncTo::Cloud)],
-        Some(Teams::On { backfill: false }),
+        Some(Hub::On { backfill: false }),
         ThreadUploads::All,
     )]
     #[case::atuin_cloud_picked_again(
         &[Row::Sharing(Sharing::Off), Row::SyncTo(SyncTo::Cloud)],
-        Some(Teams::Off),
+        Some(Hub::Off),
         ThreadUploads::All,
     )]
-    #[case::backfill(&[Row::Backfill], Some(Teams::On { backfill: true }), ThreadUploads::All)]
+    #[case::backfill(&[Row::Backfill], Some(Hub::On { backfill: true }), ThreadUploads::All)]
     #[case::no_backfill_of_workspaces(
         &[Row::Backfill, Row::Sharing(Sharing::Workspaces)],
-        Some(Teams::On { backfill: false }),
+        Some(Hub::On { backfill: false }),
         ThreadUploads::Workspaces,
     )]
     fn atuin_cloud_shares_threads_as_picked(
         found: Found,
         #[case] picked: &[Row],
-        #[case] expected: Option<Teams>,
+        #[case] expected: Option<Hub>,
         #[case] threads: ThreadUploads,
     ) {
-        let mut choose = on_page(&found, &teams(&found), Page::Sync);
+        let mut choose = on_page(&found, &hub(&found), Page::Sync);
         choose.server = Cursor::from(String::from("https://atuin.example.com"));
         for &row in picked {
             choose.row = row;
             press(&mut choose, &[KeyCode::Enter]);
         }
         let plan = finish(&mut choose);
-        assert_eq!((plan.teams(), plan.upload_threads.0), (expected, threads));
+        assert_eq!((plan.hub(), plan.upload_threads.0), (expected, threads));
     }
 
     #[cfg(feature = "sync")]
     #[rstest]
-    #[case::without_teams(false, SyncTo::Cloud, &[Page::Features, Page::Sync])]
+    #[case::without_hub(false, SyncTo::Cloud, &[Page::Features, Page::Sync])]
     #[cfg_attr(
         feature = "octavo",
         case::atuin_cloud(true, SyncTo::Cloud, &[Page::Features, Page::Sync, Page::Hub]),
@@ -2730,11 +2730,11 @@ mod tests {
     #[cfg_attr(feature = "octavo", case::disabled(true, SyncTo::Off, &[Page::Features, Page::Sync]))]
     fn the_hub_page_follows_atuin_cloud_with_the_flag(
         found: Found,
-        #[case] teams: bool,
+        #[case] hub: bool,
         #[case] to: SyncTo,
         #[case] expected: &[Page],
     ) {
-        let flags: &[&str] = if teams {
+        let flags: &[&str] = if hub {
             &["setup", "--hub"]
         } else {
             &["setup"]
@@ -2775,7 +2775,7 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     fn the_hub_page_says_what_atuin_hub_is_and_what_each_choice_uploads(found: Found) {
-        let choose = on_page(&found, &teams(&found), Page::Hub);
+        let choose = on_page(&found, &hub(&found), Page::Hub);
         let shown = shown(&choose, &found);
         assert!(shown[1].contains("Features › Sync › Hub"), "{shown:#?}");
         let at = shown.iter().position(|row| row.trim_end() == "  Atuin Hub").expect("a heading");
@@ -2808,7 +2808,7 @@ mod tests {
         #[case] sharing: Sharing,
         #[case] asked: bool,
     ) {
-        let mut choose = on_page(&found, &teams(&found), Page::Hub);
+        let mut choose = on_page(&found, &hub(&found), Page::Hub);
         choose.row = Row::Sharing(sharing);
         press(&mut choose, &[KeyCode::Enter]);
         assert_eq!(states(&choose, &[Row::Backfill]).len() == 1, asked);
@@ -2896,7 +2896,7 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::uploading(State::Uploading, None)]
-    #[case::paused(State::Paused, Some("    Paused while your account has Atuin for Teams off"))]
+    #[case::paused(State::Paused, Some("    Paused while your account has Atuin Hub off"))]
     #[case::no_daemon(
         State::Stalled { daemon_running: false },
         Some("    Nothing's gone up for a while, and the daemon isn't running: run `atuin daemon start`"),
@@ -2926,7 +2926,7 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 22)).unwrap();
         let running = Running {
-            steps: vec![(Step::Upload, Status::Running("Uploading to Atuin for Teams".into()))],
+            steps: vec![(Step::Upload, Status::Running("Uploading to Atuin Hub".into()))],
             upload: Some(Progress {
                 threads: Some(Gauge { done: 1, total: 4 }),
                 held: 0,
@@ -2941,7 +2941,7 @@ mod tests {
             .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
             .map(|row| row.trim_end().to_owned())
             .collect();
-        let at = rows.iter().position(|row| row.ends_with("Uploading to Atuin for Teams"));
+        let at = rows.iter().position(|row| row.ends_with("Uploading to Atuin Hub"));
         let at = at.expect("the step is drawn");
         assert_eq!(
             rows[at + 1],

@@ -54,11 +54,11 @@ impl ThreadUpload {
     }
 }
 
-/// Whether the user's own config file turns Atuin for Teams on. One that can't be run leaves it
+/// Whether the user's own config file turns Atuin Hub on. One that can't be run leaves it
 /// off.
 async fn threads_on(configs: &Configs) -> bool {
     configs.threads_on().await.unwrap_or_else(|err| {
-        tracing::warn!(?err, "leaving Atuin for Teams off, as your own config file can't be run");
+        tracing::warn!(?err, "leaving Atuin Hub off, as your own config file can't be run");
         false
     })
 }

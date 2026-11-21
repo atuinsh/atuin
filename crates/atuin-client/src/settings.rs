@@ -686,13 +686,13 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
-/// `[__debug__]`: settings kept out of the docs on purpose, for pointing Atuin for Teams at a hub
+/// `[__debug__]`: settings kept out of the docs on purpose, for pointing Atuin Hub at a hub
 /// other than Atuin's. Whether it's on, and what goes up, is the user's own `atuin.lua` to say
 /// (see [`crate::lua_config`]).
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct DebugSettings {
-    /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
+    /// The gRPC address Atuin Hub uploads to, honored only while `sync_address` is a
     /// self-hosted hub.
     pub hub_address: Option<Url>,
     /// `atuin mcp` forwards thread tools to this MCP server. It is honored only while
@@ -2828,7 +2828,7 @@ mod tests {
         assert_eq!(settings.debug.hub_address, expected.map(|url| Url::parse(url).unwrap()));
     }
 
-    /// Whether Atuin for Teams is on is the user's own `atuin.lua` to say, and its hub is in
+    /// Whether Atuin Hub is on is the user's own `atuin.lua` to say, and its hub is in
     /// `[__debug__]`, so `[teams]` and `[octavo]` are typos now.
     #[cfg(feature = "octavo")]
     #[rstest]

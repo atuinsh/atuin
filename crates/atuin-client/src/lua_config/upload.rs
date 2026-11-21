@@ -1,4 +1,4 @@
-//! What a config file lets go up to Atuin for Teams, as its `upload` says: `threads` rules on
+//! What a config file lets go up to Atuin Hub, as its `upload` says: `threads` rules on
 //! each thread, by where it started. It is a boolean, or a function that takes the [`Thread`] and
 //! returns one.
 //!

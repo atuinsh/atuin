@@ -43,7 +43,7 @@ async fn octavo(settings: &Settings) -> Option<atuin_ai::mcp::Octavo> {
         atuin_common::dirs::try_atuin_home().ok().map(std::path::PathBuf::from),
     );
     let on = configs.threads_on().await.unwrap_or_else(|err| {
-        tracing::warn!(?err, "your own atuin.lua can't be run; leaving Atuin for Teams off");
+        tracing::warn!(?err, "your own atuin.lua can't be run; leaving Atuin Hub off");
         false
     });
     if !on {

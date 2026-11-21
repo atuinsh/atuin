@@ -3,7 +3,7 @@
 //!
 //! The count's total is what the first read left, grown only when more is queued than it counted,
 //! so what's done never goes back. A backfill counts once the daemon has fixed where it stops,
-//! which it does for this machine's threads as it first sees Atuin for Teams on.
+//! which it does for this machine's threads as it first sees Atuin Hub on.
 
 use std::time::{Duration, Instant};
 
@@ -69,7 +69,7 @@ impl Gauge {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum State {
     Uploading,
-    /// The account has Atuin for Teams off, which pauses the upload until it's back on.
+    /// The account has Atuin Hub off, which pauses the upload until it's back on.
     Paused,
     /// Nothing has gone up for [`STALL_AFTER`]: the daemon is retrying, or isn't running.
     Stalled {
@@ -96,13 +96,13 @@ impl Progress {
                 1 => " but 1 thread message this Atuin can't read yet".into(),
                 held => format!(" but {} thread messages this Atuin can't read yet", count(held)),
             };
-            return format!("Uploaded everything here to Atuin for Teams{held}");
+            return format!("Uploaded everything here to Atuin Hub{held}");
         }
         let Some(Gauge { done, total }) = self.threads.filter(|gauge| gauge.total > 0) else {
-            return "Uploading to Atuin for Teams in the background".into();
+            return "Uploading to Atuin Hub in the background".into();
         };
         let rest = if self.state == State::Paused {
-            "the rest goes once your account has Atuin for Teams again"
+            "the rest goes once your account has Atuin Hub again"
         } else {
             "the rest uploading in the background"
         };
@@ -255,13 +255,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::done(Some(gauge(3, 3)), 0, State::Done, "Uploaded everything here to Atuin for Teams")]
+    #[case::done(Some(gauge(3, 3)), 0, State::Done, "Uploaded everything here to Atuin Hub")]
     #[case::done_but_held(
         Some(gauge(3, 3)),
         2,
         State::Done,
-        "Uploaded everything here to Atuin for Teams but 2 thread messages this Atuin can't read \
-         yet"
+        "Uploaded everything here to Atuin Hub but 2 thread messages this Atuin can't read yet"
     )]
     #[case::uploading(
         Some(gauge(830, 4_100)),
@@ -273,13 +272,13 @@ mod tests {
         Some(gauge(1, 9)),
         0,
         State::Paused,
-        "1 of 9 thread messages up, the rest goes once your account has Atuin for Teams again"
+        "1 of 9 thread messages up, the rest goes once your account has Atuin Hub again"
     )]
     #[case::counting(
         None,
         0,
         State::Stalled { daemon_running: false },
-        "Uploading to Atuin for Teams in the background"
+        "Uploading to Atuin Hub in the background"
     )]
     fn summary_says_how_far_it_got(
         #[case] threads: Option<Gauge>,

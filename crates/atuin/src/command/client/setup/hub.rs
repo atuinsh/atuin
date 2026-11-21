@@ -1,4 +1,4 @@
-//! Atuin for Teams in `atuin setup`: turned on once sign-in has said the account has it, by the
+//! Atuin Hub in `atuin setup`: turned on once sign-in has said the account has it, by the
 //! user's own `atuin.lua`.
 
 use std::fmt;
@@ -22,13 +22,13 @@ use super::upload::Upload;
 use super::users_file::{UsersFile, WriteError};
 use super::{Status, Step, Updates, count, send};
 
-/// Whether the user's own config file turns Atuin for Teams on, and for which threads. One that
+/// Whether the user's own config file turns Atuin Hub on, and for which threads. One that
 /// can't be read or run leaves it off.
 pub(super) async fn found() -> (ThreadUploads, bool) {
     match users_file().await {
         Ok(file) => file.uploads(),
         Err(err) => {
-            tracing::debug!(?err, "can't read your own atuin.lua; taking Atuin for Teams as off");
+            tracing::debug!(?err, "can't read your own atuin.lua; taking Atuin Hub as off");
             (ThreadUploads::All, false)
         }
     }
@@ -41,21 +41,21 @@ async fn users_file() -> Result<UsersFile> {
     Ok(read.await??)
 }
 
-/// Turn Atuin for Teams off, as far as the user's own config file lets setup.
+/// Turn Atuin Hub off, as far as the user's own config file lets setup.
 pub(super) async fn disable(tx: &Updates) {
-    send(tx, Step::Teams, Status::Running("Turning off Atuin for Teams".into()));
+    send(tx, Step::Hub, Status::Running("Turning off Atuin Hub".into()));
     let failed =
-        |err: eyre::Report| Status::Failed(format!("Couldn't turn off Atuin for Teams ({err:#})"));
+        |err: eyre::Report| Status::Failed(format!("Couldn't turn off Atuin Hub ({err:#})"));
     let status = match users_file().await.map(|file| file.write(ThreadUploads::Off)) {
-        Ok(Ok(())) => Status::Done("Atuin for Teams is off".into()),
+        Ok(Ok(())) => Status::Done("Atuin Hub is off".into()),
         Ok(Err(err @ WriteError::Theirs { .. })) => Status::Failed(err.to_string()),
         Ok(Err(err @ WriteError::Write { .. })) => failed(err.into()),
         Err(err) => failed(err),
     };
-    send(tx, Step::Teams, status);
+    send(tx, Step::Hub, status);
 }
 
-/// Turn Atuin for Teams on for `uploads`, if the account has it, and upload the threads Atuin
+/// Turn Atuin Hub on for `uploads`, if the account has it, and upload the threads Atuin
 /// already has if `backfill`. Returns the upload to watch, if it started one.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
@@ -64,17 +64,16 @@ pub(super) async fn enable(
     uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<Upload> {
-    send(tx, Step::Teams, Status::Running("Turning on Atuin for Teams".into()));
+    send(tx, Step::Hub, Status::Running("Turning on Atuin Hub".into()));
     let (status, upload) = match turn_on(settings, store, backfill, uploads).await {
         Ok(on) => on,
         Err(e) => {
-            let failed = format!(
-                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
-            );
+            let failed =
+                format!("Couldn't turn on Atuin Hub ({e:#}). Run `atuin setup --hub` to try again");
             (Status::Failed(failed), None)
         }
     };
-    send(tx, Step::Teams, status);
+    send(tx, Step::Hub, status);
     upload
 }
 
@@ -90,7 +89,7 @@ async fn turn_on(
         Ok(login) => login,
         Err(HubCallError::NotLoggedIn) => {
             let failed =
-                "Atuin for Teams needs you signed in: run `atuin login`, then `atuin setup --hub`";
+                "Atuin Hub needs you signed in: run `atuin login`, then `atuin setup --hub`";
             return Ok((Status::Failed(failed.into()), None));
         }
         Err(err) => return Err(err).wrap_err("couldn't ask the hub who you're signed in as"),
@@ -101,7 +100,7 @@ async fn turn_on(
     caps.refresh().await?;
     if caps.get_server::<OctavoCap>().await?.is_none() {
         let failed =
-            format!("Atuin for Teams isn't enabled for your account on {}", settings.sync_address);
+            format!("Atuin Hub isn't enabled for your account on {}", settings.sync_address);
         return Ok((Status::Failed(failed), None));
     }
 
@@ -138,7 +137,7 @@ async fn turn_on(
     let restarted = restart_daemon(settings).await;
     let messages = queued?;
     if let Err(instruction) = restarted {
-        let failed = format!("Atuin for Teams is on once the daemon restarts: {instruction}");
+        let failed = format!("Atuin Hub is on once the daemon restarts: {instruction}");
         return Ok((Status::Failed(failed), None));
     }
 
@@ -150,7 +149,7 @@ async fn turn_on(
     });
     Ok((
         Status::Done(format!(
-            "Atuin for Teams is on{uploading}{}",
+            "Atuin Hub is on{uploading}{}",
             OtherMachines(threads.other_machines)
         )),
         upload,
@@ -264,7 +263,7 @@ impl StoredThreads {
     /// Queue the upload of this machine's threads for `user`. Returns how many thread messages go
     /// up, if any.
     ///
-    /// The daemon fixes this machine's bound at its tail as of when it sees Atuin for Teams on.
+    /// The daemon fixes this machine's bound at its tail as of when it sees Atuin Hub on.
     async fn queue(&self, queue: &UploadQueue, user: &UserId) -> Result<Option<u64>> {
         let Some(OwnThreads { host, messages }) = &self.own else {
             return Ok(None);
@@ -277,7 +276,7 @@ impl StoredThreads {
     }
 }
 
-/// Restart the daemon, if one runs, as it opens its Atuin for Teams client only as it starts.
+/// Restart the daemon, if one runs, as it opens its Atuin Hub client only as it starts.
 /// `Err` says how the user can restart it instead.
 async fn restart_daemon(settings: &Settings) -> Result<(), String> {
     // Connecting to a systemd socket, or to launchd's for the agent, would start a daemon that
@@ -352,7 +351,7 @@ mod tests {
 
     /// A backfill without this machine's threads drops an earlier setup's unfixed backfill.
     ///
-    /// Otherwise that backfill would take the threads that were captured while Atuin for Teams
+    /// Otherwise that backfill would take the threads that were captured while Atuin Hub
     /// was off.
     #[rstest]
     #[case::no_threads_here(None, &[])]

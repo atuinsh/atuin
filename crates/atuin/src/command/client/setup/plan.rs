@@ -6,7 +6,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches};
 use super::super::init::Shell;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Choice, Flag, Form, Needs, Visit, toggles};
-use super::{AGENTS, Found, SYNC, Sync, TEAMS, THREADS, Teams, parse_sync};
+use super::{AGENTS, Found, HUB, Hub, SYNC, Sync, THREADS, parse_sync};
 
 /// What setup asks about here, besides what this atuin was built with. What it doesn't ask
 /// about, it leaves as it is.
@@ -16,8 +16,8 @@ pub(super) struct Asks {
     /// Agents' threads, commands and search, when there are agents here to ask about or the
     /// flags name some.
     pub(super) agents: bool,
-    /// Atuin for Teams, with `--hub` or `--no-hub`.
-    pub(super) teams: bool,
+    /// Atuin Hub, with `--hub` or `--no-hub`.
+    pub(super) hub: bool,
     /// Whether Atuin holds commands or threads here already, which agents can search without
     /// capturing more.
     pub(super) searchable: bool,
@@ -41,7 +41,7 @@ pub(super) struct Plan {
     pub(super) mcp: Mcp,
     pub(super) daemon: Daemon,
     pub(super) sync: Sync,
-    pub(super) atuin_for_teams: AtuinForTeams,
+    pub(super) atuin_hub: AtuinHub,
     pub(super) upload_threads: UploadThreads,
     pub(super) backfill: Backfill,
 }
@@ -85,15 +85,15 @@ toggles! {
         on: "Run the daemon, which thread and output capture need",
         off: "Stop the daemon, and keep it off",
     }
-    // Hidden until Atuin for Teams ships. 18.24.8 shipped it as `--teams`.
-    AtuinForTeams("hub", "Sync"; hidden = true; alias = "teams") {
-        on: "Turn on Atuin for Teams",
-        off: "Turn off Atuin for Teams",
+    // Hidden until uploading to Atuin Hub ships. 18.24.8 shipped it as `--teams`.
+    AtuinHub("hub", "Sync"; hidden = true; alias = "teams") {
+        on: "Turn on Atuin Hub",
+        off: "Turn off Atuin Hub",
     }
-    /// Atuin for Teams uploading what this machine has already, as well as what Atuin records
+    /// Atuin Hub uploading what this machine has already, as well as what Atuin records
     /// from now on.
     Backfill("backfill", "Sync"; hidden = true) {
-        on: "Upload what this machine has already to Atuin for Teams",
+        on: "Upload what this machine has already to Atuin Hub",
         off: "Upload only what Atuin records from now on",
     }
 }
@@ -124,7 +124,7 @@ impl Flag for Sync {
     }
 }
 
-/// Which agent threads Atuin for Teams uploads, as setup writes the user's own `atuin.lua`.
+/// Which agent threads Atuin Hub uploads, as setup writes the user's own `atuin.lua`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ThreadUploads {
     #[default]
@@ -147,7 +147,7 @@ impl ThreadUploads {
     }
 }
 
-/// Which agent threads Atuin for Teams uploads while it's on.
+/// Which agent threads Atuin Hub uploads while it's on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct UploadThreads(pub(super) ThreadUploads);
 
@@ -166,11 +166,11 @@ impl Flag for UploadThreads {
                 .value_name("all|workspaces|off")
                 .value_parser(parse_thread_uploads)
                 .overrides_with("upload-threads")
-                // Hidden until Atuin for Teams ships.
+                // Hidden until uploading to Atuin Hub ships.
                 .hide(true)
                 .help(
-                    "Which agent threads Atuin for Teams uploads: all, those started in a \
-                     workspace, or none",
+                    "Which agent threads Atuin Hub uploads: all, those started in a workspace, or \
+                     none",
                 )
                 .help_heading("Sync"),
         )
@@ -277,7 +277,7 @@ impl Form for Plan {
         visit.field(&mut self.mcp);
         visit.field(&mut self.daemon);
         visit.field(&mut self.sync);
-        visit.field(&mut self.atuin_for_teams);
+        visit.field(&mut self.atuin_hub);
         visit.field(&mut self.upload_threads);
         visit.field(&mut self.backfill);
     }
@@ -327,8 +327,8 @@ const SOMETHING_TO_SEARCH: Needs = Needs {
     flags: "`--shell-history`, `--agent-history` or `--threads`",
 };
 
-const TEAMS_ON: Needs = Needs {
-    what: "Atuin for Teams",
+const HUB_ON: Needs = Needs {
+    what: "Atuin Hub",
     flags: "`--hub`",
 };
 
@@ -438,15 +438,15 @@ impl Choice<Plan> for Sync {
     }
 }
 
-/// Atuin for Teams uploads as the account sync signs in to, from the daemon.
-impl Choice<Plan> for AtuinForTeams {
+/// Atuin Hub uploads as the account sync signs in to, from the daemon.
+impl Choice<Plan> for AtuinHub {
     fn asked(plan: &Plan) -> Result<(), &'static str> {
-        if !TEAMS {
-            Err("this atuin was built without Atuin for Teams")
-        } else if plan.asks.teams {
+        if !HUB {
+            Err("this atuin was built without uploads to Atuin Hub")
+        } else if plan.asks.hub {
             Ok(())
         } else {
-            Err("setup asks about Atuin for Teams only with `--hub`")
+            Err("setup asks about Atuin Hub only with `--hub`")
         }
     }
 
@@ -458,15 +458,15 @@ impl Choice<Plan> for AtuinForTeams {
 
 impl Choice<Plan> for UploadThreads {
     fn asked(plan: &Plan) -> Result<(), &'static str> {
-        AtuinForTeams::asked(plan)
+        AtuinHub::asked(plan)
     }
 
     fn allowed(plan: &Plan) -> Result<(), Needs> {
-        needs(plan.atuin_for_teams.0, TEAMS_ON)
+        needs(plan.atuin_hub.0, HUB_ON)
     }
 }
 
-/// Setup asks about the backfill along with Atuin for Teams, and allows the backfill only when
+/// Setup asks about the backfill along with Atuin Hub, and allows the backfill only when
 /// uploads aren't limited to workspaces.
 ///
 /// TODO(taylordotfish, cc @markovejnovic): The backfill was limited this way because it uploaded
@@ -476,11 +476,11 @@ impl Choice<Plan> for UploadThreads {
 /// offering the backfill with workspace-only uploads.
 impl Choice<Plan> for Backfill {
     fn asked(plan: &Plan) -> Result<(), &'static str> {
-        AtuinForTeams::asked(plan)
+        AtuinHub::asked(plan)
     }
 
     fn allowed(plan: &Plan) -> Result<(), Needs> {
-        needs(plan.atuin_for_teams.0, TEAMS_ON)?;
+        needs(plan.atuin_hub.0, HUB_ON)?;
         needs(plan.upload_threads.0 != ThreadUploads::Workspaces, BEYOND_WORKSPACES)
     }
 }
@@ -513,7 +513,7 @@ impl Plan {
             mcp: Mcp(!found.mcp_agents().is_empty()),
             daemon: Daemon(found.daemon),
             sync: found.syncing().unwrap_or_default(),
-            atuin_for_teams: AtuinForTeams(found.teams),
+            atuin_hub: AtuinHub(found.hub),
             upload_threads: UploadThreads(found.upload_threads),
             backfill: Backfill::default(),
         }
@@ -549,27 +549,27 @@ impl Plan {
             mcp: Mcp(agents),
             daemon: Daemon(!found.daemon_off),
             sync,
-            atuin_for_teams: AtuinForTeams(self.asks.teams),
+            atuin_hub: AtuinHub(self.asks.hub),
             ..self
         }
     }
 
-    /// What setup does about Atuin for Teams, `None` when it leaves it as it is.
-    pub(super) fn teams(&self) -> Option<Teams> {
-        AtuinForTeams::asked(self).ok()?;
-        Some(if self.atuin_for_teams.0 {
-            Teams::On {
+    /// What setup does about Atuin Hub, `None` when it leaves it as it is.
+    pub(super) fn hub(&self) -> Option<Hub> {
+        AtuinHub::asked(self).ok()?;
+        Some(if self.atuin_hub.0 {
+            Hub::On {
                 backfill: self.backfill.0,
             }
         } else {
-            Teams::Off
+            Hub::Off
         })
     }
 
-    /// Whether setup waits for its imports: turning Atuin for Teams on restarts the daemon, which
+    /// Whether setup waits for its imports: turning Atuin Hub on restarts the daemon, which
     /// would stop one going in the background, and its upload takes in only what's imported.
     pub(super) fn waits_for_imports(&self) -> bool {
-        matches!(self.teams(), Some(Teams::On { .. }))
+        matches!(self.hub(), Some(Hub::On { .. }))
     }
 }
 

@@ -19,7 +19,7 @@ use crate::pb::hub_service_client::HubServiceClient;
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    #[error("the Atuin for Teams endpoint {address} is not a valid URI")]
+    #[error("the Atuin Hub endpoint {address} is not a valid URI")]
     Endpoint {
         address: Url,
         #[source]
@@ -33,7 +33,7 @@ pub enum ConnectError {
 pub enum HubCallError {
     #[error("the hub has not stored the thread yet")]
     ThreadNotStored(#[source] tonic::Status),
-    #[error("Atuin for Teams needs a hub login; run `atuin login`")]
+    #[error("Atuin Hub needs you logged in; run `atuin login`")]
     NotLoggedIn,
     #[error("the hub login was saved without its user, which the next upload pass learns")]
     UnknownUser,
@@ -41,15 +41,15 @@ pub enum HubCallError {
     Meta(eyre::Report),
     #[error(transparent)]
     Connect(#[from] ConnectError),
-    #[error("Atuin for Teams runs only on Atuin's hosted hub, not {0}")]
+    #[error("Atuin Hub runs only on Atuin's hosted hub, not {0}")]
     SelfHostedHub(Url),
-    #[error("the hub changed to {0} after Atuin for Teams connected; restart atuin")]
+    #[error("the hub changed to {0} after Atuin Hub connected; restart atuin")]
     HubChanged(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
     NoUserId,
-    #[error("Atuin for Teams is not enabled for this account")]
+    #[error("Atuin Hub is not enabled for this account")]
     OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
     Hub(#[source] Status),

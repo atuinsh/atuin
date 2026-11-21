@@ -1,8 +1,8 @@
-//! The user's own `atuin.lua`, in `$ATUIN_HOME`, which turns Atuin for Teams on: setup writes it
+//! The user's own `atuin.lua`, in `$ATUIN_HOME`, which turns Atuin Hub on: setup writes it
 //! to say which threads go up, and leaves one they wrote be.
 
 use std::path::{Path, PathBuf};
-use std::{fs, io};
+use std::{fmt, fs, io};
 
 use atuin_client::lua_config::{LoadError, RuleName, Upload};
 use thiserror::Error;
@@ -44,7 +44,9 @@ impl UsersFile {
             path: path.clone(),
             source,
         })?;
-        let wrote = ThreadUploads::EACH.into_iter().find(|&uploads| source(uploads) == text);
+        let wrote = ThreadUploads::EACH
+            .into_iter()
+            .find(|&uploads| HubName::EACH.into_iter().any(|name| source(uploads, name) == text));
         let says = wrote.map_or_else(
             || Says::Theirs {
                 on: upload.switches_on(RuleName::Threads),
@@ -54,7 +56,7 @@ impl UsersFile {
         Ok(Self { path, says })
     }
 
-    /// Whether it turns Atuin for Teams on, and for which threads as setup offers them: every
+    /// Whether it turns Atuin Hub on, and for which threads as setup offers them: every
     /// thread for one of theirs that's on, and for one that's off, so turning it on again does.
     pub(super) const fn uploads(&self) -> (ThreadUploads, bool) {
         match self.says {
@@ -89,7 +91,7 @@ impl UsersFile {
         if let Some(home) = self.path.parent() {
             fs::create_dir_all(home).map_err(write)?;
         }
-        fs::write(&self.path, source(uploads)).map_err(write)
+        fs::write(&self.path, source(uploads, HubName::AtuinHub)).map_err(write)
     }
 }
 
@@ -121,29 +123,73 @@ const fn rule(uploads: ThreadUploads) -> &'static str {
     }
 }
 
-/// The file setup writes for `uploads`.
-fn source(uploads: ThreadUploads) -> String {
-    let rule = match uploads {
-        ThreadUploads::All => {
-            r"    -- Every agent thread goes up to Atuin for Teams.
-    threads = true,
-"
+/// A name for Atuin Hub in the comments of a file that setup writes.
+#[derive(Clone, Copy, Debug)]
+enum HubName {
+    /// The name that setup writes.
+    AtuinHub,
+    /// The name that setup wrote up to 18.25, so setup still reads a file with this name as its
+    /// own.
+    AtuinForTeams,
+}
+
+impl HubName {
+    const EACH: [Self; 2] = [Self::AtuinHub, Self::AtuinForTeams];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AtuinHub => "Atuin Hub",
+            Self::AtuinForTeams => "Atuin for Teams",
         }
-        ThreadUploads::Workspaces => {
-            r"    -- The agent threads started in a workspace, at or under a project's atuin.lua, go
-    -- up to Atuin for Teams.
+    }
+}
+
+/// The file that setup writes for `uploads`, with comments that call Atuin Hub `name`.
+fn source(uploads: ThreadUploads, name: HubName) -> String {
+    let rule = match uploads {
+        ThreadUploads::All => all_rule,
+        ThreadUploads::Workspaces => workspaces_rule,
+        ThreadUploads::Off => off_rule,
+    };
+    fmt::from_fn(|f| {
+        f.write_str("-- atuin:version=1\n\natuin.config = {\n  upload = {")?;
+        rule(f, name.as_str())?;
+        f.write_str("\n  },\n}\n")
+    })
+    .to_string()
+}
+
+/// The `upload` lines for [`ThreadUploads::All`].
+fn all_rule(f: &mut fmt::Formatter<'_>, hub: &str) -> fmt::Result {
+    write!(
+        f,
+        "
+    -- Every agent thread goes up to {hub}.
+    threads = true,"
+    )
+}
+
+/// The `upload` lines for [`ThreadUploads::Workspaces`].
+fn workspaces_rule(f: &mut fmt::Formatter<'_>, hub: &str) -> fmt::Result {
+    write!(
+        f,
+        "
+    -- The agent threads started in a workspace, at or under a project's atuin.lua, go
+    -- up to {hub}.
     threads = function(thread)
       return thread.workspace ~= nil
-    end,
-"
-        }
-        ThreadUploads::Off => {
-            r"    -- Agent threads stay on this machine.
-    threads = false,
-"
-        }
-    };
-    format!("-- atuin:version=1\n\natuin.config = {{\n  upload = {{\n{rule}  }},\n}}\n")
+    end,"
+    )
+}
+
+/// The `upload` lines for [`ThreadUploads::Off`].
+fn off_rule(f: &mut fmt::Formatter<'_>, _hub: &str) -> fmt::Result {
+    write!(
+        f,
+        "
+    -- Agent threads stay on this machine.
+    threads = false,"
+    )
 }
 
 #[cfg(test)]
@@ -181,6 +227,37 @@ mod tests {
         assert_eq!(read(&home).uploads(), (offered, on));
         let upload = Upload::in_dir(home.path()).expect("a run").expect("a file");
         assert_eq!(upload.switches_on(RuleName::Threads), on);
+    }
+
+    /// Setup reads a file that 18.25 wrote as setup's own file, so setup can still change the
+    /// file.
+    #[rstest]
+    #[case::all(
+        ThreadUploads::All,
+        "-- atuin:version=1\n\natuin.config = {\n  upload = {\n    -- Every agent thread goes up \
+         to Atuin for Teams.\n    threads = true,\n  },\n}\n"
+    )]
+    #[case::workspaces(
+        ThreadUploads::Workspaces,
+        "-- atuin:version=1\n\natuin.config = {\n  upload = {\n    -- The agent threads started \
+         in a workspace, at or under a project's atuin.lua, go\n    -- up to Atuin for Teams.\n    \
+         threads = function(thread)\n      return thread.workspace ~= nil\n    end,\n  },\n}\n"
+    )]
+    fn setup_reads_a_file_of_18_25_as_its_own(
+        home: TempDir,
+        #[case] uploads: ThreadUploads,
+        #[case] of_18_25: &str,
+        #[values(ThreadUploads::All, ThreadUploads::Workspaces, ThreadUploads::Off)]
+        changed_to: ThreadUploads,
+    ) {
+        let path = home.path().join("atuin.lua");
+        fs::write(&path, of_18_25).expect("write");
+
+        assert_eq!(read(&home).uploads(), (uploads, true));
+        read(&home).write(changed_to).expect("a write");
+
+        let expected = source(changed_to, HubName::AtuinHub);
+        assert_eq!(fs::read_to_string(&path).expect("the file"), expected);
     }
 
     /// Setup can't edit their code, so a file of theirs that says otherwise is left as it was.

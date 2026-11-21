@@ -43,10 +43,10 @@ use tracing::instrument;
 mod agents;
 mod encoding;
 mod form;
+#[cfg(feature = "octavo")]
+mod hub;
 mod plan;
 mod scroll;
-#[cfg(feature = "octavo")]
-mod teams;
 #[cfg(feature = "octavo")]
 mod upload;
 #[cfg(feature = "octavo")]
@@ -61,7 +61,7 @@ use form::{Flag, Form as _};
 #[cfg(feature = "ai")]
 use plan::{AgentHistory, Mcp};
 use plan::{
-    Asks, AtuinForTeams, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory, ThreadUploads,
+    Asks, AtuinHub, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory, ThreadUploads,
     Threads, UpArrow,
 };
 
@@ -109,9 +109,9 @@ impl Cmd {
                 import(&offer, &tx, plan.waits_for_imports(), plan.daemon.0).await;
             }
             #[cfg(feature = "octavo")]
-            if let Some(Teams::On { backfill }) = plan.teams() {
+            if let Some(Hub::On { backfill }) = plan.hub() {
                 // Not watched: there's no screen to watch it on.
-                let _upload = turn_on_teams(store, backfill, plan.upload_threads.0, &tx).await;
+                let _upload = turn_on_hub(store, backfill, plan.upload_threads.0, &tx).await;
             }
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
@@ -149,7 +149,7 @@ impl Cmd {
             agents: !found.agents.is_empty()
                 || !found.connections.is_empty()
                 || plan::Agents::from_args(flags).is_some(),
-            teams: AtuinForTeams::from_args(flags).is_some(),
+            hub: AtuinHub::from_args(flags).is_some(),
             searchable: found.imported > 0 || found.threads_here > 0,
             unhooks: self.only && ShellHistory::from_args(flags) == Some(ShellHistory(false)),
         };
@@ -207,8 +207,8 @@ const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
 /// Sync needs the sync client, which `sync` builds in.
 const SYNC: bool = cfg!(feature = "sync");
 
-/// Atuin for Teams needs the hub client, which `octavo` builds in.
-const TEAMS: bool = cfg!(feature = "octavo");
+/// Atuin Hub needs the hub client, which `octavo` builds in.
+const HUB: bool = cfg!(feature = "octavo");
 
 /// `--sync`: `cloud`, `off`, or a server's address.
 fn parse_sync(value: &str) -> Result<Sync, String> {
@@ -266,12 +266,12 @@ pub struct Found {
     signed_in: bool,
     /// A sync server that isn't Atuin Cloud, already configured.
     server: Option<String>,
-    /// Which agent threads Atuin for Teams uploads while it's on, as configured now.
+    /// Which agent threads Atuin Hub uploads while it's on, as configured now.
     upload_threads: ThreadUploads,
     /// The agents Atuin is in, and how.
     connections: Vec<(AnyHarness, Connection)>,
-    /// Whether Atuin for Teams is on, as configured now.
-    teams: bool,
+    /// Whether Atuin Hub is on, as configured now.
+    hub: bool,
 }
 
 /// What of Atuin an agent has: hooks that run it, and its MCP server.
@@ -285,10 +285,10 @@ impl Found {
     async fn detect(settings: &Settings, db: &Sqlite) -> Self {
         let hooked = var_nonempty("ATUIN_SESSION").is_some();
         #[cfg(feature = "octavo")]
-        let (upload_threads, teams) = teams::found().await;
-        // As a build with Atuin for Teams would read an unset config.
+        let (upload_threads, hub) = hub::found().await;
+        // As a build with Atuin Hub would read an unset config.
         #[cfg(not(feature = "octavo"))]
-        let (upload_threads, teams) = (ThreadUploads::All, false);
+        let (upload_threads, hub) = (ThreadUploads::All, false);
         Self {
             history: shell_history().await,
             // Less `atuin setup` itself, which a shell that runs Atuin has recorded already.
@@ -310,7 +310,7 @@ impl Found {
             server: (!settings.is_hub_sync()).then(|| settings.sync_address.to_string()),
             upload_threads,
             connections: connections().await,
-            teams,
+            hub,
         }
     }
 
@@ -359,9 +359,9 @@ pub enum Sync {
     Off,
 }
 
-/// Whether Atuin for Teams is on.
+/// Whether Atuin Hub is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Teams {
+pub enum Hub {
     Off,
     /// Uploading what Atuin records from now on, and with `backfill` what it has already.
     On {
@@ -383,10 +383,10 @@ pub enum Step {
     Daemon,
     Sync,
     #[cfg(feature = "octavo")]
-    Teams,
+    Hub,
     History,
     Threads,
-    /// Watching Atuin for Teams upload, after the imports it takes in.
+    /// Watching Atuin Hub upload, after the imports it takes in.
     #[cfg(feature = "octavo")]
     Upload,
 }
@@ -427,7 +427,7 @@ fn send(tx: &Updates, step: Step, status: Status) {
     let _ = tx.send(Update::Step(step, status));
 }
 
-/// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin for Teams.
+/// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin Hub.
 /// Sign-in, if any, reads `answers`. Returns what there is to import, now sign-in has said what
 /// the account holds.
 async fn apply(
@@ -444,8 +444,8 @@ async fn apply(
         send(tx, Step::Config, Status::Done(changed));
     }
     #[cfg(feature = "octavo")]
-    if plan.teams() == Some(Teams::Off) && found.teams {
-        teams::disable(tx).await;
+    if plan.hub() == Some(Hub::Off) && found.hub {
+        hub::disable(tx).await;
     }
     let settings = Arc::new(Settings::new()?);
     // Before anything writes records, so the daemon and sign-in agree on it.
@@ -513,23 +513,22 @@ async fn apply(
     Ok(offer(plan, found, account, tx))
 }
 
-/// Turn Atuin for Teams on, once sign-in has said who the account is, so the hub can say whether
+/// Turn Atuin Hub on, once sign-in has said who the account is, so the hub can say whether
 /// it has it, and after the imports, so what it uploads takes them in. Returns the upload to
 /// watch, if it started one.
 #[cfg(feature = "octavo")]
-async fn turn_on_teams(
+async fn turn_on_hub(
     store: &SqliteStore,
     backfill: bool,
     uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<upload::Upload> {
     match Settings::new() {
-        Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, uploads, tx).await,
+        Ok(settings) => hub::enable(&Arc::new(settings), store, backfill, uploads, tx).await,
         Err(e) => {
-            let failed = format!(
-                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
-            );
-            send(tx, Step::Teams, Status::Failed(failed));
+            let failed =
+                format!("Couldn't turn on Atuin Hub ({e:#}). Run `atuin setup --hub` to try again");
+            send(tx, Step::Hub, Status::Failed(failed));
             None
         }
     }
@@ -2206,7 +2205,7 @@ mod tests {
         found.connections = vec![(codex, hooks_only)];
         let asks = Asks {
             agents: true,
-            teams: false,
+            hub: false,
             searchable: false,
             unhooks: false,
         };
@@ -2401,7 +2400,7 @@ mod tests {
             server: None,
             upload_threads: ThreadUploads::All,
             connections: Vec::new(),
-            teams: false,
+            hub: false,
         }
     }
 
@@ -2507,7 +2506,7 @@ mod tests {
         assert_eq!(setup(&flags).plan(&found, false).unwrap(), Plan {
             asks: Asks {
                 agents: true,
-                teams: false,
+                hub: false,
                 searchable: false,
                 unhooks: false,
             },
@@ -2522,7 +2521,7 @@ mod tests {
             mcp: Mcp(false),
             daemon: Daemon(true),
             sync: Sync::Off,
-            atuin_for_teams: AtuinForTeams(false),
+            atuin_hub: AtuinHub(false),
             upload_threads: plan::UploadThreads(ThreadUploads::All),
             backfill: plan::Backfill(false),
         });
@@ -2569,7 +2568,7 @@ mod tests {
     )]
     #[cfg_attr(
         feature = "octavo",
-        case::teams(
+        case::hub(
             &["--hub", "--sync", "off"],
             "`--hub` needs sync: `--sync cloud`, or your own server's address",
         )
@@ -2578,7 +2577,7 @@ mod tests {
         feature = "octavo",
         case::upload_threads(
             &["--no-hub", "--upload-threads", "workspaces"],
-            "`--upload-threads workspaces` needs Atuin for Teams: `--hub`",
+            "`--upload-threads workspaces` needs Atuin Hub: `--hub`",
         )
     )]
     #[case::shells(&["--no-shell-history", "--shells", "zsh"], "`--shells zsh` needs shell history: `--shell-history`")]
@@ -2589,7 +2588,7 @@ mod tests {
             "`--mcp` needs history or threads to search: `--shell-history`, `--agent-history` or `--threads`",
         )
     )]
-    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin for Teams only with `--hub`"))]
+    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin Hub only with `--hub`"))]
     #[cfg_attr(
         feature = "octavo",
         case::backfill_of_workspaces(
@@ -2642,7 +2641,7 @@ mod tests {
         found.inits = vec![Shell::Zsh];
         let here = Plan::from_current_state(&found, Asks {
             agents: true,
-            teams: false,
+            hub: false,
             searchable: false,
             unhooks: false,
         });
@@ -2935,17 +2934,17 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::not_asked(&[], None)]
-    #[case::asked(&["--hub"], Some(Teams::On { backfill: false }))]
-    #[case::as_18_24_8_spelled_it(&["--teams"], Some(Teams::On { backfill: false }))]
-    #[case::with_backfill(&["--hub", "--backfill"], Some(Teams::On { backfill: true }))]
-    #[case::turned_off(&["--no-hub"], Some(Teams::Off))]
-    fn teams_is_asked_about_with_its_flags(
+    #[case::asked(&["--hub"], Some(Hub::On { backfill: false }))]
+    #[case::as_18_24_8_spelled_it(&["--teams"], Some(Hub::On { backfill: false }))]
+    #[case::with_backfill(&["--hub", "--backfill"], Some(Hub::On { backfill: true }))]
+    #[case::turned_off(&["--no-hub"], Some(Hub::Off))]
+    fn hub_is_asked_about_with_its_flags(
         mut found: Found,
         #[case] flags: &[&str],
-        #[case] expected: Option<Teams>,
+        #[case] expected: Option<Hub>,
     ) {
         found.signed_in = true;
-        assert_eq!(setup(flags).plan(&found, false).unwrap().effective().teams(), expected);
+        assert_eq!(setup(flags).plan(&found, false).unwrap().effective().hub(), expected);
     }
 
     #[rstest]
