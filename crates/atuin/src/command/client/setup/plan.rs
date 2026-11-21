@@ -90,9 +90,10 @@ toggles! {
         on: "Turn on Atuin for Teams",
         off: "Turn off Atuin for Teams",
     }
-    /// Atuin for Teams uploading what Atuin has already, as well as what it records from now on.
+    /// Atuin for Teams uploading what this machine has already, as well as what Atuin records
+    /// from now on.
     Backfill("backfill", "Sync"; hidden = true) {
-        on: "Upload what Atuin has already to Atuin for Teams",
+        on: "Upload what this machine has already to Atuin for Teams",
         off: "Upload only what Atuin records from now on",
     }
 }
@@ -465,7 +466,14 @@ impl Choice<Plan> for UploadThreads {
     }
 }
 
-/// Workspace-only uploads take nothing from before, which can't be told to come from a workspace.
+/// Setup asks about the backfill along with Atuin for Teams, and allows the backfill only when
+/// uploads aren't limited to workspaces.
+///
+/// TODO(taylordotfish, cc @markovejnovic): The backfill was limited this way because it uploaded
+/// other machines' threads too, and this machine can't tell whether another machine's thread
+/// started in a workspace. The backfill now uploads only this machine's threads, and the daemon can
+/// tell whether each of those started in a workspace, so that reason no longer holds. Reconsider
+/// offering the backfill with workspace-only uploads.
 impl Choice<Plan> for Backfill {
     fn asked(plan: &Plan) -> Result<(), &'static str> {
         AtuinForTeams::asked(plan)

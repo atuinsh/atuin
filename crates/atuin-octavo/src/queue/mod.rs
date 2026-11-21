@@ -468,6 +468,21 @@ impl UploadQueue {
         Ok(())
     }
 
+    /// Drops `user`'s backfills of every host except `here`. Only the machine that captured a
+    /// thread uploads it.
+    pub async fn drop_other_hosts_thread_backfills(
+        &self,
+        user: &UserId,
+        here: HostId,
+    ) -> Result<(), QueueError> {
+        db::query("DELETE FROM thread_backfills WHERE user_id = ?1 AND host_id != ?2")
+            .bind(user.as_str())
+            .bind(here)
+            .execute(self.db.pool())
+            .await?;
+        Ok(())
+    }
+
     /// `user`'s backfills, done or not, in host order.
     pub async fn thread_backfills(&self, user: &UserId) -> Result<Vec<ThreadBackfill>, QueueError> {
         let backfills = db::query_as(
@@ -823,6 +838,34 @@ mod tests {
             .chain(unfixed_until.map(|until| backfill(unfixed, Some(until))))
             .collect();
         assert_eq!(queue.queue.thread_backfills(&user).await.expect("read"), want);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn dropping_other_hosts_backfills_keeps_this_hosts(#[future(awt)] queue: TempQueue) {
+        let user = UserId::new("alice");
+        let other_user = UserId::new("bob");
+        let [here, done, unfixed] = [1, 2, 3].map(|n| HostId(uuid::Uuid::from_u128(n)));
+        let request = [(here, Some(9)), (done, Some(4)), (unfixed, None)];
+        queue.queue.request_thread_backfill(&user, request).await.expect("request");
+        queue.queue.advance_thread_backfill(&user, here, 3).await.expect("advance");
+        queue.queue.advance_thread_backfill(&user, done, 5).await.expect("advance");
+        queue.queue.request_thread_backfill(&other_user, [(done, Some(4))]).await.expect("request");
+
+        queue.queue.drop_other_hosts_thread_backfills(&user, here).await.expect("drop");
+
+        let kept = ThreadBackfill {
+            host_id: here,
+            next_idx: 3,
+            until_idx: Some(10),
+        };
+        assert_eq!(queue.queue.thread_backfills(&user).await.expect("read"), [kept]);
+        let other_users = ThreadBackfill {
+            host_id: done,
+            next_idx: 0,
+            until_idx: Some(5),
+        };
+        assert_eq!(queue.queue.thread_backfills(&other_user).await.expect("read"), [other_users]);
     }
 
     #[rstest]

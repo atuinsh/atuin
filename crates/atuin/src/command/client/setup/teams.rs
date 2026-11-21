@@ -1,6 +1,7 @@
 //! Atuin for Teams in `atuin setup`: turned on once sign-in has said the account has it, by the
 //! user's own `atuin.lua`.
 
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use atuin_client::settings::Settings;
 use atuin_daemon::service::pidfile::Pidfile;
 use atuin_daemon::service::{ActiveService, ExternalManager, RestartError};
 use atuin_domain::caps::OctavoCap;
-use atuin_domain::record::{HostId, RecordIdx, RecordStatus, RecordTag};
+use atuin_domain::record::{HostId, RecordStatus, RecordTag};
 use atuin_octavo::hub::{HubCallError, HubClient, UserId};
 use atuin_octavo::queue::UploadQueue;
 use atuin_octavo::{UPLOADS_HISTORY, pb};
@@ -122,12 +123,7 @@ async fn turn_on(
     // An unfixed backfill from an earlier setup would be fixed at the tail on the daemon's next
     // pass with it on, taking threads captured while it was off. Dropped before the config turns
     // it on, so that pass can't come first.
-    if backfill.threads.is_none() {
-        queue
-            .drop_unfixed_thread_backfills(user)
-            .await
-            .wrap_err("couldn't cancel an earlier upload of your threads")?;
-    }
+    backfill.drop_earlier_unfixed(&queue, user).await?;
     match users_file().await?.write(uploads) {
         Ok(()) => {}
         Err(err @ WriteError::Theirs { .. }) => return Ok((Status::Failed(err.to_string()), None)),
@@ -139,7 +135,11 @@ async fn turn_on(
     // Even with it on already, or the queue refusing: a daemon started before the upload queue
     // existed uploads nothing until it restarts, and the config can't say whether one did.
     let restarted = restart_daemon(settings).await;
-    let (uploading, old) = queued?;
+    let Queued {
+        uploading,
+        old,
+        other_machines,
+    } = queued?;
     if let Err(instruction) = restarted {
         let failed = format!("Atuin for Teams is on once the daemon restarts: {instruction}");
         return Ok((Status::Failed(failed), None));
@@ -155,7 +155,37 @@ async fn turn_on(
     } else {
         String::new()
     };
-    Ok((Status::Done(format!("Atuin for Teams is on{uploading}{old}")), upload))
+    Ok((
+        Status::Done(format!(
+            "Atuin for Teams is on{uploading}{old}{}",
+            OtherMachines(other_machines)
+        )),
+        upload,
+    ))
+}
+
+/// The summary clause about the machines that upload their own threads, empty for none.
+struct OtherMachines(usize);
+
+impl fmt::Display for OtherMachines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self(n) = *self;
+        match n {
+            0 => Ok(()),
+            1 => write!(
+                f,
+                ". Threads from {} other machine go up once you run atuin setup --hub --backfill \
+                 on that machine",
+                count(n)
+            ),
+            _ => write!(
+                f,
+                ". Threads from {} other machines go up once you run atuin setup --hub --backfill \
+                 on those machines",
+                count(n)
+            ),
+        }
+    }
 }
 
 /// What Atuin already has here, to upload.
@@ -168,7 +198,34 @@ struct Backfill {
     threads: Option<StoredThreads>,
 }
 
+/// What `Backfill::queue` queued, and what it left out.
+struct Queued {
+    /// What goes up, if anything.
+    uploading: Option<String>,
+    /// How many commands stay out.
+    old: usize,
+    /// How many other machines hold threads that only those machines upload.
+    other_machines: usize,
+}
+
 impl Backfill {
+    /// Whether this backfill queues this machine's threads.
+    fn requests_own_threads(&self) -> bool {
+        self.threads.as_ref().is_some_and(|threads| threads.own.is_some())
+    }
+
+    /// Drops `user`'s unfixed backfills from an earlier setup, unless this backfill queues this
+    /// machine's threads again.
+    async fn drop_earlier_unfixed(&self, queue: &UploadQueue, user: &UserId) -> Result<()> {
+        if !self.requests_own_threads() {
+            queue
+                .drop_unfixed_thread_backfills(user)
+                .await
+                .wrap_err("couldn't cancel an earlier upload of your threads")?;
+        }
+        Ok(())
+    }
+
     /// What's here of what Atuin for Teams uploads, as it uploads `uploads`.
     async fn read(
         settings: &Arc<Settings>,
@@ -185,10 +242,11 @@ impl Backfill {
         } else {
             (Vec::new(), Vec::new())
         };
-        // Only of every thread: those of the account's other machines can't be told to have
-        // started in a workspace here.
+        // Only with every thread going up, because threads stay local with uploads off, and setup
+        // allows `--backfill` only when uploads aren't limited to workspaces (see
+        // `impl Choice<Plan> for Backfill` in `plan.rs`).
         let threads = if uploads == ThreadUploads::All {
-            StoredThreads::read(settings, store).await?
+            Some(StoredThreads::read(settings, store).await?)
         } else {
             None
         };
@@ -199,9 +257,8 @@ impl Backfill {
         })
     }
 
-    /// Queue the uploads for `user`. Returns what goes up, if anything, and how many commands
-    /// stay out.
-    async fn queue(self, queue: &UploadQueue, user: &UserId) -> Result<(Option<String>, usize)> {
+    /// Queue the uploads for `user`.
+    async fn queue(self, queue: &UploadQueue, user: &UserId) -> Result<Queued> {
         let mut going = Vec::new();
         if !self.history.is_empty() {
             let queued = queue
@@ -210,34 +267,50 @@ impl Backfill {
                 .wrap_err("couldn't queue your history for upload")?;
             going.push(format!("{} commands", count(queued)));
         }
+        let StoredThreads {
+            own,
+            other_machines,
+        } = self.threads.unwrap_or_default();
         // The daemon fixes this machine's bound at its tail as of when it sees Atuin for Teams on.
-        if let Some(StoredThreads { tails, messages }) = self.threads {
+        if let Some(OwnThreads { host, messages }) = own {
             queue
-                .request_thread_backfill(user, tails)
+                .request_thread_backfill(user, [(host, None)])
                 .await
                 .wrap_err("couldn't queue your threads for upload")?;
             going.push(format!("{} thread messages", count(messages)));
         }
         let going: Vec<&str> = going.iter().map(String::as_str).collect();
-        Ok(((!going.is_empty()).then(|| names(&going)), self.old))
+        Ok(Queued {
+            uploading: (!going.is_empty()).then(|| names(&going)),
+            old: self.old,
+            other_machines,
+        })
     }
 }
 
-/// The account's thread records: every `ai-session` series, on this machine or the server.
+/// The account's thread records, as setup splits them between this machine and the others.
+#[derive(Default)]
 struct StoredThreads {
-    /// Each series' host, with the idx of the last record to upload. This machine's is `None`, for
-    /// the daemon to fix once it sees Atuin for Teams on, as capture appends to it until then.
-    tails: Vec<(HostId, Option<RecordIdx>)>,
-    /// How many records the series hold together.
+    /// This machine's series, if it has one.
+    own: Option<OwnThreads>,
+    /// How many other machines hold a thread series, which only those machines upload.
+    other_machines: usize,
+}
+
+/// This machine's thread series.
+struct OwnThreads {
+    host: HostId,
+    /// How many records the series holds, by the later of the local and remote tails.
     messages: u64,
 }
 
 impl StoredThreads {
-    /// The thread records `store` or `settings`' server holds, or `None` when neither holds any.
+    /// The thread records that `store` and the server of `settings` hold.
     ///
-    /// The server is asked too, so the records that a sync in progress has yet to download go up
-    /// as well. Nothing else uploads another machine's threads.
-    async fn read(settings: &Arc<Settings>, store: &SqliteStore) -> Result<Option<Self>> {
+    /// The server is asked too, so that the series of other machines that exist only on the
+    /// server are counted. Each machine uploads only its own threads, because only that machine
+    /// can read the config files that decide whether a thread goes up.
+    async fn read(settings: &Arc<Settings>, store: &SqliteStore) -> Result<Self> {
         let remote = async {
             SyncSession::builder()
                 .store(store.clone())
@@ -256,23 +329,30 @@ impl StoredThreads {
         Ok(Self::of(settings.host_id().await?, &store.status().await?, &remote))
     }
 
-    /// The `ai-session` series `local` or `remote` holds, each at the later of its tails, with
-    /// `here` this machine's host.
-    fn of(here: HostId, local: &RecordStatus, remote: &RecordStatus) -> Option<Self> {
+    /// This machine's `ai-session` series and a count of the other machines that have one.
+    ///
+    /// This machine's series is at the later of its tails in `local` and `remote`. `here` is this
+    /// machine's host.
+    fn of(here: HostId, local: &RecordStatus, remote: &RecordStatus) -> Self {
         let tails = [local, remote]
             .into_iter()
             .flat_map(|status| &status.hosts)
             .filter_map(|(&host, tails)| Some((host, *tails.get(&RecordTag::AiSession)?)))
             .into_grouping_map()
             .max();
-        if tails.is_empty() {
-            return None;
-        }
 
-        let messages = tails.values().map(|tail| tail.saturating_add(1)).sum();
-        let tails =
-            tails.into_iter().map(|(host, tail)| (host, (host != here).then_some(tail))).collect();
-        Some(Self { tails, messages })
+        let mut threads = Self::default();
+        for (host, tail) in tails {
+            if host == here {
+                threads.own = Some(OwnThreads {
+                    host,
+                    messages: tail.saturating_add(1),
+                });
+            } else {
+                threads.other_machines += 1;
+            }
+        }
+        threads
     }
 }
 
@@ -326,12 +406,68 @@ fn with_instruction(err: &RestartError, manager: &ExternalManager) -> String {
 #[cfg(test)]
 mod tests {
     use atuin_domain::record::RecordSeriesKey;
+    use atuin_octavo::queue::ThreadBackfill;
     use rstest::rstest;
 
     use super::*;
 
     #[rstest]
-    fn stored_threads_bound_other_machines_series_at_the_later_tail() {
+    #[case(0, "")]
+    #[case(
+        1,
+        ". Threads from 1 other machine go up once you run atuin setup --hub --backfill on that \
+         machine"
+    )]
+    #[case(
+        2,
+        ". Threads from 2 other machines go up once you run atuin setup --hub --backfill on those \
+         machines"
+    )]
+    fn other_machines_clause(#[case] n: usize, #[case] text: &str) {
+        assert_eq!(OtherMachines(n).to_string(), text);
+    }
+
+    const HERE: HostId = HostId(uuid::Uuid::from_u128(1));
+
+    /// A backfill without this machine's threads drops an earlier setup's unfixed backfill.
+    ///
+    /// Otherwise that backfill would take the threads that were captured while Atuin for Teams
+    /// was off.
+    #[rstest]
+    #[case::no_threads_here(None, &[])]
+    #[case::threads_here(
+        Some(4),
+        &[ThreadBackfill { host_id: HERE, next_idx: 0, until_idx: None }],
+    )]
+    #[tokio::test]
+    async fn a_backfill_queues_this_machines_threads_or_drops_earlier_ones(
+        #[case] messages: Option<u64>,
+        #[case] expected: &[ThreadBackfill],
+    ) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let queue = UploadQueue::open(dir.path().join("octavo.db")).await.expect("a queue");
+        let user = UserId::new("alice");
+        queue.request_thread_backfill(&user, [(HERE, None)]).await.expect("request");
+        queue.advance_thread_backfill(&user, HERE, 3).await.expect("advance");
+        let backfill = Backfill {
+            threads: Some(StoredThreads {
+                own: messages.map(|messages| OwnThreads {
+                    host: HERE,
+                    messages,
+                }),
+                other_machines: 1,
+            }),
+            ..Backfill::default()
+        };
+
+        backfill.drop_earlier_unfixed(&queue, &user).await.expect("drop");
+        backfill.queue(&queue, &user).await.expect("queue");
+
+        assert_eq!(queue.thread_backfills(&user).await.expect("read"), expected);
+    }
+
+    #[rstest]
+    fn stored_threads_backfill_only_this_machines_series() {
         let [here, behind, remote_only] = [1, 2, 3].map(|n| HostId(uuid::Uuid::from_u128(n)));
         let threads = |host| RecordSeriesKey::new(host, RecordTag::AiSession);
         let local = RecordStatus::from_points([
@@ -346,21 +482,44 @@ mod tests {
         ]);
 
         let StoredThreads {
-            mut tails,
-            messages,
-        } = StoredThreads::of(here, &local, &remote).expect("both hold threads");
+            own,
+            other_machines,
+        } = StoredThreads::of(here, &local, &remote);
 
-        tails.sort();
-        assert_eq!(tails, [(here, None), (behind, Some(9)), (remote_only, Some(2))]);
-        assert_eq!(messages, 6 + 10 + 3);
+        let own = own.expect("this machine has threads");
+        assert_eq!((own.host, own.messages), (here, 6));
+        assert_eq!(other_machines, 2);
     }
 
     #[rstest]
-    fn stored_threads_are_none_without_a_thread_series() {
+    fn stored_threads_count_other_machines_without_a_series_here() {
+        let [here, elsewhere] = [1, 2].map(|n| HostId(uuid::Uuid::from_u128(n)));
+        let local =
+            RecordStatus::from_points([(RecordSeriesKey::new(here, RecordTag::History), 7)]);
+        let remote =
+            RecordStatus::from_points([(RecordSeriesKey::new(elsewhere, RecordTag::AiSession), 3)]);
+
+        let StoredThreads {
+            own,
+            other_machines,
+        } = StoredThreads::of(here, &local, &remote);
+
+        assert!(own.is_none());
+        assert_eq!(other_machines, 1);
+    }
+
+    #[rstest]
+    fn stored_threads_are_empty_without_a_thread_series() {
         let host = HostId(uuid::Uuid::from_u128(1));
         let history =
             RecordStatus::from_points([(RecordSeriesKey::new(host, RecordTag::History), 7)]);
 
-        assert!(StoredThreads::of(host, &history, &RecordStatus::new()).is_none());
+        let StoredThreads {
+            own,
+            other_machines,
+        } = StoredThreads::of(host, &history, &RecordStatus::new());
+
+        assert!(own.is_none());
+        assert_eq!(other_machines, 0);
     }
 }

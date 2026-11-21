@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
 use atuin_client::lua_config::Thread;
-use atuin_domain::record::RecordId;
+use atuin_domain::record::{HostId, RecordId};
 use atuin_octavo::pb;
 use atuin_octavo::shares::Configs;
 use jiff::Timestamp;
@@ -39,23 +39,28 @@ pub(super) struct Starts {
     configs: Configs,
     /// Where a thread started, as stored. Without it, its messages say.
     sidecar: Option<AiSessionDatabase>,
+    /// The host that this daemon captures for. Stored rows of any other host stay here: their
+    /// config files are on the machine that captured them.
+    here: HostId,
     remembered_for: Duration,
     started: Arc<Mutex<HashMap<HarnessSession, Remembered>>>,
 }
 
 impl Starts {
-    pub(super) fn new(configs: Configs, sidecar: Option<AiSessionDatabase>) -> Self {
-        Self::remembering(configs, sidecar, REMEMBERED_FOR)
+    pub(super) fn new(configs: Configs, sidecar: Option<AiSessionDatabase>, here: HostId) -> Self {
+        Self::remembering(configs, sidecar, here, REMEMBERED_FOR)
     }
 
     fn remembering(
         configs: Configs,
         sidecar: Option<AiSessionDatabase>,
+        here: HostId,
         remembered_for: Duration,
     ) -> Self {
         Self {
             configs,
             sidecar,
+            here,
             remembered_for,
             started: Arc::default(),
         }
@@ -74,11 +79,12 @@ impl Starts {
     }
 
     /// Those of `messages`, as stored, whose threads go up, and the ids of those that wait: those
-    /// whose threads' starts the sidecar can't say yet, and those not looked up by `until`.
+    /// whose threads' starts the sidecar can't say yet, and those not looked up by `until`. Rows
+    /// that another host captured are left out of both lists, so the caller drops them.
     pub(super) async fn uploads_stored(&self, messages: Vec<Message>, until: Deadline) -> Sorted {
         let goes = self.sort(Rows::Stored { until }, &messages).await;
         let mut sorted = Sorted::default();
-        for message in messages {
+        for message in messages.into_iter().filter(|message| self.captured_here(message)) {
             match goes.get(&message.session) {
                 Some(Goes::Up) => sorted.going.push(message),
                 Some(Goes::Later) => sorted.waiting.push(message.id),
@@ -86,7 +92,7 @@ impl Starts {
                     sorted.waiting.push(message.id);
                     sorted.overdue = true;
                 }
-                Some(Goes::Here) | None => {}
+                Some(Goes::Here | Goes::CapturedElsewhere) | None => {}
             }
         }
         sorted
@@ -94,18 +100,47 @@ impl Starts {
 
     /// What goes of `thread`'s queued share, as its stored messages would, looked up by `until`.
     /// One of a harness this build doesn't know stays queued, as its config files can't be asked.
+    /// A share of a thread that another host captured is given up.
     pub(super) async fn shares(&self, thread: &pb::HarnessSession, until: Deadline) -> Goes {
-        match thread.thread() {
-            Some(session) => self.goes(Rows::Stored { until }, &session, &[]).await,
-            None => Goes::Here,
+        let Some(session) = thread.thread() else {
+            return Goes::Here;
+        };
+        if self.captured_elsewhere(&session).await {
+            return Goes::CapturedElsewhere;
+        }
+        self.goes(Rows::Stored { until }, &session, &[]).await
+    }
+
+    /// Whether the sidecar says that another host captured `session`. A session with no host
+    /// predates host tracking and is this host's.
+    async fn captured_elsewhere(&self, session: &HarnessSession) -> bool {
+        let Some(sidecar) = &self.sidecar else {
+            return false;
+        };
+        match sidecar.get_session(session).await {
+            Ok(stored) => {
+                stored.and_then(|stored| stored.host).is_some_and(|host| host != self.here)
+            }
+            Err(err) => {
+                tracing::warn!(?err, "failed to read which host captured a thread");
+                false
+            }
         }
     }
 
-    /// What goes of each thread of `messages`, which come from `rows`.
+    /// Whether `message` was captured by this host. A row with no host predates host tracking
+    /// and is this host's.
+    fn captured_here(&self, message: &Message) -> bool {
+        message.host.is_none_or(|host| host == self.here)
+    }
+
+    /// What goes of each thread of `messages`, which come from `rows`. Stored rows of other hosts
+    /// are left out.
     async fn sort(&self, rows: Rows, messages: &[Message]) -> HashMap<HarnessSession, Goes> {
         let mut goes = HashMap::new();
         for message in messages {
-            if goes.contains_key(&message.session) {
+            let elsewhere = matches!(rows, Rows::Stored { .. }) && !self.captured_here(message);
+            if elsewhere || goes.contains_key(&message.session) {
                 continue;
             }
             let thread = self.goes(rows, &message.session, messages).await;
@@ -255,6 +290,9 @@ pub(super) enum Goes {
     Later,
     /// They wait for a lookup the deadline cut off.
     Overdue,
+    /// Another host captured the thread, and only that host can read the config files that
+    /// decide it.
+    CapturedElsewhere,
 }
 
 impl Goes {
@@ -310,6 +348,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    const HERE: HostId = HostId(uuid::Uuid::from_u128(1));
+    const ELSEWHERE: HostId = HostId(uuid::Uuid::from_u128(2));
 
     /// A thread's row, as `(thread, seconds in, directory under the root)`.
     type Row<'a> = (&'a str, i64, Option<&'a str>);
@@ -402,6 +443,29 @@ mod tests {
         sidecar
     }
 
+    /// A stored row of another host stays here, because only the machine that captured the row
+    /// can read the config files that decide it.
+    ///
+    /// A row with no host predates host tracking and is this machine's.
+    #[rstest]
+    #[case::this_host(Some(HERE), &["a"])]
+    #[case::no_host(None, &["a"])]
+    #[case::another_host(Some(ELSEWHERE), &[])]
+    #[tokio::test]
+    async fn a_stored_row_of_another_host_stays_here(
+        root: TempDir,
+        #[case] host: Option<HostId>,
+        #[case] going: &[&str],
+    ) {
+        let held = sidecar(root.path(), &[("a", 1, Some("project"))]).await;
+        let starts = Starts::new(configs(root.path(), ON), Some(held), HERE);
+        let mut rows = messages(root.path(), &[("a", 1, Some("project"))]);
+        rows[0].host = host;
+
+        let going: Vec<_> = going.iter().map(ToString::to_string).collect();
+        assert_eq!(sorted(&starts, rows, unhurried()).await, (going, 0, false));
+    }
+
     /// Rows read back from the record store may not hold where their thread started, as one
     /// page of a backfill may not, so their thread goes by the sidecar's rows, or waits for them:
     /// while the sidecar recovers, a later directory may be all the page names.
@@ -425,7 +489,7 @@ mod tests {
         for row in messages(root.path(), held) {
             sidecar.append(&row).await.expect("an append");
         }
-        let starts = Starts::new(configs(root.path(), ON), Some(sidecar));
+        let starts = Starts::new(configs(root.path(), ON), Some(sidecar), HERE);
 
         let sorted = sorted(&starts, messages(root.path(), read), unhurried()).await;
 
@@ -459,7 +523,7 @@ mod tests {
         for row in messages(root.path(), stored) {
             sidecar.append(&row).await.expect("an append");
         }
-        let starts = Starts::new(configs(root.path(), WORKSPACES), Some(sidecar));
+        let starts = Starts::new(configs(root.path(), WORKSPACES), Some(sidecar), HERE);
         let captured = messages(root.path(), captured);
         assert_eq!(uploaded(&starts, captured).await, expected);
     }
@@ -475,7 +539,7 @@ mod tests {
         #[case] queued: &[Row<'_>],
         #[case] expected: &[&str],
     ) {
-        let starts = Starts::new(configs(root.path(), WORKSPACES), None);
+        let starts = Starts::new(configs(root.path(), WORKSPACES), None, HERE);
         let queued = messages(root.path(), queued);
         assert_eq!(uploaded(&starts, queued).await, expected);
     }
@@ -493,7 +557,7 @@ mod tests {
         #[case] users: &str,
         #[case] expected: &[&str],
     ) {
-        let starts = Starts::new(configs(root.path(), users), None);
+        let starts = Starts::new(configs(root.path(), users), None, HERE);
         let rows = messages(root.path(), &[
             ("a", 1, Some("project")),
             ("b", 1, Some("elsewhere")),
@@ -508,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_start_is_up_to_the_users_own(root: TempDir) {
         let users = "atuin.config = { upload = { threads = function(t) return t.dir ~= nil end } }";
-        let starts = Starts::new(configs(root.path(), users), None);
+        let starts = Starts::new(configs(root.path(), users), None, HERE);
 
         let first = messages(root.path(), &[("a", 1, None)]);
         assert!(uploaded(&starts, first).await.is_empty());
@@ -527,7 +591,8 @@ mod tests {
         #[case] remembered_for: Duration,
         #[case] expected: &[&str],
     ) {
-        let starts = Starts::remembering(configs(root.path(), WORKSPACES), None, remembered_for);
+        let starts =
+            Starts::remembering(configs(root.path(), WORKSPACES), None, HERE, remembered_for);
         let first = messages(root.path(), &[("a", 1, Some("project"))]);
         assert_eq!(uploaded(&starts, first).await, ["a"]);
 
@@ -557,9 +622,36 @@ mod tests {
         for row in messages(root.path(), &rows) {
             sidecar.append(&row).await.expect("an append");
         }
-        let starts = Starts::new(configs(root.path(), users), Some(sidecar));
+        let starts = Starts::new(configs(root.path(), users), Some(sidecar), HERE);
         let thread = pb::HarnessSession::of_thread(thread(name)).expect("a thread Octavo names");
         assert_eq!(starts.shares(&thread, unhurried()).await == Goes::Up, expected);
+    }
+
+    /// A queued share of a thread that another host captured is given up, because only that host
+    /// can read the config files that decide the share.
+    ///
+    /// A thread with no host predates host tracking and is this machine's.
+    #[rstest]
+    #[case::this_host(Some(HERE), "project", Goes::Up)]
+    #[case::this_host_kept(Some(HERE), "kept", Goes::Here)]
+    #[case::no_host(None, "project", Goes::Up)]
+    #[case::another_host(Some(ELSEWHERE), "project", Goes::CapturedElsewhere)]
+    #[case::another_host_kept(Some(ELSEWHERE), "kept", Goes::CapturedElsewhere)]
+    #[tokio::test]
+    async fn a_share_of_another_hosts_thread_is_given_up(
+        root: TempDir,
+        #[case] host: Option<HostId>,
+        #[case] dir: &str,
+        #[case] expected: Goes,
+    ) {
+        let sidecar = AiSessionDatabase::in_memory().await.expect("a sidecar");
+        for mut row in messages(root.path(), &[("a", 1, Some(dir))]) {
+            row.host = host;
+            sidecar.append(&row).await.expect("an append");
+        }
+        let starts = Starts::new(configs(root.path(), ON), Some(sidecar), HERE);
+        let thread = pb::HarnessSession::of_thread(thread("a")).expect("a thread Octavo names");
+        assert_eq!(starts.shares(&thread, unhurried()).await, expected);
     }
 
     /// A thread whose start nothing says yet isn't remembered as kept here, so its next messages
@@ -567,7 +659,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn an_unknown_start_is_not_remembered(root: TempDir) {
-        let starts = Starts::new(configs(root.path(), WORKSPACES), None);
+        let starts = Starts::new(configs(root.path(), WORKSPACES), None, HERE);
         let first = messages(root.path(), &[("a", 1, None)]);
         assert!(uploaded(&starts, first).await.is_empty());
         let next = messages(root.path(), &[("a", 2, Some("project"))]);
@@ -579,7 +671,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn stored_rows_wait_without_a_sidecar(root: TempDir) {
-        let starts = Starts::new(configs(root.path(), ON), None);
+        let starts = Starts::new(configs(root.path(), ON), None, HERE);
 
         let rows = messages(root.path(), &[("a", 2, Some("elsewhere"))]);
 
@@ -592,7 +684,8 @@ mod tests {
     #[tokio::test]
     async fn past_the_deadline_only_remembered_threads_go(root: TempDir) {
         let held = [("a", 1, Some("project")), ("b", 1, Some("elsewhere"))];
-        let starts = Starts::new(configs(root.path(), ON), Some(sidecar(root.path(), &held).await));
+        let starts =
+            Starts::new(configs(root.path(), ON), Some(sidecar(root.path(), &held).await), HERE);
         let first = messages(root.path(), &[("a", 2, None)]);
         assert_eq!(sorted(&starts, first, unhurried()).await, (vec!["a".to_owned()], 0, false));
 
@@ -607,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn a_start_the_sidecar_moves_is_looked_up_again(root: TempDir) {
         let sidecar = sidecar(root.path(), &[("a", 5, Some("elsewhere"))]).await;
-        let starts = Starts::new(configs(root.path(), ON), Some(sidecar.clone()));
+        let starts = Starts::new(configs(root.path(), ON), Some(sidecar.clone()), HERE);
         let first = messages(root.path(), &[("a", 6, Some("elsewhere"))]);
         assert_eq!(sorted(&starts, first, unhurried()).await, (vec!["a".to_owned()], 0, false));
 

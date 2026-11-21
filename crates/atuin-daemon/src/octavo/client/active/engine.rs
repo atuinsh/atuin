@@ -169,6 +169,18 @@ impl NextPass {
     }
 }
 
+/// The threads of a login that are queued to be opened and haven't been sent yet.
+#[derive(Debug)]
+struct HeldShares {
+    /// Those that the config files keep here, or that wait for a lookup.
+    held: HashSet<pb::HarnessSession>,
+    /// Threads that another host captured. Their shares are given up, because only that host can
+    /// read the config files that decide them.
+    elsewhere: HashSet<pb::HarnessSession>,
+    /// When the next pass goes: at once if a lookup was cut off.
+    next: NextPass,
+}
+
 /// What a pass that sent its live work hands on to background work.
 struct Sending {
     login: HubLogin,
@@ -404,6 +416,9 @@ impl EngineInner {
         if !threads_on(self.starts.configs()).await {
             return Ok(None);
         }
+        // Before the bounds are fixed, so that only this host's backfill gets a bound and counts in
+        // setup's gauge.
+        self.drop_other_hosts_backfills(&login).await?;
         // Fixed even while the account is marked off: what capture lets by then goes up direct or
         // not at all, and a bound fixed once the mark clears would take it.
         self.fix_backfill_bounds(&login).await?;
@@ -729,49 +744,58 @@ impl EngineInner {
 
     /// Sends `login`'s queued thread shares for up to [`PASS_BUDGET`], up to the first that fails
     /// for a reason that may pass, as one the budget cuts short does. A share of a thread that
-    /// the config files keep here stays queued.
+    /// the config files keep here stays queued. A share of a thread that another host captured is
+    /// given up.
     ///
     /// A share cut short goes again, which Octavo takes as a repeat even if it stored the first.
     /// Says whether threads were left to look up.
     async fn send_thread_shares(&self, login: &HubLogin) -> Result<NextPass, Halt> {
-        let opening = Opening::of(&self.queue, login).await?;
-        let narrowed = opening.look_again(self.starts.configs()).await?.narrow().await?;
         // Before the budget starts, as each thread's config files may take a lookup of their own,
         // with a budget of its own.
-        let (held, next) = self.held_shares(login, Instant::now() + PASS_BUDGET).await?;
+        let shares = self.held_shares(login, Instant::now() + PASS_BUDGET).await?;
+        let opening = Opening::of(&self.queue, login).await?.without(&shares.elsewhere);
+        let narrowed = opening.look_again(self.starts.configs()).await?.narrow().await?;
         // First, so no share opens to an organization one of its thread's directories keeps out.
         let deadline = Instant::now() + PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
-        for open in narrowed.pending(sent, held).await? {
+        for open in narrowed.pending(sent, shares.held).await? {
+            if shares.elsewhere.contains(open.thread()) {
+                open.give_up().await?;
+                continue;
+            }
             let sent = tokio::time::timeout_at(deadline, self.send_thread_share(login, open)).await;
             sent.unwrap_or(Err(Halt::RetryLater))?;
         }
-        Ok(next)
+        Ok(shares.next)
     }
 
-    /// The threads of `login` queued to be opened that the config files keep here, whose shares
-    /// wait: queued under another config, those it keeps here wait for that again, as do those not
-    /// looked up by `until`, for the next pass to go at once.
-    async fn held_shares(
-        &self,
-        login: &HubLogin,
-        until: Instant,
-    ) -> Result<(HashSet<pb::HarnessSession>, NextPass), Halt> {
-        let mut held = HashSet::new();
-        let mut next = NextPass::Waiting;
+    /// The threads of `login` that are queued to be opened, split into those whose shares wait
+    /// and those whose shares are given up.
+    ///
+    /// A thread waits when its config files keep it here, or when its lookup didn't finish by
+    /// `until`. In that case the next pass goes at once.
+    async fn held_shares(&self, login: &HubLogin, until: Instant) -> Result<HeldShares, Halt> {
+        let mut shares = HeldShares {
+            held: HashSet::new(),
+            elsewhere: HashSet::new(),
+            next: NextPass::Waiting,
+        };
         for thread in self.queue.opening_threads(login.user_id()).await? {
             match self.starts.shares(&thread, until).await {
                 Goes::Up => {}
                 Goes::Overdue => {
-                    held.insert(thread);
-                    next = NextPass::Now;
+                    shares.held.insert(thread);
+                    shares.next = NextPass::Now;
                 }
                 Goes::Here | Goes::Later => {
-                    held.insert(thread);
+                    shares.held.insert(thread);
+                }
+                Goes::CapturedElsewhere => {
+                    shares.elsewhere.insert(thread);
                 }
             }
         }
-        Ok((held, next))
+        Ok(shares)
     }
 
     async fn send_thread_share(&self, login: &HubLogin, open: PendingOpen<'_>) -> Result<(), Halt> {
@@ -840,6 +864,23 @@ impl EngineInner {
                  sharing threads with it"
             );
         }
+    }
+
+    /// Drops the backfills of other hosts' series from `login`'s queue.
+    ///
+    /// Each machine uploads only the threads that it captured, because uploading another
+    /// machine's backfill would judge its threads by this machine's config files.
+    async fn drop_other_hosts_backfills(&self, login: &HubLogin) -> Result<(), RetryLater> {
+        self.queue
+            .drop_other_hosts_thread_backfills(login.user_id(), self.records.host_id())
+            .await
+            .map_err(|err| {
+                tracing::warn!(
+                    ?err,
+                    "failed to drop the octavo thread backfills of other hosts; retrying later"
+                );
+                RetryLater
+            })
     }
 
     /// Fixes the bound of each of `login`'s backfills that has none just past its series' tail.

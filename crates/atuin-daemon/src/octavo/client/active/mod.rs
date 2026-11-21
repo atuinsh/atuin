@@ -57,7 +57,7 @@ impl ActiveOctavoClient {
         let wake = Arc::new(Notify::new());
         // Without a home, the user has no config of their own.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
-        let starts = Starts::new(configs, sidecar);
+        let starts = Starts::new(configs, sidecar, records.host_id());
         let engine = UploadEngine::spawn(
             queue.clone(),
             hub.clone(),
