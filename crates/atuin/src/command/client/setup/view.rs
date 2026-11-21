@@ -35,7 +35,9 @@ use super::plan::{
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
 use super::upload::{Gauge, Progress, State, Tracker, Upload};
-use super::{Answer, Found, Offer, Scope, Status, Step, Sync, Update, count, is_address, names};
+use super::{
+    Answer, Found, OffBecause, Offer, Scope, Status, Step, Sync, Update, count, is_address, names,
+};
 
 pub(super) const ACCENT: Color = Color::LightGreen;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -567,7 +569,7 @@ impl SyncTo {
         match self {
             Self::Cloud => *sync == Sync::Cloud,
             Self::SelfHosted => matches!(sync, Sync::Server(_)),
-            Self::Off => *sync == Sync::Off,
+            Self::Off => matches!(sync, Sync::Off(_)),
         }
     }
 }
@@ -698,7 +700,7 @@ impl Choose {
     fn new(found: &Found, plan: &Plan) -> Self {
         let server = match &plan.sync {
             Sync::Server(address) => Some(address.clone()),
-            Sync::Cloud | Sync::Off => found.server.clone(),
+            Sync::Cloud | Sync::Off(_) => found.server.clone(),
         };
         // With those Atuin is in, which can be taken out of one that isn't here now.
         let mut agents = found.agents();
@@ -936,7 +938,7 @@ impl Choose {
         self.plan.sync = match to {
             SyncTo::Cloud => Sync::Cloud,
             SyncTo::SelfHosted => Sync::Server(self.server.as_str().to_owned()),
-            SyncTo::Off => Sync::Off,
+            SyncTo::Off => Sync::Off(OffBecause::Chosen),
         };
         // Atuin Hub comes only with Atuin Cloud, which `--hub` shares from as it can.
         if moved {
@@ -1026,7 +1028,8 @@ impl Choose {
         }
         let chosen =
             [plan.shell.0, plan.output.0, plan.threads.0, plan.agent_history.0, plan.mcp.0];
-        if done && !self.set_up_here && !chosen.contains(&true) && plan.sync == Sync::Off {
+        if done && !self.set_up_here && !chosen.contains(&true) && matches!(plan.sync, Sync::Off(_))
+        {
             self.error = Some("Choose something to set up, or press ctrl-c to leave");
             return None;
         }
@@ -2094,6 +2097,7 @@ mod tests {
             daemon_running: false,
             daemon_off: false,
             signed_in: false,
+            sync_choice: atuin_client::meta::SyncChoice::Enabled,
             server: None,
             upload_threads: ThreadUploads::All,
             connections: Vec::new(),
@@ -2216,7 +2220,7 @@ mod tests {
             sync: if SYNC {
                 Sync::Cloud
             } else {
-                Sync::Off
+                Sync::Off(OffBecause::Chosen)
             },
             atuin_hub: AtuinHub(false),
             upload_threads: UploadThreads(ThreadUploads::All),
@@ -2864,7 +2868,7 @@ mod tests {
         choose.plan.threads = Threads(false);
         choose.plan.agent_history = AgentHistory(false);
         choose.plan.mcp = Mcp(false);
-        choose.plan.sync = Sync::Off;
+        choose.plan.sync = Sync::Off(OffBecause::Chosen);
         // Sync may yet give it something to set up, so only the last page says so.
         choose.page = *choose.pages().last().expect("a page");
         choose.row = Row::Go;

@@ -1,12 +1,13 @@
 //! What setup sets up: the choices on its first screen and their flags, and how they depend on
 //! each other.
 
+use atuin_client::meta::SyncChoice;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches};
 
 use super::super::init::Shell;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Choice, Flag, Form, Needs, Visit, toggles};
-use super::{AGENTS, Found, HUB, Hub, SYNC, Sync, THREADS, parse_sync};
+use super::{AGENTS, Found, HUB, Hub, OffBecause, SYNC, Sync, THREADS, parse_sync};
 
 /// What setup asks about here, besides what this atuin was built with. What it doesn't ask
 /// about, it leaves as it is.
@@ -119,7 +120,7 @@ impl Flag for Sync {
         match self {
             Self::Cloud => "--sync cloud".to_owned(),
             Self::Server(address) => format!("--sync {address}"),
-            Self::Off => "--sync off".to_owned(),
+            Self::Off(_) => "--sync off".to_owned(),
         }
     }
 }
@@ -451,7 +452,7 @@ impl Choice<Plan> for AtuinHub {
     }
 
     fn allowed(plan: &Plan) -> Result<(), Needs> {
-        needs(plan.sync != Sync::Off, SYNCING)?;
+        needs(!matches!(plan.sync, Sync::Off(_)), SYNCING)?;
         needs(plan.daemon.0, DAEMON)
     }
 }
@@ -519,11 +520,22 @@ impl Plan {
         }
     }
 
-    /// What setup sets up where no flag says otherwise, from what's set up here: all it asks
-    /// about but output capture, the daemon unless they turned it off, the keys as they're bound,
-    /// and sync where it's signed in. Once
-    /// Atuin is in an agent, the agents' choices stay as they are, but for its MCP server, which
-    /// comes with every agent connected. `yes` when nobody's there to sign in.
+    /// The choices that setup proposes for anything that a flag doesn't set.
+    ///
+    /// The proposal starts from what's set up on this machine and changes it as follows:
+    ///
+    /// - Shell history is on.
+    /// - The daemon is on, unless the user turned it off.
+    /// - The MCP server is on whenever this machine has a coding agent.
+    /// - Agent history and thread capture are on when Atuin isn't in any agent yet. Once Atuin is
+    ///   in an agent, both stay as they are.
+    /// - Sync stays as it is when this machine is signed in. Otherwise, sync is off when `yes` is
+    ///   set, when the user turned it off in an earlier setup, or when this build lacks sync. In
+    ///   every other case, sync uses the configured server, or Atuin Cloud when there isn't one.
+    /// - Atuin for Teams is on when its flag is given.
+    ///
+    /// Everything else stays as it is, including output capture and the key bindings. Pass `yes`
+    /// when nobody is there to sign in.
     #[must_use]
     pub(super) fn proposal(self, found: &Found, yes: bool) -> Self {
         let agents = agents(&self).is_ok();
@@ -531,7 +543,10 @@ impl Plan {
         let sync = match found.syncing() {
             // Left as it is, rather than signing them out.
             Some(syncing) => syncing,
-            None if yes || !SYNC => Sync::Off,
+            None if yes => Sync::Off(OffBecause::NobodyToSignIn),
+            None if !SYNC || found.sync_choice == SyncChoice::Disabled => {
+                Sync::Off(OffBecause::Chosen)
+            }
             None => found.server.clone().map_or(Sync::Cloud, Sync::Server),
         };
         Self {

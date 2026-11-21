@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use atuin_client::database::Sqlite;
+use atuin_client::meta::SyncChoice;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::{RequestedSearchMode, Settings};
 use atuin_common::dirs::home_dir;
@@ -214,7 +215,7 @@ const HUB: bool = cfg!(feature = "octavo");
 fn parse_sync(value: &str) -> Result<Sync, String> {
     match value {
         "cloud" => Ok(Sync::Cloud),
-        "off" => Ok(Sync::Off),
+        "off" => Ok(Sync::Off(OffBecause::Chosen)),
         address if is_address(address) => Ok(Sync::Server(address.to_string())),
         _ => {
             Err("expected cloud, off, or your server's address, starting http:// or https://"
@@ -264,6 +265,9 @@ pub struct Found {
     /// environment, as `atuin setup --only --no-daemon` writes, rather than left unset.
     daemon_off: bool,
     signed_in: bool,
+    /// Whether they turned sync off in an earlier setup, or skipped signing in there, and haven't
+    /// signed in or chosen somewhere to sync since.
+    sync_choice: SyncChoice,
     /// A sync server that isn't Atuin Cloud, already configured.
     server: Option<String>,
     /// Which agent threads Atuin Hub uploads while it's on, as configured now.
@@ -307,6 +311,7 @@ impl Found {
             daemon_running: daemon_running(settings),
             daemon_off: !settings.daemon.enabled && daemon_setting_is_theirs().await,
             signed_in: signed_in(settings).await,
+            sync_choice: sync_choice(settings).await,
             server: (!settings.is_hub_sync()).then(|| settings.sync_address.to_string()),
             upload_threads,
             connections: connections().await,
@@ -351,12 +356,26 @@ impl Found {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sync {
     Cloud,
     Server(String),
-    #[default]
-    Off,
+    Off(OffBecause),
+}
+
+impl Default for Sync {
+    fn default() -> Self {
+        Self::Off(OffBecause::Chosen)
+    }
+}
+
+/// Why sync is off, which decides whether later setups keep it off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OffBecause {
+    /// They turned it off, on the screen or with `--sync off`.
+    Chosen,
+    /// `--yes` left it off because nobody's there to sign in, so a later setup still offers it.
+    NobodyToSignIn,
 }
 
 /// Whether Atuin Hub is on.
@@ -772,6 +791,21 @@ pub(super) async fn sign_out() {
     }
 }
 
+/// Record `choice` for later setups: they propose sync off while it's disabled.
+#[cfg(feature = "sync")]
+async fn save_sync_choice(settings: &Settings, choice: SyncChoice) {
+    if let Ok(meta) = settings.meta_store().await {
+        let _ = meta.save_sync_choice(choice).await;
+    }
+}
+
+async fn sync_choice(settings: &Settings) -> SyncChoice {
+    match settings.meta_store().await {
+        Ok(meta) => meta.sync_choice().await.unwrap_or_default(),
+        Err(_) => SyncChoice::default(),
+    }
+}
+
 /// Start the daemon, if it isn't running, to sync, and tell it of the sign-in as `atuin login`
 /// does. Without the `daemon`, the shell syncs on its next command.
 #[cfg(feature = "daemon")]
@@ -865,7 +899,7 @@ fn config_changes(
                 let cloud = atuin_client::settings::DEFAULT_SYNC_URL.as_str();
                 changes.push(("sync_address", Value::from(cloud)));
             }
-            Sync::Cloud | Sync::Off => {}
+            Sync::Cloud | Sync::Off(_) => {}
         }
     }
     changes
@@ -1335,13 +1369,18 @@ async fn sync(
     if syncing.is_some() && syncing.as_ref() != Some(&plan.sync) {
         sign_out().await;
     }
+    match plan.sync {
+        Sync::Off(OffBecause::Chosen) => save_sync_choice(settings, SyncChoice::Disabled).await,
+        Sync::Off(OffBecause::NobodyToSignIn) => {}
+        Sync::Cloud | Sync::Server(_) => save_sync_choice(settings, SyncChoice::Enabled).await,
+    }
     match &plan.sync {
-        Sync::Off if syncing.is_some() => {
+        Sync::Off(_) if syncing.is_some() => {
             let off = "Signed out: sync is off, and everything stays on this machine";
             send(tx, Step::Sync, Status::Done(off.into()));
             return SignedIn::No;
         }
-        Sync::Off => return SignedIn::No,
+        Sync::Off(_) => return SignedIn::No,
         Sync::Server(address) if syncing.as_ref() == Some(&plan.sync) => {
             send(tx, Step::Sync, Status::Done(format!("Syncing with {address}")));
             return SignedIn::No;
@@ -1393,6 +1432,7 @@ async fn sync(
             answer = answers.recv() => match answer {
                 Some(Answer::OpenAgain) => { let _ = session.open_in_browser(); }
                 Some(Answer::Skip) | None => {
+                    save_sync_choice(settings, SyncChoice::Disabled).await;
                     send(tx, Step::Sync, skipped());
                     return SignedIn::No;
                 }
@@ -2397,6 +2437,7 @@ mod tests {
             daemon_running: false,
             daemon_off: false,
             signed_in: false,
+            sync_choice: SyncChoice::Enabled,
             server: None,
             upload_threads: ThreadUploads::All,
             connections: Vec::new(),
@@ -2520,7 +2561,7 @@ mod tests {
             up_arrow: UpArrow(false),
             mcp: Mcp(false),
             daemon: Daemon(true),
-            sync: Sync::Off,
+            sync: Sync::Off(OffBecause::Chosen),
             atuin_hub: AtuinHub(false),
             upload_threads: plan::UploadThreads(ThreadUploads::All),
             backfill: plan::Backfill(false),
@@ -2880,23 +2921,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case::asked(false, None, Sync::Cloud)]
-    #[case::not_asked(true, None, Sync::Off)]
-    #[case::their_server(false, Some("https://atuin.example.com"), Sync::Server("https://atuin.example.com".into()))]
+    #[case::asked(false, None, SyncChoice::Enabled, Sync::Cloud)]
+    #[case::not_asked(true, None, SyncChoice::Enabled, Sync::Off(OffBecause::NobodyToSignIn))]
+    #[case::their_server(false, Some("https://atuin.example.com"), SyncChoice::Enabled, Sync::Server("https://atuin.example.com".into()))]
+    #[case::turned_off(false, None, SyncChoice::Disabled, Sync::Off(OffBecause::Chosen))]
+    #[case::turned_off_with_their_server(
+        false,
+        Some("https://atuin.example.com"),
+        SyncChoice::Disabled,
+        Sync::Off(OffBecause::Chosen)
+    )]
     fn sync_without_the_flag(
         mut found: Found,
         #[case] yes: bool,
         #[case] server: Option<&str>,
+        #[case] sync_choice: SyncChoice,
         #[case] expected: Sync,
     ) {
         found.server = server.map(Into::into);
+        found.sync_choice = sync_choice;
         // Without sync, there's nowhere to sync to.
         let expected = if cfg!(feature = "sync") {
             expected
+        } else if yes {
+            Sync::Off(OffBecause::NobodyToSignIn)
         } else {
-            Sync::Off
+            Sync::Off(OffBecause::Chosen)
         };
         assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
+    }
+
+    #[rstest]
+    fn sync_off_from_the_flag_is_chosen(found: Found, #[values(false, true)] yes: bool) {
+        let sync = setup(&["--sync", "off"]).plan(&found, yes).unwrap().sync;
+        assert_eq!(sync, Sync::Off(OffBecause::Chosen));
     }
 
     #[rstest]
@@ -2905,10 +2963,12 @@ mod tests {
     fn sync_stays_where_it_is_signed_in(
         mut found: Found,
         #[values(false, true)] yes: bool,
+        #[values(SyncChoice::Enabled, SyncChoice::Disabled)] sync_choice: SyncChoice,
         #[case] server: Option<&str>,
         #[case] expected: Sync,
     ) {
         found.signed_in = true;
+        found.sync_choice = sync_choice;
         found.server = server.map(Into::into);
         assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
     }
@@ -2949,7 +3009,7 @@ mod tests {
 
     #[rstest]
     #[case("cloud", Some(Sync::Cloud))]
-    #[case("off", Some(Sync::Off))]
+    #[case("off", Some(Sync::Off(OffBecause::Chosen)))]
     #[case("http://localhost:8888", Some(Sync::Server("http://localhost:8888".into())))]
     #[case("atuin.example.com", None)]
     fn sync_flag_takes_cloud_off_or_an_address(
