@@ -1158,10 +1158,11 @@ impl CodexMessage {
     /// (`response_item`, or before 0.32.0 a bare item), a compaction, or a message between agents.
     /// Everything else (session, turn and world state, usage, events) names no item.
     fn is_item(&self) -> bool {
-        // Of a voice conversation's items (codex-rs `RealtimeItemContent`), what was said; the
-        // rest mark where it started, ended, or showed an agent's item.
+        // Of a voice conversation's items (codex-rs `RealtimeItemContent`), what was said (a
+        // `frame` from 0.171.0, a `transcript_segment` before); the rest mark where it started,
+        // ended, or showed an agent's item.
         if self.kind == "realtime_item" {
-            return self.payload_type() == Some("transcript_segment");
+            return matches!(self.payload_type(), Some("frame" | "transcript_segment"));
         }
         !matches!(
             self.kind.as_str(),
@@ -1385,7 +1386,12 @@ impl Message for CodexMessage {
             Some("function_call_output" | "custom_tool_call_output" | "tool_search_output") => {
                 Role::Tool
             }
-            _ => match payload.and_then(|p| p["role"].as_str()).unwrap_or(self.kind.as_str()) {
+            _ => match payload
+                .and_then(|p| {
+                    p["role"].as_str().or(p["channels"]["voice_transcript"]["role"].as_str())
+                })
+                .unwrap_or(self.kind.as_str())
+            {
                 "user" if self.is_contextual() => Role::System,
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
@@ -1473,6 +1479,12 @@ impl Message for CodexMessage {
             Some("transcript_segment") => {
                 vec![Content::Text(payload["text"].as_str().unwrap_or_default().to_owned())]
             }
+            Some("frame") => vec![Content::Text(
+                payload["channels"]["voice_transcript"]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )],
             Some("tool_search_call") => tool_use(
                 call_id(if payload["call_id"].is_string() {
                     "call_id"
@@ -3237,11 +3249,24 @@ mod tests {
     #[rstest]
     #[case::user("user", Role::User)]
     #[case::assistant("assistant", Role::Assistant)]
-    fn a_voice_transcript_segment_is_conversation(#[case] role: &str, #[case] expected: Role) {
+    fn a_voice_transcript_segment_is_conversation(
+        #[case] role: &str,
+        #[case] expected: Role,
+        #[values(false, true)] frame: bool,
+    ) {
         let id = "01a14000-0000-7000-8000-000000000001";
+        let said = serde_json::json!({"role": role, "text": "what's failing in CI?"});
+        let mut payload = serde_json::json!({"id": id, "realtime_session_id": "rs_1"});
+        if frame {
+            payload["type"] = "frame".into();
+            payload["channels"] = serde_json::json!({"voice_transcript": said});
+        } else {
+            payload["type"] = "transcript_segment".into();
+            payload["role"] = said["role"].clone();
+            payload["text"] = said["text"].clone();
+        }
         let m = line(&serde_json::json!({"timestamp": "2026-10-20T10:00:00.000Z", "ordinal": 7,
-            "type": "realtime_item", "payload": {"id": id, "realtime_session_id": "rs_1",
-                "type": "transcript_segment", "role": role, "text": "what's failing in CI?"}}));
+            "type": "realtime_item", "payload": payload}));
         assert_eq!(m.id(), Some(MessageId::from(id.to_owned())));
         assert_eq!(m.role(), expected);
         assert_eq!(m.content(), vec![Content::Text("what's failing in CI?".to_owned())]);
