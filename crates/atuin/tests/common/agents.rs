@@ -480,7 +480,23 @@ impl Transcript {
     /// Rename the session `title`, as the agent does. opencode's `Session.setTitle` writes a
     /// `session.updated.1` row with the session's info, `time.updated` bumped to now; Hermes's
     /// `/title` sets the session's title in place, ranked as the user's.
+    /// Codex appends the name to `session_index.jsonl`.
     pub fn rename(&self, title: &str) {
+        if self.agent == Agent::Codex {
+            let index = self.path.ancestors().nth(5).unwrap().join("session_index.jsonl");
+            let mut file = fs::OpenOptions::new().create(true).append(true).open(index).unwrap();
+            writeln!(
+                file,
+                "{}",
+                json!({
+                    "id": self.id,
+                    "thread_name": title,
+                    "updated_at": rfc3339(tick()),
+                })
+            )
+            .unwrap();
+            return;
+        }
         if self.agent == Agent::Hermes {
             hermes_open(&self.path)
                 .execute(
@@ -493,7 +509,7 @@ impl Transcript {
         assert_eq!(
             self.agent,
             Agent::Opencode,
-            "only opencode's and Hermes's sessions are renamed"
+            "only Codex's, opencode's and Hermes's sessions are renamed"
         );
         let (directory, created) = rusqlite::Connection::open(&self.path)
             .unwrap()

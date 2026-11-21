@@ -213,7 +213,14 @@ async fn capture(
                     }
                     let read = reads.insert(session.clone(), checkpoint.generation);
                     if let Some(from) = opened {
-                        let start = Start::of(from, checkpoint);
+                        let start = if checkpoint.generation == 0
+                            && from == Some(checkpoint)
+                            && matches!(&message, AnyMessage::Codex(message) if message.is_index_title())
+                        {
+                            Start::Resumed
+                        } else {
+                            Start::of(from, checkpoint)
+                        };
                         // A new read retries whatever a failed append lost.
                         stuck.remove(&session);
                         untimed.remove(&session);

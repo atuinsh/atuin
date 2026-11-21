@@ -270,17 +270,32 @@ fn the_daemon_lets_go_of_the_hermes_store(machine: Machine, project: TempDir) {
 /// A session renamed after its conversation is listed, and found, under its new title at once,
 /// not only once another message carries it.
 #[rstest]
+#[case::codex(Agent::Codex, false)]
+#[case::codex_restarted(Agent::Codex, true)]
+#[case::hermes(Agent::Hermes, false)]
+#[case::opencode(Agent::Opencode, false)]
 fn a_renamed_session_is_listed_under_its_new_title(
-    machine: Machine,
+    mut machine: Machine,
     project: TempDir,
-    #[values(Agent::Hermes, Agent::Opencode)] agent: Agent,
+    #[case] agent: Agent,
+    #[case] restart: bool,
 ) {
     let turns = [Turn::new()];
     let transcript = Transcript::create(machine.home(), agent, project.path(), &turns);
     machine.wait_until_said(&transcript.id, &said(&turns));
 
+    if restart {
+        machine.stop_daemon();
+        std::fs::File::open(&transcript.path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+    }
     let title = format!("renamed {}", word());
     transcript.rename(&title);
+    if restart {
+        machine.start_daemon();
+    }
     ai::wait_for("the session to be listed under its new title", || {
         let listed = machine.session(&transcript.id).unwrap()["title"].clone();
         if listed == title.as_str() {
@@ -290,6 +305,22 @@ fn a_renamed_session_is_listed_under_its_new_title(
         }
     });
     assert!(finds(&machine, last_word(&title), &transcript.id), "the new title didn't find it");
+}
+
+#[rstest]
+fn import_reads_the_latest_indexed_codex_name(project: TempDir) {
+    let mut machine = Machine::with_config("", "enabled = false\n");
+    let turns = [Turn::new(), Turn::new()];
+    let transcript = Transcript::create(machine.home(), Agent::Codex, project.path(), &turns[..1]);
+    transcript.rename("First name");
+    transcript.rename("Latest name");
+    transcript.append(project.path(), &turns[1..]);
+    machine.start_daemon();
+
+    machine.run(&["threads", "import"]);
+    let listed = machine.session(&transcript.id).unwrap();
+    assert_eq!(listed["title"], "Latest name");
+    assert_eq!(machine.said(&transcript.id), said(&turns));
 }
 
 /// Turning capture on in the config takes effect in the running daemon, which captures the
