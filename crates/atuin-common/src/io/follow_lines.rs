@@ -79,7 +79,15 @@ impl<S: AsyncReadLines + Send + 'static> FollowLines<S> {
     /// value is ignored), until the sender drops.
     pub fn follow(
         self,
+        changes: watch::Receiver<impl Send + Sync + 'static>,
+    ) -> impl Stream<Item = io::Result<Line>> + Send + 'static {
+        self.follow_with_idle(changes, || ())
+    }
+
+    pub(crate) fn follow_with_idle(
+        self,
         mut changes: watch::Receiver<impl Send + Sync + 'static>,
+        mut idle: impl FnMut() + Send + 'static,
     ) -> impl Stream<Item = io::Result<Line>> + Send + 'static {
         async_stream::stream! {
             let mut source = self.source;
@@ -96,7 +104,10 @@ impl<S: AsyncReadLines + Send + 'static> FollowLines<S> {
                 }
 
                 match failure {
-                    None => retry = None,
+                    None => {
+                        retry = None;
+                        idle();
+                    }
                     Some(err) => {
                         // Once the sender is gone so is the file (or its watcher): a failed last
                         // read is expected, not news.

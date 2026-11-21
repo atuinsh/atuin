@@ -127,8 +127,15 @@ impl MessageEnricher {
     pub fn capture(&mut self, session: &SessionId, m: &AnyMessage) -> Vec<Message> {
         let handle = self.handle(session);
         let state = self.sessions.entry(session.to_string()).or_default();
+        let index_title = matches!(m, AnyMessage::Codex(message) if message.is_index_title());
         if let Some(ts) = m.timestamp() {
-            state.last_ts = Some(ts);
+            // Import may read past the rename before it sees the index. Project the name at
+            // least as late as the transcript so it becomes the session's displayed title.
+            state.last_ts = Some(if index_title {
+                ts.max(state.last_ts.unwrap_or(ts))
+            } else {
+                ts
+            });
         }
         if let Some(change) = m.title() {
             apply(&mut state.titles, change);
@@ -272,15 +279,16 @@ fn build(
     };
     // Codex and Grok Build lines name no parent: each row follows the row captured before it, so
     // the rows of two hosts continuing one transcript part where they did (see
-    // `AiSessionDatabase::analyse`). An applied Codex patch row or a Grok title-change row hangs
-    // beside the chain rather than on it, so the conversational rows around it link the same
-    // regardless of when it arrived.
+    // `AiSessionDatabase::analyse`). Codex patches and index titles and Grok title changes hang
+    // beside the chain so the conversational rows around them link the same regardless of when
+    // they arrived.
     let patch_only = !content.is_empty() && content.iter().all(|c| matches!(c, Content::Patch(_)));
     // A pushed message names its own parent, whatever the harness's transcripts do.
     let pushed = matches!(m, AnyMessage::Pushed(_));
     let chained = !pushed && matches!(handle.harness, HarnessKind::Codex | HarnessKind::Grok);
     let beside_chain = !pushed
         && ((handle.harness == HarnessKind::Codex && patch_only)
+            || matches!(m, AnyMessage::Codex(message) if message.is_index_title())
             || (handle.harness == HarnessKind::Grok && m.parent_id().is_some()));
     let parent_source_id = if beside_chain {
         m.parent_id().map(|id| SourceId::from(String::from(id))).or_else(|| state.previous.clone())
