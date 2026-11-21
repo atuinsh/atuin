@@ -1439,10 +1439,19 @@ fn patch_of(name: &str, call: &ToolCallId, input: &Value, output: &Value) -> Opt
                 .as_array()?
                 .iter()
                 .filter_map(|block| {
-                    let old: Vec<&str> =
-                        block["old_lines"].as_array()?.iter().filter_map(Value::as_str).collect();
-                    let new: Vec<&str> =
-                        block["new_lines"].as_array()?.iter().filter_map(Value::as_str).collect();
+                    // Vibe keeps each line's newline; a hunk's lines don't.
+                    let lines = |key: &str| -> Option<Vec<&str>> {
+                        Some(
+                            block[key]
+                                .as_array()?
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|line| line.strip_suffix('\n').unwrap_or(line))
+                                .collect(),
+                        )
+                    };
+                    let old = lines("old_lines")?;
+                    let new = lines("new_lines")?;
                     let lines = old
                         .iter()
                         .map(|line| format!("-{line}"))

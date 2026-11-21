@@ -477,3 +477,14 @@ async fn usage_and_left_out_arguments_come_from_the_journal(root: tempfile::Temp
     };
     assert_eq!(found.output["toolCount"], 3);
 }
+
+#[rstest]
+fn an_edit_patch_has_its_lines_without_their_newlines() {
+    let output = json!({"_meta": {"mistralai.vibe.sdk.search_replace": {"blocks": [{
+        "old_start_line": 1, "old_lines": ["OSPREY\n"],
+        "new_start_line": 1, "new_lines": ["OSPREY\n", "HERON was here\n"]}]}},
+        "structured_content": {"file": "/p/notes.txt"}});
+    let call = ToolCallId::from("c1".to_owned());
+    let patch = patch_of("edit", &call, &json!({}), &output).unwrap();
+    assert_eq!(patch.files[0].hunks[0].lines, ["-OSPREY", "+OSPREY", "+HERON was here"]);
+}
