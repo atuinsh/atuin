@@ -77,8 +77,11 @@ impl Octavo {
         records: AiSessionStore,
         sidecar: Option<AiSessionDatabase>,
     ) -> Self {
+        // Once Atuin for Teams has been on here, the client opens with it off too. Its passes
+        // read the config files again, so turning threads back on, or fixing a file that fails to
+        // run, takes effect without a daemon restart.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
-        if !threads_on(&configs).await {
+        if !settings.octavo_queue_path().exists() && !threads_on(&configs).await {
             return Self::nop();
         }
 
