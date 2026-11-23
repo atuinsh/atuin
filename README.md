@@ -25,16 +25,23 @@
   <a href="https://twitter.com/atuinsh"><img src="https://img.shields.io/badge/follow%20%40atuinsh-000000?style=flat-square&logo=x&logoColor=white" /></a>
 </p>
 
-Atuin gives you, and your agents, a history of everything that happened in your terminal.
+Atuin gives you, and your agents, a history of everything that happened in your
+terminal.
 
-**Shell history** Atuin replaces your shell history with a SQLite database that records exit codes, working directories, hosts and durations. Hit <kbd>Ctrl</kbd><kbd>r</kbd> and find any command you've ever
-run, on any machine.
+**Shell history** Atuin replaces your shell history with a SQLite database that
+records exit codes, working directories, hosts and durations. Hit
+<kbd>Ctrl</kbd><kbd>r</kbd> and find any command you've ever run, on any
+machine.
 
-**Agent Threads** Atuin captures your Claude Code, Codex, OpenCode and other agent sessions. Start a thread on your laptop, then `atuin resume` it on a different machine, in a different harness.
+**Agent Threads** Atuin captures your Claude Code, Codex, OpenCode and other
+agent sessions. Start a thread on your laptop, then `atuin resume` it on a
+different machine, in a different harness.
 
-Your agents can, optionally, search everything that's ever happened through the built-in MCP server.
+Your agents can, optionally, search everything that's ever happened through the
+built-in MCP server.
 
-Atuin can also sync both history and threads across all of your machines, end-to-end encrypted. Or it can work totally offline! 
+Atuin can also sync both history and threads across all of your machines,
+end-to-end encrypted. Or it can work totally offline! 
 
 # Quick Start
 
@@ -61,21 +68,30 @@ highlighted command.
 </p>
 
 
-Agents can search your history too:
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://atuin-demos.pages.dev/history-dark.webp">
-    <img src="https://atuin-demos.pages.dev/history-light.webp" alt="Claude Code finding a command from your shell history through Atuin's MCP server" width="100%" />
-  </picture>
-</p>
-
 As well as the search UI, `atuin` has a CLI interface for searching commands:
 
 ```bash
 # search for all successful `make` commands, recorded after 3pm yesterday
 atuin search --exit 0 --after "yesterday 3pm" make
 ```
+
+Finally, agents can search your history too, through our
+[MCP](https://docs.atuin.sh/latest/ai/mcp/).
+
+Atuin supports
+[<img src="assets/icons/zsh.svg" height="16" align="absmiddle" alt=""> `zsh`](https://www.zsh.org/),
+[<img src="assets/icons/bash.svg" height="16" align="absmiddle" alt=""> `bash`](https://www.gnu.org/software/bash/),
+[<img src="assets/icons/fish.svg" height="16" align="absmiddle" alt=""> `fish`](https://fishshell.com/),
+[<img src="assets/icons/nushell.svg" height="16" align="absmiddle" alt=""> `nushell`](https://www.nushell.sh/),
+[<img src="assets/icons/xonsh.svg" height="16" align="absmiddle" alt=""> `xonsh`](https://xon.sh/) and
+[<img src="assets/icons/powershell.svg" height="16" align="absmiddle" alt=""> `PowerShell`](https://learn.microsoft.com/en-us/powershell/).
+
+### Sync
+
+Atuin can sync all your shell activity, across all your machines (even
+ephemeral ones). You can either use the official [Atuin
+Service](https://atuin.sh) or you can self-host the sync server. **Everything
+it syncs is end-to-end encrypted.**
 
 ## Threads
 
@@ -85,13 +101,6 @@ another.
 
 With _Atuin Threads_, your agent has access to your full history, and the
 built-in Atuin MCP gives your agent context on everything you've ever done.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://atuin-demos.pages.dev/mcp-dark.webp">
-    <img src="https://atuin-demos.pages.dev/mcp-light.webp" alt="Claude Code recalling a decision from last week's Codex thread through Atuin's MCP server" width="100%" />
-  </picture>
-</p>
 
 You can take a session you started on your personal computer in Claude Code,
 and `$ atuin resume` it in a remote machine inside Codex.
@@ -109,23 +118,18 @@ Similarly to the _history_ index, you can search through your _threads_:
 atuin threads search 'c++'
 ```
 
-## Sync
+> [!TIP]
+>
+> AI functionality is completely opt-in: `atuin setup` will ask you if you want
+> threads support, or, if you want your binary to have zero AI features,
+> disable the `ai` feature flag during compilation:
+>
+> ```bash
+> cargo install atuin --no-default-features \
+>   --features client,sync,clipboard,check-update,daemon
+> ```
 
-Atuin syncs all your AI threads, your shell sessions across all your computers
-(even ephemeral VMs!). You can either use the official [Atuin
-Service](https://atuin.sh) or you can self-host the sync server. **Everything it
-syncs is end-to-end encrypted.**
-
-##
-
-Atuin supports
-[<img src="assets/icons/zsh.svg" height="16" align="absmiddle" alt=""> `zsh`](https://www.zsh.org/),
-[<img src="assets/icons/bash.svg" height="16" align="absmiddle" alt=""> `bash`](https://www.gnu.org/software/bash/),
-[<img src="assets/icons/fish.svg" height="16" align="absmiddle" alt=""> `fish`](https://fishshell.com/),
-[<img src="assets/icons/nushell.svg" height="16" align="absmiddle" alt=""> `nushell`](https://www.nushell.sh/),
-[<img src="assets/icons/xonsh.svg" height="16" align="absmiddle" alt=""> `xonsh`](https://xon.sh/) and
-[<img src="assets/icons/powershell.svg" height="16" align="absmiddle" alt=""> `PowerShell`](https://learn.microsoft.com/en-us/powershell/)
-as well as
+Supported harnesses are
 [<img src="assets/icons/claude-code.svg" height="16" align="absmiddle" alt=""> `Claude Code`](https://claude.com/product/claude-code),
 [<img src="assets/icons/codex.svg" height="16" align="absmiddle" alt=""> `Codex`](https://openai.com/codex/),
 [<picture><source media="(prefers-color-scheme: dark)" srcset="assets/icons/opencode-dark.svg"><img src="assets/icons/opencode.svg" height="16" align="absmiddle" alt=""></picture> Opencode](https://opencode.ai/),
