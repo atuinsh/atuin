@@ -26,7 +26,7 @@ impl FdIdentity {
     }
 
     /// An identity from raw parts, for tests that need one without a file behind it.
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, unix, feature = "fs-watcher"))]
     pub(crate) const fn from_raw(device: u64, inode: u64) -> Self {
         Self { device, inode }
     }

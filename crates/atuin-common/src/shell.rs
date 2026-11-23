@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "os", test)))]
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::ExitStatus;
@@ -183,7 +183,7 @@ pub fn shell_name(parent: Option<&Process>) -> String {
 ///
 /// `parse` is fed the full output of the command and should return just the portion that
 /// represents the path to the shell.
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "os", test)))]
 fn shell_from_command<F>(
     command: &OsStr,
     args: &[&OsStr],
@@ -227,7 +227,7 @@ where
 }
 
 /// Extract the shell from the output of `dscl localhost -read <user> shell`.
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "os", test)))]
 fn parse_dscl(output: &[u8]) -> Option<&[u8]> {
     // Extract the second field.
     output
@@ -239,7 +239,7 @@ fn parse_dscl(output: &[u8]) -> Option<&[u8]> {
 }
 
 /// Extract the login shell from the output of `getent passwd <uid>`.
-#[cfg(unix)]
+#[cfg(all(unix, any(feature = "os", test)))]
 fn parse_getent(output: &[u8]) -> Option<&[u8]> {
     // Extract the 7th colon-separated field.
     output
