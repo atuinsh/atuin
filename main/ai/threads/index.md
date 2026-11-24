@@ -112,9 +112,11 @@ atuin threads search "flaky test"
 
 ## Resuming
 
-`atuin resume` (or a key you bind to it, see [Binding `atuin resume`](https://docs.atuin.sh/reference/init/#binding-atuin-resume)) opens a picker over your threads. It works like the history search: type to search, `Ctrl`+`O` inspects the selected thread, and `Esc` leaves. `atuin threads resume` is the same command, under its longer name.
+`atuin resume` (or [a key bound to it](https://docs.atuin.sh/configuration/key-binding/#thread-resume-key)) opens a picker over your threads. It works like the history search: type to search, `Ctrl`+`O` inspects the selected thread, and `Esc` leaves. `atuin threads resume` is the same command, under its longer name.
 
-No key opens it by default. To open it with `Ctrl`+`T` (which replaces the shell's own transpose-chars on that key), pass `--bind-ai-resume` to `atuin init`; or bind the widget to a key of your choice after the `atuin init` line:
+`Ctrl`+`T` opens `atuin resume` when `threads.enabled` is true. This key might replace your shell's built-in `transpose-chars` binding in emacs mode. To disable the keybinding, set `bind_ai_resume = false` in your config, or run `atuin setup --only --no-ai-resume`.
+
+To bind the `resume` widget yourself, add these lines after the `atuin init` line:
 
 ```
 bindkey -M emacs '^T' atuin-ai-resume
