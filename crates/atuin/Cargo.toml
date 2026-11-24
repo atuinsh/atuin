@@ -49,7 +49,6 @@ eula = false
 default = [
     "client",
     "sync",
-    "clipboard",
     "check-update",
     "daemon",
     "ai",
@@ -73,7 +72,6 @@ octavo = [
     "dep:atuin-octavo",
 ]
 hex = ["pty-proxy"]
-clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
@@ -162,10 +160,10 @@ uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-arboard = { workspace = true, optional = true }
+arboard = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
+arboard = { workspace = true, features = ["wayland-data-control"] }
 
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,

@@ -81,7 +81,7 @@ If you'd rather the code wasn't in the binary at all, build from source without
 the default features:
 
 ```shell
-cargo build --release --no-default-features --features client,daemon,clipboard
+cargo build --release --no-default-features --features client,daemon
 ```
 
 This compiles out the update checker, the sync commands, and AI.
