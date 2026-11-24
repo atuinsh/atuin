@@ -21,6 +21,9 @@ case "$1" in
     section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace
     section ":mag: check (server)" cargo check -p atuin-server
     section ":mag: check (client only)" cargo check --no-default-features --features client --workspace
+    # The README's `cargo install` for a binary without the AI features, so
+    # keep the two feature lists in sync.
+    section ":mag: check (without ai)" cargo check -p atuin --locked --no-default-features --features client,sync,clipboard,check-update,daemon,pty-proxy
     section ":mag: check (release profile)" cargo check --workspace --locked --release
     ;;
   tests)
