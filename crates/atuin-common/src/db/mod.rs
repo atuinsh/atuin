@@ -99,10 +99,27 @@ macro_rules! __atuin_db_migrate {
         let pool = $pool;
         async move {
             #[allow(clippy::disallowed_macros)]
-            ::sqlx::migrate!($dir).run(pool).await?;
+            let migrator = ::sqlx::migrate!($dir);
             let mut conn = ::sqlx::Acquire::acquire(pool)
                 .await
                 .map_err(::sqlx::migrate::MigrateError::Execute)?;
+            // sqlx's migration lock is a no-op on SQLite. Without the write lock, processes that
+            // open a new database at the same time all apply its migrations, and all but one fail.
+            let locked = $crate::db::is_sqlite(pool)
+                && match ::sqlx::Connection::begin_with(&mut *conn, "BEGIN IMMEDIATE").await {
+                    Ok(mut tx) => {
+                        migrator.run(&mut tx).await?;
+                        tx.commit().await?;
+                        true
+                    }
+                    // A read-only database can't take the lock. It only needs one for a pending
+                    // migration, which fails either way.
+                    Err(e) if $crate::db::is_read_only(&e) => false,
+                    Err(e) => return Err(::sqlx::migrate::MigrateError::Execute(e)),
+                };
+            if !locked {
+                migrator.run(&mut *conn).await?;
+            }
             // Unfortunately this is necessary. Sqlx caches statements, so if you do something like
             // "SELECT * FROM foobar" where foobar has columns foo and bar, sqlx will cache the
             // "compiled" statement.
@@ -118,6 +135,24 @@ macro_rules! __atuin_db_migrate {
 }
 
 pub use __atuin_db_migrate as migrate;
+
+#[doc(hidden)]
+#[must_use]
+pub fn is_sqlite<DB: Database>(_: &sqlx::Pool<DB>) -> bool {
+    DB::NAME == "SQLite"
+}
+
+/// Whether `e` is SQLite's `SQLITE_READONLY`, in any of its extended forms.
+#[doc(hidden)]
+#[must_use]
+pub fn is_read_only(e: &sqlx::Error) -> bool {
+    const SQLITE_READONLY: u32 = 8;
+
+    e.as_database_error()
+        .and_then(|db| db.code())
+        .and_then(|code| code.parse::<u32>().ok())
+        .is_some_and(|code| code & 0xff == SQLITE_READONLY)
+}
 
 /// A sqlite connection string.
 #[derive(Clone, PartialEq, Eq)]
