@@ -329,10 +329,23 @@ impl SettingPaths {
     }
 }
 
+/// The Cargo features that this build of Atuin was compiled with, such as `ai` or `sync`.
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+struct BuildFeatures(Vec<&'static str>);
+
+impl BuildFeatures {
+    /// The features in manifest order, without `default`.
+    fn enabled() -> Self {
+        Self(env!("ATUIN_FEATURES").split(',').filter(|name| !name.is_empty()).collect())
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct AtuinInfo {
     pub version: String,
     pub commit: String,
+    pub features: BuildFeatures,
 
     /// Whether the main Atuin sync server is in use
     /// I'm just calling it Atuin Cloud for lack of a better name atm
@@ -366,6 +379,7 @@ impl AtuinInfo {
         Self {
             version: crate::VERSION.to_string(),
             commit: crate::SHA.to_string(),
+            features: BuildFeatures::enabled(),
             sync,
             sqlite_version,
             setting_paths: SettingPaths::new(settings),
@@ -454,4 +468,21 @@ pub async fn run(settings: &Settings) -> Result<()> {
     println!("{dump}");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::BuildFeatures;
+
+    #[rstest]
+    #[case::plain_name("client", cfg!(feature = "client"))]
+    #[case::dashed_name("pty-proxy", cfg!(feature = "pty-proxy"))]
+    #[case::off_by_default("vendored-tls", cfg!(feature = "vendored-tls"))]
+    #[case::not_a_feature("default", false)]
+    #[case::optional_dependency("atuin-client", false)]
+    fn lists_a_feature_when_this_build_has_it(#[case] name: &str, #[case] expected: bool) {
+        assert_eq!(BuildFeatures::enabled().0.contains(&name), expected);
+    }
 }

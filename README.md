@@ -126,7 +126,7 @@ atuin threads search 'c++'
 >
 > ```bash
 > cargo install atuin --no-default-features \
->   --features client,sync,clipboard,check-update,daemon
+>   --features client,sync,clipboard,check-update,daemon,pty-proxy
 > ```
 
 Supported harnesses are
