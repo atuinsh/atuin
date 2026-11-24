@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, Row, TransactionBehavior};
 use tracing::warn;
 
+use super::cjk::contains_cjk;
 use super::query::{FromRow, query, query_as, query_scalar};
 use super::watermark::BUMP_GENERATION;
 use super::{
@@ -362,11 +363,20 @@ impl AiSessionDatabase {
         }
 
         let rowid = inserted.last_insert_rowid();
+        let session_title = msg.session_title.as_deref().unwrap_or("");
         query("INSERT INTO messages_fts(rowid, title, body) VALUES (?, ?, ?)")
             .bind(rowid)
-            .bind(msg.session_title.as_deref().unwrap_or(""))
+            .bind(session_title)
             .bind(&prepared.body)
             .execute(conn)?;
+
+        if contains_cjk(&prepared.body) || contains_cjk(session_title) {
+            query("INSERT OR REPLACE INTO messages_cjk_fts(rowid, title, body) VALUES (?, ?, ?)")
+                .bind(rowid)
+                .bind(session_title)
+                .bind(&prepared.body)
+                .execute(conn)?;
+        }
 
         // Session title denormalised onto the message so it survives a reproject from records
         // (which carry messages only). The session upsert below takes the newest row's, so a
@@ -550,6 +560,18 @@ impl AiSessionDatabase {
                     .bind(title)
                     .bind(&body)
                     .execute(conn)?;
+
+                if contains_cjk(&body) || contains_cjk(title) {
+                    query("INSERT OR REPLACE INTO messages_cjk_fts(rowid, title, body) VALUES (?, ?, ?)")
+                        .bind(rowid)
+                        .bind(title)
+                        .bind(&body)
+                        .execute(conn)?;
+                } else {
+                    query("DELETE FROM messages_cjk_fts WHERE rowid = ?")
+                        .bind(rowid)
+                        .execute(conn)?;
+                }
             }
         }
 
@@ -1138,6 +1160,8 @@ impl AiSessionDatabase {
         for sql in [
             "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE session IN \
              (SELECT value FROM json_each(?)))",
+            "DELETE FROM messages_cjk_fts WHERE rowid IN (SELECT rowid FROM messages WHERE session IN \
+             (SELECT value FROM json_each(?)))",
             "DELETE FROM messages WHERE session IN (SELECT value FROM json_each(?))",
             "DELETE FROM calls WHERE (harness, session_id) IN (SELECT harness, session_id FROM \
              sessions WHERE id IN (SELECT value FROM json_each(?)))",
@@ -1185,5 +1209,88 @@ impl AiSessionDatabase {
 
         tx.commit()?;
         Ok(Some(!contributors.is_empty()))
+    }
+
+    pub(crate) fn backfill_cjk_sync(conn: &mut Connection) -> Result<(), DbError> {
+        let backfilled: i64 = conn
+            .query_row("SELECT backfilled FROM cjk_state WHERE id = 0", [], |r| r.get(0))
+            .unwrap_or(0);
+        if backfilled == 1 {
+            return Ok(());
+        }
+
+        let msg_count: i64 = conn
+            .query_row("SELECT count(*) FROM messages LIMIT 1", [], |r| r.get(0))
+            .unwrap_or(0);
+        if msg_count == 0 {
+            conn.execute("UPDATE cjk_state SET backfilled = 1 WHERE id = 0", [])?;
+            return Ok(());
+        }
+
+        const CHUNK_SIZE: i64 = 500;
+        let mut last_seq: i64 = 0;
+        loop {
+            let mut stmt = conn.prepare(
+                "SELECT m.seq, m.content, m.content_z, s.title, \
+                 (SELECT value FROM interned WHERE id = m.cwd), \
+                 (SELECT value FROM interned WHERE id = m.git_branch), \
+                 (SELECT value FROM interned WHERE id = m.model) \
+                 FROM messages m \
+                 JOIN sessions s ON s.id = m.session \
+                 WHERE m.seq > ? \
+                 ORDER BY m.seq ASC \
+                 LIMIT ?",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![last_seq, CHUNK_SIZE])?;
+            let mut chunk = Vec::new();
+            let mut read_count: i64 = 0;
+            while let Some(row) = rows.next()? {
+                read_count += 1;
+                let seq: i64 = row.get(0)?;
+                last_seq = seq;
+                let content: String = row.get(1)?;
+                let content_z: Option<Vec<u8>> = row.get(2)?;
+                let title: Option<String> = row.get(3)?;
+                let cwd: Option<String> = row.get(4)?;
+                let git_branch: Option<String> = row.get(5)?;
+                let model: Option<String> = row.get(6)?;
+
+                let body = Self::body_from_parts(
+                    content,
+                    content_z,
+                    cwd.as_deref(),
+                    git_branch.as_deref(),
+                    model.as_deref(),
+                )
+                .unwrap_or_default();
+
+                let title = title.unwrap_or_default();
+                if contains_cjk(&body) || contains_cjk(&title) {
+                    chunk.push((seq, title, body));
+                }
+            }
+            drop(rows);
+            drop(stmt);
+
+            if !chunk.is_empty() {
+                let tx = conn.transaction()?;
+                {
+                    let mut ins = tx.prepare(
+                        "INSERT OR REPLACE INTO messages_cjk_fts(rowid, title, body) VALUES (?, ?, ?)",
+                    )?;
+                    for (seq, title, body) in chunk {
+                        ins.execute(rusqlite::params![seq, title, body])?;
+                    }
+                }
+                tx.commit()?;
+            }
+
+            if read_count < CHUNK_SIZE {
+                break;
+            }
+        }
+
+        conn.execute("UPDATE cjk_state SET backfilled = 1 WHERE id = 0", [])?;
+        Ok(())
     }
 }

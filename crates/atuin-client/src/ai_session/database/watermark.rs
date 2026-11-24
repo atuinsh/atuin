@@ -245,6 +245,9 @@ impl AiSessionDatabase {
         db::query("INSERT INTO messages_fts (messages_fts) VALUES ('delete-all')")
             .execute(&mut *tx)
             .await?;
+        db::query("DELETE FROM messages_cjk_fts")
+            .execute(&mut *tx)
+            .await?;
         // Messages first: they reference their sessions.
         for sql in [
             "DELETE FROM messages",
