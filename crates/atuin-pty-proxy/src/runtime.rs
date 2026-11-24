@@ -198,7 +198,7 @@ async fn run(options: RuntimeOptions) -> Result<i32, Error> {
 
     let shell = options.shell.first().cloned();
     let mut cmd = CommandBuilder::from_argv(options.shell);
-    cmd.cwd(std::env::current_dir()?);
+    cmd.cwd(".");
     // Reflect the shell we actually spawn in `$SHELL` so the child — and
     // anything it execs via `$SHELL -c` (e.g. fzf's `become`) — sees the
     // shell the user asked for instead of a stale value inherited from the
