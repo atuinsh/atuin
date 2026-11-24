@@ -30,14 +30,15 @@ use tokio::sync::mpsc;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Form as _, Needs};
 use super::plan::{
-    AgentHistory, Agents, AtuinHub, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan, ShellHistory,
-    Shells, ThreadUploads, Threads, UpArrow,
+    AgentHistory, Agents, AiResume, AtuinHub, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan,
+    ShellHistory, Shells, ThreadUploads, Threads, UpArrow,
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
 use super::upload::{Gauge, Progress, State, Tracker, Upload};
 use super::{
-    Answer, Found, OffBecause, Offer, Scope, Status, Step, Sync, Update, count, is_address, names,
+    Answer, Found, OffBecause, Offer, Scope, Status, Step, Sync, Update, count, is_address,
+    join_with_and,
 };
 
 pub(super) const ACCENT: Color = Color::LightGreen;
@@ -385,11 +386,12 @@ enum Row {
     Agents,
     /// One of [`Choose::agents`], in the open list of agents.
     AgentPick(usize),
-    /// Advanced keybindings: a fold of [`Self::CtrlR`] and [`Self::UpArrow`] at the bottom of the
-    /// features.
+    /// Advanced keybindings: a fold of [`Self::CtrlR`], [`Self::UpArrow`] and [`Self::AiResume`]
+    /// at the bottom of the features.
     Keys,
     CtrlR,
     UpArrow,
+    AiResume,
     /// A place to sync to, on the sync page.
     SyncTo(SyncTo),
     /// The address of their own server, under [`SyncTo::SelfHosted`] once it's picked.
@@ -440,7 +442,8 @@ impl Row {
             | Self::AgentPick(_)
             | Self::Keys
             | Self::CtrlR
-            | Self::UpArrow => Some(Page::Features),
+            | Self::UpArrow
+            | Self::AiResume => Some(Page::Features),
         }
     }
 
@@ -449,7 +452,7 @@ impl Row {
         match self {
             Self::Shells | Self::ShellPick(_) => Some(List::Shells),
             Self::Agents | Self::AgentPick(_) => Some(List::Agents),
-            Self::Keys | Self::CtrlR | Self::UpArrow => Some(List::Keys),
+            Self::Keys | Self::CtrlR | Self::UpArrow | Self::AiResume => Some(List::Keys),
             Self::Shell
             | Self::Output
             | Self::Threads
@@ -472,6 +475,11 @@ impl Row {
         !matches!(self, Self::Keys | Self::SyncTo(_) | Self::Server | Self::Sharing(_) | Self::Go)
     }
 
+    /// The state of the ctrl-t row, which the screen leaves out when threads are disabled.
+    fn ai_resume_state(plan: &Plan) -> Option<Result<(), Needs>> {
+        plan.threads.0.then(|| plan.ask::<AiResume>()).flatten()
+    }
+
     /// Whether the screen shows the row for `plan`, `None` when it doesn't, and if it does, what
     /// the row needs while the rest of the screen rules it out.
     fn state(self, plan: &Plan) -> Option<Result<(), Needs>> {
@@ -482,13 +490,18 @@ impl Row {
             Self::Output => plan.ask::<OutputCapture>(),
             Self::Threads => plan.ask::<Threads>(),
             Self::AgentHistory => plan.ask::<AgentHistory>(),
-            // It opens while either key can change.
+            // The row opens if any key can change. When none can, the row shows what the first key
+            // needs.
             Self::Keys => {
-                let keys = [plan.ask::<CtrlR>(), plan.ask::<UpArrow>()];
-                keys.into_iter().flatten().reduce(Result::or)
+                let keys =
+                    [plan.ask::<CtrlR>(), plan.ask::<UpArrow>(), Self::ai_resume_state(plan)];
+                keys.into_iter()
+                    .flatten()
+                    .reduce(|first, key| first.or_else(|need| key.or(Err(need))))
             }
             Self::CtrlR => plan.ask::<CtrlR>(),
             Self::UpArrow => plan.ask::<UpArrow>(),
+            Self::AiResume => Self::ai_resume_state(plan),
             Self::SyncTo(_) => SyncTo::state(plan),
             Self::Server => plan.ask::<Sync>().filter(|_| matches!(plan.sync, Sync::Server(_))),
             Self::Sharing(sharing) => sharing.state(plan),
@@ -511,6 +524,7 @@ impl Row {
             Self::Keys => "Advanced keybindings",
             Self::CtrlR => "Ctrl-R",
             Self::UpArrow => "Up arrow",
+            Self::AiResume => "Ctrl-T",
             Self::SyncTo(to) => to.label(),
             Self::Server => "Address",
             Self::Sharing(sharing) => sharing.label(),
@@ -530,7 +544,7 @@ impl Row {
             }
             Self::SyncTo(_) | Self::Server => Some("Where should Atuin sync?"),
             Self::Sharing(_) | Self::Backfill => Some("Atuin Hub"),
-            Self::Keys | Self::CtrlR | Self::UpArrow | Self::Go => None,
+            Self::Keys | Self::CtrlR | Self::UpArrow | Self::AiResume | Self::Go => None,
         }
     }
 }
@@ -735,7 +749,7 @@ impl Choose {
             set_up_here: found.hooked
                 || !found.inits.is_empty()
                 || !found.connections.is_empty()
-                || found.capture
+                || found.threads
                 || found.output
                 || found.syncing().is_some(),
         }
@@ -766,7 +780,7 @@ impl Choose {
             let picks = match row {
                 Row::Shells if open => (0..HOOKABLE.len()).map(Row::ShellPick).collect(),
                 Row::Agents if open => (0..self.agents.len()).map(Row::AgentPick).collect(),
-                Row::Keys if open => vec![Row::CtrlR, Row::UpArrow],
+                Row::Keys if open => vec![Row::CtrlR, Row::UpArrow, Row::AiResume],
                 _ => Vec::new(),
             };
             let shown = picks.into_iter().filter_map(|pick| Some((pick, pick.state(&self.plan)?)));
@@ -926,6 +940,7 @@ impl Choose {
             }
             Row::CtrlR => plan.ctrl_r.0 = !plan.ctrl_r.0,
             Row::UpArrow => plan.up_arrow.0 = !plan.up_arrow.0,
+            Row::AiResume => plan.ai_resume.0 = !plan.ai_resume.0,
             Row::SyncTo(to) => self.pick(to),
             Row::Sharing(sharing) => self.share(sharing),
             Row::Backfill => plan.backfill.0 = !plan.backfill.0,
@@ -1202,6 +1217,7 @@ impl Choose {
                 | Row::AgentPick(_)
                 | Row::CtrlR
                 | Row::UpArrow
+                | Row::AiResume
                 | Row::Backfill,
             ) => hints(&[("enter", "toggle"), ("↑↓", "move"), esc]),
         }
@@ -1243,7 +1259,7 @@ impl Choose {
         let summary = if picked.is_empty() {
             "none".to_owned()
         } else {
-            names(picked)
+            join_with_and(picked).to_string()
         };
         let about = vec![dim(summary)];
         let at = at.then_some(self.part);
@@ -1296,6 +1312,9 @@ impl Choose {
                 row.label(),
                 "opens the search on your last command",
             ),
+            Row::AiResume => {
+                key_choice(at, self.plan.ai_resume.0, row.label(), "resumes an agent thread")
+            }
             Row::SyncTo(to) => {
                 let signed_in = found.syncing().is_some_and(|syncing| to.is_where(&syncing));
                 let picked = to.is_where(&self.plan.sync);
@@ -1606,7 +1625,7 @@ fn title(after: Vec<Span<'static>>) -> Vec<Line<'static>> {
 fn found_lines(found: &Found) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let agents =
-        names(&found.agents().into_iter().map(|agent| agent.display_name()).collect::<Vec<_>>());
+        join_with_and(found.agents().into_iter().map(|agent| agent.display_name())).to_string();
     let threads = found.threads();
 
     if let Some((shell, commands)) = found.history
@@ -1712,9 +1731,9 @@ impl Import {
             lines.push(choice(self.row == Row::Shell, self.history, "Shell history", about));
         }
         if let Some(threads) = offer.threads {
-            let agents = names(
-                &found.agents().into_iter().map(|agent| agent.display_name()).collect::<Vec<_>>(),
-            );
+            let agents =
+                join_with_and(found.agents().into_iter().map(|agent| agent.display_name()))
+                    .to_string();
             let noun = if threads == 1 {
                 "thread"
             } else {
@@ -1821,6 +1840,7 @@ fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
         | Row::AgentPick(_)
         | Row::CtrlR
         | Row::UpArrow
+        | Row::AiResume
         | Row::Server
         | Row::Backfill
         | Row::Go => "[ ] ",
@@ -2052,7 +2072,7 @@ mod tests {
     use clap::Parser as _;
     use rstest::{fixture, rstest};
 
-    use super::super::super::init::Shell;
+    use super::super::super::init::{KeySet, Keybindings, Shell};
     #[cfg(feature = "octavo")]
     use super::super::Hub;
     use super::super::plan::{Asks, Backfill, Mcp, UploadThreads};
@@ -2069,9 +2089,14 @@ mod tests {
             hooked: false,
             inits: Vec::new(),
             shells: vec![Shell::Zsh, Shell::Bash],
-            ctrl_r: true,
-            up_arrow: true,
-            capture: false,
+            keys: Keybindings {
+                ctrl_r: true,
+                up_arrow: true,
+                ai_resume: true,
+            },
+            flags_movable: true,
+            keys_set_by_env: KeySet::empty(),
+            threads: false,
             output: false,
             saves_output: false,
             daemon: false,
@@ -2196,6 +2221,7 @@ mod tests {
             agents: Agents(found.agents()),
             ctrl_r: CtrlR(true),
             up_arrow: UpArrow(true),
+            ai_resume: AiResume(true),
             mcp: Mcp(THREADS),
             daemon: super::super::plan::Daemon(true),
             sync: if SYNC {
@@ -2554,8 +2580,12 @@ mod tests {
 
         choose.row = Row::Keys;
         press(&mut choose, &[KeyCode::Enter]);
-        let open = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::Go];
-        assert!(rows(&choose).ends_with(&open), "{:?}", rows(&choose));
+        let open: &[Row] = if cfg!(feature = "ai") {
+            &[Row::Keys, Row::CtrlR, Row::UpArrow, Row::AiResume, Row::Go]
+        } else {
+            &[Row::Keys, Row::CtrlR, Row::UpArrow, Row::Go]
+        };
+        assert!(rows(&choose).ends_with(open), "{:?}", rows(&choose));
         let line = drawn(&choose, &found, Row::Keys);
         assert!(line.starts_with("  ▾ Advanced keybindings"), "{line}");
 
@@ -2570,7 +2600,7 @@ mod tests {
         choose.row = Row::Shell;
         press(&mut choose, &[KeyCode::Enter]);
         assert!(!choose.plan.shell.0);
-        let rows = [Row::Keys, Row::CtrlR, Row::UpArrow];
+        let rows = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::AiResume];
         assert_eq!(states(&choose, &rows), [(Row::Keys, Some("shell history"))]);
         let line = drawn(&choose, &found, Row::Keys);
         assert!(line.starts_with("  ▸ Advanced keybindings       needs shell history"), "{line}");
@@ -2613,6 +2643,42 @@ mod tests {
         assert!(drawn(&choose, &found, Row::UpArrow).contains("left to your shell"));
         let plan = finish(&mut choose);
         assert!(plan.ctrl_r.0 && !plan.up_arrow.0);
+    }
+
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn ai_resume_is_hidden_until_threads_are_on(found: Found) {
+        let mut choose = on_the_keys(&found);
+        choose.plan.threads = Threads(false);
+        let keys = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::AiResume];
+        let hidden = [(Row::Keys, None), (Row::CtrlR, None), (Row::UpArrow, None)];
+        assert_eq!(states(&choose, &keys), hidden);
+
+        choose.plan.threads = Threads(true);
+        let shown = [hidden[0], hidden[1], hidden[2], (Row::AiResume, None)];
+        assert_eq!(states(&choose, &keys), shown);
+    }
+
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn ai_resume_is_checked_by_default_and_can_be_left_to_the_shell(found: Found) {
+        let mut choose = on_the_keys(&found);
+        choose.plan.threads = Threads(true);
+        choose.row = Row::AiResume;
+        assert!(choose.plan.ai_resume.0);
+        assert!(drawn(&choose, &found, Row::AiResume).contains("resumes an agent thread"));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert!(!choose.plan.ai_resume.0);
+    }
+
+    #[cfg(feature = "ai")]
+    #[rstest]
+    fn the_keys_name_shell_history_when_nothing_is_on(found: Found) {
+        let mut choose = on_the_keys(&found);
+        choose.plan.shell = ShellHistory(false);
+        choose.plan.threads = Threads(false);
+        let rows = [Row::Keys, Row::CtrlR, Row::UpArrow, Row::AiResume];
+        assert_eq!(states(&choose, &rows), [(Row::Keys, Some("shell history"))]);
     }
 
     #[cfg(feature = "sync")]

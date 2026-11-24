@@ -1096,12 +1096,14 @@ pub struct Settings {
     /// the hidden `--shell-up-key-binding` option was passed.
     #[schemars(skip)]
     pub shell_up_key_binding: bool,
-    /// Whether `atuin init` binds ctrl-r to search. `atuin setup --only --no-ctrl-r` turns it off,
-    /// and `atuin init --disable-ctrl-r` turns it off either way.
+    /// Whether `atuin init` binds ctrl-r to search.
     pub bind_ctrl_r: bool,
-    /// Whether `atuin init` binds the up arrow to search. `atuin setup --only --no-up-arrow` turns
-    /// it off, and `atuin init --disable-up-arrow` turns it off either way.
+    /// Whether `atuin init` binds the up arrow to search.
     pub bind_up_arrow: bool,
+    /// Whether `atuin init` binds ctrl-t to `atuin threads resume` in zsh, bash and fish.
+    ///
+    /// The binding applies only while `threads.enabled` is on.
+    pub bind_ai_resume: bool,
     /// The most lines interactive search takes up. `0` uses the whole screen.
     pub inline_height: u16,
     /// The most lines search takes up when the up arrow opens it. If unset, `inline_height`.
@@ -1721,6 +1723,7 @@ impl Settings {
             .set_default("style", "compact")?
             .set_default("bind_ctrl_r", true)?
             .set_default("bind_up_arrow", true)?
+            .set_default("bind_ai_resume", true)?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
@@ -2838,6 +2841,11 @@ mod tests {
     #[case::legacy("[octavo]\nenabled = true\n", &["octavo"])]
     fn teams_in_config_toml_is_unknown(#[case] toml: &str, #[case] expected: &[&str]) {
         assert_unknown(&load_file(toml).unknown, expected);
+    }
+
+    #[rstest]
+    fn bind_ai_resume_defaults_on() {
+        assert!(parse_settings("").bind_ai_resume);
     }
 
     #[rstest]

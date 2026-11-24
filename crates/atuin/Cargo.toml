@@ -119,6 +119,7 @@ crossterm = { workspace = true, features = ["use-dev-tty"] }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+enumset = { workspace = true }
 eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }

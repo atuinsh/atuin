@@ -33,12 +33,6 @@ atuin setup --only --no-up-arrow
 
 Setup writes `bind_up_arrow = false` to your config, and new shells pick it up.
 
-You can also add `--disable-up-arrow` to the line containing `atuin init` in your shell config file. For example:
-
-```shell
-eval "$(atuin init zsh --disable-up-arrow)"
-```
-
 See [key binding](configuration/key-binding.md) for more
 
 ## How do I edit a command instead of running it immediately?

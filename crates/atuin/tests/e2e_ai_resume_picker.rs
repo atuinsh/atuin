@@ -121,7 +121,7 @@ fn the_shell_widget_resumes_the_session_chosen(
     let (session, turn) = two_sessions(&mut machine, project.path());
 
     let vars = BTreeMap::from([("PATH".to_owned(), machine.path_var())]);
-    let (pty, _) = setup.spawn(&machine.env, vars, "--bind-ai-resume");
+    let (pty, _) = setup.spawn(&machine.env, vars, "");
     // ctrl-t
     pty.send(b"\x14");
     pick(&pty, &turn);

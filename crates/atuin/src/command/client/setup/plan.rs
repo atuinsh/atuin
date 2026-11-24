@@ -39,6 +39,7 @@ pub(super) struct Plan {
     pub(super) agents: Agents,
     pub(super) ctrl_r: CtrlR,
     pub(super) up_arrow: UpArrow,
+    pub(super) ai_resume: AiResume,
     pub(super) mcp: Mcp,
     pub(super) daemon: Daemon,
     pub(super) sync: Sync,
@@ -75,6 +76,11 @@ toggles! {
     UpArrow("up-arrow", "Search") {
         on: "Search with the up arrow",
         off: "Leave the up arrow to your shell",
+    }
+    /// Binding ctrl-t to `atuin resume`.
+    AiResume("ai-resume", "Search") {
+        on: "Resume agent threads with ctrl-t",
+        off: "Leave ctrl-t to your shell",
     }
     /// Letting the agents search Atuin over MCP.
     Mcp("mcp", "Search") {
@@ -275,6 +281,7 @@ impl Form for Plan {
         visit.field(&mut self.agents);
         visit.field(&mut self.ctrl_r);
         visit.field(&mut self.up_arrow);
+        visit.field(&mut self.ai_resume);
         visit.field(&mut self.mcp);
         visit.field(&mut self.daemon);
         visit.field(&mut self.sync);
@@ -306,6 +313,11 @@ const fn needs(on: bool, needs: Needs) -> Result<(), Needs> {
 const SHELL_HISTORY: Needs = Needs {
     what: "shell history",
     flags: "`--shell-history`",
+};
+
+const THREADS_ON: Needs = Needs {
+    what: "threads",
+    flags: "`--threads`",
 };
 
 const DAEMON: Needs = Needs {
@@ -388,6 +400,23 @@ impl Choice<Plan> for CtrlR {
 
 impl Choice<Plan> for UpArrow {
     fn allowed(plan: &Plan) -> Result<(), Needs> {
+        needs(plan.shell.0, SHELL_HISTORY)
+    }
+}
+
+/// Ctrl-T needs threads because it resumes captured threads, and shell history because
+/// `atuin init` binds it.
+impl Choice<Plan> for AiResume {
+    fn asked(_: &Plan) -> Result<(), &'static str> {
+        if cfg!(feature = "ai") {
+            Ok(())
+        } else {
+            Err("this atuin was built without agent support")
+        }
+    }
+
+    fn allowed(plan: &Plan) -> Result<(), Needs> {
+        needs(plan.threads.0, THREADS_ON)?;
         needs(plan.shell.0, SHELL_HISTORY)
     }
 }
@@ -506,11 +535,12 @@ impl Plan {
             shell: ShellHistory(found.hooked || !found.inits.is_empty()),
             shells: Shells(shells),
             output: OutputCapture(found.output),
-            threads: Threads(found.capture),
+            threads: Threads(found.threads),
             agent_history: AgentHistory(!found.hooked_agents().is_empty()),
             agents: Agents(agents),
-            ctrl_r: CtrlR(found.ctrl_r),
-            up_arrow: UpArrow(found.up_arrow),
+            ctrl_r: CtrlR(found.keys.ctrl_r),
+            up_arrow: UpArrow(found.keys.up_arrow),
+            ai_resume: AiResume(found.keys.ai_resume),
             mcp: Mcp(!found.mcp_agents().is_empty()),
             daemon: Daemon(found.daemon),
             sync: found.syncing().unwrap_or_default(),

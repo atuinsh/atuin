@@ -60,6 +60,7 @@ dirs = "6"
 # which was released in 0.6.0
 easy-cast = { version = "0.5", features = ["assert_nonzero"] }
 enum_dispatch = "0.3"
+enumset = "1"
 eyre = "0.6"
 fjall = { version = "3" }
 fixedbitset = "0.5"
