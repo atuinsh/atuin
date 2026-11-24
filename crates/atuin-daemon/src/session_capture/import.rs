@@ -60,6 +60,8 @@ impl SessionImporter {
         filter: Option<HarnessKind>,
     ) -> impl Stream<Item = ImportProgress> + Send + 'static {
         async_stream::stream! {
+            // The import's memory is released once this and every read's share are dropped.
+            let release = Arc::new(ReleaseMemoryOnDrop);
             let mut sessions = 0u64;
             let mut imported = 0u64;
             let mut skipped = 0u64;
@@ -72,7 +74,7 @@ impl SessionImporter {
                 let Some(observed) = harness.sessions(&self.pool) else {
                     continue;
                 };
-                let progress = self.harness(kind, observed);
+                let progress = self.harness_releasing(kind, observed, Arc::clone(&release));
                 futures::pin_mut!(progress);
                 while let Some(event) = progress.next().await {
                     let mut passthrough = true;
@@ -100,10 +102,22 @@ impl SessionImporter {
         }
     }
 
+    /// Imports one harness's sessions on their own, with a release of their own.
+    #[cfg(test)]
     pub fn harness(
         &self,
         kind: HarnessKind,
         sessions: AnySessions,
+    ) -> impl Stream<Item = ImportProgress> + Send + 'static {
+        self.harness_releasing(kind, sessions, Arc::new(ReleaseMemoryOnDrop))
+    }
+
+    /// Imports one harness's sessions. Each read holds a share of `release` until its rows are freed.
+    fn harness_releasing(
+        &self,
+        kind: HarnessKind,
+        sessions: AnySessions,
+        release: Arc<ReleaseMemoryOnDrop>,
     ) -> impl Stream<Item = ImportProgress> + Send + 'static {
         let sink = self.sink.clone();
         let concurrency = self.concurrency;
@@ -119,6 +133,7 @@ impl SessionImporter {
             let mut reads = existing
                 .map(|item| {
                     let sink = sink.clone();
+                    let release = Arc::clone(&release);
                     AbortOnDropHandle::new(tokio::spawn(async move {
                         // A scan failure (unreadable directory/entry) is not a session; surface it
                         // so the summary reflects a partial backfill instead of a silent one.
@@ -130,11 +145,12 @@ impl SessionImporter {
                         // Decoding and enriching a session's lines is CPU work: on a blocking
                         // thread, as the runtime's is the daemon's every other request's. (Not the
                         // pool's: reading the session takes a worker of it.)
-                        let read = tokio::task::spawn_blocking(move || {
-                            futures::executor::block_on(read(enricher, session))
+                        let read = tokio::task::spawn_blocking(move || Shared {
+                            read: futures::executor::block_on(read(enricher, session)),
+                            _release: release,
                         });
                         match read.await {
-                            Ok(read) => Some(read),
+                            Ok(shared) => Some(shared.read),
                             Err(err) => std::panic::resume_unwind(err.into_panic()),
                         }
                     }))
@@ -245,6 +261,34 @@ async fn read(mut enricher: MessageEnricher, session: AnySession) -> Read {
         rows,
         failed,
     }
+}
+
+/// Hands the memory an import freed back to the operating system when it is dropped.
+///
+/// The import and each of its reads hold it in an `Arc`, so it is dropped once all of them are.
+///
+/// An import reads whole sessions into memory, up to [`SessionImporter`]'s concurrency at a time.
+/// The allocator keeps that memory once it is freed. Without this, a large import left the daemon
+/// at its peak size, close to a gigabyte, until it restarted.
+struct ReleaseMemoryOnDrop;
+
+impl Drop for ReleaseMemoryOnDrop {
+    fn drop(&mut self) {
+        // Releasing walks every arena, which is too slow for the runtime's own threads.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn_blocking(atuin_common::os::memory::release_free_memory));
+        }
+    }
+}
+
+/// A session's read, with its share of the import's [`ReleaseMemoryOnDrop`].
+///
+/// Aborting a read's task does not stop its blocking thread. After a cancelled import, the read
+/// finishes on its own and its result is dropped there. Fields drop in order, so the rows go before
+/// the share. The import's memory is then released only after the last read's rows are freed.
+struct Shared {
+    read: Read,
+    _release: Arc<ReleaseMemoryOnDrop>,
 }
 
 /// One session as an import reads it: its rows, and how many of its lines failed to read.
