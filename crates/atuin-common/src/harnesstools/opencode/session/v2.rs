@@ -358,7 +358,9 @@ impl Pass<'_> {
             reader.passed(row.seq, &row.id, self.gap);
             return None;
         }
-        let Some(full) = reader.reads.row(&reader.session, row.seq, self.state.legacy).await else {
+        let Some(full) =
+            reader.reads.row(&reader.session, row.seq, self.state.legacy, self.state.parts).await
+        else {
             reader.failed = true;
             self.stage = Stage::Done;
             return None;
@@ -395,6 +397,8 @@ struct State {
     moves: Vec<Moved>,
     /// Whether the database keeps opencode 1.x's `message` table, whose copies are skipped.
     legacy: bool,
+    /// Whether the database has a `session_part` table (see [`data_of`]).
+    parts: bool,
 }
 
 impl State {
@@ -810,10 +814,28 @@ fn written_from<'a>(data: &'a Value, session: &str) -> &'a Value {
 async fn tables(conn: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error> {
     query_scalar::<Sqlite, String>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', \
-         'session_message', 'event_sequence', 'message')",
+         'session_message', 'session_part', 'event_sequence', 'message')",
     )
     .fetch_all(conn)
     .await
+}
+
+/// A `session_message` row's data (`m`), with, for an assistant's message whose parts opencode
+/// keeps as `session_part` rows (2.4+), those parts ahead of any it holds inline as its content,
+/// as opencode reads it (`withParts` in `session/history.ts`). `json()` keeps the array JSON
+/// through the subquery, which SQLite 3.50+ would otherwise hand `json_set` as a string.
+fn data_of(parts: bool) -> &'static str {
+    if parts {
+        "CASE WHEN m.type != 'assistant' OR json_valid(m.data) = 0 OR NOT EXISTS (SELECT 1 FROM \
+         session_part p WHERE p.message_id = m.id) THEN m.data ELSE json_set(m.data, '$.content', \
+         json((SELECT json_group_array(CASE WHEN j THEN json(v) ELSE v END) FROM (SELECT 0 AS k, \
+         p.ordinal AS o, p.data AS v, 1 AS j FROM session_part p WHERE p.message_id = m.id AND \
+         json_valid(p.data) UNION ALL SELECT 1, c.key, c.value, c.type IN ('object', 'array') FROM \
+         json_each(m.data, '$.content') c WHERE json_type(m.data, '$.content') = 'array' ORDER BY \
+         k, o)))) END AS data"
+    } else {
+        "m.data"
+    }
 }
 
 /// A 2.0 session as opencode holds it now, for sync (see `projection`).
@@ -852,16 +874,20 @@ pub(super) async fn held(
     conn: &mut SqliteConnection,
     id: &str,
 ) -> Result<Option<Held>, sqlx::Error> {
-    const PLAIN: &str = "SELECT id, seq, type, time_created, data, 0 AS migrated FROM \
-                         session_message WHERE session_id = ?1 ORDER BY seq";
-    // as `Reads::row` tells a copy of a 1.x message
-    const LEGACY: &str = "SELECT m.id, m.seq, m.type, m.time_created, m.data, EXISTS (SELECT 1 \
-                          FROM message l WHERE l.session_id = m.session_id AND (l.id = m.id OR \
-                          (m.type = 'synthetic' AND substr(l.id, 1, 16) = substr(m.id, 1, 16)))) \
-                          AS migrated FROM session_message m WHERE m.session_id = ?1 ORDER BY \
-                          m.seq";
     let tables = tables(&mut *conn).await?;
     let has = |name: &str| tables.iter().any(|table| table == name);
+    let data = data_of(has("session_part"));
+    let plain = format!(
+        "SELECT m.id, m.seq, m.type, m.time_created, {data}, 0 AS migrated FROM session_message m \
+         WHERE m.session_id = ?1 ORDER BY m.seq"
+    );
+    // as `Reads::row` tells a copy of a 1.x message
+    let legacy_sql = format!(
+        "SELECT m.id, m.seq, m.type, m.time_created, {data}, EXISTS (SELECT 1 FROM message l \
+         WHERE l.session_id = m.session_id AND (l.id = m.id OR (m.type = 'synthetic' AND \
+         substr(l.id, 1, 16) = substr(m.id, 1, 16)))) AS migrated FROM session_message m WHERE \
+         m.session_id = ?1 ORDER BY m.seq"
+    );
     if !has("session_v2") || !has("session_message") {
         return Ok(None);
     }
@@ -880,19 +906,23 @@ pub(super) async fn held(
             .bind(id)
             .fetch_one(&mut *conn)
             .await?;
-    let updated = query_scalar::<Sqlite, Option<i64>>(
+    let updated = query_scalar::<Sqlite, Option<i64>>(if has("session_part") {
         "SELECT MAX(t) FROM (SELECT time_updated AS t FROM session_v2 WHERE id = ?1 UNION ALL \
-         SELECT time_updated FROM session_message WHERE session_id = ?1)",
-    )
+         SELECT time_updated FROM session_message WHERE session_id = ?1 UNION ALL SELECT \
+         time_updated FROM session_part WHERE session_id = ?1)"
+    } else {
+        "SELECT MAX(t) FROM (SELECT time_updated AS t FROM session_v2 WHERE id = ?1 UNION ALL \
+         SELECT time_updated FROM session_message WHERE session_id = ?1)"
+    })
     .bind(id)
     .fetch_one(&mut *conn)
     .await?;
     let legacy = has("message");
-    let rows = query_as::<Sqlite, Full>(if legacy {
-        LEGACY
+    let rows = query_as::<Sqlite, Full>(sqlx::AssertSqlSafe(if legacy {
+        legacy_sql
     } else {
-        PLAIN
-    })
+        plain
+    }))
     .bind(id)
     .fetch_all(&mut *conn)
     .await?;
@@ -1024,6 +1054,7 @@ impl Reads {
                     restart,
                     moves,
                     legacy: has("message"),
+                    parts: has("session_part"),
                 })
             })
         })
@@ -1057,15 +1088,25 @@ impl Reads {
 
     /// The row of `session` at `seq`, whole, and whether it is a copy of a 1.x message when the
     /// database keeps 1.x's `message` table (`legacy`). `Some(None)` for a row gone since.
-    async fn row(self: &Arc<Self>, session: &str, seq: i64, legacy: bool) -> Option<Option<Full>> {
-        const PLAIN: &str = "SELECT id, seq, type, time_created, data, 0 AS migrated FROM \
-                             session_message WHERE session_id = ?1 AND seq = ?2";
+    async fn row(
+        self: &Arc<Self>,
+        session: &str,
+        seq: i64,
+        legacy: bool,
+        parts: bool,
+    ) -> Option<Option<Full>> {
+        let data = data_of(parts);
+        let plain = format!(
+            "SELECT m.id, m.seq, m.type, m.time_created, {data}, 0 AS migrated FROM \
+             session_message m WHERE m.session_id = ?1 AND m.seq = ?2"
+        );
         // `syntheticID` keeps the first 16 characters of the 1.x message it splits off
-        const LEGACY: &str = "SELECT m.id, m.seq, m.type, m.time_created, m.data, EXISTS (SELECT \
-                              1 FROM message l WHERE l.session_id = m.session_id AND (l.id = m.id \
-                              OR (m.type = 'synthetic' AND substr(l.id, 1, 16) = substr(m.id, 1, \
-                              16)))) AS migrated FROM session_message m WHERE m.session_id = ?1 \
-                              AND m.seq = ?2";
+        let legacy_sql = format!(
+            "SELECT m.id, m.seq, m.type, m.time_created, {data}, EXISTS (SELECT 1 FROM message l \
+             WHERE l.session_id = m.session_id AND (l.id = m.id OR (m.type = 'synthetic' AND \
+             substr(l.id, 1, 16) = substr(m.id, 1, 16)))) AS migrated FROM session_message m \
+             WHERE m.session_id = ?1 AND m.seq = ?2"
+        );
         // whether the call a turn ended on carries an error (see `Full::reported`)
         const REPORTED: &str = "SELECT json_type(data, '$.error') = 'object' FROM session_message \
                                 WHERE session_id = ?1 AND seq < ?2 AND type IN ('user', \
@@ -1073,15 +1114,16 @@ impl Reads {
         let session = session.to_owned();
         self.read("2.0 row read", move |conn| {
             Box::pin(async move {
-                let full = query_as::<Sqlite, Full>(if legacy {
-                    LEGACY
+                let sql = if legacy {
+                    legacy_sql
                 } else {
-                    PLAIN
-                })
-                .bind(&session)
-                .bind(seq)
-                .fetch_optional(&mut *conn)
-                .await?;
+                    plain
+                };
+                let full = query_as::<Sqlite, Full>(sqlx::AssertSqlSafe(sql))
+                    .bind(&session)
+                    .bind(seq)
+                    .fetch_optional(&mut *conn)
+                    .await?;
                 let Some(mut full) = full else {
                     return Ok(None);
                 };
