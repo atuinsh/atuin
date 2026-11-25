@@ -725,6 +725,7 @@ impl TailEvent {
                 shell: normalize_optional_string(history.shell),
                 deleted_at: None,
                 author_kind: author_kind.into(),
+                workspace: None,
             },
         })
     }
@@ -971,7 +972,7 @@ impl Cmd {
             (true, true) => [Session, Directory],
             (true, false) => [Session, Global],
             (false, true) => [Global, Directory],
-            (false, false) => [settings.default_filter_mode(context.vcs_root.is_some()), Global],
+            (false, false) => [settings.default_filter_mode(context.has_workspace()), Global],
         };
 
         let history = db.list(filters, &context, None, false, include_deleted, None).await?;
@@ -1323,6 +1324,7 @@ mod tests {
                 deleted_at: None,
                 shell: Some("zsh".into()),
                 author_kind: Some(AuthorKind::Agent),
+                workspace: None,
             },
         }
     }

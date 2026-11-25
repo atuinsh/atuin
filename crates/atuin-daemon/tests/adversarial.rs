@@ -32,6 +32,7 @@ fn tame_request() -> StartHistoryRequest {
         intent: String::new(),
         shell: "bash".into(),
         author_kind: 0,
+        workspace: None,
     }
 }
 
@@ -111,6 +112,7 @@ proptest! {
                 _ => None,
             };
             prop_assert_eq!(row.author_kind, expected_kind);
+            prop_assert_eq!(&row.workspace, &req.workspace);
             match duration.map(|d| Duration::try_from(d).unwrap()) {
                 Some(d) => prop_assert_eq!(row.duration, i64::try_from(d.as_nanos()).unwrap_or(i64::MAX)),
                 None => prop_assert!(row.duration >= 0),

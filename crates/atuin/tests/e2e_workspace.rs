@@ -1,4 +1,5 @@
-//! Workspace filters keep jj history local, including colocated Git worktrees.
+//! Workspace filters find the history of every checkout of a repository, from jj workspaces and
+//! Git worktrees alike.
 
 #![cfg(unix)]
 
@@ -10,7 +11,7 @@ use std::process::Command;
 use atuin_common::path::{AbsPathBuf, PathBufExt as _};
 use rstest::{fixture, rstest};
 
-use crate::common::{FreshEnv, Process, SESSION};
+use crate::common::{FreshEnv, Process, SESSION, output};
 
 #[fixture]
 fn env() -> FreshEnv {
@@ -48,7 +49,11 @@ fn check_history(env: &FreshEnv, cwd: &Path, expected: &str) {
 #[case::jj_workspace(true, false)]
 #[case::colocated_jj_workspace(true, true)]
 #[case::plain_git_worktree(false, true)]
-fn workspace_filters_use_the_active_root(env: FreshEnv, #[case] jj: bool, #[case] colocated: bool) {
+fn workspace_filters_share_history_across_checkouts(
+    env: FreshEnv,
+    #[case] jj: bool,
+    #[case] colocated: bool,
+) {
     let home = AbsPathBuf::canonicalize(env.home()).unwrap().into_path_buf();
     let main = home.join("main");
     let workspace = home.join("workspace");
@@ -56,7 +61,11 @@ fn workspace_filters_use_the_active_root(env: FreshEnv, #[case] jj: bool, #[case
     std::fs::create_dir_all(&main).unwrap();
     std::fs::create_dir_all(&deep).unwrap();
     if jj {
-        std::fs::create_dir_all(main.join(".jj").joined("repo")).unwrap();
+        let store = main.join(".jj").joined("repo").joined("store");
+        std::fs::create_dir_all(&store).unwrap();
+        if colocated {
+            std::fs::write(store.joined("git_target"), "../../../.git").unwrap();
+        }
         std::fs::create_dir_all(workspace.join(".jj")).unwrap();
         std::fs::write(workspace.join(".jj").joined("repo"), "../../main/.jj/repo").unwrap();
     }
@@ -70,15 +79,29 @@ fn workspace_filters_use_the_active_root(env: FreshEnv, #[case] jj: bool, #[case
     env.record("echo workspace", SESSION, &deep);
     env.record("echo outside", SESSION, env.home());
 
-    check_history(
-        &env,
-        &deep,
-        if jj {
-            "echo workspace"
-        } else {
-            "echo main"
-        },
-    );
+    check_history(&env, &deep, "echo main\necho workspace");
+    check_history(&env, &main, "echo main\necho workspace");
+}
+
+/// A worktree's commands stay in the repository's history after the worktree is removed.
+#[rstest]
+fn removed_worktree_history_stays_in_the_workspace(env: FreshEnv) {
+    let home = AbsPathBuf::canonicalize(env.home()).unwrap().into_path_buf();
+    let main = home.join("main");
+    let gone = home.join("gone");
+    let git_dir = main.join(".git").joined("worktrees").joined("gone");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    std::fs::write(git_dir.join("commondir"), "../..\n").unwrap();
+    std::fs::create_dir_all(&gone).unwrap();
+    std::fs::write(gone.join(".git"), format!("gitdir: {}", git_dir.display())).unwrap();
+    env.record("echo main", SESSION, &main);
+    env.record("echo gone", SESSION, &gone);
+    env.record("echo outside", SESSION, &home);
+
+    std::fs::remove_dir_all(&gone).unwrap();
+    std::fs::remove_dir_all(&git_dir).unwrap();
+
+    check_history(&env, &main, "echo gone\necho main");
 }
 
 #[rstest]
@@ -155,7 +178,7 @@ fn real_jj_workspace_keeps_history_when_colocation_changes(
     env.record("echo main", SESSION, &main);
     env.record("echo workspace", SESSION, &deep);
     env.record("echo outside", SESSION, env.home());
-    check_history(&env, &deep, "echo workspace");
+    check_history(&env, &deep, "echo main\necho workspace");
 
     let operations = if colocated {
         ["disable", "enable"]
@@ -165,6 +188,29 @@ fn real_jj_workspace_keeps_history_when_colocation_changes(
     for operation in operations {
         jj(&env, &workspace, &["git", "colocation", operation]);
         assert_eq!(workspace.join(".git").is_file(), operation == "enable");
-        check_history(&env, &deep, "echo workspace");
+        check_history(&env, &deep, "echo main\necho workspace");
     }
+}
+
+/// A Git repository keeps its history when jj is colocated with it, and every jj workspace that
+/// is added afterwards shares that history.
+#[rstest]
+#[ignore = "requires jj >= 0.46.0 and Git >= 2.42.0"]
+fn real_git_repo_keeps_history_when_jj_is_colocated(env: FreshEnv) {
+    let main = env.home().join("main");
+    let workspace = env.home().join("workspace");
+    std::fs::create_dir_all(&main).unwrap();
+    let mut git = Command::new("git");
+    git.env_clear().envs(env.env_vars()).args(["init", "-q"]).current_dir(&main);
+    output(git);
+    env.record("echo git", SESSION, &main);
+
+    jj(&env, &main, &["git", "init", "--colocate"]);
+    env.record("echo colocated", SESSION, &main);
+    jj(&env, &main, &["workspace", "add", workspace.to_str().unwrap()]);
+    env.record("echo workspace", SESSION, &workspace);
+    env.record("echo outside", SESSION, env.home());
+
+    check_history(&env, &main, "echo colocated\necho git\necho workspace");
+    check_history(&env, &workspace, "echo colocated\necho git\necho workspace");
 }

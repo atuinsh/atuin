@@ -180,6 +180,7 @@ impl HistoryGen {
             .deleted_at(None)
             .shell(shell)
             .author_kind(is_agent.then_some(AuthorKind::Agent))
+            .workspace(None)
             .build()
             .into()
     }

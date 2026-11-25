@@ -645,7 +645,6 @@ pub(super) mod tests {
     use atuin_common::filter::OrFilter;
     use atuin_common::path::DisplayRichExt;
     use rstest::{fixture, rstest};
-    use uuid::Uuid;
 
     use super::*;
 
@@ -763,6 +762,55 @@ pub(super) mod tests {
             "/home/user/project".display_rich().trailing_slash(true).to_string(),
         );
         assert_eq!(index.search("", &directory, 10).unwrap().count(), 2);
+    }
+
+    /// With a workspace id, the workspace filter matches the commands that recorded the id from any
+    /// checkout, and the commands that recorded no workspace under the prefix. A command that
+    /// recorded another workspace stays out, even when it ran under the prefix. Without an id, the
+    /// filter matches every command under the prefix.
+    #[rstest]
+    #[case::recorded_workspace(Some("/work/repo/.git"), &["feat", "gone", "legacy-main", "main", "shared"])]
+    #[case::unknown_workspace(Some("/work/unknown/.git"), &["legacy-main"])]
+    #[case::no_workspace(None, &["legacy-main", "main", "shared", "submodule"])]
+    fn workspace_filter_matches_the_recorded_workspace(
+        #[case] id: Option<&str>,
+        #[case] expected: &[&str],
+    ) {
+        let at = "2024-01-01T10:00:00Z".parse::<Timestamp>().unwrap();
+        let run = |name: &str, cwd: &str, workspace: Option<&str>| History {
+            workspace: workspace.map(str::to_owned),
+            ..make_history(&format!("echo {name}"), cwd, at)
+        };
+        let main = Some("/work/repo/.git");
+        let submodule = Some("/work/repo/.git/modules/sub");
+        let runs = [
+            run("main", "/work/repo/src", main),
+            run("feat", "/work/repo.feat/src", main),
+            run("gone", "/work/repo.gone/src", main),
+            run("legacy-main", "/work/repo/src", None),
+            run("legacy-feat", "/work/repo.feat/src", None),
+            run("submodule", "/work/repo/sub", submodule),
+            run("shared", "/work/repo/sub", submodule),
+            run("shared", "/work/repo.feat/src", main),
+            run("elsewhere", "/elsewhere", None),
+        ];
+        let mut index = SearchIndex::default();
+        index.add_history(&runs);
+
+        let filter = IndexFilterMode::Workspace {
+            prefix: "/work/repo".display_rich().trailing_slash(true).to_string(),
+            id: id.map(str::to_owned),
+        };
+        let mut found: Vec<&str> = index
+            .search("", &filter, 10)
+            .unwrap()
+            .map(|id| {
+                let run = runs.iter().find(|run| run.id == id).unwrap();
+                run.command.trim_start_matches("echo ")
+            })
+            .collect();
+        found.sort_unstable();
+        assert_eq!(found, expected);
     }
 
     /// Regression test for #3702: a frequently-run command whose match is
@@ -1124,10 +1172,9 @@ pub(super) mod tests {
         runs
     }
 
-    /// Per command: use count, most recent timestamp and id, directories, hosts, sessions and
+    /// Per command: use count, most recent timestamp and id, where its runs happened, and
     /// frecency.
-    type CommandSnapshot =
-        (u32, i64, HistoryId, BTreeSet<String>, BTreeSet<String>, Vec<Uuid>, u32);
+    type CommandSnapshot = (u32, i64, HistoryId, command::Places, u32);
 
     /// What `index` holds for each command, with interned keys resolved. Two indexes then compare
     /// equal when they agree, whatever order they hold their commands in. Also checks that the
@@ -1144,14 +1191,11 @@ pub(super) mod tests {
                 let i = usize::conv(i);
                 assert_eq!(&*index.haystack[i], &*command.normalize_diacritics(), "misaligned");
                 let data = &index.data[i];
-                let (directories, hosts, sessions) = data.places(&index.interner);
                 let snapshot = (
                     data.count,
                     data.most_recent_timestamp,
                     data.most_recent_id,
-                    directories,
-                    hosts,
-                    sessions,
+                    data.places(&index.interner),
                     index.frecency[i],
                 );
                 (command.to_string(), snapshot)

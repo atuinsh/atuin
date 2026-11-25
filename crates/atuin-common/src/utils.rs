@@ -6,7 +6,7 @@ use getrandom::fill;
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretString};
 use uuid::Uuid;
 
-use crate::path::{AbsPathBuf, PathBufExt as _};
+use crate::path::{AbsPath, AbsPathBuf, PathBufExt as _};
 
 /// Generate N random bytes, using a cryptographically secure source
 #[must_use]
@@ -57,13 +57,10 @@ fn resolve_git_worktree(path: &Path) -> Option<AbsPathBuf> {
         return None;
     }
 
-    let contents = std::fs::read_to_string(&git_path).ok()?;
-    let gitdir = contents.strip_prefix("gitdir: ")?.trim();
-    let gitdir = AbsPathBuf::canonicalize(path.join(gitdir)).ok()?;
+    let gitdir = read_gitdir_pointer(&git_path)?;
 
     // a submodule's gitdir is a repository of its own, with no `commondir`
-    let commondir = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
-    let commondir = AbsPathBuf::canonicalize(gitdir.join(commondir.trim())).ok()?;
+    let commondir = read_commondir(&gitdir)?;
 
     // a bare repository has no main worktree to share
     if commondir.file_name()? != ".git" {
@@ -72,26 +69,159 @@ fn resolve_git_worktree(path: &Path) -> Option<AbsPathBuf> {
     commondir.parent().map(ToOwned::to_owned)
 }
 
+/// The git dir that the `.git` file at `git_path` points to with its `gitdir: <path>` line. A
+/// relative pointer is resolved from the directory that holds the `.git` file.
+fn read_gitdir_pointer(git_path: &Path) -> Option<AbsPathBuf> {
+    let contents = std::fs::read_to_string(git_path).ok()?;
+    let gitdir = contents.strip_prefix("gitdir: ")?.trim();
+    AbsPathBuf::canonicalize(git_path.parent()?.join(gitdir)).ok()
+}
+
+/// The common dir that the `commondir` file in `gitdir` names, relative to `gitdir`. Only the git
+/// dir of a linked worktree has a `commondir` file.
+fn read_commondir(gitdir: &AbsPath) -> Option<AbsPathBuf> {
+    let commondir = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    AbsPathBuf::canonicalize(gitdir.join(commondir.trim())).ok()
+}
+
+/// The git common dir of the checkout whose `.git` entry is at `git_path`.
+///
+/// Every worktree of a repository shares this directory. It is `.git` in an ordinary clone, and
+/// the repository itself when it is bare.
+fn git_common_dir(git_path: &Path) -> Option<AbsPathBuf> {
+    let gitdir = if git_path.is_file() {
+        read_gitdir_pointer(git_path)?
+    } else {
+        AbsPathBuf::canonicalize(git_path).ok()?
+    };
+    Some(read_commondir(&gitdir).unwrap_or(gitdir))
+}
+
+/// The repo directory of the jj workspace whose `.jj/repo` entry is at `repo_path`.
+///
+/// The main workspace keeps the repo in its `.jj/repo` directory. A secondary workspace has a
+/// `.jj/repo` file instead, which holds the path to the main workspace's `.jj/repo`. A relative
+/// path in that file is resolved from the workspace's `.jj` directory.
+fn jj_repo_dir(repo_path: &Path) -> Option<AbsPathBuf> {
+    if repo_path.is_dir() {
+        return AbsPathBuf::canonicalize(repo_path).ok();
+    }
+
+    let pointer = std::fs::read_to_string(repo_path).ok()?;
+    let pointer = pointer.trim();
+    if pointer.is_empty() {
+        return None;
+    }
+
+    let repo = AbsPathBuf::canonicalize(repo_path.parent()?.join(pointer)).ok()?;
+    repo.is_dir().then_some(repo)
+}
+
+/// The identity of the repository that `path` is in, which all of its checkouts share.
+///
+/// The identity is the canonical git common dir of the repository, whichever VCS owns the
+/// checkout. For example, `/x/repo` and its linked worktree `/x/repo.feat` both resolve to
+/// `/x/repo/.git`, and a worktree of the bare repository `/x/repo.git` resolves to `/x/repo.git`.
+///
+/// A jj workspace resolves to the git repository that its repo's git backend uses, when that git
+/// repository lives outside the repo's store. For example, every workspace of a colocated repo at
+/// `/x/repo` resolves to `/x/repo/.git`, and a repo created with `--git-repo=/x/repo.git` resolves
+/// to `/x/repo.git`. Otherwise the identity is the `.git` path in the jj main workspace root, even
+/// when that path doesn't exist. For example, a repo at `/x/repo` that keeps its git repository
+/// in its store resolves to `/x/repo/.git`. A jj repository therefore keeps its identity when it
+/// becomes colocated, and a git repository keeps its identity when jj is colocated with it.
+///
+/// A git checkout whose common dir is the git repository in a jj repo's store resolves the same
+/// way as the jj repo. For example, a git worktree of `/x/repo/.jj/repo/store/git` resolves to
+/// `/x/repo/.git`. A secondary jj workspace that is also such a git worktree therefore keeps its
+/// identity when its `.jj` directory is removed.
+///
+/// The repository is found the way [`in_vcs_repo`] finds it, so the nearest checkout above `path`
+/// wins. A directory that holds both a `.jj` workspace and a `.git` entry resolves to the jj
+/// workspace's identity, even when the jj repo uses another git repository.
+///
+/// This only reads the filesystem. It returns [`None`] outside a repository, and also when the
+/// repository's pointer files can't be followed.
+#[must_use]
+pub fn vcs_workspace_id(path: &Path) -> Option<PathBuf> {
+    let (dir, vcs) = nearest_vcs_dir(path)?;
+    match vcs {
+        Vcs::Jj => jj_git_dir(&jj_repo_dir(&dir.join(".jj").joined("repo"))?),
+        Vcs::Git => git_common_dir(&dir.join(".git")).map(git_dir_identity),
+    }
+}
+
+/// The identity of the git repository whose canonical common dir is `git_dir`.
+///
+/// The git repository in a jj repo's store takes the identity of that jj repo, which is the `.git`
+/// path in the jj main workspace root. For example, `/x/repo/.jj/repo/store/git` resolves to
+/// `/x/repo/.git`. A checkout of that git repository therefore resolves the same way through git
+/// as through jj. Any other git repository is its own identity.
+fn git_dir_identity(git_dir: AbsPathBuf) -> PathBuf {
+    let in_jj_store = git_dir.ends_with(".jj/repo/store/git");
+    if let Some(jj_root) = git_dir.ancestors().nth(4).filter(|_| in_jj_store) {
+        return jj_root.join(".git");
+    }
+    git_dir.into_path_buf()
+}
+
+/// The git dir that identifies the jj repo whose canonical repo directory is `repo`.
+///
+/// The repo's `store/git_target` file holds the path of the git backend's repository. That path
+/// is either absolute or relative to the store. A git repository outside the store gives the
+/// identity that [`git_dir_identity`] assigns to its git common dir. For example, a repo
+/// colocated in a git linked worktree resolves to the main worktree's `.git`, the same as the git
+/// side of the repository. A git repository inside the store moves to `<root>/.git` when the repo
+/// becomes colocated, so the identity is `<root>/.git` for it and for a repo with no usable
+/// `git_target`. `<root>` is the main workspace root, which holds the `.jj` directory that
+/// contains `repo`.
+fn jj_git_dir(repo: &AbsPath) -> Option<PathBuf> {
+    if let Some(git_dir) = jj_external_git_dir(repo) {
+        return Some(git_dir_identity(git_dir));
+    }
+    Some(repo.parent()?.parent()?.join(".git"))
+}
+
+/// The git common dir of the git repository that the `store/git_target` file of the jj repo
+/// `repo` names, when that git repository lives outside the store.
+fn jj_external_git_dir(repo: &AbsPath) -> Option<AbsPathBuf> {
+    let store = AbsPathBuf::canonicalize(repo.join("store")).ok()?;
+    let target = std::fs::read_to_string(store.join("git_target")).ok()?;
+    let git_dir = git_common_dir(&store.join(target.trim()))?;
+    (!git_dir.starts_with(&store)).then_some(git_dir)
+}
+
 // I really don't want to bring in libgit for something simple like this
 // If we start to do anything more advanced, then perhaps
 /// The nearest repository above `path`, whichever VCS owns it.
 /// A git worktree resolves to the main repo; a jj workspace keeps its own root.
 #[must_use]
 pub fn in_vcs_repo(path: &Path) -> Option<PathBuf> {
-    for dir in path.ancestors().take_while(|dir| !dir.as_os_str().is_empty()) {
+    let (dir, vcs) = nearest_vcs_dir(path)?;
+    let root = match vcs {
+        Vcs::Jj => dir.to_path_buf(),
+        Vcs::Git => {
+            resolve_git_worktree(dir).map_or_else(|| dir.to_path_buf(), AbsPathBuf::into_path_buf)
+        }
+    };
+    Some(root)
+}
+
+/// The VCS that owns the directory that [`nearest_vcs_dir`] finds.
+enum Vcs {
+    Jj,
+    Git,
+}
+
+/// The nearest directory, `path` or above, that holds a `.jj/repo` or a `.git` entry. A directory
+/// that holds both belongs to jj.
+fn nearest_vcs_dir(path: &Path) -> Option<(&Path, Vcs)> {
+    path.ancestors().take_while(|dir| !dir.as_os_str().is_empty()).find_map(|dir| {
         if dir.join(".jj").joined("repo").exists() {
-            return Some(dir.to_path_buf());
+            return Some((dir, Vcs::Jj));
         }
-
-        if dir.join(".git").exists() {
-            return Some(
-                resolve_git_worktree(dir)
-                    .map_or_else(|| dir.to_path_buf(), AbsPathBuf::into_path_buf),
-            );
-        }
-    }
-
-    None
+        dir.join(".git").exists().then_some((dir, Vcs::Git))
+    })
 }
 
 /// Find the main Git repository for `path`, including linked worktrees.
@@ -531,6 +661,371 @@ mod tests {
         let repo = |path: &Path| in_git_repo(path).map(|p| AbsPathBuf::canonicalize(p).unwrap());
         assert_eq!(repo(&deep), Some(AbsPathBuf::canonicalize(&main).unwrap()));
         assert_eq!(repo(&main), Some(AbsPathBuf::canonicalize(&main).unwrap()));
+
+        let common_dir = AbsPathBuf::canonicalize(main.join(".git")).unwrap().into_path_buf();
+        assert_eq!(vcs_workspace_id(&deep), Some(common_dir.clone()));
+        assert_eq!(vcs_workspace_id(&main), Some(common_dir));
+    }
+
+    /// Every checkout of a repository resolves to the same identity, and a checkout keeps that
+    /// identity through relative and absolute pointers. `{root}` in a file's contents stands for
+    /// the temp dir.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::repository(&[("repo/.git/HEAD", "")], &[], "repo", Some("repo/.git"))]
+    #[case::subdirectory_of_a_repository(
+        &[("repo/.git/HEAD", "")],
+        &[],
+        "repo/src/deep",
+        Some("repo/.git"),
+    )]
+    #[case::worktree_with_a_relative_gitdir(
+        &[
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/.git"),
+    )]
+    #[case::worktree_with_an_absolute_gitdir(
+        &[
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: {root}/main/.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/.git"),
+    )]
+    #[case::worktree_with_a_relative_gitdir_through_a_symlink(
+        &[
+            (".git/HEAD", ""),
+            ("data/main/.git/worktrees/wt/commondir", "../..\n"),
+            ("data/wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[("home/wt", "../data/wt")],
+        "home/wt/src",
+        Some("data/main/.git"),
+    )]
+    #[case::worktree_of_a_bare_repository(
+        &[
+            ("repo.git/HEAD", ""),
+            ("repo.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../repo.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("repo.git"),
+    )]
+    #[case::submodule(
+        &[
+            ("super/.git/modules/sub/HEAD", ""),
+            ("super/sub/.git", "gitdir: ../.git/modules/sub\n"),
+        ],
+        &[],
+        "super/sub/src",
+        Some("super/.git/modules/sub"),
+    )]
+    #[case::dangling_gitdir(
+        &[("wt/.git", "gitdir: ../gone/.git/worktrees/wt\n")],
+        &[],
+        "wt/src",
+        None,
+    )]
+    #[case::jj_colocated_main_workspace(
+        &[("repo/.git/HEAD", ""), ("repo/.jj/repo/store/git_target", "../../../.git")],
+        &[],
+        "repo/src",
+        Some("repo/.git"),
+    )]
+    #[case::jj_colocated_secondary_workspace_with_a_relative_pointer(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.jj/repo/store/git_target", "../../../.git"),
+            ("ws/.jj/repo", "../../main/.jj/repo"),
+        ],
+        &[],
+        "ws/src",
+        Some("main/.git"),
+    )]
+    #[case::jj_colocated_secondary_workspace_with_an_absolute_pointer(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.jj/repo/store/git_target", "../../../.git"),
+            ("ws/.jj/repo", "{root}/main/.jj/repo\n"),
+        ],
+        &[],
+        "ws/src",
+        Some("main/.git"),
+    )]
+    // jj 0.47 also makes a colocated secondary workspace a git worktree of the main workspace.
+    #[case::jj_colocated_secondary_workspace_that_is_a_git_worktree(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.git/worktrees/ws/commondir", "../..\n"),
+            ("main/.jj/repo/store/git_target", "../../../.git"),
+            ("ws/.git", "gitdir: ../main/.git/worktrees/ws\n"),
+            ("ws/.jj/repo", "../../main/.jj/repo"),
+        ],
+        &[],
+        "ws/src",
+        Some("main/.git"),
+    )]
+    #[case::git_worktree_of_a_colocated_repository(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("main/.jj/repo/store/git_target", "../../../.git"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/.git"),
+    )]
+    #[case::jj_non_colocated_main_workspace(
+        &[("repo/.jj/repo/store/git_target", "git"), ("repo/.jj/repo/store/git/HEAD", "")],
+        &[],
+        "repo/src",
+        Some("repo/.git"),
+    )]
+    #[case::jj_non_colocated_secondary_workspace(
+        &[
+            ("main/.jj/repo/store/git_target", "git"),
+            ("main/.jj/repo/store/git/HEAD", ""),
+            ("ws/.jj/repo", "../../main/.jj/repo"),
+        ],
+        &[],
+        "ws/src",
+        Some("main/.git"),
+    )]
+    // A secondary workspace that is colocated while the main workspace isn't is a worktree of the
+    // git repository in the store.
+    #[case::jj_colocated_secondary_workspace_of_a_non_colocated_repo(
+        &[
+            ("main/.jj/repo/store/git_target", "git"),
+            ("main/.jj/repo/store/git/HEAD", ""),
+            ("main/.jj/repo/store/git/worktrees/ws/commondir", "../..\n"),
+            ("ws/.git", "gitdir: ../main/.jj/repo/store/git/worktrees/ws\n"),
+            ("ws/.jj/repo", "../../main/.jj/repo"),
+        ],
+        &[],
+        "ws/src",
+        Some("main/.git"),
+    )]
+    // `jj workspace add --colocate` in a non-colocated repo writes this layout. Removing the
+    // workspace's `.jj` directory, or running `git worktree add` against the store, leaves a plain
+    // git worktree of the git repository in the store.
+    #[case::git_worktree_of_the_git_repo_in_a_jj_store(
+        &[
+            ("main/.jj/repo/store/git_target", "git"),
+            ("main/.jj/repo/store/git/HEAD", ""),
+            ("main/.jj/repo/store/git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: {root}/main/.jj/repo/store/git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/.git"),
+    )]
+    // Only a git dir whose last components are `.jj/repo/store/git` belongs to a jj store.
+    #[case::git_repo_whose_path_only_resembles_a_jj_store(
+        &[
+            ("main/x.jj/repo/store/git/HEAD", ""),
+            ("main/x.jj/repo/store/git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/x.jj/repo/store/git/worktrees/wt\n"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/x.jj/repo/store/git"),
+    )]
+    #[case::jj_external_git_repo_with_an_absolute_target(
+        &[("repo.git/HEAD", ""), ("repo/.jj/repo/store/git_target", "{root}/repo.git")],
+        &[],
+        "repo/src",
+        Some("repo.git"),
+    )]
+    #[case::jj_external_git_repo_with_a_relative_target(
+        &[("repo.git/HEAD", ""), ("repo/.jj/repo/store/git_target", "../../../../repo.git\n")],
+        &[],
+        "repo/src",
+        Some("repo.git"),
+    )]
+    #[case::jj_native_backend(
+        &[("repo/.jj/repo/store/type", "")],
+        &[],
+        "repo/src",
+        Some("repo/.git"),
+    )]
+    #[case::jj_colocated_in_a_git_worktree(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+            ("wt/.jj/repo/store/git_target", "../../../.git"),
+        ],
+        &[],
+        "wt/src",
+        Some("main/.git"),
+    )]
+    #[case::jj_external_git_repo_in_a_git_worktree(
+        &[
+            ("main/.git/HEAD", ""),
+            ("main/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../main/.git/worktrees/wt\n"),
+            ("repo/.jj/repo/store/git_target", "{root}/wt/.git"),
+        ],
+        &[],
+        "repo/src",
+        Some("main/.git"),
+    )]
+    #[case::jj_dangling_git_target(
+        &[("repo/.jj/repo/store/git_target", "../../../gone/.git")],
+        &[],
+        "repo/src",
+        Some("repo/.git"),
+    )]
+    #[case::jj_empty_git_target(
+        &[("repo/.jj/repo/store/git_target", "")],
+        &[],
+        "repo/src",
+        Some("repo/.git"),
+    )]
+    // jj comes before git in the same directory, so an unrelated `.git` there doesn't count.
+    #[case::jj_and_an_unrelated_git_repo_in_one_directory(
+        &[
+            ("repo/.git/HEAD", ""),
+            ("repo/.jj/repo/store/git_target", "{root}/other.git"),
+            ("other.git/HEAD", ""),
+        ],
+        &[],
+        "repo/src",
+        Some("other.git"),
+    )]
+    #[case::jj_dangling_pointer(&[("ws/.jj/repo", "../../missing/.jj/repo")], &[], "ws/src", None)]
+    #[case::jj_empty_pointer(&[("ws/.jj/repo", "")], &[], "ws/src", None)]
+    #[case::not_in_a_repository(&[], &[], "plain/src", None)]
+    fn workspace_id_is_shared_by_every_checkout(
+        tmp: TempDir,
+        #[case] files: &[(&str, &str)],
+        #[case] symlinks: &[(&str, &str)],
+        #[case] cwd: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        // Resolved like the pointers are (on macOS, /var is /private/var).
+        let root = AbsPathBuf::canonicalize(tmp.path()).unwrap();
+        write_files(&root, files);
+        for (link, target) in symlinks {
+            let link = root.join(link);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, link).unwrap();
+        }
+        let cwd = root.join(cwd);
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        assert_eq!(vcs_workspace_id(&cwd), expected.map(|expected| root.join(expected)));
+    }
+
+    /// Writes each file under `root`, with `{root}` in its contents replaced by `root`.
+    fn write_files(root: &Path, files: &[(&str, &str)]) {
+        for (path, contents) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let contents = contents.replace("{root}", &root.to_string_lossy());
+            std::fs::write(path, contents).unwrap();
+        }
+    }
+
+    /// A repository keeps its identity when jj is colocated with it or removed from it, so the
+    /// history that was recorded before the change stays in the workspace. The layouts are the
+    /// ones jj 0.47 writes before and after the change.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::git_repo_gets_colocated_with_jj(
+        &[("repo/.git/HEAD", "")],
+        &[],
+        &[("repo/.jj/repo/store/git_target", "../../../.git")],
+        &["repo/src"],
+    )]
+    #[case::git_worktree_gets_colocated_with_jj(
+        &[
+            ("repo/.git/HEAD", ""),
+            ("repo/.git/worktrees/wt/commondir", "../..\n"),
+            ("wt/.git", "gitdir: ../repo/.git/worktrees/wt\n"),
+        ],
+        &[],
+        &[("wt/.jj/repo/store/git_target", "../../../.git")],
+        &["wt/src", "repo/src"],
+    )]
+    #[case::jj_is_removed_from_a_colocated_repo(
+        &[("repo/.git/HEAD", ""), ("repo/.jj/repo/store/git_target", "../../../.git")],
+        &["repo/.jj"],
+        &[],
+        &["repo/src"],
+    )]
+    #[case::non_colocated_jj_repo_enables_colocation(
+        &[
+            ("repo/.jj/repo/store/git_target", "git"),
+            ("repo/.jj/repo/store/git/HEAD", ""),
+            ("ws/.jj/repo", "../../repo/.jj/repo"),
+        ],
+        &["repo/.jj/repo/store/git"],
+        &[("repo/.git/HEAD", ""), ("repo/.jj/repo/store/git_target", "../../../.git")],
+        &["repo/src", "ws/src"],
+    )]
+    #[case::colocated_jj_repo_disables_colocation(
+        &[
+            ("repo/.git/HEAD", ""),
+            ("repo/.jj/repo/store/git_target", "../../../.git"),
+            ("ws/.jj/repo", "../../repo/.jj/repo"),
+        ],
+        &["repo/.git"],
+        &[("repo/.jj/repo/store/git/HEAD", ""), ("repo/.jj/repo/store/git_target", "git")],
+        &["repo/src", "ws/src"],
+    )]
+    // `jj workspace add --colocate` in a non-colocated repo makes the workspace a git worktree of
+    // the git repository in the store.
+    #[case::jj_is_removed_from_a_colocated_workspace_of_a_non_colocated_repo(
+        &[
+            ("repo/.jj/repo/store/git_target", "git"),
+            ("repo/.jj/repo/store/git/HEAD", ""),
+            ("repo/.jj/repo/store/git/worktrees/ws/commondir", "../..\n"),
+            ("ws/.git", "gitdir: ../repo/.jj/repo/store/git/worktrees/ws\n"),
+            ("ws/.jj/repo", "../../repo/.jj/repo"),
+        ],
+        &["ws/.jj"],
+        &[],
+        &["repo/src", "ws/src"],
+    )]
+    fn workspace_id_survives_a_change_of_colocation(
+        tmp: TempDir,
+        #[case] before: &[(&str, &str)],
+        #[case] removed: &[&str],
+        #[case] added: &[(&str, &str)],
+        #[case] cwds: &[&str],
+    ) {
+        let root = AbsPathBuf::canonicalize(tmp.path()).unwrap();
+        let expected = Some(root.join("repo").joined(".git"));
+        write_files(&root, before);
+        let cwds: Vec<_> = cwds.iter().map(|cwd| root.join(cwd)).collect();
+        for cwd in &cwds {
+            std::fs::create_dir_all(cwd).unwrap();
+            assert_eq!(vcs_workspace_id(cwd), expected, "before the change, in {cwd:?}");
+        }
+
+        for path in removed {
+            std::fs::remove_dir_all(root.join(path)).unwrap();
+        }
+        write_files(&root, added);
+
+        for cwd in &cwds {
+            assert_eq!(vcs_workspace_id(cwd), expected, "after the change, in {cwd:?}");
+        }
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::relative("src/deep")]
+    fn workspace_id_never_probes_the_empty_path(#[case] path: &str) {
+        assert_eq!(vcs_workspace_id(Path::new(path)), None);
     }
 
     #[rstest]

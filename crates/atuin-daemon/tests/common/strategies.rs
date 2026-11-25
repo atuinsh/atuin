@@ -109,8 +109,11 @@ prop_compose! {
         intent in prop_oneof![Just(String::new()), "[^\\p{Cc}]{0,40}"],
         shell in shell(),
         author_kind in prop_oneof![Just(0i32), Just(1), Just(2), any::<i32>()],
+        workspace in proptest::option::of(cwd()),
     ) -> StartHistoryRequest {
-        StartHistoryRequest { timestamp, command, cwd, session, hostname, author, intent, shell, author_kind }
+        StartHistoryRequest {
+            timestamp, command, cwd, session, hostname, author, intent, shell, author_kind, workspace,
+        }
     }
 }
 

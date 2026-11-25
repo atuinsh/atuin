@@ -148,6 +148,7 @@ mod unix {
             cmd_origin: atuin_domain::record::CmdOrigin::parse_lenient(hostname),
             host_id: "test-host-id".to_string(),
             vcs_root: vcs_root.map(Into::into),
+            workspace: None,
         }
     }
 
@@ -196,10 +197,21 @@ mod unix {
         // alpha: bash, host-a, session A, inside the workspace
         // beta:  zsh, host-b, session B, outside the workspace
         // gamma: unknown shell, host-a, session A, workspace root
+        // delta: fish, host-c, session B, in a linked worktree of the repo
+        // epsilon: fish, host-c, session B, in a submodule under the workspace root
         let alpha = seed_history("echo alpha", "/work/repo/sub", "host-a", SESSION_A, Some("bash"));
         let beta = seed_history("echo beta", "/elsewhere", "host-b", SESSION_B, Some("zsh"));
         let gamma = seed_history("echo gamma", "/work/repo", "host-a", SESSION_A, None);
-        let seeded = [alpha.clone(), beta.clone(), gamma.clone()];
+        let delta = History {
+            workspace: Some("/work/repo/.git".to_owned()),
+            ..seed_history("echo delta", "/work/repo.feat/src", "host-c", SESSION_B, Some("fish"))
+        };
+        let epsilon = History {
+            workspace: Some("/work/repo/.git/modules/mod".to_owned()),
+            ..seed_history("echo epsilon", "/work/repo/mod", "host-c", SESSION_B, Some("fish"))
+        };
+        let seeded = [alpha.clone(), beta.clone(), gamma.clone(), delta.clone(), epsilon.clone()];
+        let all_ids = ids_of(&seeded.iter().collect::<Vec<_>>());
 
         let (mut client, handle, _tmp) = start_seeded_daemon(&seeded).await;
         let ctx = || context("/work/repo", "host-a", SESSION_A, None);
@@ -211,7 +223,7 @@ mod unix {
             query_id += 1;
             let results =
                 search(&mut client, query_id, "echo", FilterMode::Global, ctx(), &[]).await;
-            if results.len() == 3 {
+            if results.len() == seeded.len() {
                 break;
             }
             assert!(
@@ -238,7 +250,25 @@ mod unix {
             &[],
         )
         .await;
-        assert_eq!(sorted(results), ids_of(&[&alpha, &gamma]), "workspace");
+        assert_eq!(sorted(results), ids_of(&[&alpha, &gamma, &epsilon]), "workspace");
+
+        // Workspace with an id: the commands recorded with it, which include the linked
+        // worktree's command, and the commands recorded without one under the repo root. The
+        // submodule's command recorded another workspace, so it stays out.
+        query_id += 1;
+        let results = search(
+            &mut client,
+            query_id,
+            "echo",
+            FilterMode::Workspace,
+            Context {
+                workspace: Some("/work/repo/.git".to_owned()),
+                ..context("/work/repo/sub", "host-a", SESSION_A, Some("/work/repo"))
+            },
+            &[],
+        )
+        .await;
+        assert_eq!(sorted(results), ids_of(&[&alpha, &gamma, &delta]), "workspace id");
 
         // Host: only host-b's command.
         query_id += 1;
@@ -268,11 +298,7 @@ mod unix {
             let results =
                 search(&mut client, query_id, "echo", FilterMode::SessionPreload, new_ctx(), &[])
                     .await;
-            assert_eq!(
-                sorted(results),
-                ids_of(&[&alpha, &beta, &gamma]),
-                "session preload, from the {attempt}"
-            );
+            assert_eq!(sorted(results), all_ids.clone(), "session preload, from the {attempt}");
         }
         query_id += 1;
         let results =
@@ -298,7 +324,8 @@ mod unix {
             (vec!["bash"], ids_of(&[&alpha]), "bash only"),
             (vec!["bash", ""], ids_of(&[&alpha, &gamma]), "bash+unknown"),
             (vec!["zsh"], ids_of(&[&beta]), "zsh only"),
-            (vec![], ids_of(&[&alpha, &beta, &gamma]), "back to all"),
+            (vec!["fish"], ids_of(&[&delta, &epsilon]), "fish only"),
+            (vec![], all_ids, "back to all"),
         ] {
             query_id += 1;
             let results =

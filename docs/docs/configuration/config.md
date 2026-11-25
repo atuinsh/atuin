@@ -307,9 +307,15 @@ This flag enables a pseudo filter-mode named "workspace": the filter is automati
 activated when you're in a Git or Jujutsu repository.
 
 With workspace filtering enabled, Atuin filters commands executed in any directory
-within the repository tree. A plain Git worktree searches history under the main
-repository root. A Jujutsu workspace searches history under its own root, even when
-colocated with a Git worktree.
+within the repository tree. Every checkout of a repository shares its workspace
+history. This includes Git linked worktrees and the worktrees of a bare repository.
+It also includes every Jujutsu workspace of a repository, and worktrees that have
+since been deleted.
+
+Commands that an older version of Atuin recorded have no repository attached, so
+they still match by directory. Such a command matches when it ran under the
+repository root. For a Git worktree, the repository root is the main worktree's
+root. For a Jujutsu workspace, the repository root is the workspace's own root.
 
 Filter modes can still be toggled via ctrl-r.
 

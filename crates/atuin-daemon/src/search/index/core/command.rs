@@ -22,6 +22,10 @@ pub struct CommandData {
     // Pre-computed indexes for O(1) filter lookups
     /// All directories where this command has been run (interned keys).
     directories: HashSet<Spur>,
+    /// All [workspaces](History::workspace) where this command has been run (interned keys).
+    workspaces: HashSet<Spur>,
+    /// The directories of the runs that recorded no workspace (interned keys).
+    unscoped_directories: HashSet<Spur>,
     /// All hostnames where this command has been run (interned keys).
     hosts: HashSet<Spur>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
@@ -36,18 +40,35 @@ impl CommandData {
         let session = Uuid::parse_str(&history.session).ok()?;
         let timestamp = history.timestamp.as_second();
 
-        let dir_key =
-            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         let host_key = interner.get_or_intern(history.cmd_origin.as_str());
 
-        Some(Self {
+        let mut data = Self {
             most_recent_id: history.id,
             most_recent_timestamp: timestamp,
             count: 1,
-            directories: HashSet::from([dir_key]),
+            directories: HashSet::new(),
+            workspaces: HashSet::new(),
+            unscoped_directories: HashSet::new(),
             hosts: HashSet::from([host_key]),
             sessions: HashSet::from([session]),
-        })
+        };
+        data.add_places(history, interner);
+        Some(data)
+    }
+
+    /// Record the directory and the workspace of `history`.
+    fn add_places(&mut self, history: &History, interner: &mut Rodeo) {
+        let dir_key =
+            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
+        self.directories.insert(dir_key);
+        match &history.workspace {
+            Some(workspace) => {
+                self.workspaces.insert(interner.get_or_intern(workspace));
+            }
+            None => {
+                self.unscoped_directories.insert(dir_key);
+            }
+        }
     }
 
     /// Add an invocation from a history entry.
@@ -63,9 +84,7 @@ impl CommandData {
         self.count += 1;
 
         // Update pre-computed indexes for O(1) filter lookups
-        let dir_key =
-            interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
-        self.directories.insert(dir_key);
+        self.add_places(history, interner);
         self.hosts.insert(interner.get_or_intern(history.cmd_origin.as_str()));
         self.sessions.insert(session);
 
@@ -87,6 +106,8 @@ impl CommandData {
             keys.iter().map(|key| to.get_or_intern(from.resolve(key))).collect()
         };
         self.directories = move_keys(&self.directories);
+        self.workspaces = move_keys(&self.workspaces);
+        self.unscoped_directories = move_keys(&self.unscoped_directories);
         self.hosts = move_keys(&self.hosts);
     }
 
@@ -145,7 +166,22 @@ impl CommandData {
     ///
     /// O(n) where n = number of unique directories for this command.
     pub fn has_invocation_in_workspace(&self, prefix: &str, interner: &Rodeo) -> bool {
-        self.directories.iter().any(|&spur| interner.resolve(&spur).starts_with(prefix))
+        any_under(&self.directories, prefix, interner)
+    }
+
+    /// Check if any invocation recorded the interned [workspace](History::workspace) `workspace`,
+    /// or recorded no workspace and ran in a directory under `prefix`.
+    ///
+    /// O(1) for the workspace, then O(n) where n = number of unique directories of this command's
+    /// runs that recorded no workspace.
+    pub fn has_invocation_in_workspace_id(
+        &self,
+        workspace: Option<Spur>,
+        prefix: &str,
+        interner: &Rodeo,
+    ) -> bool {
+        let in_workspace = workspace.is_some_and(|workspace| self.workspaces.contains(&workspace));
+        in_workspace || any_under(&self.unscoped_directories, prefix, interner)
     }
 
     /// Check if any invocation matches an interned hostname.
@@ -164,20 +200,39 @@ impl CommandData {
     }
 }
 
+/// Whether any of the interned `directories` starts with `prefix`.
+fn any_under(directories: &HashSet<Spur>, prefix: &str, interner: &Rodeo) -> bool {
+    directories.iter().any(|&spur| interner.resolve(&spur).starts_with(prefix))
+}
+
+/// Where a command's runs happened, with interned keys resolved. See [`CommandData::places`].
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::search::index) struct Places {
+    pub directories: std::collections::BTreeSet<String>,
+    pub workspaces: std::collections::BTreeSet<String>,
+    pub unscoped_directories: std::collections::BTreeSet<String>,
+    pub hosts: std::collections::BTreeSet<String>,
+    pub sessions: Vec<Uuid>,
+}
+
 #[cfg(test)]
 impl CommandData {
-    /// The directories, hosts and sessions of this command's runs, with the keys resolved in
-    /// `interner`. The data of two indexes then compare equal when they agree.
-    pub(in crate::search::index) fn places(
-        &self,
-        interner: &Rodeo,
-    ) -> (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>, Vec<Uuid>) {
+    /// The directories, workspaces, hosts and sessions of this command's runs, with the keys
+    /// resolved in `interner`. The data of two indexes then compare equal when they agree.
+    pub(in crate::search::index) fn places(&self, interner: &Rodeo) -> Places {
         let resolve = |keys: &HashSet<Spur>| {
             keys.iter().map(|key| interner.resolve(key).to_owned()).collect()
         };
         let mut sessions: Vec<_> = self.sessions.iter().copied().collect();
         sessions.sort_unstable();
-        (resolve(&self.directories), resolve(&self.hosts), sessions)
+        Places {
+            directories: resolve(&self.directories),
+            workspaces: resolve(&self.workspaces),
+            unscoped_directories: resolve(&self.unscoped_directories),
+            hosts: resolve(&self.hosts),
+            sessions,
+        }
     }
 }
 

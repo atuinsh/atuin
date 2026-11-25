@@ -483,14 +483,7 @@ fn convert_filter_mode(
         (FilterMode::Directory, Some(ctx)) => {
             IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
         }
-        (FilterMode::Workspace, Some(ctx)) => {
-            if let Some(ref vcs_root) = ctx.vcs_root {
-                IndexFilterMode::Workspace(vcs_root.display_rich().trailing_slash(true).to_string())
-            } else {
-                // Fall back to directory if no repo root
-                IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
-            }
-        }
+        (FilterMode::Workspace, Some(ctx)) => workspace_filter_mode(ctx),
         (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
@@ -498,5 +491,72 @@ fn convert_filter_mode(
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
+    }
+}
+
+/// The workspace filter for `ctx`, which matches the database's workspace filter. It falls back
+/// to the directory filter when `ctx` has neither a repository root nor a workspace.
+fn workspace_filter_mode(ctx: &crate::search::SearchContext) -> IndexFilterMode {
+    let has_workspace = ctx.vcs_root.is_some() || ctx.workspace.is_some();
+    if !has_workspace {
+        return IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string());
+    }
+    // Without a repository root, the commands that were recorded without a workspace match under
+    // the cwd.
+    let root = ctx.vcs_root.as_deref().unwrap_or(&ctx.cwd);
+    IndexFilterMode::Workspace {
+        prefix: root.display_rich().trailing_slash(true).to_string(),
+        id: ctx.workspace.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::search::SearchContext;
+
+    /// The workspace filter applies whenever the context has a repository root or a workspace.
+    /// Without a repository root, the commands that were recorded without a workspace match under
+    /// the cwd.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::root_and_workspace(
+        Some("/work/repo"),
+        Some("/work/repo/.git"),
+        IndexFilterMode::Workspace {
+            prefix: "/work/repo/".to_owned(),
+            id: Some("/work/repo/.git".to_owned()),
+        },
+    )]
+    #[case::root_only(
+        Some("/work/repo"),
+        None,
+        IndexFilterMode::Workspace { prefix: "/work/repo/".to_owned(), id: None },
+    )]
+    #[case::workspace_only(
+        None,
+        Some("/work/repo/.git"),
+        IndexFilterMode::Workspace {
+            prefix: "/work/repo.gone/src/".to_owned(),
+            id: Some("/work/repo/.git".to_owned()),
+        },
+    )]
+    #[case::neither(None, None, IndexFilterMode::Directory("/work/repo.gone/src/".to_owned()))]
+    fn workspace_filter_uses_the_context_workspace(
+        #[case] vcs_root: Option<&str>,
+        #[case] workspace: Option<&str>,
+        #[case] expected: IndexFilterMode,
+    ) {
+        let context = SearchContext {
+            session_id: "session".to_owned(),
+            cwd: "/work/repo.gone/src".to_owned(),
+            hostname: "host:user".to_owned(),
+            host_id: "host-id".to_owned(),
+            vcs_root: vcs_root.map(String::from),
+            workspace: workspace.map(String::from),
+        };
+        assert_eq!(convert_filter_mode(FilterMode::Workspace, Some(&context)), expected);
     }
 }

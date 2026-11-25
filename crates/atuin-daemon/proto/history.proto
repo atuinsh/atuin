@@ -30,6 +30,9 @@ message StartHistoryRequest {
   string intent = 7;
   string shell = 8;
   AuthorKind author_kind = 9;
+  // The repository that the command ran in, which the client resolved from cwd when it
+  // captured the command. Absent outside a repository.
+  optional string workspace = 10;
 }
 
 message EndHistoryRequest {
