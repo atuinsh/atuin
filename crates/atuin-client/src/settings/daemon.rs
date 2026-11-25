@@ -9,7 +9,10 @@ use atuin_common::path::{AbsPath, EnvDependentPathBuf, PathBufExt as _};
 use atuin_common::path::{AbsPathBuf, RelativeTo};
 // `AsDisableableDuration` is deprecated.
 #[allow(deprecated)]
-use atuin_common::time::{AsDisableableDuration, NonZeroDuration, Seconds};
+use atuin_common::time::{
+    AsDisableableDuration, DisableableDurationSchema, NonZeroDuration, Seconds,
+};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -20,35 +23,40 @@ const SOCKET_NAME: &str = "atuin.sock";
 
 #[allow(deprecated)]
 #[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Daemon {
-    /// Use the daemon to sync
-    /// If enabled, history hooks are routed through the daemon.
+    /// Send history and sync through the daemon, rather than from each shell.
+    /// `atuin setup --only --daemon` turns it on, with `autostart` and the `daemon-fuzzy`
+    /// `search_mode`.
     // The field has a config builder default, so `settings::aliases` must list this alias.
     #[serde(alias = "enable")]
     pub enabled: bool,
 
-    /// Automatically start and manage a local daemon when needed.
+    /// Start the daemon whenever a command needs it. It doesn't work with `systemd_socket`.
     pub autostart: bool,
 
-    /// The daemon will handle sync on an interval. How often to sync, in seconds. `0` disables
-    /// periodic sync.
+    /// How often the daemon syncs, such as `5m`. `0` turns periodic sync off.
     #[serde_as(as = "AsDisableableDuration<Seconds>")]
+    #[schemars(with = "DisableableDurationSchema<Seconds>")]
     pub sync_frequency: Option<NonZeroDuration>,
 
-    /// The path to the unix socket used by the daemon.
-    /// When unset, [`Daemon::socket_path`] picks the default location.
+    /// The Unix socket that clients reach the daemon through. If unset,
+    /// `$TMPDIR/atuin-$UID/atuin.sock`, or `$XDG_RUNTIME_DIR/atuin.sock` with `systemd_socket`.
+    ///
+    /// The default doesn't depend on `ATUIN_HOME`. Give each `ATUIN_HOME` whose daemon runs at the
+    /// same time a socket of its own.
     #[serde_as(as = "Option<RelativeTo<ConfigDir>>")]
     pub socket_path: Option<AbsPathBuf>,
 
-    /// Path to the daemon pidfile used for process coordination.
+    /// The daemon's pidfile, which processes coordinate through.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub pidfile_path: AbsPathBuf,
 
-    /// Use a socket passed via systemd's socket activation protocol, instead of the path
+    /// Listen on the socket that systemd's socket activation passes, rather than on
+    /// `socket_path`.
     pub systemd_socket: bool,
 
-    /// The port that should be used for TCP on non unix systems
+    /// The TCP port that clients reach the daemon through, on systems without Unix sockets.
     pub tcp_port: u64,
 }
 

@@ -96,7 +96,7 @@ impl From<sqlx::Error> for DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct DbSettings {
     pub db_uri: OwnedDbUrl,
 

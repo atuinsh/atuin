@@ -2,6 +2,99 @@
 
 All notable changes to this project will be documented in this file.
 
+## 18.25.1
+
+### Bug Fixes
+
+- *(config)* Rename `threads.capture` to `threads.enabled` ([#4785](https://github.com/atuinsh/atuin/issues/4785))
+- *(setup)* Contrast on default Terminal.app ([#4780](https://github.com/atuinsh/atuin/issues/4780))
+- *(setup)* Preserve line breaks in error messages ([#4784](https://github.com/atuinsh/atuin/issues/4784))
+- *(setup)* Show the sign-in code to match against the Hub ([#4791](https://github.com/atuinsh/atuin/issues/4791))
+- *(setup,common)* Keep stray log lines off the setup screen
+
+
+### Features
+
+- *(threads)* Support Mistral Vibe threads and MCP ([#4778](https://github.com/atuinsh/atuin/issues/4778))
+- *(threads)* Change ctrl-] binding to ctrl-t ([#4786](https://github.com/atuinsh/atuin/issues/4786))
+
+
+### Miscellaneous Tasks
+
+- Enable `debug-embed` in `rust-embed` ([#4777](https://github.com/atuinsh/atuin/issues/4777))
+- Update AGENTS.md disclosure instructions ([#4789](https://github.com/atuinsh/atuin/issues/4789))
+- Fix/debug macOS tests ([#4790](https://github.com/atuinsh/atuin/issues/4790))
+
+
+### Refactor
+
+- *(deps)* Bump rmcp from 3.9.0 to 3.10.0 ([#4752](https://github.com/atuinsh/atuin/issues/4752))
+- *(deps)* Bump tonic-prost from 0.14.6 to 0.14.9 ([#4750](https://github.com/atuinsh/atuin/issues/4750))
+
+
+## 18.25.0
+
+### Bug Fixes
+
+- *(ai)* Parse SKILL.md frontmatter with CRLF line endings ([#4758](https://github.com/atuinsh/atuin/issues/4758))
+- *(ai)* Resolve in-flight tools when the chat stream fails ([#4759](https://github.com/atuinsh/atuin/issues/4759))
+- *(ai)* Don't re-prompt the model after server-side tool calls ([#4310](https://github.com/atuinsh/atuin/issues/4310))
+- *(daemon)* Search index race conditions ([#4730](https://github.com/atuinsh/atuin/issues/4730))
+- *(mcp)* Keep the Atuin for Teams tool list cached from the daemon, and keep it through a failed call ([#4726](https://github.com/atuinsh/atuin/issues/4726))
+- *(mcp)* Tell Atuin for Teams which thread is calling, and load atuin_history up front ([#4768](https://github.com/atuinsh/atuin/issues/4768))
+- *(nushell)* Make keybindings work in helix mode ([#4738](https://github.com/atuinsh/atuin/issues/4738))
+- *(opencode)* Write handed-off tool calls as opencode 2's own shell, read, write and edit ([#4665](https://github.com/atuinsh/atuin/issues/4665))
+- *(pty-proxy)* Don't spawn pty when piped ([#4734](https://github.com/atuinsh/atuin/issues/4734))
+- *(pty-proxy)* Propagate outer terminal pixel size to inner PTY ([#4619](https://github.com/atuinsh/atuin/issues/4619))
+- *(setup)* Let enter expand/close submenus ([#4771](https://github.com/atuinsh/atuin/issues/4771))
+- *(setup)* Ignore comments in shell init files ([#4772](https://github.com/atuinsh/atuin/issues/4772))
+- *(threads)* Don't offer agents atuin can't write to as --in targets ([#4662](https://github.com/atuinsh/atuin/issues/4662))
+- *(threads)* Catch a Claude Code copy up past its own turn_duration line ([#4733](https://github.com/atuinsh/atuin/issues/4733))
+- *(threads)* Keep omp background job results and notices ([#4773](https://github.com/atuinsh/atuin/issues/4773))
+- *(userio)* Escape control characters in messages for the user ([#4757](https://github.com/atuinsh/atuin/issues/4757))
+- Standardize path to `atuin` in external config ([#4766](https://github.com/atuinsh/atuin/issues/4766))
+- Create the key file without a hard link on Android/Termux ([#4767](https://github.com/atuinsh/atuin/issues/4767))
+
+
+### Documentation
+
+- *(readme)* Rework the README around rendered demos
+- Adjust readme ([#4747](https://github.com/atuinsh/atuin/issues/4747))
+
+
+### Features
+
+- *(config)* Warn about and avoid setting unknown keys ([#4727](https://github.com/atuinsh/atuin/issues/4727))
+- *(setup)* Make atuin setup the way to set atuin up
+- *(setup)* Further atuin setup improvements
+- *(setup)* Individually select arrow and checkbox ([#4774](https://github.com/atuinsh/atuin/issues/4774))
+- *(threads)* Read content blocks of kinds a newer atuin added ([#4735](https://github.com/atuinsh/atuin/issues/4735))
+- Move datetime handling to jiff, with DST-aware time zones ([#4765](https://github.com/atuinsh/atuin/issues/4765))
+
+
+### Miscellaneous Tasks
+
+- *(ai)* Remove the Atuin AI agent ([#4764](https://github.com/atuinsh/atuin/issues/4764))
+- *(theme)* Remove theme.max_depth and theme.debug ([#4755](https://github.com/atuinsh/atuin/issues/4755))
+- Update agent instructions ([#4754](https://github.com/atuinsh/atuin/issues/4754))
+- Move release skill to `.agents` ([#4775](https://github.com/atuinsh/atuin/issues/4775))
+
+
+### Performance
+
+- *(daemon)* Update the search index in place on delete ([#4743](https://github.com/atuinsh/atuin/issues/4743))
+
+
+### Refactor
+
+- Ensure ai features are gated by "ai" crate feature ([#4756](https://github.com/atuinsh/atuin/issues/4756))
+
+
+### Testing
+
+- *(common)* Keep repo walk proptest clear of Windows device names
+
+
 ## 18.24.8
 
 ### Bug Fixes

@@ -7,6 +7,7 @@
 //! rebuilding, and says so beside the results. An unreachable daemon (not running, or not
 //! answering in time) is never started, and says nothing.
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,22 +50,25 @@ pub trait RebuildProbe: Send + Sync {
 }
 
 /// Asks the daemon over its socket, without starting it, giving up after [`PROBE_TIMEOUT`].
-pub struct DaemonProbe {
-    settings: Arc<Settings>,
+///
+/// `S` holds the settings: an `Arc<Settings>` for a probe that outlives its caller, or a
+/// `&Settings` for one asked once.
+pub struct DaemonProbe<S> {
+    settings: S,
 }
 
-impl DaemonProbe {
+impl<S> DaemonProbe<S> {
     #[must_use]
-    pub const fn new(settings: Arc<Settings>) -> Self {
+    pub const fn new(settings: S) -> Self {
         Self { settings }
     }
 }
 
 #[async_trait]
-impl RebuildProbe for DaemonProbe {
+impl<S: Borrow<Settings> + Send + Sync> RebuildProbe for DaemonProbe<S> {
     async fn rebuilding(&self) -> Option<Rebuilding> {
         let probe = async {
-            let mut client = AiClient::from_settings(&self.settings).await.ok()?;
+            let mut client = AiClient::from_settings(self.settings.borrow()).await.ok()?;
             client.rebuild_status().await.ok()?
         };
         let progress = tokio::time::timeout(PROBE_TIMEOUT, probe).await.ok().flatten()?;

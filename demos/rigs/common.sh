@@ -50,7 +50,7 @@ configure_daemon() {
   cat >>"$1/.config/atuin/config.toml" <<TOML
 
 [threads]
-capture = true
+enabled = true
 
 [daemon]
 enabled = true

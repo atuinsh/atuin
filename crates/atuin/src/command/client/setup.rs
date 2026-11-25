@@ -1,32 +1,30 @@
 //! `atuin setup`: one screen of choices, filled in from what is on this machine, then a live list
 //! of what it is doing.
 
-use std::fs::OpenOptions;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 #[cfg(all(feature = "ai", feature = "daemon"))]
 use std::num::NonZeroU64;
 #[cfg(feature = "ai")]
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 #[cfg(feature = "ai")]
 use std::time::{Duration, SystemTime};
 
 use atuin_client::database::Sqlite;
+use atuin_client::meta::SyncChoice;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{RequestedSearchMode, Settings, ThreadUploads};
-use atuin_common::dirs::home_dir;
+use atuin_client::settings::{RequestedSearchMode, Settings};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::executable::is_executable_with_path_search;
+use atuin_common::fs::can_write;
 #[cfg(feature = "ai")]
 use atuin_common::harnesstools::{
     InstallHookError,
     mcp::InstallMcp as _,
     session::any::{ObservableExt as _, SessionsExt as _},
 };
-use atuin_common::path::{AbsPathBuf, PathBufExt as _};
 #[cfg(feature = "ai")]
 use atuin_common::sync::BlockingPool;
 #[cfg(feature = "ai")]
@@ -41,32 +39,35 @@ use toml_edit::Value;
 use tracing::instrument;
 
 mod agents;
-mod encoding;
 mod form;
+#[cfg(feature = "octavo")]
+mod hub;
 mod plan;
 mod scroll;
-#[cfg(feature = "octavo")]
-mod teams;
+mod shell_init;
 #[cfg(feature = "octavo")]
 mod upload;
+#[cfg(feature = "octavo")]
+mod users_file;
 mod view;
 
 use agents::AnyHarness;
 #[cfg(feature = "ai")]
 use agents::Harness;
-use encoding::Encoding;
 use form::{Flag, Form as _};
-#[cfg(feature = "octavo")]
-use plan::UploadThreads;
 #[cfg(feature = "ai")]
 use plan::{AgentHistory, Mcp};
 use plan::{
-    Asks, AtuinForTeams, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory, Threads,
-    UpArrow,
+    AiResume, Asks, AtuinHub, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory,
+    ThreadUploads, Threads, UpArrow,
+};
+use shell_init::{
+    RcDirs, Stripped, Unhooked, install_shell_init, remove_shell_init, shell_inits, shells_here,
+    strip_init_flags,
 };
 
 use super::config::update_config_file;
-use super::init::Shell;
+use super::init::{Key, KeyContext, KeySet, Keybindings, Shell, keys_set_by_env};
 
 /// Each flag sets a choice on the first screen, which starts from what's found here.
 #[derive(Parser, Debug)]
@@ -109,9 +110,9 @@ impl Cmd {
                 import(&offer, &tx, plan.waits_for_imports(), plan.daemon.0).await;
             }
             #[cfg(feature = "octavo")]
-            if let Some(Teams::On { backfill }) = plan.teams() {
+            if let Some(Hub::On { backfill }) = plan.hub() {
                 // Not watched: there's no screen to watch it on.
-                let _upload = turn_on_teams(store, backfill, &tx).await;
+                let _upload = turn_on_hub(store, backfill, plan.upload_threads.0, &tx).await;
             }
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
@@ -149,7 +150,7 @@ impl Cmd {
             agents: !found.agents.is_empty()
                 || !found.connections.is_empty()
                 || plan::Agents::from_args(flags).is_some(),
-            teams: AtuinForTeams::from_args(flags).is_some(),
+            hub: AtuinHub::from_args(flags).is_some(),
             searchable: found.imported > 0 || found.threads_here > 0,
             unhooks: self.only && ShellHistory::from_args(flags) == Some(ShellHistory(false)),
         };
@@ -207,14 +208,14 @@ const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
 /// Sync needs the sync client, which `sync` builds in.
 const SYNC: bool = cfg!(feature = "sync");
 
-/// Atuin for Teams needs the hub client, which `octavo` builds in.
-const TEAMS: bool = cfg!(feature = "octavo");
+/// Atuin Hub needs the hub client, which `octavo` builds in.
+const HUB: bool = cfg!(feature = "octavo");
 
 /// `--sync`: `cloud`, `off`, or a server's address.
 fn parse_sync(value: &str) -> Result<Sync, String> {
     match value {
         "cloud" => Ok(Sync::Cloud),
-        "off" => Ok(Sync::Off),
+        "off" => Ok(Sync::Off(OffBecause::Chosen)),
         address if is_address(address) => Ok(Sync::Server(address.to_string())),
         _ => {
             Err("expected cloud, off, or your server's address, starting http:// or https://"
@@ -246,11 +247,18 @@ pub struct Found {
     inits: Vec<Shell>,
     /// The shells here setup can hook into: those on `PATH`, or with an rc file.
     shells: Vec<Shell>,
-    /// Whether `atuin init` binds ctrl-r, and the up arrow, as configured now.
-    ctrl_r: bool,
-    up_arrow: bool,
+    /// The keys that the config and the `atuin init` flags turn on, which the key rows of the
+    /// form start from. `atuin init` binds ctrl-t only while threads are on as well.
+    keys: Keybindings,
+    /// Whether setup can take the keybinding flags off the `atuin init` lines and write the keys
+    /// that they choose into the config. Setup can't if any of those files is read-only, or if an
+    /// environment variable chooses a key.
+    flags_movable: bool,
+    /// The keys whose binding status is currently set by an environment variable, like
+    /// `ATUIN_BIND_UP_ARROW=false`.
+    keys_set_by_env: KeySet,
     /// Whether the daemon captures agent threads, as configured now.
-    capture: bool,
+    threads: bool,
     /// Whether output is captured, as configured now.
     output: bool,
     /// Whether the daemon keeps the output proxies send it, `output.enabled`, which it does for
@@ -264,14 +272,57 @@ pub struct Found {
     /// environment, as `atuin setup --only --no-daemon` writes, rather than left unset.
     daemon_off: bool,
     signed_in: bool,
+    /// Whether they turned sync off in an earlier setup, or skipped signing in there, and haven't
+    /// signed in or chosen somewhere to sync since.
+    sync_choice: SyncChoice,
     /// A sync server that isn't Atuin Cloud, already configured.
     server: Option<String>,
-    /// Which agent threads Atuin for Teams uploads while it's on, as configured now.
+    /// Which agent threads Atuin Hub uploads while it's on, as configured now.
     upload_threads: ThreadUploads,
     /// The agents Atuin is in, and how.
     connections: Vec<(AnyHarness, Connection)>,
-    /// Whether Atuin for Teams is on, as configured now.
-    teams: bool,
+    /// Whether Atuin Hub is on, as configured now.
+    hub: bool,
+}
+
+/// The keys whose binding status is decided by `plan`, in the context of the given `scope`.
+fn planned_keys(plan: &Plan, scope: Scope<'_>) -> KeySet {
+    let covered = |key| match key {
+        Key::CtrlR => scope.covers::<CtrlR>(),
+        Key::UpArrow => scope.covers::<UpArrow>(),
+        Key::AiResume => plan.threads.0 && scope.covers::<AiResume>(),
+    };
+    KeySet::all().iter().filter(|&key| plan.shell.0 && covered(key)).collect()
+}
+
+/// The keybindings that will be enabled once setup applies `plan`. Setup writes these to the config
+/// before it takes any corresponding flags off the init lines.
+///
+/// A key that `plan` doesn't decide keeps what `found` read, so that taking its flag off changes
+/// nothing. `plan` decides ctrl-r and the up arrow while shell history is on and `scope` covers
+/// them, and ctrl-t only while threads are on as well.
+///
+/// The returned set of keys may be different from the keys that will actually get bound (for
+/// example, if threads are disabled); see [`bound_after`].
+fn keys_after(plan: &Plan, found: &Found, scope: Scope<'_>) -> Keybindings {
+    let planned = planned_keys(plan, scope);
+    Keybindings {
+        ctrl_r: if planned.contains(Key::CtrlR) {
+            plan.ctrl_r.0
+        } else {
+            found.keys.ctrl_r
+        },
+        up_arrow: if planned.contains(Key::UpArrow) {
+            plan.up_arrow.0
+        } else {
+            found.keys.up_arrow
+        },
+        ai_resume: if planned.contains(Key::AiResume) {
+            plan.ai_resume.0
+        } else {
+            found.keys.ai_resume
+        },
+    }
 }
 
 /// What of Atuin an agent has: hooks that run it, and its MCP server.
@@ -284,11 +335,14 @@ struct Connection {
 impl Found {
     async fn detect(settings: &Settings, db: &Sqlite) -> Self {
         let hooked = var_nonempty("ATUIN_SESSION").is_some();
+        let dirs = RcDirs::here();
+        let inits = shell_inits(&dirs).await;
+        let keys_set_by_env = keys_set_by_env();
         #[cfg(feature = "octavo")]
-        let (upload_threads, teams) = (settings.teams.upload_threads, settings.teams.enabled);
-        // As a build with Atuin for Teams would read an unset config.
+        let (upload_threads, hub) = hub::found().await;
+        // As a build with Atuin Hub would read an unset config.
         #[cfg(not(feature = "octavo"))]
-        let (upload_threads, teams) = (ThreadUploads::All, false);
+        let (upload_threads, hub) = (ThreadUploads::All, false);
         Self {
             history: shell_history().await,
             // Less `atuin setup` itself, which a shell that runs Atuin has recorded already.
@@ -296,21 +350,29 @@ impl Found {
             threads_here: threads_here(settings).await,
             agents: detect_agents().await,
             hooked,
-            inits: shell_inits(&RcDirs::here()).await,
-            shells: shells_here(&RcDirs::here()),
-            ctrl_r: settings.bind_ctrl_r,
-            up_arrow: settings.bind_up_arrow,
-            capture: settings.threads.capture,
+            inits: inits.shells,
+            shells: shells_here(&dirs),
+            keys: inits.flags.chosen(settings),
+            // An environment variable can disagree with the config file. Setup could then end up
+            // removing an init flag like `--bind-ai-resume` without setting `bind_ai_resume = true`
+            // in the config because `ATUIN_BIND_AI_RESUME=true` was overriding it. So, if any
+            // variable chooses a key, setup will not remove any init flags.
+            flags_movable: inits.strippable
+                && keys_set_by_env.is_empty()
+                && Settings::get_config_path().is_ok_and(|config| can_write(&config)),
+            keys_set_by_env,
+            threads: settings.threads.enabled,
             output: settings.output.limits().is_some() && settings.pty_proxy.enabled,
             saves_output: settings.output.limits().is_some(),
             daemon: settings.daemon.enabled,
             daemon_running: daemon_running(settings),
             daemon_off: !settings.daemon.enabled && daemon_setting_is_theirs().await,
             signed_in: signed_in(settings).await,
+            sync_choice: sync_choice(settings).await,
             server: (!settings.is_hub_sync()).then(|| settings.sync_address.to_string()),
             upload_threads,
             connections: connections().await,
-            teams,
+            hub,
         }
     }
 
@@ -325,6 +387,19 @@ impl Found {
 
     fn hooked_agents(&self) -> Vec<AnyHarness> {
         self.connections.iter().filter(|(_, how)| how.hooks).map(|&(agent, _)| agent).collect()
+    }
+
+    /// Whether a run over `scope` takes the keybinding flags off the `atuin init` lines.
+    ///
+    /// A run does this if the flags can move and the run covers a key, shell history, or the
+    /// shells, which are the parts of setup that the init lines serve.
+    fn strips_flags(&self, scope: Scope<'_>) -> bool {
+        self.flags_movable
+            && (scope.covers::<CtrlR>()
+                || scope.covers::<UpArrow>()
+                || scope.covers::<AiResume>()
+                || scope.covers::<ShellHistory>()
+                || scope.covers::<plan::Shells>())
     }
 
     /// Whether turning output capture `on` or off changes anything. Off, it stops the daemon
@@ -351,17 +426,31 @@ impl Found {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sync {
     Cloud,
     Server(String),
-    #[default]
-    Off,
+    Off(OffBecause),
 }
 
-/// Whether Atuin for Teams is on.
+impl Default for Sync {
+    fn default() -> Self {
+        Self::Off(OffBecause::Chosen)
+    }
+}
+
+/// Why sync is off, which decides whether later setups keep it off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Teams {
+pub enum OffBecause {
+    /// They turned it off, on the screen or with `--sync off`.
+    Chosen,
+    /// `--yes` left it off because nobody's there to sign in, so a later setup still offers it.
+    NobodyToSignIn,
+}
+
+/// Whether Atuin Hub is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hub {
     Off,
     /// Uploading what Atuin records from now on, and with `backfill` what it has already.
     On {
@@ -383,10 +472,10 @@ pub enum Step {
     Daemon,
     Sync,
     #[cfg(feature = "octavo")]
-    Teams,
+    Hub,
     History,
     Threads,
-    /// Watching Atuin for Teams upload, after the imports it takes in.
+    /// Watching Atuin Hub upload, after the imports it takes in.
     #[cfg(feature = "octavo")]
     Upload,
 }
@@ -402,9 +491,10 @@ pub enum Status {
 #[derive(Debug)]
 pub enum Update {
     Step(Step, Status),
-    /// Sign-in is waiting on the browser, at this address.
+    /// Sign-in is waiting on the browser, at this address, showing this code.
     Browser {
         url: String,
+        code: String,
         opened: bool,
     },
     /// The account has data this machine's key can't read, so sign-in needs the right key. The
@@ -426,7 +516,7 @@ fn send(tx: &Updates, step: Step, status: Status) {
     let _ = tx.send(Update::Step(step, status));
 }
 
-/// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin for Teams.
+/// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin Hub.
 /// Sign-in, if any, reads `answers`. Returns what there is to import, now sign-in has said what
 /// the account holds.
 async fn apply(
@@ -439,9 +529,22 @@ async fn apply(
 ) -> Result<Offer> {
     let changed = write_config(plan, found, scope).await?;
     if matches!(scope, Scope::Flagged(_)) && !changed.is_empty() {
-        let changed = format!("Set {} in your config", names(&changed));
+        let changed = format!("Set {} in your config", join_with_and(&changed));
         send(tx, Step::Config, Status::Done(changed));
     }
+    #[cfg(feature = "octavo")]
+    if plan.hub() == Some(Hub::Off) && found.hub {
+        hub::disable(tx).await;
+    }
+
+    // The config now holds the keys that the flags chose, so the flags can come off without
+    // changing the key settings. Taking the flags off now increases the chance that the `atuin
+    // init` lines can be successfully removed if shell history is being turned off.
+    let notes = if found.strips_flags(scope) {
+        strip_init_flags(&RcDirs::here()).to_notes()
+    } else {
+        ShellNotes::default()
+    };
     let settings = Arc::new(Settings::new()?);
     // Before anything writes records, so the daemon and sign-in agree on it.
     paseto_v4::Key::try_load_or_generate(&settings.key_path)?;
@@ -457,7 +560,10 @@ async fn apply(
                 named.as_deref(),
                 PartialEq::eq,
             );
-            hook_shells(&shells, !plan.shell.0 && found.hooked && found.inits.is_empty(), tx);
+            let elsewhere = !plan.shell.0 && found.hooked && found.inits.is_empty();
+            hook_shells(&shells, elsewhere, notes, tx);
+        } else if let Some(status) = summary(notes.done, notes.failed) {
+            send(tx, Step::Shells, status);
         }
         #[cfg(feature = "ai")]
         connect(plan, found, scope, tx).await;
@@ -508,22 +614,22 @@ async fn apply(
     Ok(offer(plan, found, account, tx))
 }
 
-/// Turn Atuin for Teams on, once sign-in has said who the account is, so the hub can say whether
+/// Turn Atuin Hub on, once sign-in has said who the account is, so the hub can say whether
 /// it has it, and after the imports, so what it uploads takes them in. Returns the upload to
 /// watch, if it started one.
 #[cfg(feature = "octavo")]
-async fn turn_on_teams(
+async fn turn_on_hub(
     store: &SqliteStore,
     backfill: bool,
+    uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<upload::Upload> {
     match Settings::new() {
-        Ok(settings) => teams::enable(&Arc::new(settings), store, backfill, tx).await,
+        Ok(settings) => hub::enable(&Arc::new(settings), store, backfill, uploads, tx).await,
         Err(e) => {
-            let failed = format!(
-                "Couldn't turn on Atuin for Teams ({e:#}). Run `atuin setup --hub` to try again"
-            );
-            send(tx, Step::Teams, Status::Failed(failed));
+            let failed =
+                format!("Couldn't turn on Atuin Hub ({e:#}). Run `atuin setup --hub` to try again");
+            send(tx, Step::Hub, Status::Failed(failed));
             None
         }
     }
@@ -767,6 +873,21 @@ pub(super) async fn sign_out() {
     }
 }
 
+/// Record `choice` for later setups: they propose sync off while it's disabled.
+#[cfg(feature = "sync")]
+async fn save_sync_choice(settings: &Settings, choice: SyncChoice) {
+    if let Ok(meta) = settings.meta_store().await {
+        let _ = meta.save_sync_choice(choice).await;
+    }
+}
+
+async fn sync_choice(settings: &Settings) -> SyncChoice {
+    match settings.meta_store().await {
+        Ok(meta) => meta.sync_choice().await.unwrap_or_default(),
+        Err(_) => SyncChoice::default(),
+    }
+}
+
 /// Start the daemon, if it isn't running, to sync, and tell it of the sign-in as `atuin login`
 /// does. Without the `daemon`, the shell syncs on its next command.
 #[cfg(feature = "daemon")]
@@ -832,17 +953,23 @@ fn config_changes(
     } else if daemon && !plan.daemon.0 && daemon_fuzzy {
         changes.push(("search_mode", Value::from("fuzzy")));
     }
-    // Without shell history, the keys are left as they are: the shell may run Atuin already.
-    if plan.shell.0 {
-        if scope.covers::<CtrlR>() && plan.ctrl_r.0 != settings.bind_ctrl_r {
-            changes.push(("bind_ctrl_r", Value::from(plan.ctrl_r.0)));
-        }
-        if scope.covers::<UpArrow>() && plan.up_arrow.0 != settings.bind_up_arrow {
-            changes.push(("bind_up_arrow", Value::from(plan.up_arrow.0)));
+    let keys = keys_after(plan, found, scope);
+
+    let planned = planned_keys(plan, scope);
+    let strips = found.strips_flags(scope);
+    let in_settings = Keybindings::from_settings(settings);
+    for key in KeySet::all() {
+        let differs = keys.get(key) != in_settings.get(key);
+        // Either the user decided the key, or an init flag removed by setup decided it. A key that
+        // an environment variable chooses is written even if `settings`, which holds the variable's
+        // value, agrees, to ensure that Atuin will bind the key as requested without the variable.
+        if (planned.contains(key) || strips) && (differs || found.keys_set_by_env.contains(key)) {
+            changes.push((key.setting(), Value::from(keys.get(key))));
         }
     }
-    if scope.covers::<Threads>() && plan.threads.0 != settings.threads.capture {
-        changes.push(("threads.capture", Value::from(plan.threads.0)));
+
+    if scope.covers::<Threads>() && plan.threads.0 != settings.threads.enabled {
+        changes.push(("threads.enabled", Value::from(plan.threads.0)));
     }
     if scope.covers::<OutputCapture>() && found.output_changes(plan.output.0) {
         // Off, the pty proxy is left running: only `pty_proxy.enabled` says to run it.
@@ -860,36 +987,25 @@ fn config_changes(
                 let cloud = atuin_client::settings::DEFAULT_SYNC_URL.as_str();
                 changes.push(("sync_address", Value::from(cloud)));
             }
-            Sync::Cloud | Sync::Off => {}
+            Sync::Cloud | Sync::Off(_) => {}
         }
-    }
-    // Turned on after sign-in, once the hub has said the account has it.
-    #[cfg(feature = "octavo")]
-    if plan.teams() == Some(Teams::Off) && settings.teams.enabled {
-        changes.push(("teams.enabled", Value::from(false)));
-    }
-    // Written before it's turned on, so its backfill takes only what it uploads.
-    #[cfg(feature = "octavo")]
-    if matches!(plan.teams(), Some(Teams::On { .. }))
-        && scope.covers::<UploadThreads>()
-        && plan.upload_threads.0 != settings.teams.upload_threads
-    {
-        changes.push(("teams.upload_threads", Value::from(plan.upload_threads.0.as_str())));
     }
     changes
 }
 
 /// Put `atuin init` into the rc files of the shells `changes` adds, and take it out of those it
 /// removes. `elsewhere` when shell history is to be off, but this shell loads Atuin from somewhere
-/// setup can't tell.
-fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, tx: &Updates) {
+/// setup can't tell. `notes` start the step's summary.
+fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, notes: ShellNotes, tx: &Updates) {
     let dirs = RcDirs::here();
-    let mut done = Vec::new();
-    let mut failed = Vec::new();
+    let ShellNotes {
+        mut done,
+        mut failed,
+    } = notes;
     if !changes.add.is_empty() {
         match install_shell_init(&dirs, &changes.add) {
             Ok(hooked) if !hooked.is_empty() => {
-                done.push(format!("hooked into {}", names(&hooked)));
+                done.push(format!("hooked into {}", join_with_and(&hooked)));
             }
             Ok(_) => {
                 let shells: Vec<_> = changes.add.iter().map(|shell| shell.name()).collect();
@@ -898,7 +1014,7 @@ fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, tx: &Updates) {
                 } else {
                     "run"
                 };
-                done.push(format!("{} {run} Atuin already", names(&shells)));
+                done.push(format!("{} {run} Atuin already", join_with_and(&shells)));
             }
             Err(e) => failed.push(format!("couldn't hook into your shell: {e}")),
         }
@@ -907,7 +1023,7 @@ fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, tx: &Updates) {
         match remove_shell_init(&dirs, &changes.remove) {
             Ok(Unhooked { shells, left }) => {
                 if !shells.is_empty() {
-                    done.push(format!("unhooked {}", names(&shells)));
+                    done.push(format!("unhooked {}", join_with_and(&shells)));
                 }
                 done.extend(left.into_iter().map(|(rc, line)| {
                     let rc = rc.display();
@@ -987,6 +1103,7 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
                     restart.push(agent.display_name());
                 }
             }
+            Err(InstallHookError::Unsupported) => {}
             Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
         }
     }
@@ -1004,16 +1121,16 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     }
     let mut done = Vec::new();
     if !hooked.is_empty() {
-        done.push(format!("recording commands from {}", names(&hooked)));
+        done.push(format!("recording commands from {}", join_with_and(&hooked)));
     }
     if !restart.is_empty() {
-        done.push(format!("restart {} to load the hooks", names(&restart)));
+        done.push(format!("restart {} to load the hooks", join_with_and(&restart)));
     }
     if !unhooked.is_empty() {
-        done.push(format!("took the hooks out of {}", names(&unhooked)));
+        done.push(format!("took the hooks out of {}", join_with_and(&unhooked)));
     }
     if !unload.is_empty() {
-        done.push(format!("restart {} to stop recording there", names(&unload)));
+        done.push(format!("restart {} to stop recording there", join_with_and(&unload)));
     }
     let mut failures = Vec::new();
     if !failed.is_empty() {
@@ -1099,7 +1216,7 @@ const fn daemon_running(_: &Settings) -> bool {
 /// starts now. Left for the shell to start, it wouldn't without shell history.
 fn wakes_daemon(plan: &Plan, found: &Found, scope: Scope<'_>) -> bool {
     let daemon = scope.covers::<Daemon>() && !found.daemon;
-    let threads = scope.covers::<Threads>() && plan.threads.0 && !found.capture;
+    let threads = scope.covers::<Threads>() && plan.threads.0 && !found.threads;
     plan.daemon.0 && (daemon || threads)
 }
 
@@ -1201,10 +1318,13 @@ async fn connect_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     drop(quiet);
     let mut done = Vec::new();
     if !connected.is_empty() {
-        done.push(format!("{} can search Atuin from their next session", names(&connected)));
+        done.push(format!(
+            "{} can search Atuin from their next session",
+            join_with_and(&connected)
+        ));
     }
     if !disconnected.is_empty() {
-        done.push(format!("disconnected {} from Atuin", names(&disconnected)));
+        done.push(format!("disconnected {} from Atuin", join_with_and(&disconnected)));
     }
     let mut failures = Vec::new();
     if !failed.is_empty() {
@@ -1342,13 +1462,18 @@ async fn sync(
     if syncing.is_some() && syncing.as_ref() != Some(&plan.sync) {
         sign_out().await;
     }
+    match plan.sync {
+        Sync::Off(OffBecause::Chosen) => save_sync_choice(settings, SyncChoice::Disabled).await,
+        Sync::Off(OffBecause::NobodyToSignIn) => {}
+        Sync::Cloud | Sync::Server(_) => save_sync_choice(settings, SyncChoice::Enabled).await,
+    }
     match &plan.sync {
-        Sync::Off if syncing.is_some() => {
+        Sync::Off(_) if syncing.is_some() => {
             let off = "Signed out: sync is off, and everything stays on this machine";
             send(tx, Step::Sync, Status::Done(off.into()));
             return SignedIn::No;
         }
-        Sync::Off => return SignedIn::No,
+        Sync::Off(_) => return SignedIn::No,
         Sync::Server(address) if syncing.as_ref() == Some(&plan.sync) => {
             send(tx, Step::Sync, Status::Done(format!("Syncing with {address}")));
             return SignedIn::No;
@@ -1376,6 +1501,7 @@ async fn sync(
     let opened = session.open_in_browser();
     let _ = tx.send(Update::Browser {
         url: session.auth_url.to_string(),
+        code: session.short_code().to_string(),
         opened,
     });
 
@@ -1399,6 +1525,7 @@ async fn sync(
             answer = answers.recv() => match answer {
                 Some(Answer::OpenAgain) => { let _ = session.open_in_browser(); }
                 Some(Answer::Skip) | None => {
+                    save_sync_choice(settings, SyncChoice::Disabled).await;
                     send(tx, Step::Sync, skipped());
                     return SignedIn::No;
                 }
@@ -1643,6 +1770,43 @@ async fn latest_threads(settings: &Settings) -> Vec<atuin_ai::commands::Recent> 
     atuin_ai::commands::recent(settings, 3).await.unwrap_or_default()
 }
 
+/// A key or command that the summary suggests trying, and what it does.
+#[derive(Debug, PartialEq, Eq)]
+struct Tip {
+    keys: &'static str,
+    what: &'static str,
+}
+
+/// What the summary suggests trying after setup applies `plan`.
+fn tips(plan: &Plan, found: &Found, scope: Scope<'_>) -> impl Iterator<Item = Tip> {
+    let tip = |shown: bool, keys, what| shown.then_some(Tip { keys, what });
+    [
+        tip(plan.ctrl_r.0, "ctrl-r", "search your shell history"),
+        tip(plan.up_arrow.0, "up arrow", "search it from what you've typed"),
+        tip(bound_after(plan, found, scope).ai_resume, "ctrl-t", "resume an agent thread"),
+        tip(plan.threads.0, "atuin resume", "pick a thread back up, in any agent"),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// The keys that `atuin init` will bind once setup applies `plan`.
+fn bound_after(plan: &Plan, found: &Found, scope: Scope<'_>) -> Keybindings {
+    keys_after(plan, found, scope).bound(KeyContext {
+        threads: plan.threads.0,
+        ai_resume_shell: plan.shells.0.iter().copied().any(Shell::binds_ai_resume),
+    })
+}
+
+/// Whether `plan` changes any keys that `atuin init` binds.
+fn keys_changed(plan: &Plan, found: &Found, scope: Scope<'_>) -> bool {
+    let now = found.keys.bound(KeyContext {
+        threads: found.threads,
+        ai_resume_shell: found.inits.iter().copied().any(Shell::binds_ai_resume),
+    });
+    bound_after(plan, found, scope) != now
+}
+
 /// What setup did, and what to try next, left in the scrollback.
 async fn print_summary(plan: &Plan, found: &Found, scope: Scope<'_>, steps: &[(Step, Status)]) {
     if matches!(scope, Scope::Flagged(_)) {
@@ -1659,11 +1823,7 @@ async fn print_summary(plan: &Plan, found: &Found, scope: Scope<'_>, steps: &[(S
     println!("  {} {}", "atuin".bold().green(), how.bold());
     println!();
     for (_, status) in steps {
-        match status {
-            Status::Done(text) => println!("  {} {text}", "✓".green()),
-            Status::Failed(text) => println!("  {} {text}", "!".yellow().bold()),
-            Status::Running(text) => println!("  {} {}", "·".dimmed(), text.dimmed()),
-        }
+        print_status(status);
     }
     if stopped {
         println!();
@@ -1694,29 +1854,21 @@ async fn print_summary(plan: &Plan, found: &Found, scope: Scope<'_>, steps: &[(S
         }
     }
 
-    let mut tips: Vec<(&str, &str)> = Vec::new();
-    if plan.ctrl_r.0 {
-        tips.push(("ctrl-r", "search your shell history"));
-    }
-    if plan.up_arrow.0 {
-        tips.push(("up arrow", "search it from what you've typed"));
-    }
-    if plan.threads.0 {
-        tips.push(("atuin resume", "pick a thread back up, in any agent"));
-    }
+    let mut tips = tips(plan, found, scope).peekable();
     // A shell picks up its key bindings as it starts.
-    let keys_changed = plan.ctrl_r.0 != found.ctrl_r || plan.up_arrow.0 != found.up_arrow;
-    let shell_changed = !found.hooked || keys_changed || plan.output.0 != found.output;
+    let shell_changed =
+        !found.hooked || keys_changed(plan, found, scope) || plan.output.0 != found.output;
     let new_terminal = plan.shell.0 && shell_changed;
-    if new_terminal || !tips.is_empty() {
+    let no_tips = tips.peek().is_none();
+    if new_terminal || !no_tips {
         println!();
-        let heading = match (new_terminal, tips.is_empty()) {
+        let heading = match (new_terminal, no_tips) {
             (true, true) => "Open a new terminal",
             (true, false) => "Open a new terminal, then try",
             (false, _) => "Try",
         };
         println!("  {}", heading.bold());
-        for (keys, what) in tips {
+        for Tip { keys, what } in tips {
             println!("    {:<14} {}", keys.bold(), what.dimmed());
         }
     }
@@ -1740,92 +1892,35 @@ fn print_steps(steps: &[(Step, Status)]) {
         println!("  {}", "Nothing to change".dimmed());
     }
     for (_, status) in steps {
-        match status {
-            Status::Done(text) => println!("  {} {text}", "✓".green()),
-            Status::Failed(text) => println!("  {} {text}", "!".yellow().bold()),
-            Status::Running(text) => println!("  {} {}", "·".dimmed(), text.dimmed()),
+        print_status(status);
+    }
+}
+
+/// Prints the status for one step.
+fn print_status(status: &Status) {
+    match status {
+        Status::Done(text) => println!("{}", status_text("✓".green(), text, |line| line.normal())),
+        Status::Failed(text) => {
+            println!("{}", status_text("!".yellow().bold(), text, |line| line.normal()));
+        }
+        Status::Running(text) => {
+            println!("{}", status_text("·".dimmed(), text, |line| line.dimmed()));
         }
     }
 }
 
-/// Where the shells setup hooks into keep their rc files.
-struct RcDirs {
-    home: PathBuf,
-    /// Where zsh reads its rc file from: `$ZDOTDIR`, else the home.
-    zdotdir: PathBuf,
-    /// The user's documents, where PowerShell keeps its profiles on Windows.
-    documents: PathBuf,
-}
-
-impl RcDirs {
-    fn here() -> Self {
-        Self {
-            home: home_dir(),
-            zdotdir: var_nonempty("ZDOTDIR").map_or_else(home_dir, PathBuf::from),
-            documents: atuin_common::dirs::documents_dir(),
-        }
-    }
-
-    /// The rc files `shell` reads, which setup writes `atuin init` into. PowerShell's are its
-    /// profiles: on Windows, PowerShell 7 and Windows PowerShell each have one, and Atuin's
-    /// script runs in both.
-    fn rc_files(&self, shell: Shell) -> Vec<PathBuf> {
-        const PROFILE: &str = "Microsoft.PowerShell_profile.ps1";
-        match shell {
-            Shell::Zsh => vec![self.zdotdir.join(".zshrc")],
-            Shell::Bash => vec![self.home.join(".bashrc")],
-            Shell::Fish => vec![self.home.join(".config").joined("fish").joined("config.fish")],
-            Shell::PowerShell if cfg!(windows) => ["PowerShell", "WindowsPowerShell"]
-                .map(|dir| self.documents.join(dir).joined(PROFILE))
-                .into(),
-            Shell::PowerShell => {
-                vec![self.home.join(".config").joined("powershell").joined(PROFILE)]
-            }
-            Shell::Nu | Shell::Xonsh => Vec::new(),
-        }
-    }
-}
-
-/// What in an rc file shows that it loads Atuin, for the shells setup hooks into.
-const fn init_marker(shell: Shell) -> Option<&'static str> {
-    match shell {
-        Shell::Zsh => Some("atuin init zsh"),
-        Shell::Bash => Some("atuin init bash"),
-        Shell::Fish => Some("atuin init fish"),
-        Shell::PowerShell => Some("atuin init powershell"),
-        Shell::Nu | Shell::Xonsh => None,
-    }
-}
-
-/// The programs that run `shell`, any of which on `PATH` means it's here.
-const fn programs(shell: Shell) -> &'static [&'static str] {
-    match shell {
-        Shell::Zsh => &["zsh"],
-        Shell::Bash => &["bash"],
-        Shell::Fish => &["fish"],
-        Shell::PowerShell => &["pwsh", "powershell"],
-        Shell::Nu => &["nu"],
-        Shell::Xonsh => &["xonsh"],
-    }
-}
-
-/// The shells an rc file of which loads Atuin.
-async fn shell_inits(dirs: &RcDirs) -> Vec<Shell> {
-    let mut inits = Vec::new();
-    for shell in plan::HOOKABLE {
-        let Some(marker) = init_marker(shell) else {
-            continue;
-        };
-        for rc in dirs.rc_files(shell) {
-            let read = tokio::fs::read(&rc).await;
-            let text = read.ok().and_then(|bytes| Encoding::decode(&bytes).ok());
-            if text.is_some_and(|(_, rc)| rc.contains(marker)) {
-                inits.push(shell);
-                break;
-            }
-        }
-    }
-    inits
+/// The text representing a step's status. Puts `marker` before the first line of `text`, and
+/// indents every subsequent line of `text` to line up.
+fn status_text(
+    marker: impl std::fmt::Display,
+    text: &str,
+    style: impl Fn(&str) -> colored::ColoredString,
+) -> impl std::fmt::Display {
+    std::fmt::from_fn(move |f| {
+        let mut lines = text.split('\n');
+        write!(f, "  {marker} {}", style(lines.next().unwrap_or_default()))?;
+        lines.try_for_each(|line| write!(f, "\n    {}", style(line)))
+    })
 }
 
 /// Whether they set `daemon.enabled` themselves, in `ATUIN_DAEMON__ENABLED` or the config file,
@@ -1871,193 +1966,57 @@ async fn connections() -> Vec<(AnyHarness, Connection)> {
     Vec::new()
 }
 
-/// The shells here that setup can hook into: those on `PATH`, or with an rc file.
-fn shells_here(dirs: &RcDirs) -> Vec<Shell> {
-    let here = |shell: &Shell| {
-        let rc = dirs.rc_files(*shell).iter().any(|rc| rc.exists());
-        rc || programs(*shell).iter().any(is_executable_with_path_search)
-    };
-    plan::HOOKABLE.into_iter().filter(here).collect()
+/// What the shells step says about the init flags that setup removed, to be reported with the rest
+/// of that step.
+#[derive(Default)]
+struct ShellNotes {
+    done: Vec<String>,
+    failed: Vec<String>,
 }
 
-/// Add `atuin init` to the rc files of each of `shells`. Returns the shells it was added to, less
-/// those it was in already.
-fn install_shell_init(dirs: &RcDirs, shells: &[Shell]) -> io::Result<Vec<&'static str>> {
-    let mut hooked = Vec::new();
-    for &shell in shells {
-        let Some(marker) = init_marker(shell) else {
-            continue;
-        };
-        let mut added = false;
-        for rc in dirs.rc_files(shell) {
-            let init = match shell {
-                Shell::Zsh => "\neval \"$(atuin init zsh)\"\n",
-                // A `.bashrc` made here would be the only one bash reads, so it needs the
-                // installer's PATH.
-                Shell::Bash if !rc.exists() && installer_env(&dirs.home).exists() => {
-                    ". \"$HOME/.atuin/bin/env\"\neval \"$(atuin init bash)\"\n"
-                }
-                Shell::Bash => "\neval \"$(atuin init bash)\"\n",
-                Shell::Fish => "\nif status is-interactive\n    atuin init fish | source\nend\n",
-                Shell::PowerShell => "\natuin init powershell | Out-String | Invoke-Expression\n",
-                Shell::Nu | Shell::Xonsh => continue,
+impl Stripped {
+    /// What the shells step says about the flags that setup took off.
+    fn to_notes(&self) -> ShellNotes {
+        let mut notes = ShellNotes::default();
+        if !self.changed.is_empty() {
+            let files = join_with_and(self.changed.iter().map(|file| file.display()));
+            let done = format!(
+                "took the keybinding flags off `atuin init` in {files}, since your config chooses \
+                 the keys"
+            );
+            notes.done.push(done);
+        }
+        notes.failed.extend(self.failed.iter().map(|unwritten| {
+            let file = unwritten.path.display();
+            format!(
+                "couldn't take the keybinding flags off `atuin init` in {file}: {}",
+                unwritten.error
+            )
+        }));
+        notes
+    }
+}
+
+/// Join `items` as a list separated by "and": "a, b and c".
+fn join_with_and<I>(items: I) -> impl std::fmt::Display
+where
+    I: IntoIterator + Clone,
+    I::Item: std::fmt::Display,
+{
+    std::fmt::from_fn(move |f| {
+        let mut items = items.clone().into_iter().peekable();
+        let mut first = true;
+        while let Some(item) = items.next() {
+            let gap = match (first, items.peek()) {
+                (true, _) => "",
+                (false, Some(_)) => ", ",
+                (false, None) => " and ",
             };
-            // Fish and PowerShell keep theirs in a directory a fresh install hasn't made.
-            if let Some(dir) = rc.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            added |= append_once(&rc, marker, init)?;
+            write!(f, "{gap}{item}")?;
+            first = false;
         }
-        if added {
-            hooked.push(shell.name());
-        }
-    }
-    Ok(hooked)
-}
-
-/// The script the installer writes to put Atuin on `PATH`.
-fn installer_env(home: &Path) -> PathBuf {
-    home.join(".atuin").joined("bin").joined("env")
-}
-
-/// The shells whose rc files `remove_shell_init` took `atuin init` out of, and the lines loading
-/// Atuin it left, each with its rc file, which setup didn't write.
-struct Unhooked {
-    shells: Vec<&'static str>,
-    left: Vec<(PathBuf, String)>,
-}
-
-/// Take the `atuin init` that [`install_shell_init`] writes out of the rc files of each of
-/// `shells`.
-fn remove_shell_init(dirs: &RcDirs, shells: &[Shell]) -> io::Result<Unhooked> {
-    let mut unhooked = Unhooked {
-        shells: Vec::new(),
-        left: Vec::new(),
-    };
-    for &shell in shells {
-        let Some(marker) = init_marker(shell) else {
-            continue;
-        };
-        let mut removed = false;
-        for rc in dirs.rc_files(shell) {
-            // An rc file linked from a dotfiles repo is saved there, keeping the link.
-            let target = AbsPathBuf::canonicalize(&rc).map_or_else(|_| rc.clone(), PathBuf::from);
-            let read = match std::fs::read(&target) {
-                Ok(read) => read,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            };
-            let (encoding, text) = Encoding::decode(&read)?;
-            let without = without_init(&text, shell);
-            if let Some(without) = &without {
-                let bytes = encoding.encode(without, true);
-                atuin_common::fs::replace(&target, &bytes, |now| now == read)
-                    .map_err(io::Error::other)?;
-                removed = true;
-            }
-            let after = without.as_deref().unwrap_or(&text);
-            let left = after.lines().filter(|line| line.contains(marker));
-            unhooked.left.extend(left.map(|line| (rc.clone(), line.trim().to_owned())));
-        }
-        if removed {
-            unhooked.shells.push(shell.name());
-        }
-    }
-    Ok(unhooked)
-}
-
-/// `rc` without the `atuin init` that [`install_shell_init`] writes for `shell`, and the blank
-/// line it writes before it. `None` when it has none. Anything else loading Atuin stays, as
-/// setup can't tell what a change to it would break: the same line indented, or inside a block
-/// the user opened, as `if command -v atuin; then` does.
-fn without_init(rc: &str, shell: Shell) -> Option<String> {
-    let written: &[&str] = match shell {
-        Shell::Zsh => &["eval \"$(atuin init zsh)\""],
-        Shell::Bash => &["eval \"$(atuin init bash)\""],
-        Shell::Fish => &["if status is-interactive", "    atuin init fish | source", "end"],
-        Shell::PowerShell => &["atuin init powershell | Out-String | Invoke-Expression"],
-        Shell::Nu | Shell::Xonsh => return None,
-    };
-    let lines: Vec<&str> = rc.lines().collect();
-    let mut kept: Vec<&str> = Vec::new();
-    let mut at = 0;
-    let mut removed = false;
-    while at < lines.len() {
-        let block = lines.get(at..at + written.len());
-        let is_written = block.is_some_and(|block| {
-            block.iter().zip(written).all(|(line, written)| line.trim_end() == *written)
-        });
-        let before = kept.iter().rev().find(|line| !line.trim().is_empty());
-        let after = lines.iter().skip(at + written.len()).find(|line| !line.trim().is_empty());
-        let nested = before.is_some_and(|line| opens_block(line))
-            || after.is_some_and(|line| closes_block(line));
-        if is_written && !nested {
-            if kept.last().is_some_and(|line| line.trim().is_empty()) {
-                kept.pop();
-            }
-            at += written.len();
-            removed = true;
-            continue;
-        }
-        kept.push(lines[at]);
-        at += 1;
-    }
-    if !removed {
-        return None;
-    }
-    // As the file ends its lines, which on Windows is often `\r\n`.
-    let newline = newline_of(rc);
-    let mut without = kept.join(newline);
-    if rc.ends_with('\n') && !without.is_empty() {
-        without.push_str(newline);
-    }
-    Some(without)
-}
-
-/// Whether `line` opens a block the lines after it are in, as `then` and `{` do.
-fn opens_block(line: &str) -> bool {
-    let last = line.trim_end().rsplit([' ', '\t', ';']).next();
-    last.is_some_and(|word| matches!(word, "then" | "do" | "else" | "{"))
-}
-
-/// Whether `line` closes a block, as `fi` and `}` do.
-fn closes_block(line: &str) -> bool {
-    let first = line.trim_start().split([' ', '\t', ';']).next();
-    first.is_some_and(|word| matches!(word, "fi" | "done" | "esac" | "}" | "end"))
-}
-
-/// How `text` ends its lines: `\r\n` if it does anywhere, else `\n`.
-fn newline_of(text: &str) -> &'static str {
-    if text.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
-/// Append `text` to the file at `path` unless it holds `marker`, with the file's encoding and line
-/// endings. Returns whether it appended.
-fn append_once(path: &Path, marker: &str, text: &str) -> io::Result<bool> {
-    let (encoding, newline) = match std::fs::read(path) {
-        Ok(read) => match Encoding::decode(&read)? {
-            (_, existing) if existing.contains(marker) => return Ok(false),
-            (encoding, existing) => (encoding, newline_of(&existing)),
-        },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (Encoding::Utf8, "\n"),
-        Err(e) => return Err(e),
-    };
-    let text = encoding.encode(&text.replace('\n', newline), false);
-    OpenOptions::new().create(true).append(true).open(path)?.write_all(&text)?;
-    Ok(true)
-}
-
-/// "Claude Code, Codex and pi".
-fn names(names: &[&str]) -> String {
-    match names.split_last() {
-        None => String::new(),
-        Some((last, [])) => (*last).to_string(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-    }
+        Ok(())
+    })
 }
 
 /// 48210 as "48,210".
@@ -2076,7 +2035,6 @@ fn count(n: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use rstest::{fixture, rstest};
-    use tempfile::TempDir;
 
     use super::*;
 
@@ -2120,7 +2078,14 @@ mod tests {
     #[case(&["Claude Code", "Codex"], "Claude Code and Codex")]
     #[case(&["Claude Code", "Codex", "pi"], "Claude Code, Codex and pi")]
     fn names_read_as_a_list(#[case] list: &[&str], #[case] expected: &str) {
-        assert_eq!(names(list), expected);
+        assert_eq!(join_with_and(list).to_string(), expected);
+    }
+
+    #[rstest]
+    #[case::one_line("Started the daemon", "  ! Started the daemon")]
+    #[case::two_lines("socket in use\nplease set it", "  ! socket in use\n    please set it")]
+    fn status_text_indents_each_later_line(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(status_text("!", text, |line| line.normal()).to_string(), expected);
     }
 
     #[rstest]
@@ -2176,7 +2141,7 @@ mod tests {
         found.connections = vec![(codex, hooks_only)];
         let asks = Asks {
             agents: true,
-            teams: false,
+            hub: false,
             searchable: false,
             unhooks: false,
         };
@@ -2190,133 +2155,286 @@ mod tests {
         assert_eq!((proposed.agent_history, proposed.mcp), (AgentHistory(true), Mcp(true)));
     }
 
+    /// The shells step names every rc file that lost its flags and every rc file that setup
+    /// couldn't write. A failed rc file doesn't hide the rc files that changed.
     #[rstest]
-    #[case::zsh(Shell::Zsh, "export A=1\n\neval \"$(atuin init zsh)\"\n", Some("export A=1\n"))]
-    #[case::bash_keeps_the_path(
-        Shell::Bash,
-        ". \"$HOME/.atuin/bin/env\"\neval \"$(atuin init bash)\"\n",
-        Some(". \"$HOME/.atuin/bin/env\"\n")
-    )]
-    #[case::fish(
-        Shell::Fish,
-        "set -x A 1\n\nif status is-interactive\n    atuin init fish | source\nend\n",
-        Some("set -x A 1\n")
-    )]
-    #[case::alone(Shell::Zsh, "\neval \"$(atuin init zsh)\"\n", Some(""))]
-    #[case::powershell(
-        Shell::PowerShell,
-        "Set-Alias g git\r\n\r\natuin init powershell | Out-String | Invoke-Expression\r\n",
-        Some("Set-Alias g git\r\n")
-    )]
-    #[case::its_own_flags(Shell::Zsh, "eval \"$(atuin init zsh --disable-up-arrow)\"\n", None)]
-    #[case::guarded(
-        Shell::Bash,
-        "if command -v atuin >/dev/null; then\n  eval \"$(atuin init bash)\"\nfi\n",
-        None
-    )]
-    #[case::guarded_unindented(
-        Shell::Bash,
-        "if command -v atuin >/dev/null; then\neval \"$(atuin init bash)\"\nfi\n",
-        None
-    )]
-    #[case::in_a_function(Shell::Zsh, "atuin_on() {\neval \"$(atuin init zsh)\"\n}\n", None)]
-    #[case::fish_in_a_function(
-        Shell::Fish,
-        "function atuin_on\nif status is-interactive\n    atuin init fish | source\nend\nend\n",
-        None
-    )]
-    #[case::after_a_block(
-        Shell::Zsh,
-        "if true; then\n  export A=1\nfi\n\neval \"$(atuin init zsh)\"\n",
-        Some("if true; then\n  export A=1\nfi\n")
-    )]
-    #[case::none(Shell::Zsh, "export A=1\n", None)]
-    fn the_init_setup_wrote_comes_out_and_nothing_else(
+    fn the_flag_removal_is_reported_through_the_summary() {
+        let stripped = |changed: &[&str], failed: &[&str]| Stripped {
+            changed: changed.iter().map(std::path::PathBuf::from).collect(),
+            failed: failed
+                .iter()
+                .map(|path| shell_init::Unwritten {
+                    path: std::path::PathBuf::from(path),
+                    error: io::Error::other("denied"),
+                })
+                .collect(),
+        };
+        let status = |stripped: Stripped| {
+            let ShellNotes { done, failed } = stripped.to_notes();
+            summary(done, failed)
+        };
+        let off = "Took the keybinding flags off `atuin init` in .zshrc and .bashrc, since your \
+                   config chooses the keys";
+        assert_eq!(status(stripped(&[".zshrc", ".bashrc"], &[])), Some(Status::Done(off.into())));
+        assert_eq!(status(stripped(&[], &[])), None);
+        let partly = "Took the keybinding flags off `atuin init` in .zshrc, since your config \
+                      chooses the keys; couldn't take the keybinding flags off `atuin init` in \
+                      .bashrc: denied";
+        let partly = Some(Status::Failed(partly.into()));
+        assert_eq!(status(stripped(&[".zshrc"], &[".bashrc"])), partly);
+    }
+
+    /// The summary suggests ctrl-t only where `atuin init` will bind it, and asks for a new
+    /// terminal when that changes.
+    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[rstest]
+    #[case::threads_on(Shell::Zsh, true, true, true)]
+    #[case::threads_off(Shell::Zsh, true, false, false)]
+    #[case::key_off(Shell::Zsh, false, true, false)]
+    #[case::shell_without_the_widget(Shell::PowerShell, true, true, false)]
+    fn the_thread_key_is_suggested_only_where_it_is_bound(
+        mut found: Found,
         #[case] shell: Shell,
-        #[case] rc: &str,
-        #[case] expected: Option<&str>,
+        #[case] ai_resume: bool,
+        #[case] threads: bool,
+        #[case] bound: bool,
     ) {
-        assert_eq!(without_init(rc, shell).as_deref(), expected);
+        found.inits = vec![shell];
+        let plan = Plan {
+            shell: ShellHistory(true),
+            ai_resume: AiResume(ai_resume),
+            threads: Threads(threads),
+            ..Plan::from_current_state(&found, Asks::default())
+        };
+        let ctrl_t = Tip {
+            keys: "ctrl-t",
+            what: "resume an agent thread",
+        };
+        assert_eq!(tips(&plan, &found, Scope::All).any(|tip| tip == ctrl_t), bound);
+        // `found` has threads off, so ctrl-t isn't bound now.
+        assert_eq!(keys_changed(&plan, &found, Scope::All), bound);
     }
 
-    /// A profile written with Windows line endings gets the init with them too.
-    #[rstest]
-    fn shell_init_keeps_the_files_line_endings() {
-        let home = TempDir::new().unwrap();
-        let dirs = RcDirs::under(home.path());
-        let profile = dirs.rc_files(Shell::PowerShell).remove(0);
-        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        std::fs::write(&profile, "Set-Alias g git\r\n").unwrap();
-
-        install_shell_init(&dirs, &[Shell::PowerShell]).unwrap();
-        let hooked = std::fs::read_to_string(&profile).unwrap();
-        let init = "atuin init powershell | Out-String | Invoke-Expression";
-        assert_eq!(hooked, format!("Set-Alias g git\r\n\r\n{init}\r\n"));
-        remove_shell_init(&dirs, &[Shell::PowerShell]).unwrap();
-        assert_eq!(std::fs::read_to_string(&profile).unwrap(), "Set-Alias g git\r\n");
+    /// What a run of setup starts from: the init lines, the config, and the run's `args`.
+    struct Round {
+        lines: &'static [InitLine],
+        threads: bool,
+        bind_ai_resume: bool,
+        args: &'static [&'static str],
     }
 
-    /// A profile Windows PowerShell 5.1 wrote as UTF-16 gets the init in UTF-16, and setup finds it
-    /// there and takes it out again.
+    /// An `atuin init` line in the rc file of `shell`.
+    struct InitLine {
+        shell: Shell,
+        flags: &'static str,
+    }
+
+    impl InitLine {
+        /// The line with `flags` in place of its own.
+        fn text(&self, flags: &str) -> String {
+            format!("eval \"$(atuin init {}{flags})\"\n", self.shell.name())
+        }
+    }
+
+    /// The keys that `atuin init` binds by its own rules, with the init lines and the config as
+    /// they are.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Bound {
+        now: Keybindings,
+        /// The keys that it binds once threads are on.
+        with_threads: Keybindings,
+    }
+
+    /// What a run of setup should leave bound.
+    enum Expected {
+        /// The keys bound before the run.
+        Unchanged,
+        Bound(Bound),
+    }
+
+    /// What a run of setup left, and whether it wrote a key or changed an rc file.
+    struct After {
+        bound: Bound,
+        changed: bool,
+    }
+
+    async fn bound(dirs: &RcDirs, settings: &Settings) -> Bound {
+        let flags = shell_inits(dirs).await.flags;
+        Bound {
+            now: flags.bound(settings, Shell::Zsh),
+            with_threads: flags.chosen(settings),
+        }
+    }
+
+    /// Run setup's key steps once over `dirs` and `settings`: detect, plan, write the keys into
+    /// `settings`, and take the flags off the init lines.
+    async fn run_keys(
+        found: &mut Found,
+        settings: &mut Settings,
+        dirs: &RcDirs,
+        args: &[&str],
+    ) -> After {
+        let inits = shell_inits(dirs).await;
+        found.inits = inits.shells;
+        found.keys = inits.flags.chosen(settings);
+        found.threads = settings.threads.enabled;
+        let cmd = setup(args);
+        let plan = cmd.plan(found, true).unwrap().effective();
+        let mut changed = false;
+        for (key, value) in config_changes(&plan, found, cmd.scope(), settings) {
+            let value = value.as_bool();
+            match key {
+                "bind_ctrl_r" => settings.bind_ctrl_r = value.unwrap(),
+                "bind_up_arrow" => settings.bind_up_arrow = value.unwrap(),
+                "bind_ai_resume" => settings.bind_ai_resume = value.unwrap(),
+                "threads.enabled" => settings.threads.enabled = value.unwrap(),
+                _ => continue,
+            }
+            changed = true;
+        }
+        if found.strips_flags(cmd.scope()) {
+            let stripped = strip_init_flags(dirs);
+            assert!(stripped.failed.is_empty(), "{:?}", stripped.failed);
+            changed |= !stripped.changed.is_empty();
+        }
+
+        // What setup shows agrees with what `atuin init` binds.
+        let bound = bound(dirs, settings).await;
+        assert_eq!(bound.now.ctrl_r, plan.ctrl_r.0);
+        assert_eq!(bound.now.up_arrow, plan.up_arrow.0);
+        assert_eq!(bound.now.ai_resume, bound_after(&plan, found, cmd.scope()).ai_resume);
+        After { bound, changed }
+    }
+
+    /// A run of setup that covers the keys or the shells takes every flag off the init lines. Any
+    /// run keeps each key that it doesn't change and leaves nothing for the next run to change.
+    #[cfg(all(feature = "ai", feature = "daemon"))]
     #[rstest]
+    #[case::no_flags(
+        Round { lines: &[InitLine { shell: Shell::Zsh, flags: "" }], threads: false, bind_ai_resume: true, args: &["--no-threads"] },
+        Expected::Unchanged,
+        false
+    )]
+    #[case::flag_moves(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --disable-up-arrow" }],
+            threads: false,
+            bind_ai_resume: true,
+            args: &["--no-threads"],
+        },
+        Expected::Unchanged,
+        true
+    )]
+    #[case::one_shell_flag_turns_the_key_off_for_both(
+        Round {
+            lines: &[
+                InitLine { shell: Shell::Zsh, flags: " --disable-up-arrow" },
+                InitLine { shell: Shell::Bash, flags: "" },
+            ],
+            threads: false,
+            bind_ai_resume: true,
+            args: &["--no-threads"],
+        },
+        Expected::Bound(Bound { now: Keybindings { ctrl_r: true, up_arrow: false, ai_resume: false }, with_threads: Keybindings { ctrl_r: true, up_arrow: false, ai_resume: true } }),
+        true
+    )]
+    #[case::thread_flag_goes_without_threads(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --bind-ai-resume" }],
+            threads: false,
+            bind_ai_resume: true,
+            args: &["--no-threads"],
+        },
+        Expected::Unchanged,
+        true
+    )]
+    #[case::thread_flag_outlasts_threads_off(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --bind-ai-resume" }],
+            threads: false,
+            bind_ai_resume: false,
+            args: &["--no-threads"],
+        },
+        Expected::Unchanged,
+        true
+    )]
+    #[case::thread_flag_moves_with_threads(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --bind-ai-resume" }],
+            threads: true,
+            bind_ai_resume: false,
+            args: &["--threads"],
+        },
+        Expected::Unchanged,
+        true
+    )]
+    #[case::a_scoped_run_moves_every_flag(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --disable-ctrl-r --disable-up-arrow" }],
+            threads: false,
+            bind_ai_resume: true,
+            args: &["--only", "--no-up-arrow"],
+        },
+        Expected::Unchanged,
+        true
+    )]
+    #[case::a_run_without_keys_leaves_the_flags(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --disable-ctrl-r --disable-ai" }],
+            threads: true,
+            bind_ai_resume: true,
+            args: &["--only", "--threads", "--daemon"],
+        },
+        Expected::Unchanged,
+        false
+    )]
+    #[case::a_run_turns_a_flagged_key_on(
+        Round {
+            lines: &[InitLine { shell: Shell::Zsh, flags: " --disable-up-arrow" }],
+            threads: false,
+            bind_ai_resume: true,
+            args: &["--only", "--up-arrow"],
+        },
+        Expected::Bound(Bound { now: Keybindings { ctrl_r: true, up_arrow: true, ai_resume: false }, with_threads: Keybindings { ctrl_r: true, up_arrow: true, ai_resume: true } }),
+        true
+    )]
     #[tokio::test]
-    async fn shell_init_keeps_the_files_encoding(
-        #[values(Encoding::Utf16Le, Encoding::Utf16Be)] encoding: Encoding,
+    async fn a_setup_run_leaves_nothing_for_the_next(
+        mut found: Found,
+        #[case] round: Round,
+        #[case] expected: Expected,
+        #[case] changed: bool,
     ) {
-        let home = TempDir::new().unwrap();
+        let home = tempfile::TempDir::new().unwrap();
         let dirs = RcDirs::under(home.path());
-        let profile = dirs.rc_files(Shell::PowerShell).remove(0);
-        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
-        let mine = encoding.encode("Set-Alias g git\r\n", true);
-        std::fs::write(&profile, &mine).unwrap();
+        let rc = |line: &InitLine| dirs.rc_files(line.shell).remove(0);
+        for line in round.lines {
+            std::fs::write(rc(line), line.text(line.flags)).unwrap();
+        }
+        let mut settings = Settings::utc();
+        settings.threads.enabled = round.threads;
+        settings.bind_ai_resume = round.bind_ai_resume;
+        let before = bound(&dirs, &settings).await;
 
-        install_shell_init(&dirs, &[Shell::PowerShell]).unwrap();
-        let init = "atuin init powershell | Out-String | Invoke-Expression";
-        let hooked = format!("Set-Alias g git\r\n\r\n{init}\r\n");
-        let read = std::fs::read(&profile).unwrap();
-        assert_eq!(Encoding::decode(&read).unwrap(), (encoding, hooked));
-        assert_eq!(shell_inits(&dirs).await, [Shell::PowerShell]);
-        remove_shell_init(&dirs, &[Shell::PowerShell]).unwrap();
-        assert_eq!(std::fs::read(&profile).unwrap(), mine);
-    }
-
-    /// An rc file linked from a dotfiles repo loses the init there, and stays a link.
-    #[cfg(unix)]
-    #[rstest]
-    fn shell_init_comes_out_where_a_link_leads() {
-        let home = TempDir::new().unwrap();
-        let dotfiles = home.path().join("dotfiles");
-        std::fs::create_dir(&dotfiles).unwrap();
-        let tracked = dotfiles.join("zshrc");
-        std::fs::write(&tracked, "export A=1\n").unwrap();
-        let zshrc = home.path().join(".zshrc");
-        std::os::unix::fs::symlink(&tracked, &zshrc).unwrap();
-        let dirs = RcDirs::under(home.path());
-        install_shell_init(&dirs, &[Shell::Zsh]).unwrap();
-
-        remove_shell_init(&dirs, &[Shell::Zsh]).unwrap();
-        assert!(zshrc.symlink_metadata().unwrap().is_symlink());
-        assert_eq!(std::fs::read_to_string(&tracked).unwrap(), "export A=1\n");
-    }
-
-    /// Taken out, the init setup wrote leaves the rc file as it found it, and says what else loads
-    /// Atuin that it left.
-    #[rstest]
-    fn shell_init_comes_out_as_it_went_in() {
-        let home = TempDir::new().unwrap();
-        let zshrc = home.path().join(".zshrc");
-        std::fs::write(&zshrc, "export A=1\n").unwrap();
-        let bashrc = home.path().join(".bashrc");
-        let custom = "eval \"$(atuin init bash --disable-up-arrow)\"";
-        std::fs::write(&bashrc, format!("{custom}\n")).unwrap();
-        let dirs = RcDirs::under(home.path());
-        install_shell_init(&dirs, &[Shell::Zsh]).unwrap();
-
-        let shells = [Shell::Zsh, Shell::Bash];
-        let unhooked = remove_shell_init(&dirs, &shells).unwrap();
-        assert_eq!(unhooked.shells, ["zsh"]);
-        assert_eq!(unhooked.left, [(bashrc, custom.to_owned())]);
-        assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
+        let first = run_keys(&mut found, &mut settings, &dirs, round.args).await;
+        assert_eq!(first.changed, changed);
+        let strips = found.strips_flags(setup(round.args).scope());
+        for line in round.lines {
+            let flags = if strips {
+                ""
+            } else {
+                line.flags
+            };
+            assert_eq!(std::fs::read_to_string(rc(line)).unwrap(), line.text(flags));
+        }
+        let second = run_keys(&mut found, &mut settings, &dirs, round.args).await;
+        assert!(!second.changed);
+        assert_eq!(second.bound, first.bound);
+        let expected = match expected {
+            Expected::Unchanged => before,
+            Expected::Bound(bound) => bound,
+        };
+        assert_eq!(first.bound, expected);
     }
 
     #[fixture]
@@ -2329,30 +2447,25 @@ mod tests {
             hooked: false,
             inits: Vec::new(),
             shells: vec![Shell::Zsh, Shell::Bash],
-            ctrl_r: true,
-            up_arrow: true,
-            capture: false,
+            keys: Keybindings {
+                ctrl_r: true,
+                up_arrow: true,
+                ai_resume: true,
+            },
+            flags_movable: true,
+            keys_set_by_env: KeySet::empty(),
+            threads: false,
             output: false,
             saves_output: false,
             daemon: false,
             daemon_running: false,
             daemon_off: false,
             signed_in: false,
+            sync_choice: SyncChoice::Enabled,
             server: None,
             upload_threads: ThreadUploads::All,
             connections: Vec::new(),
-            teams: false,
-        }
-    }
-
-    impl RcDirs {
-        /// Every rc file under `root`.
-        fn under(root: &Path) -> Self {
-            Self {
-                home: root.to_owned(),
-                zdotdir: root.to_owned(),
-                documents: root.join("Documents"),
-            }
+            hub: false,
         }
     }
 
@@ -2447,7 +2560,7 @@ mod tests {
         assert_eq!(setup(&flags).plan(&found, false).unwrap(), Plan {
             asks: Asks {
                 agents: true,
-                teams: false,
+                hub: false,
                 searchable: false,
                 unhooks: false,
             },
@@ -2459,10 +2572,11 @@ mod tests {
             agents: plan::Agents(found.agents()),
             ctrl_r: CtrlR(true),
             up_arrow: UpArrow(false),
+            ai_resume: AiResume(true),
             mcp: Mcp(false),
             daemon: Daemon(true),
-            sync: Sync::Off,
-            atuin_for_teams: AtuinForTeams(false),
+            sync: Sync::Off(OffBecause::Chosen),
+            atuin_hub: AtuinHub(false),
             upload_threads: plan::UploadThreads(ThreadUploads::All),
             backfill: plan::Backfill(false),
         });
@@ -2500,6 +2614,10 @@ mod tests {
     #[case::ctrl_r(&["--no-shell-history", "--ctrl-r"], "`--ctrl-r` needs shell history: `--shell-history`")]
     #[case::up_arrow(&["--no-shell-history", "--up-arrow"], "`--up-arrow` needs shell history: `--shell-history`")]
     #[cfg_attr(
+        feature = "ai",
+        case::ai_resume(&["--ai-resume", "--no-threads"], "`--ai-resume` needs threads: `--threads`")
+    )]
+    #[cfg_attr(
         all(feature = "pty-proxy", feature = "daemon", unix),
         case::output(&["--no-daemon", "--output-capture"], "`--output-capture` needs the daemon: `--daemon`")
     )]
@@ -2509,7 +2627,7 @@ mod tests {
     )]
     #[cfg_attr(
         feature = "octavo",
-        case::teams(
+        case::hub(
             &["--hub", "--sync", "off"],
             "`--hub` needs sync: `--sync cloud`, or your own server's address",
         )
@@ -2518,7 +2636,7 @@ mod tests {
         feature = "octavo",
         case::upload_threads(
             &["--no-hub", "--upload-threads", "workspaces"],
-            "`--upload-threads workspaces` needs Atuin for Teams: `--hub`",
+            "`--upload-threads workspaces` needs Atuin Hub: `--hub`",
         )
     )]
     #[case::shells(&["--no-shell-history", "--shells", "zsh"], "`--shells zsh` needs shell history: `--shell-history`")]
@@ -2529,7 +2647,7 @@ mod tests {
             "`--mcp` needs history or threads to search: `--shell-history`, `--agent-history` or `--threads`",
         )
     )]
-    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin for Teams only with `--hub`"))]
+    #[cfg_attr(feature = "octavo", case::backfill(&["--backfill"], "`--backfill` can't be on here: setup asks about Atuin Hub only with `--hub`"))]
     #[cfg_attr(
         feature = "octavo",
         case::backfill_of_workspaces(
@@ -2578,11 +2696,11 @@ mod tests {
     #[cfg(all(feature = "ai", feature = "daemon"))]
     #[rstest]
     fn only_starts_from_what_is_here(mut found: Found) {
-        found.capture = true;
+        found.threads = true;
         found.inits = vec![Shell::Zsh];
         let here = Plan::from_current_state(&found, Asks {
             agents: true,
-            teams: false,
+            hub: false,
             searchable: false,
             unhooks: false,
         });
@@ -2626,9 +2744,68 @@ mod tests {
         daemon_on(found, settings);
         settings.requested_search_mode = RequestedSearchMode::Prefix;
     }, &[("daemon.enabled", "false"), ("daemon.autostart", "false")])]
+    #[case::flag_kept_off_is_written(&["--only", "--no-up-arrow"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.keys.up_arrow = false;
+        settings.bind_up_arrow = true;
+    }, &[("bind_up_arrow", "false")])]
+    // Turning shell history off takes the flags off, so that the init lines can come out.
+    #[case::flag_moves(&["--only", "--no-shell-history"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.keys.up_arrow = false;
+        settings.bind_up_arrow = true;
+    }, &[("bind_up_arrow", "false")])]
+    #[case::flag_out_of_scope_stays(&["--only", "--no-output-capture"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.keys.up_arrow = false;
+        settings.bind_up_arrow = true;
+    }, &[])]
+    // Another shell's line may bind the key, so the key that the user kept off is written.
+    #[case::key_kept_off_over_a_flag_that_stays(&["--only", "--no-up-arrow"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh, Shell::Bash];
+        found.keys.up_arrow = false;
+        found.flags_movable = false;
+        settings.bind_up_arrow = true;
+    }, &[("bind_up_arrow", "false")])]
+    #[case::flag_that_stays_is_left_out(&["--only", "--no-output-capture"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.keys.up_arrow = false;
+        found.flags_movable = false;
+        settings.bind_up_arrow = true;
+    }, &[])]
+    #[case::key_changed_over_a_flag_that_stays(&["--only", "--up-arrow"], |found: &mut Found, settings: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.keys.up_arrow = false;
+        found.flags_movable = false;
+        settings.bind_up_arrow = false;
+    }, &[("bind_up_arrow", "true")])]
+    // The config file may say otherwise, so the variable's value is written.
+    #[case::key_from_a_variable(&["--only", "--up-arrow"], |found: &mut Found, _: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.flags_movable = false;
+        found.keys_set_by_env = Key::UpArrow.into();
+    }, &[("bind_up_arrow", "true")])]
+    #[case::key_from_a_variable_out_of_scope(&["--only", "--no-output-capture"], |found: &mut Found, _: &mut Settings| {
+        found.inits = vec![Shell::Zsh];
+        found.flags_movable = false;
+        found.keys_set_by_env = Key::UpArrow.into();
+    }, &[])]
     #[case::key(&["--only", "--no-up-arrow"], |found: &mut Found, _: &mut Settings| found.inits = vec![Shell::Zsh], &[
         ("bind_up_arrow", "false"),
     ])]
+    #[cfg_attr(feature = "ai", case::ai_resume_on(&["--only", "--ai-resume", "--threads"], |found: &mut Found, settings: &mut Settings| {
+        daemon_on(found, settings);
+        found.inits = vec![Shell::Zsh];
+        found.threads = true;
+        settings.threads.enabled = true;
+    }, &[]))]
+    #[cfg_attr(feature = "ai", case::ai_resume_off(&["--only", "--no-ai-resume", "--threads"], |found: &mut Found, settings: &mut Settings| {
+        daemon_on(found, settings);
+        found.inits = vec![Shell::Zsh];
+        found.threads = true;
+        settings.threads.enabled = true;
+    }, &[("bind_ai_resume", "false")]))]
+    #[cfg_attr(feature = "ai", case::ai_resume_left_without_threads(&["--only", "--no-threads", "--no-ai-resume"], |found: &mut Found, _: &mut Settings| found.inits = vec![Shell::Zsh], &[]))]
     #[case::keys_left_without_shell_history(&["--no-shell-history", "--no-up-arrow", "--no-threads"], |_: &mut Found, _: &mut Settings| {}, &[
         ("daemon.enabled", "true"),
         ("daemon.autostart", "true"),
@@ -2667,13 +2844,14 @@ mod tests {
     )]
     #[cfg_attr(
         feature = "octavo",
-        case::uploads_with_teams(
+        // The user's own atuin.lua says which threads go up, not config.toml.
+        case::uploads_stay_out_of_config_toml(
             &["--only", "--hub", "--upload-threads", "workspaces"],
             |found: &mut Found, settings: &mut Settings| {
                 daemon_on(found, settings);
                 found.signed_in = true;
             },
-            &[("teams.upload_threads", "\"workspaces\"")],
+            &[],
         )
     )]
     #[cfg_attr(
@@ -2751,10 +2929,10 @@ mod tests {
         mut found: Found,
         #[case] args: &[&str],
         #[case] daemon: bool,
-        #[case] capture: bool,
+        #[case] threads: bool,
         #[case] expected: bool,
     ) {
-        (found.daemon, found.capture) = (daemon, capture);
+        (found.daemon, found.threads) = (daemon, threads);
         let cmd = setup(args);
         let plan = cmd.plan(&found, true).unwrap().effective();
         assert_eq!(wakes_daemon(&plan, &found, cmd.scope()), expected);
@@ -2820,23 +2998,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case::asked(false, None, Sync::Cloud)]
-    #[case::not_asked(true, None, Sync::Off)]
-    #[case::their_server(false, Some("https://atuin.example.com"), Sync::Server("https://atuin.example.com".into()))]
+    #[case::asked(false, None, SyncChoice::Enabled, Sync::Cloud)]
+    #[case::not_asked(true, None, SyncChoice::Enabled, Sync::Off(OffBecause::NobodyToSignIn))]
+    #[case::their_server(false, Some("https://atuin.example.com"), SyncChoice::Enabled, Sync::Server("https://atuin.example.com".into()))]
+    #[case::turned_off(false, None, SyncChoice::Disabled, Sync::Off(OffBecause::Chosen))]
+    #[case::turned_off_with_their_server(
+        false,
+        Some("https://atuin.example.com"),
+        SyncChoice::Disabled,
+        Sync::Off(OffBecause::Chosen)
+    )]
     fn sync_without_the_flag(
         mut found: Found,
         #[case] yes: bool,
         #[case] server: Option<&str>,
+        #[case] sync_choice: SyncChoice,
         #[case] expected: Sync,
     ) {
         found.server = server.map(Into::into);
+        found.sync_choice = sync_choice;
         // Without sync, there's nowhere to sync to.
         let expected = if cfg!(feature = "sync") {
             expected
+        } else if yes {
+            Sync::Off(OffBecause::NobodyToSignIn)
         } else {
-            Sync::Off
+            Sync::Off(OffBecause::Chosen)
         };
         assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
+    }
+
+    #[rstest]
+    fn sync_off_from_the_flag_is_chosen(found: Found, #[values(false, true)] yes: bool) {
+        let sync = setup(&["--sync", "off"]).plan(&found, yes).unwrap().sync;
+        assert_eq!(sync, Sync::Off(OffBecause::Chosen));
     }
 
     #[rstest]
@@ -2845,10 +3040,12 @@ mod tests {
     fn sync_stays_where_it_is_signed_in(
         mut found: Found,
         #[values(false, true)] yes: bool,
+        #[values(SyncChoice::Enabled, SyncChoice::Disabled)] sync_choice: SyncChoice,
         #[case] server: Option<&str>,
         #[case] expected: Sync,
     ) {
         found.signed_in = true;
+        found.sync_choice = sync_choice;
         found.server = server.map(Into::into);
         assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
     }
@@ -2864,7 +3061,7 @@ mod tests {
         #[case] flags: &[&str],
         #[case] expected: bool,
     ) {
-        found.capture = true;
+        found.threads = true;
         if !agents {
             found.agents.clear();
         }
@@ -2874,22 +3071,22 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::not_asked(&[], None)]
-    #[case::asked(&["--hub"], Some(Teams::On { backfill: false }))]
-    #[case::as_18_24_8_spelled_it(&["--teams"], Some(Teams::On { backfill: false }))]
-    #[case::with_backfill(&["--hub", "--backfill"], Some(Teams::On { backfill: true }))]
-    #[case::turned_off(&["--no-hub"], Some(Teams::Off))]
-    fn teams_is_asked_about_with_its_flags(
+    #[case::asked(&["--hub"], Some(Hub::On { backfill: false }))]
+    #[case::as_18_24_8_spelled_it(&["--teams"], Some(Hub::On { backfill: false }))]
+    #[case::with_backfill(&["--hub", "--backfill"], Some(Hub::On { backfill: true }))]
+    #[case::turned_off(&["--no-hub"], Some(Hub::Off))]
+    fn hub_is_asked_about_with_its_flags(
         mut found: Found,
         #[case] flags: &[&str],
-        #[case] expected: Option<Teams>,
+        #[case] expected: Option<Hub>,
     ) {
         found.signed_in = true;
-        assert_eq!(setup(flags).plan(&found, false).unwrap().effective().teams(), expected);
+        assert_eq!(setup(flags).plan(&found, false).unwrap().effective().hub(), expected);
     }
 
     #[rstest]
     #[case("cloud", Some(Sync::Cloud))]
-    #[case("off", Some(Sync::Off))]
+    #[case("off", Some(Sync::Off(OffBecause::Chosen)))]
     #[case("http://localhost:8888", Some(Sync::Server("http://localhost:8888".into())))]
     #[case("atuin.example.com", None)]
     fn sync_flag_takes_cloud_off_or_an_address(
@@ -2897,38 +3094,6 @@ mod tests {
         #[case] expected: Option<Sync>,
     ) {
         assert_eq!(parse_sync(value).ok(), expected);
-    }
-
-    #[rstest]
-    fn shell_init_is_added_once() {
-        let home = TempDir::new().unwrap();
-        std::fs::create_dir_all(home.path().join(".atuin/bin")).unwrap();
-        std::fs::write(home.path().join(".atuin/bin/env"), "").unwrap();
-
-        let shells = [Shell::Zsh, Shell::Bash, Shell::Fish, Shell::PowerShell];
-        let dirs = RcDirs::under(home.path());
-        let first = install_shell_init(&dirs, &shells).unwrap();
-        let again = install_shell_init(&dirs, &shells).unwrap();
-        let all = vec!["zsh", "bash", "fish", "powershell"];
-        assert_eq!((first, again), (all, Vec::<&str>::new()));
-
-        let bashrc = std::fs::read_to_string(home.path().join(".bashrc")).unwrap();
-        assert_eq!(bashrc, ". \"$HOME/.atuin/bin/env\"\neval \"$(atuin init bash)\"\n");
-        let zshrc = std::fs::read_to_string(home.path().join(".zshrc")).unwrap();
-        assert_eq!(zshrc.matches("atuin init zsh").count(), 1);
-        // Into a config directory fish hadn't made yet.
-        let fish = std::fs::read_to_string(home.path().join(".config/fish/config.fish")).unwrap();
-        assert_eq!(fish.matches("atuin init fish").count(), 1);
-        let profiles = dirs.rc_files(Shell::PowerShell);
-        let profile = std::fs::read_to_string(&profiles[0]).unwrap();
-        assert_eq!(profile, "\natuin init powershell | Out-String | Invoke-Expression\n");
-    }
-
-    #[rstest]
-    fn shell_init_goes_only_where_it_is_asked_for() {
-        let home = TempDir::new().unwrap();
-        install_shell_init(&RcDirs::under(home.path()), &[Shell::Fish]).unwrap();
-        assert!(!home.path().join(".zshrc").exists() && !home.path().join(".bashrc").exists());
     }
 
     #[rstest]

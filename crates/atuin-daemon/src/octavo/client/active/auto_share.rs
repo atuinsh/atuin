@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionDatabase, DbError, HarnessSession};
 use atuin_client::lua_config::OrgSlug;
-use atuin_client::settings::ThreadUploads;
 use atuin_common::harnesstools::session::ParentKind;
 use atuin_octavo::hub::UserId;
 use atuin_octavo::pb;
@@ -23,6 +22,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::DirectUploader;
+use super::starts::Goes;
 
 /// How long a thread goes between looks at its config: a change made before a row the thread
 /// writes reaches it within this of the row, without a walk up the disk for each line a busy agent
@@ -103,11 +103,6 @@ impl Sharer {
 
     /// Queues the shares `thread`'s config files ask for.
     async fn look_at(&mut self, thread: LiveThread) {
-        // A share needs the thread's messages up first.
-        let uploads = self.uploader.handle.settings().await.teams.clone();
-        if !uploads.enabled || uploads.upload_threads == ThreadUploads::Off {
-            return;
-        }
         let candidate = match thread.read().await {
             Ok(Some(candidate)) => candidate,
             Ok(None) => return,
@@ -116,12 +111,13 @@ impl Sharer {
                 return;
             }
         };
-        if uploads.upload_threads == ThreadUploads::Workspaces
-            && !candidate.started_in_workspace(self.uploader.workspaces.configs()).await
-        {
+        // A share needs the thread's messages up first.
+        // One thread, so its lookup always goes ahead.
+        let until = Instant::now() + super::engine::PASS_BUDGET;
+        if self.uploader.starts.shares(&candidate.thread, until).await != Goes::Up {
             return;
         }
-        let proposal = match candidate.look_up(self.uploader.workspaces.configs()).await {
+        let proposal = match candidate.look_up(self.uploader.starts.configs()).await {
             Ok(proposal) => proposal,
             Err(LookupError::Config(err)) => {
                 if self.warned_of.insert(err.path().to_owned()) {
@@ -186,18 +182,6 @@ struct Candidate {
 }
 
 impl Candidate {
-    /// Whether the first of its directories is in a workspace. One whose config can't be read
-    /// isn't, as the thread's messages stay here then too.
-    async fn started_in_workspace(&self, configs: &Configs) -> bool {
-        let Some(start) = self.dirs.first() else {
-            return false;
-        };
-        configs.in_workspace(start.clone()).await.unwrap_or_else(|err| {
-            tracing::debug!(?err, "not sharing a thread whose workspace can't be told");
-            false
-        })
-    }
-
     /// The organizations its directories' configs all share it with.
     async fn look_up(self, configs: &Configs) -> Result<Proposal, LookupError> {
         let orgs = configs.orgs_of_thread(self.dirs).await?;

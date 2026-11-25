@@ -31,10 +31,13 @@
 ## possible values: prefix, fulltext, fuzzy, daemon-fuzzy
 # search_mode = "fuzzy"
 
-## whether `atuin init` binds ctrl-r and the up arrow to search
-## passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns them off either way
+## which keys `atuin init` binds to interactive search
 # bind_ctrl_r = true
 # bind_up_arrow = true
+
+## whether `atuin init` binds ctrl-t to `atuin resume`. only applies when
+## `threads.enabled` is true.
+# bind_ai_resume = true
 
 ## which search mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "search_mode"
@@ -337,7 +340,7 @@ enter_accept = true
 
 ## Capture threads into the encrypted record store, and sync them like your history.
 ## `atuin setup --only --threads --daemon` turns this on, with the daemon it needs.
-# capture = false
+# enabled = false
 
 ## Also capture what each tool call was given and returned (commands and their output,
 ## files read and written), with secrets redacted. Off keeps only each tool's name.

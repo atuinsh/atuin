@@ -74,16 +74,6 @@ struct Remote {
     cache: PathBuf,
 }
 
-/// The local tools cover these Octavo tools better. Local history is complete and immediate,
-/// while Octavo holds only what has been uploaded.
-const LOCAL_ON_OCTAVO: [&str; 3] = ["search_history", "tally_history", "get_command_output"];
-
-/// Returns the Octavo tools that are forwarded to it.
-fn forwarded(mut tools: Vec<Tool>) -> Vec<Tool> {
-    tools.retain(|t| !LOCAL_ON_OCTAVO.contains(&t.name.as_ref()));
-    tools
-}
-
 /// Returns the tools to list. Octavo's tools take the place of the local thread tools.
 fn listed_tools(octavo: Option<&[Tool]>) -> Vec<Tool> {
     match octavo {
@@ -170,7 +160,7 @@ impl Remote {
     /// because closing the shared one would fail a tool call in flight.
     async fn list(&self) -> Result<Vec<Tool>> {
         let octavo = self.connect(None).await?;
-        let tools = forwarded(tokio::time::timeout(CALL_TIMEOUT, octavo.list_all_tools()).await??);
+        let tools = tokio::time::timeout(CALL_TIMEOUT, octavo.list_all_tools()).await??;
         // Written aside and renamed, so another session never reads half of it.
         let dir = self.cache.parent().unwrap_or(&self.cache);
         let mut file = tempfile::NamedTempFile::new_in(dir)?;
@@ -747,18 +737,8 @@ mod tests {
     }
 
     #[rstest]
-    fn octavo_thread_tools_replace_the_local_ones_and_its_history_tools_are_dropped() {
-        let octavo = forwarded(
-            [
-                "search_threads",
-                "get_thread",
-                "search_history",
-                "tally_history",
-                "get_command_output",
-            ]
-            .map(octavo_tool)
-            .to_vec(),
-        );
+    fn octavo_thread_tools_replace_the_local_ones() {
+        let octavo = ["search_threads", "get_thread"].map(octavo_tool).to_vec();
         let names: Vec<_> = listed_tools(Some(&octavo)).into_iter().map(|t| t.name).collect();
         assert_eq!(names, [
             "atuin_history",

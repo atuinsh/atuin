@@ -1,32 +1,28 @@
 mod auto_share;
 mod engine;
 mod gate;
-mod workspaces;
+mod starts;
 
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
-use atuin_client::history::{History, HistoryId};
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubLogin, HubSession, UserId};
-use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
 use atuin_octavo::shares::Configs;
 use auto_share::AutoSharer;
 use engine::{UploadEngine, UploadRetryLater, Uploaded};
 use gate::{Cleared, CloseHalt, Closes, Rows};
+use starts::Starts;
 use thiserror::Error;
 use tokio::sync::Notify;
-use workspaces::Workspaces;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
 use crate::octavo::ThreadUpload;
-use crate::output_capture::OutputStore;
 
 #[derive(Debug, Error)]
 pub enum OpenActiveOctavoClientError {
@@ -47,7 +43,6 @@ impl ActiveOctavoClient {
     pub async fn open(
         settings: &Settings,
         handle: DaemonHandle,
-        outputs: Arc<OutputStore>,
         records: AiSessionStore,
         sidecar: Option<AiSessionDatabase>,
     ) -> Result<Self, OpenActiveOctavoClientError> {
@@ -56,15 +51,14 @@ impl ActiveOctavoClient {
         let wake = Arc::new(Notify::new());
         // Without a home, the user has no config of their own.
         let configs = Configs::new(dirs::try_atuin_home().ok().map(PathBuf::from));
-        let workspaces = Workspaces::new(configs, sidecar);
+        let starts = Starts::new(configs, sidecar, records.host_id());
         let engine = UploadEngine::spawn(
             queue.clone(),
             hub.clone(),
             handle.clone(),
-            outputs,
             records,
             wake.clone(),
-            workspaces.clone(),
+            starts.clone(),
         );
 
         let uploader = Arc::new(DirectUploader {
@@ -72,7 +66,7 @@ impl ActiveOctavoClient {
             handle,
             queue,
             wake,
-            workspaces,
+            starts,
         });
 
         Ok(Self {
@@ -84,60 +78,9 @@ impl ActiveOctavoClient {
 }
 
 impl OctavoClient for ActiveOctavoClient {
-    async fn push_history(&self, history: &History, record_id: RecordId) {
-        let settings = self.uploader.handle.settings().await.clone();
-        if !(settings.teams.enabled && settings.teams.upload_history) {
-            return;
-        }
-        // Read now, so the command goes to whoever was logged in as it finished.
-        let Some(session) = self.uploader.session(&settings).await else {
-            return;
-        };
-
-        // Detached, so finishing a command never waits on the network. A daemon that exits while
-        // the upload is in flight loses only that entry's upload.
-        tokio::spawn(Arc::clone(&self.uploader).upload_or_queue(
-            settings,
-            session,
-            history.clone(),
-            record_id,
-        ));
-    }
-
-    async fn push_output(&self, id: HistoryId) {
-        let settings = self.uploader.handle.settings().await.clone();
-        let teams = &settings.teams;
-        if !(teams.enabled && teams.upload_history && teams.upload_output) {
-            return;
-        }
-        // Read now, so the output goes to whoever was logged in as it was captured.
-        let Some(session) = self.uploader.session(&settings).await else {
-            return;
-        };
-        // Queued even while the account is marked off, which pauses the queue, to wait on its
-        // entry's direct upload: a success sends it, and a refusal, or a failure while the mark
-        // holds, forgets it. One stored after a refusal waits out the off spell, then expires
-        // unsent, as Octavo has no entry for it.
-        self.uploader.enqueue(session.user_id(), Queued::Output(id)).await;
-    }
-
-    async fn delete_history(&self, ids: &[HistoryId]) {
-        let settings = self.uploader.handle.settings().await.clone();
-        // Read now, so the deletions go to whoever was logged in when the entries were deleted.
-        let Some(session) = self.uploader.session(&settings).await else {
-            return;
-        };
-
-        self.uploader.enqueue(session.user_id(), Queued::Deletions(ids.to_vec())).await;
-    }
-
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
-        if !settings.teams.enabled {
-            return ThreadUpload::Nothing;
-        }
-        let uploads = settings.teams.upload_threads;
-        let messages = self.uploader.workspaces.uploads(uploads, messages.to_vec()).await;
+        let messages = self.uploader.starts.uploads(messages.to_vec()).await;
         if messages.is_empty() {
             return ThreadUpload::Nothing;
         }
@@ -163,8 +106,8 @@ impl OctavoClient for ActiveOctavoClient {
             });
         }
 
-        let ids = messages.iter().map(|message| message.id).collect();
-        if !self.uploader.queue(session.user_id(), Queued::ThreadMessages(ids)).await {
+        let ids: Vec<_> = messages.iter().map(|message| message.id).collect();
+        if !self.uploader.queue(session.user_id(), &ids).await {
             return ThreadUpload::Nothing;
         }
         ThreadUpload::Queued {
@@ -178,124 +121,18 @@ impl OctavoClient for ActiveOctavoClient {
     }
 }
 
-/// Work for the engine to send, queued under the user a hub token belongs to.
-#[derive(Debug)]
-enum Queued {
-    Deletions(Vec<HistoryId>),
-    Output(HistoryId),
-    ThreadMessages(Vec<RecordId>),
-}
-
-impl fmt::Display for Queued {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Deletions(ids) => write!(f, "{} deletions", ids.len()),
-            Self::Output(id) => write!(f, "the output of {id}"),
-            Self::ThreadMessages(ids) => write!(f, "{} thread messages", ids.len()),
-        }
-    }
-}
-
-/// Uploads a finished command as soon as it finishes, leaving the queue to the ones that can't go
-/// right away.
+/// Queues thread messages for the engine, and uploads those that skip the queue.
 #[derive(Debug)]
 struct DirectUploader {
     hub: HubClient,
     handle: DaemonHandle,
     queue: UploadQueue,
     wake: Arc<Notify>,
-    /// Who threads are shared with, and which started in a workspace.
-    workspaces: Workspaces,
+    /// Who threads are shared with, and which threads go up.
+    starts: Starts,
 }
 
 impl DirectUploader {
-    /// Uploads `history`, or queues it for the engine to retry when the upload fails for a reason
-    /// that may pass, such as no network, and the account isn't marked off.
-    async fn upload_or_queue(
-        self: Arc<Self>,
-        settings: Arc<Settings>,
-        session: HubSession,
-        history: History,
-        record_id: RecordId,
-    ) {
-        let id = history.id;
-        let login = match self.hub.login_as(session, &settings) {
-            Ok(login) => login,
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    %id,
-                    "failed to log in to octavo; not uploading this history entry"
-                );
-                return;
-            }
-        };
-
-        let entry = match pb::History::with_record(history, Some(record_id)) {
-            Ok(entry) => entry,
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    %id,
-                    "octavo will never accept this history entry; dropping it"
-                );
-                forget_output(&self.queue, login.user_id(), id).await;
-                return;
-            }
-        };
-
-        match login.upload_history(pb::HistoryBatch::one(entry)).await {
-            Ok(()) => {
-                self.resume(login.user_id()).await;
-                // The entry's output may be queued already, waiting on it.
-                if settings.teams.upload_output {
-                    self.wake.notify_one();
-                }
-            }
-            Err(HubCallError::OctavoOff(_)) => {
-                tracing::debug!(%id, "octavo is off for the account; dropping this history entry");
-                mark_off(&self.queue, login.user_id()).await;
-                forget_output(&self.queue, login.user_id(), id).await;
-            }
-            Err(err) if err.is_permanent() => {
-                tracing::warn!(
-                    ?err,
-                    %id,
-                    "octavo will never accept this history entry; dropping it"
-                );
-                forget_output(&self.queue, login.user_id(), id).await;
-            }
-            Err(err) => {
-                // Work captured while the account has Octavo off is never queued: it would go up
-                // once Octavo is back.
-                if is_off(&self.queue, login.user_id()).await {
-                    tracing::debug!(
-                        ?err,
-                        %id,
-                        "failed to upload a history entry to octavo; dropping it, as the account is \
-                         marked off"
-                    );
-                    forget_output(&self.queue, login.user_id(), id).await;
-                    return;
-                }
-                tracing::debug!(
-                    ?err,
-                    %id,
-                    "failed to upload a history entry to octavo; queueing it"
-                );
-                if let Err(err) = self.queue.push_history(login.user_id(), id, record_id).await {
-                    tracing::warn!(
-                        ?err,
-                        %id,
-                        "failed to queue a history entry for octavo; it will not be uploaded"
-                    );
-                    return;
-                }
-                self.wake.notify_one();
-            }
-        }
-    }
-
     /// Clears the mark [`mark_off`] left on `user`'s account, as an upload just went through, and
     /// wakes the engine to send what the mark paused, if there was one.
     async fn resume(&self, user: &UserId) {
@@ -304,34 +141,24 @@ impl DirectUploader {
         }
     }
 
-    /// Queues `user`'s `work` for the engine to send before returning, so it outlives the daemon,
-    /// and wakes the engine.
-    async fn enqueue(&self, user: &UserId, work: Queued) {
-        if self.queue(user, work).await {
+    /// Queues `user`'s thread messages `ids` for the engine to send before returning, so they
+    /// outlive the daemon, and wakes the engine.
+    async fn enqueue(&self, user: &UserId, ids: &[RecordId]) {
+        if self.queue(user, ids).await {
             self.wake.notify_one();
         }
     }
 
-    /// Queues `user`'s `work` for the engine to send before returning, so it outlives the daemon,
-    /// without waking the engine. Whether it was queued: a failure is logged and the work dropped.
-    async fn queue(&self, user: &UserId, work: Queued) -> bool {
-        let queued = match &work {
-            // Octavo never stored an entry whose id isn't a UUIDv7.
-            Queued::Deletions(ids) => self
-                .queue
-                .push_deletions(
-                    user,
-                    ids.iter().copied().filter(|&id| pb::UuidV7::try_from(id).is_ok()),
-                )
-                .await
-                .map(drop),
-            Queued::Output(id) => self.queue.push_output(user, *id).await,
-            Queued::ThreadMessages(ids) => {
-                self.queue.push_thread_messages(user, ids.iter().copied()).await.map(drop)
-            }
-        };
-        if let Err(err) = queued {
-            tracing::warn!(?err, %work, "failed to queue for octavo; it will not reach it");
+    /// Queues `user`'s thread messages `ids` for the engine to send before returning, so they
+    /// outlive the daemon, without waking the engine. Whether they were queued: a failure is
+    /// logged and the messages dropped.
+    async fn queue(&self, user: &UserId, ids: &[RecordId]) -> bool {
+        if let Err(err) = self.queue.push_thread_messages(user, ids.iter().copied()).await {
+            tracing::warn!(
+                ?err,
+                messages = ids.len(),
+                "failed to queue thread messages for octavo; they will not reach it"
+            );
             return false;
         }
         true
@@ -346,7 +173,7 @@ impl DirectUploader {
         messages: Vec<Message>,
     ) -> Result<Vec<Message>, CloseHalt> {
         let rows = Rows::new(&self.queue, login.user_id(), messages);
-        let closing = rows.record_dirs(self.workspaces.configs()).await?.narrow().await?;
+        let closing = rows.record_dirs(self.starts.configs()).await?.narrow().await?;
         let deadline = tokio::time::Instant::now() + engine::PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
         let Cleared { ready, waiting } = closing.clear(sent).await?;
@@ -448,14 +275,14 @@ impl DirectThreadUpload {
                     );
                     return;
                 }
-                uploader.enqueue(user, Queued::ThreadMessages(ids)).await;
+                uploader.enqueue(user, &ids).await;
             }
         }
     }
 }
 
 /// Marks `user`'s account as having Octavo off, which pauses their queue, and keeps their new
-/// entries and thread messages out of it, until an upload finds Octavo on again.
+/// thread messages out of it, until an upload finds Octavo on again.
 async fn mark_off(queue: &UploadQueue, user: &UserId) {
     match queue.mark_off(user).await {
         Ok(true) => {
@@ -489,15 +316,4 @@ async fn is_off(queue: &UploadQueue, user: &UserId) -> bool {
         tracing::warn!(?err, "failed to read whether octavo is off for the account");
         false
     })
-}
-
-/// Removes the queued output of `user`'s entry `id`, which Octavo didn't store.
-async fn forget_output(queue: &UploadQueue, user: &UserId, id: HistoryId) {
-    if let Err(err) = queue.remove_output(user, id).await {
-        tracing::warn!(
-            ?err,
-            %id,
-            "failed to remove the output of a dropped history entry from the queue"
-        );
-    }
 }

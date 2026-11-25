@@ -197,6 +197,34 @@ mod tests {
         assert_eq!(shown, [("outside".to_owned(), None), ("inside".to_owned(), Some(request))]);
     }
 
+    /// The catalogue logs on its first lookup, which can come while a message is looked up. That
+    /// event can't take the message past a filter without user messages.
+    #[rstest]
+    fn a_message_that_logs_as_it_is_looked_up_stays_out_of_the_logs() {
+        fn logged_path() -> &'static str {
+            tracing::warn!("looking it up");
+            "/atuin"
+        }
+
+        static STACK: SinkStack = SinkStack::new();
+        let shown = Held::default();
+        let _shown = STACK.push(shown.clone());
+        let logs = Seen::default();
+        let subscriber = tracing_subscriber::registry()
+            // As the logs' file layer is when there's no file to log to.
+            .with(None::<Seen>)
+            .with(logs.clone().with_filter(EnvFilter::new("warn").without_user_messages()))
+            .with(UserLayer::new(&STACK));
+
+        tracing::subscriber::with_default(subscriber, || {
+            crate::userio::log::info!("mcp-server-added", path = logged_path());
+        });
+
+        assert_eq!(*logs.0.lock(), [module_path!()]);
+        let shown: Vec<_> = shown.take().into_iter().map(|m| m.text).collect();
+        assert_eq!(shown, ["Added MCP server atuin to /atuin"]);
+    }
+
     /// A value quoted in a message cannot send an escape sequence to the terminal, and a
     /// multi-line message keeps its lines.
     #[rstest]

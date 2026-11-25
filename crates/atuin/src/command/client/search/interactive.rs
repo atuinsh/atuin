@@ -2434,12 +2434,8 @@ fn backslash_quote(s: &str) -> String {
     format!("'{}'", s.replace('\\', r"\\").replace('\'', r"\'"))
 }
 
-// cli-clipboard only works on Windows, Mac, and Linux.
-
-#[cfg(all(
-    feature = "clipboard",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
+// arboard is a dependency only on these targets.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     let mut ctx = arboard::Clipboard::new()?;
     ctx.set_text(s)?;
@@ -2448,10 +2444,7 @@ fn set_clipboard(s: String) -> Result<(), arboard::Error> {
     Ok(())
 }
 
-#[cfg(not(all(
-    feature = "clipboard",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-)))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn set_clipboard(_s: String) -> Result<(), std::convert::Infallible> {
     Ok(())
 }

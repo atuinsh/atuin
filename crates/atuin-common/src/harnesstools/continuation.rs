@@ -15,7 +15,8 @@
 //!   is carried over as a call of the target, with its result: as the target's own tool where it
 //!   has one that does the same (a shell command, a file read, written or edited, a search: see
 //!   `tools`), else as the tool it was. A model reads a call to a tool it doesn't have like any
-//!   other; it just can't make it again.
+//!   other; it just can't make it again. The changes a carried call made go with it, where
+//!   the target keeps them (all but Kiro and Hermes).
 //! - **Other calls, as notes**: a short line of text in the assistant's turn saying what was
 //!   called (see [`tool_note`]): `[ran a shell command]`, ``[edited `src/store.rs`]``. That is a
 //!   call captured without its input (`threads.capture_tools` off, or a policy withheld it), one with no
@@ -65,7 +66,7 @@ use super::rehydrate::{RehydrateMessage, RehydrateSession};
 use super::resume::is_plain_name;
 use super::{AnyHarness, Harness as _, opencode};
 use crate::harnesstools::session::{
-    Content, Message, ParentKind, Role, StopReason, ToolCallId, ToolResult, ToolUse,
+    Content, Message, ParentKind, Patch, Role, StopReason, ToolCallId, ToolResult, ToolUse,
     UNREADABLE_SUMMARY,
 };
 
@@ -304,6 +305,15 @@ fn continue_at(
         target,
         ids,
         calls: tools::CallIds::default(),
+        patches: original
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| match c {
+                Content::Patch(patch) => Some((patch.call.clone(), patch)),
+                _ => None,
+            })
+            .collect(),
         rows: Vec::with_capacity(turns.len() + 1),
         last: start,
         steps: 0,
@@ -374,11 +384,13 @@ fn continue_at(
 
 /// A continuation's rows as they are written, each later than the one before and hanging from
 /// it.
-struct Rows {
+struct Rows<'m> {
     source: AnyHarness,
     target: AnyHarness,
     ids: Ids,
     calls: tools::CallIds,
+    /// The original's patches, by the call that made them.
+    patches: HashMap<ToolCallId, &'m Patch>,
     rows: Vec<RehydrateMessage>,
     last: Timestamp,
     /// The steps written so far, and the key of the one being written, for opencode: its rows
@@ -389,7 +401,7 @@ struct Rows {
     step: Option<String>,
 }
 
-impl Rows {
+impl Rows<'_> {
     fn push(&mut self, at: Timestamp, role: Role, content: Vec<Content>, stop: Option<StopReason>) {
         let at = at.max(self.last + SignedDuration::from_millis(1));
         self.last = at;
@@ -429,13 +441,37 @@ impl Rows {
 
     fn write_step(&mut self, at: Timestamp, step: &Step<'_>, ran_in: &Path, cwd: &Path) {
         let text = (!step.parts.is_empty()).then(|| Content::Text(render(&step.parts)));
+        // A call carried as several (one edit each) has its changes on the last.
+        let mut patches = Vec::new();
         let (calls, results): (Vec<_>, Vec<_>) = step
             .calls
             .iter()
             .flat_map(|(call, result)| {
-                tools::carry(self.source, self.target, call, result, ran_in, cwd, &mut self.calls)
+                let carried = tools::carry(
+                    self.source,
+                    self.target,
+                    call,
+                    result,
+                    ran_in,
+                    cwd,
+                    &mut self.calls,
+                );
+                if let (Some(patch), Some((_, last))) = (self.patches.get(&call.id), carried.last())
+                    && !matches!(self.target, AnyHarness::Kiro(_) | AnyHarness::Hermes(_))
+                {
+                    patches.push(Patch {
+                        call: last.call.clone(),
+                        files: patch.files.clone(),
+                    });
+                }
+                carried
             })
             .unzip();
+        // A result, with the changes its call made.
+        let answer = |result: ToolResult| {
+            let patch = patches.iter().find(|p| p.call == result.call).cloned();
+            std::iter::once(Content::ToolResult(result)).chain(patch.map(Content::Patch))
+        };
         if calls.is_empty() {
             self.push(at, Role::Assistant, text.into_iter().collect(), Some(StopReason::EndTurn));
             return;
@@ -448,15 +484,16 @@ impl Rows {
             | AnyHarness::Pi(_)
             | AnyHarness::Copilot(_)
             | AnyHarness::Grok(_)
-            | AnyHarness::Hermes(_) => {
+            | AnyHarness::Hermes(_)
+            | AnyHarness::Vibe(_) => {
                 let content = text.into_iter().chain(calls.into_iter().map(Content::ToolUse));
                 self.push(at, Role::Assistant, content.collect(), calling);
                 if matches!(self.target, AnyHarness::ClaudeCode(_)) {
-                    let results = results.into_iter().map(Content::ToolResult).collect();
+                    let results = results.into_iter().flat_map(answer).collect();
                     self.push(at, Role::Tool, results, None);
                 } else {
                     for result in results {
-                        self.push(at, Role::Tool, vec![Content::ToolResult(result)], None);
+                        self.push(at, Role::Tool, answer(result).collect(), None);
                     }
                 }
             }
@@ -465,13 +502,19 @@ impl Rows {
                     self.push(at, Role::Assistant, vec![text], Some(StopReason::EndTurn));
                 }
                 let codex = matches!(self.target, AnyHarness::Codex(_) | AnyHarness::Kiro(_));
+                // Codex writes a call's changes as an item of their own, after its output.
                 for (call, result) in calls.into_iter().zip(results) {
-                    let (call, result) = (Content::ToolUse(call), Content::ToolResult(result));
+                    let call = Content::ToolUse(call);
                     if codex {
+                        let mut answered = answer(result);
                         self.push(at, Role::Assistant, vec![call], calling.clone());
-                        self.push(at, Role::Tool, vec![result], None);
+                        self.push(at, Role::Tool, answered.next().into_iter().collect(), None);
+                        if let Some(patch) = answered.next() {
+                            self.push(at, Role::Tool, vec![patch], None);
+                        }
                     } else {
-                        self.push(at, Role::Assistant, vec![call, result], calling.clone());
+                        let content = std::iter::once(call).chain(answer(result)).collect();
+                        self.push(at, Role::Assistant, content, calling.clone());
                     }
                 }
             }
@@ -784,9 +827,10 @@ impl Ids {
                 let stamp = self.now.strftime("%Y%m%d_%H%M%S");
                 format!("{stamp}_{}", &Uuid::new_v4().as_simple().to_string()[..6])
             }
-            AnyHarness::Amp(_) | AnyHarness::ClaudeCode(_) | AnyHarness::Copilot(_) => {
-                Uuid::new_v4().to_string()
-            }
+            AnyHarness::Amp(_)
+            | AnyHarness::ClaudeCode(_)
+            | AnyHarness::Copilot(_)
+            | AnyHarness::Vibe(_) => Uuid::new_v4().to_string(),
             AnyHarness::Kiro(_) => format!("sess_{}", Uuid::new_v4()),
             AnyHarness::Codex(_) | AnyHarness::Grok(_) | AnyHarness::Pi(_) => {
                 Uuid::now_v7().to_string()
@@ -811,7 +855,8 @@ impl Ids {
                 | AnyHarness::ClaudeCode(_)
                 | AnyHarness::Copilot(_)
                 | AnyHarness::Grok(_)
-                | AnyHarness::Kiro(_) => Uuid::new_v4().to_string(),
+                | AnyHarness::Kiro(_)
+                | AnyHarness::Vibe(_) => Uuid::new_v4().to_string(),
                 AnyHarness::Codex(_) => format!("syn-{}", Uuid::new_v4().as_simple()),
                 AnyHarness::Opencode(_) => {
                     opencode::rehydrate::mint_part(at, &Uuid::new_v4().to_string())

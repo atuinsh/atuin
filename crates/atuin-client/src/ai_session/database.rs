@@ -42,7 +42,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -583,6 +583,14 @@ impl AiSessionDatabase {
         .await
     }
 
+    /// Whether the database holds any session.
+    pub async fn has_sessions(&self) -> Result<bool, DbError> {
+        let found: bool = db::query_scalar("SELECT EXISTS (SELECT 1 FROM sessions)")
+            .fetch_one(self.db.pool())
+            .await?;
+        Ok(found)
+    }
+
     pub async fn contains_message(
         &self,
         session: &HarnessSession,
@@ -631,6 +639,24 @@ impl AiSessionDatabase {
         .fetch_all(self.db.pool())
         .await?;
         Ok(dirs.into_iter().map(PathBuf::from).collect())
+    }
+
+    /// The first directory the session's rows name, as [`Self::directories`] orders them, and when
+    /// the first row naming it was written, to the millisecond.
+    pub async fn start(
+        &self,
+        session: &HarnessSession,
+    ) -> Result<Option<(PathBuf, Timestamp)>, DbError> {
+        let row: Option<(String, i64)> = db::query_as(
+            "SELECT (SELECT value FROM interned WHERE id = cwd), timestamp FROM messages WHERE \
+             session = (SELECT id FROM sessions WHERE harness = ? AND session_id = ?) AND cwd IS \
+             NOT NULL ORDER BY timestamp, rowid LIMIT 1",
+        )
+        .bind(session.harness as i64)
+        .bind(session.session.as_ref())
+        .fetch_optional(self.db.pool())
+        .await?;
+        Ok(row.map(|(dir, at)| (PathBuf::from(dir), Self::time_from_millis(at))))
     }
 
     /// Every title the session's lines set or cleared, oldest first: replayed, they give each
@@ -1588,6 +1614,7 @@ impl AiSessionDatabase {
             8 => Ok(HarnessKind::Amp),
             9 => Ok(HarnessKind::Kiro),
             10 => Ok(HarnessKind::Hermes),
+            11 => Ok(HarnessKind::Vibe),
             other => Err(DbError::UnknownHarness(other)),
         }
     }
@@ -2250,6 +2277,15 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn has_sessions_once_a_message_is_stored() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        assert!(!db.has_sessions().await.unwrap());
+        db.append(&sample_message()).await.unwrap();
+        assert!(db.has_sessions().await.unwrap());
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn contains_message_reflects_presence() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let m = sample_message();
@@ -2432,7 +2468,7 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn directories_names_each_one_once_in_the_order_rows_reached_it() {
+    async fn directories_names_each_one_once_in_the_order_rows_reached_it_from_the_start() {
         let db = AiSessionDatabase::in_memory().await.unwrap();
         let session = sample_handle();
         let other = handle(HarnessKind::ClaudeCode, "other");
@@ -2449,8 +2485,11 @@ mod tests {
         }
 
         let dirs = db.directories(&session).await.unwrap();
+        let start = db.start(&session).await.unwrap();
 
         assert_eq!(dirs, [PathBuf::from("/fork"), PathBuf::from("/work")]);
+        let at = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(1);
+        assert_eq!(start, Some((PathBuf::from("/fork"), at)));
     }
 
     #[rstest]
@@ -2934,18 +2973,23 @@ mod tests {
         assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
-    /// Migration 6 empties the projection again, for the rows earlier builds read as an unknown
-    /// harness before they knew Hermes.
+    /// Migrations 6 and 7 empty the projection again, for the rows earlier builds read as an
+    /// unknown harness before they knew Hermes, and Vibe.
     #[rstest]
-    fn the_hermes_migration_empties_the_projection_for_a_rebuild() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        for migration in [
+    #[case::hermes(5)]
+    #[case::vibe(6)]
+    fn a_harness_migration_empties_the_projection_for_a_rebuild(#[case] before: usize) {
+        let migrations = [
             include_str!("migrations/0001_init.sql"),
             include_str!("migrations/0002_message_blocks.sql"),
             include_str!("migrations/0003_message_provider.sql"),
             include_str!("migrations/0004_drop_api_request_blobs.sql"),
             include_str!("migrations/0005_reproject_for_kiro.sql"),
-        ] {
+            include_str!("migrations/0006_reproject_for_hermes.sql"),
+            include_str!("migrations/0007_reproject_for_vibe.sql"),
+        ];
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in &migrations[..before] {
             conn.execute_batch(migration).unwrap();
         }
         conn.execute_batch(
@@ -2959,7 +3003,7 @@ mod tests {
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         let generation = count("SELECT generation FROM projection_state");
 
-        conn.execute_batch(include_str!("migrations/0006_reproject_for_hermes.sql")).unwrap();
+        conn.execute_batch(migrations[before]).unwrap();
 
         assert_eq!(count("SELECT count(*) FROM sessions"), 0);
         assert_eq!(count("SELECT count(*) FROM messages"), 0);

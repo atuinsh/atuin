@@ -180,8 +180,8 @@ impl Canonical {
             "read" | "read_file" => Self::Read {
                 path: path()?,
                 offset: match source {
-                    // Kiro's `read_file` counts lines from 0, the others from 1.
-                    AnyHarness::Kiro(_) => {
+                    // Kiro's and Vibe's `read_file` count lines from 0, the others from 1.
+                    AnyHarness::Kiro(_) | AnyHarness::Vibe(_) => {
                         input.get("offset").and_then(Value::as_u64).map(|n| json!(n + 1))
                     }
                     _ => input.get("offset").filter(|v| v.is_number()).cloned(),
@@ -281,7 +281,7 @@ impl Canonical {
 
     /// This call as `target`'s own tool, when it has one that does the same: its name and input.
     fn render(&self, target: AnyHarness, cwd: &Path) -> Option<(&'static str, Value)> {
-        use AnyHarness::{ClaudeCode, Codex, Copilot, Grok, Hermes, Kiro, Opencode, Pi};
+        use AnyHarness::{ClaudeCode, Codex, Copilot, Grok, Hermes, Kiro, Opencode, Pi, Vibe};
 
         let mut input = Map::new();
         let mut put = |key: &str, value: Option<Value>| {
@@ -356,8 +356,8 @@ impl Canonical {
                 };
                 put(key, Some(json!(path)));
                 let offset = match target {
-                    // Kiro counts lines from 0 (see `parse`).
-                    Kiro(_) => {
+                    // Kiro and Vibe count lines from 0 (see `parse`).
+                    Kiro(_) | Vibe(_) => {
                         offset.as_ref().and_then(Value::as_u64).map(|n| json!(n.saturating_sub(1)))
                     }
                     _ => offset.clone(),
@@ -366,7 +366,7 @@ impl Canonical {
                 put("limit", limit.clone());
                 match target {
                     ClaudeCode(_) => "Read",
-                    Grok(_) | Hermes(_) | Kiro(_) => "read_file",
+                    Grok(_) | Hermes(_) | Kiro(_) | Vibe(_) => "read_file",
                     _ => "read",
                 }
             }
@@ -385,12 +385,28 @@ impl Canonical {
                 put("content", Some(json!(content)));
                 match target {
                     ClaudeCode(_) => "Write",
-                    Hermes(_) => "write_file",
+                    Hermes(_) | Vibe(_) => "write_file",
                     _ => "write",
                 }
             }
             // pi's and Copilot's edits replace one occurrence only.
             (Self::Edit { all: true, .. }, Pi(_) | Copilot(_)) => return None,
+            // Vibe's edit names its file `file_path`, unlike its other file tools.
+            (
+                Self::Edit {
+                    path,
+                    old,
+                    new,
+                    all,
+                },
+                Vibe(_),
+            ) => {
+                put("file_path", Some(json!(path)));
+                put("old_string", Some(json!(old)));
+                put("new_string", Some(json!(new)));
+                put("replace_all", all.then_some(json!(true)));
+                "edit"
+            }
             (
                 Self::Edit {
                     path,
@@ -424,7 +440,9 @@ impl Canonical {
             // Copilot's searches (`rg`, `glob`) take input atuin hasn't seen: a search stays
             // the tool it was, which the model reads like any other. So does a `Glob` into Kiro,
             // whose `file_search` may take a substring rather than a glob (see `parse`).
-            (Self::Grep { .. } | Self::Glob { .. }, Copilot(_)) | (Self::Glob { .. }, Kiro(_)) => {
+            // Vibe searches through its shell.
+            (Self::Grep { .. } | Self::Glob { .. }, Copilot(_) | Vibe(_))
+            | (Self::Glob { .. }, Kiro(_)) => {
                 return None;
             }
             // Kiro's `grep_search` searches the whole workspace: one under a path stays foreign.
@@ -531,7 +549,8 @@ const fn path_key(target: AnyHarness) -> &'static str {
         | AnyHarness::Copilot(_)
         | AnyHarness::Hermes(_)
         | AnyHarness::Kiro(_)
-        | AnyHarness::Pi(_) => "path",
+        | AnyHarness::Pi(_)
+        | AnyHarness::Vibe(_) => "path",
     }
 }
 
@@ -680,6 +699,24 @@ fn native(target: AnyHarness, name: &str) -> bool {
             "patch",
         ],
         AnyHarness::Pi(_) => &["bash", "read", "write", "edit", "grep", "find", "ls"],
+        // What Vibe 3.1.3 offers the model, by the names it calls them (after their group).
+        AnyHarness::Vibe(_) => &[
+            "bash",
+            "read_file",
+            "write_file",
+            "edit",
+            "search_replace",
+            "todo",
+            "ask_user_question",
+            "spawn",
+            "send_message",
+            "wait",
+            "sleep",
+            "web_search",
+            "open_url",
+            "cron",
+            "search_tool_functions",
+        ],
         // What Copilot CLI 1.0.104 offers the model, its agent-management tools aside.
         AnyHarness::Copilot(_) => &[
             "bash",

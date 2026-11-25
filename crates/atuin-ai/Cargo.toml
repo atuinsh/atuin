@@ -11,9 +11,6 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
-[features]
-clipboard = ["dep:arboard"]
-
 [dependencies]
 atuin-client = { workspace = true, features = ["ai"] }
 atuin-common = { workspace = true, features = ["ai", "sqlite", "unicode"] }
@@ -56,10 +53,10 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-arboard = { workspace = true, optional = true }
+arboard = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
+arboard = { workspace = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }

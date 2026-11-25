@@ -233,6 +233,27 @@ impl OwnedDbUrl {
     }
 }
 
+impl<S, U> schemars::JsonSchema for DbUrl<S, U>
+where
+    S: Borrow<str>,
+    U: Borrow<Url>,
+{
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DbUrl".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A `postgres://` or `sqlite://` connection URL.",
+        })
+    }
+}
+
 /// The scheme of a database URL was not one we recognise.
 #[derive(Debug, Error)]
 pub enum DbUrlParseError {

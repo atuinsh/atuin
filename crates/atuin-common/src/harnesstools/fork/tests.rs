@@ -62,6 +62,7 @@ async fn written(
     let id = SessionId::from(session.id.clone());
     match harness {
         AnyHarness::Amp(_) => unreachable!("atuin writes no Amp threads"),
+        AnyHarness::Vibe(_) => unreachable!("only Vibe reads back what atuin writes for it"),
         AnyHarness::Hermes(_) => {
             let lines = hermes::rehydrate::tests::written(root, session).await;
             (rows_of(&lines), links(&session.id, &lines))

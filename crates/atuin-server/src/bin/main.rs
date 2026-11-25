@@ -2,10 +2,11 @@
 
 use std::net::SocketAddr;
 
+use atuin_common::cli_reference::CommandReference;
 use atuin_common::userio::log::{SINK, UserFilterExt as _, UserLayer};
 use atuin_server::admin::AdminCmd;
 use atuin_server::{Settings, example_config, launch, launch_metrics_server};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use eyre::{Context, Result};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
@@ -31,6 +32,17 @@ enum Cmd {
     /// Manage the server by hand
     #[clap(subcommand)]
     Admin(AdminCmd),
+
+    // Plumbing: `web/apps/docs/scripts/gen-reference.ts` renders the docs site's reference from its output.
+    #[clap(hide = true)]
+    GenReference,
+}
+
+/// What the docs site's reference is rendered from: the command tree and `server.toml`'s schema.
+#[derive(serde::Serialize)]
+struct Reference {
+    cli: CommandReference,
+    config: serde_json::Value,
 }
 
 #[tokio::main]
@@ -73,6 +85,14 @@ async fn main() -> Result<()> {
         Cmd::Admin(cmd) => {
             let settings = Settings::new().wrap_err("could not load server settings")?;
             cmd.run(&settings.db_settings).await
+        }
+        Cmd::GenReference => {
+            let reference = Reference {
+                cli: CommandReference::new(Cmd::command()),
+                config: Settings::config_schema()?,
+            };
+            serde_json::to_writer_pretty(std::io::stdout().lock(), &reference)?;
+            Ok(())
         }
     }
 }

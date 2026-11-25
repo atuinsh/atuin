@@ -4,14 +4,16 @@
 use atuin_common::secrets::Redactor;
 use atuin_common::secrets::files::SensitiveFiles;
 use regex::Regex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct Security {
     /// Regular expressions for credentials of your own, redacted wherever Atuin redacts: in
     /// captured command output and in AI sessions. A pattern's `secret` group is what goes, where
     /// it names one (`api-key: (?<secret>\w+)`), else all it matches.
     #[serde(with = "serde_regex", default, skip_serializing)]
+    #[schemars(with = "Vec<String>")]
     pub redact_patterns: Vec<Regex>,
 
     /// Files of your own whose contents are credentials, on top of the built-in ones (`.env`,

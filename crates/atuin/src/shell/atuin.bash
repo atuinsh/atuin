@@ -790,9 +790,9 @@ fi
 
 # shellcheck disable=SC2154
 if [[ ${__atuin_bind_ai_resume-} == true ]]; then
-    atuin-bind -m emacs      '\C-]' atuin-ai-resume-emacs
-    atuin-bind -m vi-insert  '\C-]' atuin-ai-resume-viins
-    atuin-bind -m vi-command '\C-]' atuin-ai-resume-vicmd
+    atuin-bind -m emacs      '\C-t' atuin-ai-resume-emacs
+    atuin-bind -m vi-insert  '\C-t' atuin-ai-resume-viins
+    atuin-bind -m vi-command '\C-t' atuin-ai-resume-vicmd
 fi
 
 if command -v __atuin_load_builtin_preexec > /dev/null; then

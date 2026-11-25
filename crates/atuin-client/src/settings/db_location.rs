@@ -1,9 +1,12 @@
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Display, Path, PathBuf};
 
 use atuin_common::db::SqliteDbUrl;
 use atuin_common::path::{AbsPath, AbsPathBuf, PathAnchor, RelativeTo, ShellExpanded};
+use schemars::{Schema, SchemaGenerator, json_schema};
 use serde::{Deserializer, Serialize, Serializer};
+use serde_with::schemars_1::JsonSchemaAs;
 use serde_with::{DeserializeAs, SerializeAs};
 
 /// Where a SQLite database setting points: a file, or a connection string SQLite reads itself,
@@ -59,6 +62,24 @@ impl<'de, A: PathAnchor> DeserializeAs<'de, DbLocation> for RelativeTo<A> {
             }
             _ => Self::resolve(path).map(DbLocation::File),
         }
+    }
+}
+
+impl<A> JsonSchemaAs<DbLocation> for RelativeTo<A> {
+    fn schema_name() -> Cow<'static, str> {
+        "DbLocation".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "description": "A database file, resolved like any path setting, or `:memory:` or a \
+                            `sqlite:`/`file:` URI taken as written.",
+        })
     }
 }
 

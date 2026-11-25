@@ -49,7 +49,6 @@ eula = false
 default = [
     "client",
     "sync",
-    "clipboard",
     "check-update",
     "daemon",
     "ai",
@@ -61,8 +60,8 @@ sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon"]
 ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
-# Compiled in, but nothing reaches Atuin for Teams until the user sets `teams.enabled`, which
-# `atuin setup --hub` does.
+# Compiled in, but nothing reaches Atuin Hub until the user's own atuin.lua sets
+# `upload.threads`, which `atuin setup --hub` writes.
 octavo = [
     "ai",
     "sync",
@@ -73,7 +72,6 @@ octavo = [
     "dep:atuin-octavo",
 ]
 hex = ["pty-proxy"]
-clipboard = ["dep:arboard", "atuin-ai?/clipboard"]
 check-update = ["atuin-client/check-update"]
 vendored-tls = ["atuin-client?/vendored-tls"]
 # `atuin update`: self-update via the cargo-dist install receipt. Not a
@@ -95,8 +93,8 @@ atuin-ai = { workspace = true, optional = true }
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
 # Keep inline tables on one line: i18n-embed-fl's `fl!` parses this manifest
 # with a TOML 1.0 parser (find-crate -> toml 0.5).
-atuin-client = { path = "../atuin-client", version = "18.24.8", optional = true, default-features = false }
-atuin-common = { workspace = true, features = ["db", "os", "unicode"] }
+atuin-client = { path = "../atuin-client", version = "18.25.1", optional = true, default-features = false }
+atuin-common = { workspace = true, features = ["cli-reference", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
@@ -121,6 +119,7 @@ crossterm = { workspace = true, features = ["use-dev-tty"] }
 derive_more = { workspace = true }
 easy-cast = { workspace = true }
 enum_dispatch = { workspace = true }
+enumset = { workspace = true }
 eyre = { workspace = true }
 frizbee = { workspace = true }
 futures-util = { workspace = true }
@@ -162,10 +161,10 @@ uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-arboard = { workspace = true, optional = true }
+arboard = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { workspace = true, optional = true, features = ["wayland-data-control"] }
+arboard = { workspace = true, features = ["wayland-data-control"] }
 
 # Enable tree-sitter shell parsing on platforms where tree-sitter's bundled C
 # compiles cleanly. tree-sitter 0.26's portable/endian.h fails on illumos,
@@ -197,6 +196,10 @@ toml_edit = { workspace = true, features = ["serde"] }
 [target.'cfg(unix)'.dev-dependencies]
 nix-pty = { package = "nix", version = "0.28", features = ["term"] }
 portable-pty = "0.9"
+
+[build-dependencies]
+# build.rs reads the feature names from this manifest for `atuin doctor`.
+toml_edit = { workspace = true }
 
 [lints]
 workspace = true

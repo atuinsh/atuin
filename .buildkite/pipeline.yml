@@ -227,6 +227,9 @@ steps:
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      # The README's `cargo install` for a binary without the AI features, so
+      # keep the two feature lists in sync.
+      - 'section ":mag: check (without ai)" cargo check -p atuin --locked --no-default-features --features client,sync,check-update,daemon,pty-proxy'
       - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
       - *prune
       - *save-target
@@ -248,6 +251,9 @@ steps:
       - 'section ":mag: check (sync)" cargo check --no-default-features --features sync --workspace'
       - 'section ":mag: check (server)" cargo check -p atuin-server'
       - 'section ":mag: check (client only)" cargo check --no-default-features --features client --workspace'
+      # The README's `cargo install` for a binary without the AI features, so
+      # keep the two feature lists in sync.
+      - 'section ":mag: check (without ai)" cargo check -p atuin --locked --no-default-features --features client,sync,check-update,daemon,pty-proxy'
       - 'section ":mag: check (release profile)" cargo check --workspace --locked --release'
       - *prune
       - *save-target
@@ -312,7 +318,9 @@ steps:
       RUST_TOOLCHAIN: nightly-2026-10-09
       RUST_COMPONENTS: rustfmt
     command:
+      - .buildkite/scripts/cache-restore.sh --name apt_debs
       - *toolchain
+      - .buildkite/scripts/cache-save.sh --name apt_debs
       - 'section ":art: cargo fmt --check" cargo fmt -- --check'
 
   - label: ":no_entry: cargo-deny"

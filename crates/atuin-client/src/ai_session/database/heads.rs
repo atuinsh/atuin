@@ -117,12 +117,14 @@ enum Model {
 impl Model {
     const fn of(harness: HarnessKind) -> Self {
         match harness {
-            HarnessKind::ClaudeCode | HarnessKind::Pi | HarnessKind::Omp | HarnessKind::Hermes => {
-                Self::Tree {
-                    chained: false,
-                    beside: true,
-                }
-            }
+            HarnessKind::ClaudeCode
+            | HarnessKind::Pi
+            | HarnessKind::Omp
+            | HarnessKind::Hermes
+            | HarnessKind::Vibe => Self::Tree {
+                chained: false,
+                beside: true,
+            },
             // Amp's title rows (an import's) are content-addressed, beside its messages.
             HarnessKind::Copilot | HarnessKind::Amp | HarnessKind::Kiro => Self::Tree {
                 chained: true,

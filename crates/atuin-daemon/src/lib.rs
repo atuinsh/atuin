@@ -147,14 +147,8 @@ pub async fn boot(
     // Before capture, which tells it of each row it captures.
     #[cfg(feature = "octavo")]
     let octavo = Arc::new(
-        octavo::Octavo::open(
-            &settings,
-            handle.clone(),
-            output_capture.store(),
-            records.clone(),
-            ai_session_db.clone(),
-        )
-        .await,
+        octavo::Octavo::open(&settings, handle.clone(), records.clone(), ai_session_db.clone())
+            .await,
     );
     #[cfg(feature = "ai")]
     let ai_session_capture = Arc::new(match &ai_session_db {
@@ -167,7 +161,7 @@ pub async fn boot(
             AiHarnessSessionCapture::open(
                 records.clone(),
                 db.clone(),
-                settings.threads.capture,
+                settings.threads.enabled,
                 session_capture::ToolCapture::from_setting(settings.threads.capture_tools),
                 session_capture::CapturePolicy::from_settings(&settings),
                 blocking_pool.clone(),
@@ -188,16 +182,13 @@ pub async fn boot(
 
     let history_store =
         HistoryStore::new(handle.store().clone(), host_id, handle.encryption_key().clone());
-    let journal = HistoryJournal::new(
+    let journal = Arc::new(HistoryJournal::new(
         handle.caps().clone(),
         history_store,
         handle.history_db().clone(),
         search_index,
         output_capture,
-    );
-    #[cfg(feature = "octavo")]
-    let journal = journal.with_octavo(octavo);
-    let journal = Arc::new(journal);
+    ));
     let history_service = HistoryServer::new(grpc::HistoryService::new(journal, handle.clone()));
     // A push's message can be one large line (a tool's whole result), clipped only in capture.
     #[cfg(feature = "ai")]
@@ -222,7 +213,7 @@ pub async fn boot(
                 // (avoids parsing the config file twice)
                 let new_settings = (*settings_rx.borrow()).clone();
                 #[cfg(feature = "ai")]
-                ai_session_capture.set_capture(new_settings.threads.capture);
+                ai_session_capture.set_capture(new_settings.threads.enabled);
                 watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");

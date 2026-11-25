@@ -25,9 +25,11 @@ use super::hooks::WarmStep;
 use super::message_enricher::{MessageEnricher, SYNTHETIC};
 use super::{AppendError, CaptureLocks, Sink, StoreState};
 
-/// Backoff bounds for retrying a harness listener whose session directory does not exist yet.
+/// Backoff bounds for retrying a harness listener. One whose session directory does not exist yet
+/// is looked for again at least every [`LISTENER_NOT_FOUND_MAX`].
 const LISTENER_RETRY_START: Duration = Duration::from_secs(2);
 const LISTENER_RETRY_MAX: Duration = Duration::from_secs(60);
+const LISTENER_NOT_FOUND_MAX: Duration = Duration::from_secs(10);
 
 /// How long a live session with rows waiting for a timestamp may stay quiet before they are
 /// stored with capture time: a transcript of untimed lines alone (Claude Code title lines)
@@ -76,7 +78,8 @@ impl SessionCaptureEngine {
 /// growing from `retry` (capped at [`LISTENER_RETRY_MAX`]), whenever it ends, fails or panics.
 ///
 /// A harness whose session directory does not exist yet (not installed, or never run) is
-/// listened to once it appears, so capture starts without a restart. One whose listener ended
+/// listened to within [`LISTENER_NOT_FOUND_MAX`] of it appearing, so capture starts without a
+/// restart. One whose listener ended
 /// (its source gone, or no longer readable) or panicked would otherwise stop capturing until the
 /// daemon restarts, and nothing would say so but a log line.
 async fn supervise<F, L>(kind: HarnessKind, mut listen: F, retry: Duration)
@@ -88,7 +91,7 @@ where
     loop {
         let started = Instant::now();
         match AssertUnwindSafe(listen()).catch_unwind().await {
-            Ok(Err(RuntimeError::NotFound(_))) => {}
+            Ok(Err(RuntimeError::NotFound(_))) => delay = delay.min(LISTENER_NOT_FOUND_MAX),
             Ok(Err(e)) => {
                 tracing::warn!(?e, ?kind, ?delay, "ai-session listener failed; retrying");
             }

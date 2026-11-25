@@ -5,6 +5,12 @@ pub mod tree_watcher;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Whether this process can write to the file at `path`. The file is left unchanged.
+#[must_use]
+pub fn can_write(path: &Path) -> bool {
+    std::fs::OpenOptions::new().write(true).open(path).is_ok()
+}
+
 /// A path that is removed when this type is dropped.
 pub struct RemoveOnDropPath<P: AsRef<Path> = PathBuf>(
     /// The path to the file.

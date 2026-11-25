@@ -30,7 +30,7 @@ path = "src/bin/main.rs"
 vendored-tls = ["reqwest/native-tls-vendored"]
 
 [dependencies]
-atuin-common = { workspace = true, features = ["db"] }
+atuin-common = { workspace = true, features = ["cli-reference", "db"] }
 atuin-domain = { workspace = true, features = ["axum"] }
 
 argon2 = { workspace = true }
@@ -52,7 +52,9 @@ reqwest = { workspace = true }
 rpassword = { workspace = true }
 rust-embed = { workspace = true }
 secrecy = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "sqlite", "mysql", "regexp", "tls-native-tls"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -68,7 +70,7 @@ uuid = { workspace = true }
 # binary crate stays free of server/postgres deps (see issue #2884).
 [dev-dependencies]
 # TODO(taylordotfish): in Rust 1.99 we can change this to `workspace = true`
-atuin-client = { path = "../atuin-client", version = "18.24.8", default-features = false, features = ["sync"] }
+atuin-client = { path = "../atuin-client", version = "18.25.1", default-features = false, features = ["sync"] }
 futures-util = { workspace = true }
 percent-encoding = { workspace = true }
 proptest = { workspace = true }

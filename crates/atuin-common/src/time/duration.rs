@@ -5,10 +5,12 @@
 
 use core::fmt;
 use core::marker::PhantomData;
+use std::borrow::Cow;
 use std::num::NonZeroU64;
 use std::ops::ControlFlow;
 
 use easy_cast::Conv;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::de::{self, Visitor};
 use serde::{Deserializer, Serializer};
 use serde_with::{DeserializeAs, SerializeAs};
@@ -480,6 +482,80 @@ impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
             }
             None => serializer.serialize_str("0"),
         }
+    }
+}
+
+/// The schema of a duration field: a units string, or a bare number in the field's unit.
+fn duration_schema<U: DurationUnit>(disableable: bool) -> Schema {
+    let unit = match U::SECS_PER_UNIT {
+        1 => "seconds",
+        60 => "minutes",
+        86_400 => "days",
+        _ => "units",
+    };
+    let off = if disableable {
+        " `0` turns it off."
+    } else {
+        ""
+    };
+    json_schema!({
+        "type": ["string", "number"],
+        "description": format!(
+            "A duration such as `500ms`, `30s`, `5m` or `4d`. A bare number counts {unit}, \
+             which is deprecated.{off}"
+        ),
+    })
+}
+
+impl JsonSchema for NonZeroDuration {
+    fn schema_name() -> Cow<'static, str> {
+        "NonZeroDuration".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        duration_schema::<Seconds>(false)
+    }
+}
+
+/// The JSON Schema of an [`AsDuration<U>`] field, for `#[schemars(with = "DurationSchema<U>")]`.
+///
+/// `#[serde_as]` would name the deprecated marker in the code `JsonSchema`'s derive generates,
+/// where no `#[allow(deprecated)]` reaches.
+pub struct DurationSchema<U>(PhantomData<U>);
+
+impl<U: DurationUnit> JsonSchema for DurationSchema<U> {
+    fn schema_name() -> Cow<'static, str> {
+        "Duration".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        duration_schema::<U>(false)
+    }
+}
+
+/// The JSON Schema of an [`AsDisableableDuration<U>`] field, as [`DurationSchema`] is of an
+/// [`AsDuration<U>`] one.
+pub struct DisableableDurationSchema<U>(PhantomData<U>);
+
+impl<U: DurationUnit> JsonSchema for DisableableDurationSchema<U> {
+    fn schema_name() -> Cow<'static, str> {
+        "DisableableDuration".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        duration_schema::<U>(true)
     }
 }
 

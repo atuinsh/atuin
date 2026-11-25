@@ -33,6 +33,24 @@ pub enum DiskUsageLimit {
     Percent(Percent),
 }
 
+impl schemars::JsonSchema for DiskUsageLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DiskUsageLimit".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A size such as `10GB` or `1000`, a share of the disk such as `10%`, or \
+                            `unlimited`.",
+        })
+    }
+}
+
 impl DiskUsageLimit {
     #[must_use]
     pub const fn is_unlimited(self) -> bool {

@@ -10,8 +10,9 @@ mod timestamp;
 pub use date_time::{DateTimeDisplay, DateTimeExt, DateTimeStyle};
 #[allow(deprecated)]
 pub use duration::{
-    AsDisableableDuration, AsDuration, Days, DurationDisplay, DurationExt, DurationOverflow,
-    DurationStyle, DurationUnit, Minutes, NonZeroDuration, Seconds,
+    AsDisableableDuration, AsDuration, Days, DisableableDurationSchema, DurationDisplay,
+    DurationExt, DurationOverflow, DurationSchema, DurationStyle, DurationUnit, Minutes,
+    NonZeroDuration, Seconds,
 };
 pub use offset_date_time_tuple::OffsetDateTimeTuple;
 pub use system_time::SystemTimeExt;

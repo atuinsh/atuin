@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::lua_config::OrgSlug;
 use atuin_client::settings::{DEFAULT_HUB_URL, DEFAULT_SYNC_URL, Settings, SyncAuth};
 use hyper_tls::HttpsConnector;
@@ -17,11 +16,10 @@ use url::Url;
 
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
-use crate::pb::{NotUuidV7, OutputTooLarge};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    #[error("the Atuin for Teams endpoint {address} is not a valid URI")]
+    #[error("the Atuin Hub endpoint {address} is not a valid URI")]
     Endpoint {
         address: Url,
         #[source]
@@ -33,15 +31,9 @@ pub enum ConnectError {
 
 #[derive(Debug, Error)]
 pub enum HubCallError {
-    #[error("history {0}")]
-    Id(#[from] NotUuidV7<HistoryId>),
-    #[error(transparent)]
-    OutputTooLarge(#[from] OutputTooLarge),
-    #[error("the hub has not stored the history entry yet")]
-    HistoryNotStored(#[source] tonic::Status),
     #[error("the hub has not stored the thread yet")]
     ThreadNotStored(#[source] tonic::Status),
-    #[error("Atuin for Teams needs a hub login; run `atuin login`")]
+    #[error("Atuin Hub needs you logged in; run `atuin login`")]
     NotLoggedIn,
     #[error("the hub login was saved without its user, which the next upload pass learns")]
     UnknownUser,
@@ -49,15 +41,15 @@ pub enum HubCallError {
     Meta(eyre::Report),
     #[error(transparent)]
     Connect(#[from] ConnectError),
-    #[error("Atuin for Teams runs only on Atuin's hosted hub, not {0}")]
+    #[error("Atuin Hub runs only on Atuin's hosted hub, not {0}")]
     SelfHostedHub(Url),
-    #[error("the hub changed to {0} after Atuin for Teams connected; restart atuin")]
+    #[error("the hub changed to {0} after Atuin Hub connected; restart atuin")]
     HubChanged(Url),
     #[error("the hub token is not a valid header value")]
     InvalidToken(#[source] InvalidMetadataValue),
     #[error("the hub named no user for the token")]
     NoUserId,
-    #[error("Atuin for Teams is not enabled for this account")]
+    #[error("Atuin Hub is not enabled for this account")]
     OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
     Hub(#[source] Status),
@@ -84,7 +76,6 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Id(_) | Self::OutputTooLarge(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser
@@ -93,7 +84,6 @@ impl HubCallError {
             | Self::SelfHostedHub(_)
             | Self::HubChanged(_)
             | Self::InvalidToken(_)
-            | Self::HistoryNotStored(_)
             | Self::ThreadNotStored(_)
             | Self::NoUserId
             // Until the account has Octavo again.
@@ -125,7 +115,7 @@ enum Target {
     Official,
     /// A self-hosted hub, which Octavo refuses: there is nowhere to upload to.
     SelfHosted,
-    /// The `teams.__debug__.address` of a self-hosted hub.
+    /// The `__debug__.hub_address` of a self-hosted hub.
     Debug(Url),
 }
 
@@ -134,7 +124,7 @@ impl Target {
         if settings.hub_endpoint() == *DEFAULT_HUB_URL {
             return Self::Official;
         }
-        match &settings.teams.debug.address {
+        match &settings.debug.hub_address {
             Some(address) => Self::Debug(address.clone()),
             None => Self::SelfHosted,
         }
@@ -163,9 +153,9 @@ pub struct HubClient {
 impl HubClient {
     pub fn new(settings: &Settings) -> Result<Self, ConnectError> {
         let target = Target::of(settings);
-        if settings.teams.debug.address.is_some() && matches!(target, Target::Official) {
+        if settings.debug.hub_address.is_some() && matches!(target, Target::Official) {
             warn!(
-                "teams.__debug__.address is honored only while sync_address is a self-hosted hub \
+                "__debug__.hub_address is honored only while sync_address is a self-hosted hub \
                  (sync_protocol = \"hub\"); uploading to Atuin's hub"
             );
         }
@@ -289,46 +279,6 @@ pub struct HubLogin {
 impl HubLogin {
     pub fn user_id(&self) -> &UserId {
         &self.user_id
-    }
-
-    pub async fn upload_history(&self, batch: pb::HistoryBatch) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::InsertHistoryRequest::from(batch));
-
-        self.caller.service.clone().insert_history(request).await.map_err(HubCallError::from)?;
-        Ok(())
-    }
-
-    /// Stores `capture` as the output of the entry with `id`.
-    ///
-    /// Fails with [`HubCallError::HistoryNotStored`] until the entry itself is stored.
-    pub async fn upload_output(
-        &self,
-        id: HistoryId,
-        capture: CommandCapture,
-    ) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::InsertHistoryOutputRequest {
-            id: Some(id.try_into()?),
-            output: Some(capture.try_into()?),
-        });
-
-        match self.caller.service.clone().insert_history_output(request).await {
-            Ok(_) => Ok(()),
-            Err(status) if status.code() == Code::AlreadyExists => Ok(()),
-            Err(status) if status.code() == Code::NotFound => {
-                Err(HubCallError::HistoryNotStored(status))
-            }
-            Err(status) => Err(status.into()),
-        }
-    }
-
-    /// Deletes the entry with `id`, and keeps it from being stored again.
-    pub async fn delete(&self, id: HistoryId) -> Result<(), HubCallError> {
-        let request = self.caller.request(pb::DeleteHistoryRequest {
-            id: Some(id.try_into()?),
-        });
-
-        self.caller.service.clone().delete_history(request).await.map_err(HubCallError::from)?;
-        Ok(())
     }
 
     /// Stores `batch`'s messages, all or none.
@@ -465,7 +415,7 @@ fn connector() -> Result<HttpsConnector<HttpConnector>, ConnectError> {
 #[cfg(test)]
 mod tests {
     use atuin_client::settings::{
-        DEFAULT_SYNC_URL, DbLocation, Settings, SyncProtocol, Teams, TeamsDebug,
+        DEFAULT_SYNC_URL, DbLocation, DebugSettings, Settings, SyncProtocol,
     };
     use atuin_common::path::AbsPathBuf;
     use rstest::rstest;
@@ -483,12 +433,9 @@ mod tests {
             sync_address: Url::parse(sync_address).unwrap(),
             sync_protocol: SyncProtocol::Hub,
             data_dir: AbsPathBuf::new(&dir).unwrap(),
-            teams: Teams {
-                debug: TeamsDebug {
-                    address: debug_address.map(|url| Url::parse(url).unwrap()),
-                    mcp_address: None,
-                },
-                ..Teams::default()
+            debug: DebugSettings {
+                hub_address: debug_address.map(|url| Url::parse(url).unwrap()),
+                hub_mcp_address: None,
             },
             ..Settings::default()
         };

@@ -212,7 +212,7 @@ arg-history-start-author-kind = Whether a human or an AI agent ran this command
     .long = 
         Whether a human or an AI agent ran this command
 
-        {"["}`Option::None`] will cause us to perform a best-guess effort.
+        Without it, Atuin makes a best guess.
 arg-history-start-intent = Optional intent/rationale for running this command
 arg-history-hook = Passed by shell hooks; this flag disables logging to avoid corrupting the terminal and to minimize the amount of time the command takes to run
 cmd-history-end = Finishes a new command in the history (adds time, exit code)
@@ -251,9 +251,6 @@ cmd-import-zsh-hist-db = Import history from the zsh-histdb database
 cmd-import-nu-hist-db = Import history from the nu history database
 cmd-import-xonsh = Import history from xonsh json files
 cmd-import-xonsh-sqlite = Import history from xonsh sqlite db
-arg-init-disable-ctrl-r = Disable the binding of CTRL-R to atuin
-arg-init-disable-up-arrow = Disable the binding of the Up Arrow key to atuin
-arg-init-bind-ai-resume = Bind CTRL-] to atuin threads resume (zsh, bash and fish; off by default: it replaces the shell's own binding)
 value-init-shell-zsh = Zsh setup
 value-init-shell-bash = Bash setup
 value-init-shell-fish = Fish setup
@@ -495,8 +492,6 @@ history-format-braces-example = Use {"{"}{"{"} for literal {"{"} and {"}"}{"}"} 
 history-start-daemon-failed = failed to start history via the daemon; saving it locally instead: { $error }
 history-end-daemon-failed = failed to end history via the daemon; ending it locally instead: { $error }
 history-cancel-daemon-failed = failed to drop history via the daemon; dropping it locally instead: { $error }
-history-teams-login-failed = failed to learn which Hub user is logged in, so deletions won't reach Atuin for Teams: { $error }
-history-teams-queue-failed = failed to queue history deletions for Atuin for Teams, so they won't reach it: { $error }
 history-tail-lagged = atuin daemon dropped { $dropped } history events; tail fell behind
 history-prune-none = No entries to prune.
 history-prune-found =

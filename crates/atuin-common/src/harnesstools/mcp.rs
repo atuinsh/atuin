@@ -19,6 +19,7 @@ use super::hermes::{self, Hermes};
 use super::kiro::{self, Kiro};
 use super::opencode::{self, Opencode};
 use super::pi::{Flavour, Pi};
+use super::vibe::{self, Vibe};
 use crate::atuin_exe;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
@@ -296,6 +297,49 @@ impl InstallMcp for Kiro {
 
     async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
         remove_from_config(&self.mcp_config_path(), "mcpServers").await
+    }
+}
+
+impl InstallMcp for Vibe {
+    fn mcp_config_path(&self) -> PathBuf {
+        vibe::home().joined("config.toml")
+    }
+
+    async fn install_mcp(&self) -> Result<(), InstallMcpError> {
+        let atuin = executable().await?;
+        // `vibe mcp add` keeps a server that is already there.
+        remove(self.program(), &["mcp", "remove", "atuin"]).await;
+        run(self.program(), &[
+            "mcp",
+            "add",
+            "atuin",
+            "--transport",
+            "stdio",
+            "--command",
+            atuin,
+            "--arg",
+            "mcp",
+        ])
+        .await
+    }
+
+    /// Vibe lists its servers as an array of tables, `[[mcp_servers]]`, each named by `name`.
+    async fn has_mcp(&self) -> Result<bool, InstallMcpError> {
+        let Some((_, _, doc)) = read_toml(&self.mcp_config_path()).await? else {
+            return Ok(false);
+        };
+        let servers = doc.get("mcp_servers").and_then(Item::as_array_of_tables);
+        Ok(servers.is_some_and(|servers| {
+            servers.iter().any(|server| server.get("name").and_then(Item::as_str) == Some("atuin"))
+        }))
+    }
+
+    async fn uninstall_mcp(&self) -> Result<bool, InstallMcpError> {
+        if !self.has_mcp().await? {
+            return Ok(false);
+        }
+        run(self.program(), &["mcp", "remove", "atuin"]).await?;
+        Ok(true)
     }
 }
 
@@ -696,6 +740,7 @@ mod tests {
     #[case("opencode", ".config/opencode/opencode.json")]
     #[case("pi", ".pi/agent/mcp.json")]
     #[case("omp", ".omp/agent/mcp.json")]
+    #[case("vibe", ".vibe/config.toml")]
     fn detects_existing_config_files(
         agent_home: (tempfile::TempDir, MockEnv),
         #[case] name: &str,
@@ -724,6 +769,7 @@ mod tests {
     #[case("opencode", "XDG_CONFIG_HOME", "opencode/opencode.json")]
     #[case("pi", "PI_CODING_AGENT_DIR", "mcp.json")]
     #[case("omp", "PI_CODING_AGENT_DIR", "mcp.json")]
+    #[case("vibe", "VIBE_HOME", "config.toml")]
     fn detection_respects_config_overrides(
         agent_home: (tempfile::TempDir, MockEnv),
         #[case] name: &str,

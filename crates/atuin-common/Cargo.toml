@@ -16,6 +16,8 @@ version.workspace = true
 ai = ["fs-watcher", "jsonl", "dep:imara-diff", "dep:sha2", "dep:toml_edit", "dep:xxhash-rust", "dep:yaml-rust2", "dep:zstd", "sqlite"]
 # Enables `atuin_common::ansi`.
 ansi = ["dep:atuin-vt100"]
+# Enables `atuin_common::cli_reference`.
+cli-reference = ["dep:clap"]
 # Enables `atuin_common::config`.
 config = ["dep:config"]
 # Enables `atuin_common::db` (but not `db::sqlite`).
@@ -43,6 +45,7 @@ atuin-vt100 = { workspace = true, optional = true }
 async-stream = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+clap = { workspace = true, optional = true }
 bytesize = { workspace = true }
 colored = { workspace = true }
 config = { workspace = true, optional = true }

@@ -1061,10 +1061,8 @@ impl Picker<'_> {
     }
 }
 
-#[cfg(all(
-    feature = "clipboard",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-))]
+// arboard is a dependency only on these targets.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn set_clipboard(s: &str) -> Result<()> {
     // Over SSH the system clipboard is the remote machine's, if it has one: the terminal's is
     // the one wanted.
@@ -1081,10 +1079,7 @@ fn set_clipboard(s: &str) -> Result<()> {
     system().or_else(|_| Ok(terminal::copy(s)?))
 }
 
-#[cfg(not(all(
-    feature = "clipboard",
-    any(target_os = "windows", target_os = "macos", target_os = "linux")
-)))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn set_clipboard(s: &str) -> Result<()> {
     Ok(terminal::copy(s)?)
 }

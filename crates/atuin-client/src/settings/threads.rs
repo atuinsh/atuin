@@ -8,13 +8,16 @@
 //! settings, so the picker matches the history search without configuring it twice.
 
 use clap::ValueEnum;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ai")]
 use crate::ai_session::HarnessKind;
 
 /// Which threads the picker shows, cycled with ctrl-r in this order (see [`Self::CYCLE`]).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, ValueEnum)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, ValueEnum, JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiSessionFilterMode {
     /// Every thread, from every host.
@@ -64,21 +67,32 @@ impl AiSessionFilterMode {
 /// would split and expand it.
 ///
 /// For example: `claude = "claude --resume {id} --permission-mode plan"`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
 pub struct AiSessionResume {
+    /// The command that resumes a Claude Code thread.
     #[serde(alias = "claude-code", alias = "claude_code")]
     pub claude: Option<String>,
+    /// The command that resumes a Codex thread.
     pub codex: Option<String>,
+    /// The command that resumes a Grok thread.
     #[serde(alias = "grok-build", alias = "grok_build")]
     pub grok: Option<String>,
+    /// The command that resumes an opencode thread.
     pub opencode: Option<String>,
+    /// The command that resumes a pi thread.
     pub pi: Option<String>,
+    /// The command that resumes an omp thread.
     pub omp: Option<String>,
+    /// The command that resumes a GitHub Copilot thread.
     pub copilot: Option<String>,
+    /// The command that resumes an Amp thread.
     pub amp: Option<String>,
+    /// The command that resumes a Kiro thread.
     pub kiro: Option<String>,
+    /// The command that resumes a Hermes thread.
     pub hermes: Option<String>,
+    pub vibe: Option<String>,
 }
 
 impl AiSessionResume {
@@ -97,22 +111,24 @@ impl AiSessionResume {
             HarnessKind::Amp => self.amp.as_deref(),
             HarnessKind::Kiro => self.kiro.as_deref(),
             HarnessKind::Hermes => self.hermes.as_deref(),
+            HarnessKind::Vibe => self.vibe.as_deref(),
             HarnessKind::Unknown => None,
         }
     }
 }
 
 /// `[threads]`.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
 pub struct Threads {
     /// Whether the daemon captures live coding-agent threads (Claude Code, Codex, ...) into the
     /// synced record store. Off by default: capture copies the conversation (what was said, and
     /// the tools called, see [`Self::capture_tools`]) into the encrypted store used by sync, so
-    /// it is strictly opt-in.
-    pub capture: bool,
+    /// it is strictly opt-in. `atuin setup --only --threads --daemon` turns it on, with the
+    /// daemon it needs.
+    pub enabled: bool,
 
-    /// With [`Self::capture`], also capture what each tool call was given and what it returned
+    /// With [`Self::enabled`], also capture what each tool call was given and what it returned
     /// (commands and their output, files read and written), so a resumed thread has them too. On
     /// by default, with secrets redacted and each payload held to 64 KiB; off keeps only each
     /// tool's name.
@@ -144,7 +160,7 @@ pub struct Threads {
 impl Default for Threads {
     fn default() -> Self {
         Self {
-            capture: false,
+            enabled: false,
             capture_tools: true,
             filter_mode: None,
             inline_height: None,
@@ -171,7 +187,7 @@ mod tests {
     fn parses_every_field() {
         let parsed: Threads = toml::from_str(
             r#"
-            capture = true
+            enabled = true
             capture_tools = false
             filter_mode = "global"
             inline_height = 20
@@ -184,7 +200,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(parsed.capture);
+        assert!(parsed.enabled);
         assert!(!parsed.capture_tools);
         assert_eq!(parsed.filter_mode, Some(AiSessionFilterMode::Global));
         assert_eq!(parsed.inline_height, Some(20));

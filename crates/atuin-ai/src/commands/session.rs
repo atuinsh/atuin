@@ -152,6 +152,9 @@ pub enum HarnessArg {
     Pi,
     Omp,
     Amp,
+    #[value(alias = "mistral-vibe")]
+    #[serde(alias = "mistral-vibe")]
+    Vibe,
 }
 
 impl From<HarnessArg> for HarnessKind {
@@ -167,6 +170,7 @@ impl From<HarnessArg> for HarnessKind {
             HarnessArg::Pi => Self::Pi,
             HarnessArg::Omp => Self::Omp,
             HarnessArg::Amp => Self::Amp,
+            HarnessArg::Vibe => Self::Vibe,
         }
     }
 }
@@ -212,7 +216,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         | Cmd::Search { ref output, .. }
         | Cmd::Tail { ref output }
         | Cmd::Import { ref output, .. } => output.style.resolve(),
-        Cmd::Push { .. } if !settings.threads.capture => {
+        Cmd::Push { .. } if !settings.threads.enabled => {
             return Err(eyre!(
                 "thread capture is off; `atuin setup --only --threads --daemon` turns it on"
             ));
@@ -220,7 +224,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         Cmd::Push { .. } => Style::Plain,
     };
 
-    if !settings.threads.capture {
+    if !settings.threads.enabled {
         userio::log::warn!("threads-capture-off");
     }
 
@@ -1206,6 +1210,7 @@ fn harness_color(harness: HarnessKind) -> Ansi {
         HarnessKind::Copilot | HarnessKind::Grok => Ansi::Blue,
         HarnessKind::Kiro => Ansi::White,
         HarnessKind::Hermes => Ansi::Yellow,
+        HarnessKind::Vibe => Ansi::Red,
         HarnessKind::Opencode => Ansi::Cyan,
         HarnessKind::Pi => Ansi::Yellow,
         HarnessKind::Omp => Ansi::Red,
@@ -1279,6 +1284,7 @@ pub fn harness_name(harness: HarnessKind) -> &'static str {
         HarnessKind::Grok => "grok",
         HarnessKind::Kiro => "kiro",
         HarnessKind::Hermes => "hermes",
+        HarnessKind::Vibe => "vibe",
         HarnessKind::Opencode => "opencode",
         HarnessKind::Pi => "pi",
         HarnessKind::Omp => "omp",

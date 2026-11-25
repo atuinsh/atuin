@@ -593,63 +593,6 @@ impl Sqlite {
         Ok(res)
     }
 
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn active_ids(&self) -> Result<Vec<HistoryId>> {
-        db::query_scalar::<_, HistoryId>("select id from history where deleted_at is null")
-            .fetch_all(self.sqlite.pool())
-            .await
-    }
-
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn load_active(
-        &self,
-        ids: impl IntoIterator<Item = HistoryId>,
-    ) -> Result<Vec<History>> {
-        let mut iter_ids = ids.into_iter();
-        let size_hint = iter_ids.size_hint();
-
-        // sqlite caps bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, as low as 999).
-        // Chunk well under that.
-        const CHUNK: usize = 500;
-
-        if let Some(upper) = size_hint.1
-            && size_hint.0 == upper
-        {
-            debug!("loading {} history items", size_hint.0);
-        } else {
-            debug!("loading somewhere around {} history items", size_hint.0);
-        }
-
-        let mut out = Vec::with_capacity(size_hint.0);
-
-        // Buffer reused across multiple chunks to avoid reallocating.
-        let mut chunk: Vec<HistoryId> = Vec::with_capacity(CHUNK);
-
-        loop {
-            chunk.clear();
-            chunk.extend(iter_ids.by_ref().take(CHUNK));
-            if chunk.is_empty() {
-                break;
-            }
-
-            let placeholders = ["?"].repeat(chunk.len()).join(",");
-            let sql = format!(
-                "select {HISTORY_COLUMNS} from history where id in ({placeholders}) and \
-                 deleted_at is null"
-            );
-
-            let mut query = db::query_as::<_, History>(sqlx::AssertSqlSafe(sql));
-            for id in &chunk {
-                query = query.bind(*id);
-            }
-
-            let rows = query.fetch_all(self.sqlite.pool()).await?;
-            out.extend(rows);
-        }
-
-        Ok(out)
-    }
-
     #[instrument(level = "trace", skip_all, fields(id = ?h.id), err)]
     pub async fn update(&self, h: &History) -> Result<()> {
         debug!("updating sqlite history");
@@ -1893,40 +1836,6 @@ mod test {
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_returns_only_requested_rows(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        let alpha = save_history_item(&db, "echo alpha").await;
-        let bravo = save_history_item(&db, "echo bravo").await;
-        let _charlie = save_history_item(&db, "echo charlie").await;
-
-        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
-
-        let mut commands: Vec<String> = loaded.into_iter().map(|h| h.command).collect();
-        commands.sort();
-        assert_eq!(commands, vec!["echo alpha", "echo bravo"]);
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_empty_never_reaches_sqlite(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        save_history_item(&db, "echo alpha").await;
-
-        // `select ... where id in ()` is a syntax error, so the empty case must
-        // short-circuit rather than build a query.
-        let loaded = db.load_active(std::iter::empty::<HistoryId>()).await.unwrap();
-
-        assert!(loaded.is_empty());
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
     async fn command_runs_aggregate_live_rows_per_command_by_author(
         #[future(awt)]
         #[from(empty_db)]
@@ -1996,66 +1905,6 @@ mod test {
         assert_eq!(deleted.commands(), &HashSet::from(["echo live".to_owned()]));
         assert!(db.all_paged(10, true).next().await.unwrap().is_none());
         assert!(db.delete_rows([live.id]).await.unwrap().is_empty(), "already deleted");
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_skips_soft_deleted(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        let mut alpha = save_history_item(&db, "echo alpha").await;
-        let bravo = save_history_item(&db, "echo bravo").await;
-
-        alpha.deleted_at = Some(Timestamp::now());
-        alpha.command = String::new();
-        db.update(&alpha).await.unwrap();
-
-        let loaded = db.load_active([alpha.id, bravo.id]).await.unwrap();
-
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].command, "echo bravo");
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_missing_ids_are_omitted(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        let alpha = save_history_item(&db, "echo alpha").await;
-
-        let loaded = db
-            .load_active([
-                alpha.id,
-                HistoryId::new("018f011c-9a0a-7000-8000-0000000000ff".parse().unwrap()),
-            ])
-            .await
-            .unwrap();
-
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].command, "echo alpha");
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_load_active_chunks_past_sqlite_param_limit(
-        #[future(awt)]
-        #[from(empty_db)]
-        db: Sqlite,
-    ) {
-        // Comfortably over SQLITE_MAX_VARIABLE_NUMBER's 999 floor: a single
-        // `in (...)` with one placeholder per id would fail here.
-        let mut ids = Vec::new();
-        for i in 0..1200 {
-            ids.push(save_history_item(&db, &format!("echo {i}")).await.id);
-        }
-
-        let loaded = db.load_active(ids).await.unwrap();
-
-        assert_eq!(loaded.len(), 1200);
     }
 
     async fn db_with(commands: &[&str]) -> Sqlite {

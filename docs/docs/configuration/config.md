@@ -239,12 +239,24 @@ filter_mode = "host"
 
 Default: `true`
 
-Whether `atuin init` binds ctrl-r and the up arrow to search. Passing `--disable-ctrl-r` or `--disable-up-arrow` to `atuin init` turns a binding off whatever these say.
+Whether `atuin init` binds ctrl-r and the up arrow to interactive search.
 
 `atuin setup --only --no-ctrl-r` sets `bind_ctrl_r = false`, and `atuin setup --only --no-up-arrow` sets `bind_up_arrow = false`. `--ctrl-r` and `--up-arrow` set them back to `true`.
 
 ```toml
 bind_up_arrow = false
+```
+
+### `bind_ai_resume`
+
+Default: `true`
+
+Whether `atuin init` binds ctrl+t to `atuin resume` when [`threads.enabled`](../ai/threads.md) is true. The binding occurs in Zsh, Bash and fish, where it may replace the shell's built-in `transpose-chars` binding in emacs mode.
+
+`atuin setup --only --no-ai-resume` sets `bind_ai_resume = false`, and `--ai-resume` sets it back to `true`. This requires threads to be enabled, so pass `--threads` if they're not.
+
+```toml
+bind_ai_resume = false
 ```
 
 ### `search_mode_shell_up_key_binding`

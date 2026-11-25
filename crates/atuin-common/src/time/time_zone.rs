@@ -123,6 +123,23 @@ impl Default for TimeZoneSpec {
     }
 }
 
+impl schemars::JsonSchema for TimeZoneSpec {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TimeZoneSpec".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "`local`, `utc`, an offset from UTC such as `+9:30`, or an IANA time zone name such as `Europe/Berlin`.",
+        })
+    }
+}
+
 /// Errors returned when parsing a [`TimeZoneSpec`].
 #[derive(Debug, thiserror::Error)]
 pub enum TimeZoneDecodingError {

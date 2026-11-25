@@ -66,8 +66,9 @@ commit_preprocessors = [
 ]
 # regex for parsing and grouping commits
 commit_parsers = [
-  # Atuin for Teams, once Octavo, stays out of the changelog until it ships.
-  { message = "^\\w+\\((octavo|teams)\\)", skip = true },
+  # Commits scoped to `hub`, or to its earlier names `octavo` and `teams`, are about uploading to
+  # Atuin Hub, so they stay out of the changelog until uploading ships.
+  { message = "^\\w+\\((hub|octavo|teams)\\)", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
   { message = "^doc", group = "Documentation" },

@@ -222,6 +222,12 @@ impl<'a> Opening<'a> {
         })
     }
 
+    /// Leaves `threads` out of the lookups that follow.
+    pub(super) fn without(mut self, threads: &HashSet<pb::HarnessSession>) -> Self {
+        self.threads.retain(|thread| !threads.contains(thread));
+        self
+    }
+
     /// Looks up each of their directories' configs again, as one may have named an organization
     /// since a thread's rows went up, which is what queues it, or dropped one. A thread with a
     /// config that can't be run, or a directory that can't be looked up, waits.

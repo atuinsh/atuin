@@ -1246,12 +1246,13 @@ impl Reads {
     /// When opencode last updated session `id` or anything of it, in milliseconds since the Unix
     /// epoch, in whichever of its layouts it has; `None` when that can't be read.
     async fn updated(self: &Arc<Self>, id: &str) -> Option<i64> {
-        const UPDATED: [&str; 5] = [
+        const UPDATED: [&str; 6] = [
             "SELECT MAX(time_updated) FROM session WHERE id = ?1",
             "SELECT MAX(time_updated) FROM message WHERE session_id = ?1",
             "SELECT MAX(time_updated) FROM part WHERE session_id = ?1",
             "SELECT MAX(time_updated) FROM session_v2 WHERE id = ?1",
             "SELECT MAX(time_updated) FROM session_message WHERE session_id = ?1",
+            "SELECT MAX(time_updated) FROM session_part WHERE session_id = ?1",
         ];
         let id = id.to_owned();
         self.read("update time read", move |conn| {

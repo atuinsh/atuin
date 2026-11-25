@@ -1139,6 +1139,36 @@ async fn a_2_0_only_database_is_read_whole(#[future] db: Db) {
     assert_eq!(lines(&read_all(&db.path).await), ["System ses_1:title:T: ", "User msg_u: hi"]);
 }
 
+/// opencode 2.4 keeps an assistant's parts as `session_part` rows.
+#[rstest]
+#[tokio::test]
+async fn a_call_s_parts_kept_as_rows_are_its_content(#[future] db: Db) {
+    let db = db.await;
+    db.execute(
+        "CREATE TABLE `session_part` (`message_id` text NOT NULL, `session_id` text NOT NULL, \
+         `ordinal` integer NOT NULL, `type` text NOT NULL, `call_id` text, `time_created` integer \
+         NOT NULL, `time_updated` integer NOT NULL, `data` text NOT NULL, CONSTRAINT \
+         `session_part_pk` PRIMARY KEY(`message_id`, `ordinal`))",
+    )
+    .await;
+    db.session("ses_1", Some("T"), None).await;
+    db.append("ses_1", "msg_u", "user", user("hi")).await;
+    // a part held inline as well follows the part rows, as opencode reads it
+    db.append("ses_1", "msg_a", "assistant", assistant("third", true)).await;
+    db.execute(
+        "INSERT INTO session_part (message_id, session_id, ordinal, type, time_created, \
+         time_updated, data) VALUES ('msg_a', 'ses_1', 1, 'text', 0, 0, \
+         '{\"type\":\"text\",\"text\":\"second\"}'), ('msg_a', 'ses_1', 0, 'text', 0, 0, \
+         '{\"type\":\"text\",\"text\":\"first\"}')",
+    )
+    .await;
+    assert_eq!(lines(&read_all(&db.path).await), [
+        "System ses_1:title:T: ",
+        "User msg_u: hi",
+        "Assistant msg_a: first | second | third",
+    ]);
+}
+
 /// A 2.0 database without the `event` table 1.x tailed (a later opencode that drops it) is read,
 /// listed and watched all the same.
 #[rstest]

@@ -385,7 +385,7 @@ impl<'a> PendingOpen<'a> {
         }
     }
 
-    /// Settles it unsent, as Octavo refused it for good, so it's never sent again.
+    /// Settles it unsent, so it's never sent again.
     pub async fn give_up(self) -> Result<(), QueueError> {
         self.settle().await
     }

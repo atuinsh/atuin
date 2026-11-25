@@ -1,13 +1,18 @@
-//! Which organizations a thread is shared with by configuration.
+//! Which organizations a thread is shared with by configuration, and what goes up at all.
 //!
 //! A directory's are the `orgs` of the nearest config file at or above it (see
 //! [`atuin_client::lua_config`]), else of the user's own. A share holds the whole thread, so a
 //! thread's are those every directory it ran in has in common.
+//!
+//! A thread goes up only if each config file covering it lets it, by its `upload`: every project's
+//! at and above where it started, and the user's own. A project's file comes with whatever the user
+//! cloned, so it can only keep threads here. The user's own turns uploading on, so without a rule
+//! there nothing goes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use atuin_client::lua_config::{ConfigFile, LoadError, OrgSlug};
+use atuin_client::lua_config::{ConfigFile, LoadError, OrgSlug, RuleName, Subject, Thread, Upload};
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -35,11 +40,23 @@ impl Configs {
         self.off_runtime(move |configs| configs.common(&dirs)).await
     }
 
-    /// Whether `dir` is in a workspace: at or under a project's config file. The user's own
-    /// doesn't make one. A file that can't be read or run fails, as it may be what keeps the
-    /// thread to itself.
-    pub async fn in_workspace(&self, dir: PathBuf) -> Result<bool, LookupError> {
-        self.off_runtime(move |_| is_workspace(&dir)).await
+    /// Whether the user's own config file turns Atuin Hub on, by an `upload.threads` that may
+    /// let a thread go.
+    pub async fn threads_on(&self) -> Result<bool, LookupError> {
+        self.off_runtime(|configs| {
+            let Some(home) = &configs.atuin_home else {
+                return Ok(false);
+            };
+            let users = Upload::in_dir(home)?;
+            Ok(users.is_some_and(|users| users.switches_on(RuleName::Threads)))
+        })
+        .await
+    }
+
+    /// Whether each config file covering where `thread` started lets it go up. A file that can't
+    /// be read or run fails, as it may be what keeps the thread here.
+    pub async fn uploads_thread(&self, thread: Thread) -> Result<bool, LookupError> {
+        self.off_runtime(move |configs| configs.uploads(thread)).await
     }
 
     /// Runs `look_up` on a blocking thread, as a hung network mount hangs it.
@@ -86,11 +103,33 @@ impl Configs {
         }
         Ok(orgs)
     }
-}
 
-/// Whether a project's config file is at or above `dir`, and reads.
-fn is_workspace(dir: &Path) -> Result<bool, LoadError> {
-    ConfigFile::projects(dir).next().transpose().map(|file| file.is_some())
+    /// Whether each config file covering `subject` lets it go up: every project's at and above
+    /// its directory, the nearest first, then the user's own. The first to keep it here settles
+    /// it. The nearest project's is its workspace.
+    fn uploads<S: Subject>(&self, mut subject: S) -> Result<bool, LoadError> {
+        // A relative one would be looked up from wherever the daemon runs.
+        let dir = subject.dir().filter(|dir| dir.is_absolute()).map(Path::to_path_buf);
+        let projects = dir.iter().flat_map(|dir| Upload::projects(dir));
+        for (nth, project) in projects.enumerate() {
+            let project = project?;
+            if nth == 0
+                && let Some(workspace) = project.path().parent()
+            {
+                subject.set_workspace(workspace.to_path_buf());
+            }
+            if project.allows(&subject)? == Some(false) {
+                return Ok(false);
+            }
+        }
+        let Some(home) = &self.atuin_home else {
+            return Ok(false);
+        };
+        let Some(users) = Upload::in_dir(home)? else {
+            return Ok(false);
+        };
+        Ok(users.allows(&subject)?.unwrap_or(false))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -107,6 +146,7 @@ pub enum LookupError {
 mod tests {
     use std::fs;
 
+    use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
     use atuin_common::path::PathBufExt as _;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -182,12 +222,78 @@ mod tests {
         assert_eq!(orgs, expected);
     }
 
+    const ON: &str = r"atuin.config = { upload = { threads = true } }";
+    const KEEP: &str = r"atuin.config = { upload = { threads = false } }";
+
+    fn thread(harness: HarnessKind, dir: PathBuf) -> Thread {
+        let session = HarnessSession {
+            harness,
+            session: NativeSessionId::from("thread".to_owned()),
+        };
+        Thread::new(&session, Some(dir))
+    }
+
+    /// Whether the config files under `root` let a Claude Code thread that started in `dir` go up.
+    fn uploads(root: &Path, dir: &str) -> Result<bool, LoadError> {
+        let dir = root.join("projects").joined(dir);
+        configs(root).uploads(thread(HarnessKind::ClaudeCode, dir))
+    }
+
+    /// The user's own file turns uploading on, and a project's can only keep threads here, so a
+    /// thread goes up only if the user's lets it and no project's keeps it.
     #[rstest]
-    #[case::in_a_project(&[("projects/work/.atuin.lua", ACME)], "work/src", true)]
-    #[case::without_orgs(&[("projects/work/atuin.lua", r"atuin.config = {}")], "work", true)]
-    #[case::outside_any(&[("projects/work/atuin.lua", ACME)], "elsewhere", false)]
-    #[case::only_the_users_own(&[("home/atuin.lua", USERS)], "work", false)]
-    fn a_workspace_is_under_a_projects_config(
+    #[case::no_config(&[], "work", false)]
+    #[case::the_users_own_unset(&[("home/atuin.lua", USERS)], "work", false)]
+    #[case::the_users_own_on(&[("home/atuin.lua", ON)], "work", true)]
+    #[case::the_users_own_off(&[("home/atuin.lua", KEEP)], "work", false)]
+    #[case::in_a_project(&[("home/atuin.lua", ON), ("projects/work/.atuin.lua", ACME)], "work/src", true)]
+    #[case::a_project_cant_turn_it_on(&[("projects/work/atuin.lua", ON)], "work", false)]
+    #[case::kept_by_a_project(&[("home/atuin.lua", ON), ("projects/work/atuin.lua", KEEP)], "work/src", false)]
+    #[case::kept_by_an_outer_project(
+        &[("home/atuin.lua", ON), ("projects/work/atuin.lua", KEEP), ("projects/work/sub/atuin.lua", ON)],
+        "work/sub",
+        false
+    )]
+    #[case::kept_by_an_inner_project(
+        &[("home/atuin.lua", ON), ("projects/work/atuin.lua", ACME), ("projects/work/sub/atuin.lua", KEEP)],
+        "work/sub",
+        false
+    )]
+    #[case::let_by_a_function(
+        &[("home/atuin.lua", r#"atuin.config = { upload = { threads = function(t) return t.harness == "claude-code" end } }"#)],
+        "work",
+        true
+    )]
+    #[case::kept_by_a_function(
+        &[("home/atuin.lua", ON), ("projects/work/atuin.lua", r#"atuin.config = { upload = { threads = function(t) return t.harness ~= "claude-code" end } }"#)],
+        "work",
+        false
+    )]
+    #[case::history_is_not_threads(
+        &[("home/atuin.lua", ON), ("projects/work/atuin.lua", r"atuin.config = { upload = { history = false } }")],
+        "work",
+        true
+    )]
+    #[case::in_a_workspace(
+        &[("home/atuin.lua", WORKSPACES), ("projects/work/atuin.lua", ACME)],
+        "work/src",
+        true
+    )]
+    #[case::outside_any_workspace(
+        &[("home/atuin.lua", WORKSPACES), ("projects/work/atuin.lua", ACME)],
+        "elsewhere",
+        false
+    )]
+    #[case::the_nearest_is_its_workspace(
+        &[
+            ("home/atuin.lua", r#"atuin.config = { upload = { threads = function(t) return string.find(t.workspace, "/sub$") ~= nil end } }"#),
+            ("projects/work/atuin.lua", ACME),
+            ("projects/work/sub/atuin.lua", ACME),
+        ],
+        "work/sub/src",
+        true
+    )]
+    fn a_thread_goes_up_if_the_users_own_lets_it_and_no_project_keeps_it(
         root: TempDir,
         #[case] configs: &[(&str, &str)],
         #[case] dir: &str,
@@ -196,15 +302,45 @@ mod tests {
         for (file, source) in configs {
             write(root.path(), file, source);
         }
-        let dir = root.path().join("projects").joined(dir);
-        assert_eq!(is_workspace(&dir).expect("the lookup"), expected);
+
+        assert_eq!(uploads(root.path(), dir).expect("the lookup"), expected);
     }
 
-    /// A broken file could be what keeps the thread to itself.
+    const WORKSPACES: &str =
+        r"atuin.config = { upload = { threads = function(t) return t.workspace ~= nil end } }";
+
+    /// A broken file could be what keeps the thread here, but once one nearer keeps it, the rest
+    /// needn't run.
     #[rstest]
-    fn a_broken_project_config_is_no_workspace_to_upload_from(root: TempDir) {
-        write(root.path(), "projects/work/atuin.lua", r"atuin.config = { org = {} }");
-        assert!(is_workspace(&root.path().join("projects/work")).is_err());
+    fn a_broken_config_fails_the_thread_unless_one_nearer_keeps_it(root: TempDir) {
+        write(root.path(), "home/atuin.lua", ON);
+        let broken = write(root.path(), "projects/atuin.lua", "this is not lua");
+        write(root.path(), "projects/work/atuin.lua", ACME);
+        write(root.path(), "projects/private/atuin.lua", KEEP);
+
+        let err = uploads(root.path(), "work").expect_err("a broken config");
+
+        assert_eq!(err.path(), broken);
+        assert!(!uploads(root.path(), "private").expect("the lookup"));
+    }
+
+    #[rstest]
+    #[case::no_file(None, false)]
+    #[case::unset(Some(USERS), false)]
+    #[case::off(Some(KEEP), false)]
+    #[case::on(Some(ON), true)]
+    #[case::by_a_function(Some(WORKSPACES), true)]
+    #[tokio::test]
+    async fn the_users_own_turns_threads_on(
+        root: TempDir,
+        #[case] source: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        if let Some(source) = source {
+            write(root.path(), "home/atuin.lua", source);
+        }
+
+        assert_eq!(configs(root.path()).threads_on().await.expect("the lookup"), expected);
     }
 
     /// A broken file could be an opt-out with a typo, so the thread must not go to the user's list.

@@ -18,7 +18,7 @@ use uuid::{Builder, Uuid};
 
 /// Records name the harness (the variant's name), and a name this build doesn't know reads as
 /// [`Self::Unknown`]. A new variant needs no new record version. It does need a sidecar migration
-/// that rebuilds the projection from the record store, as `0006_reproject_for_hermes.sql` does.
+/// that rebuilds the projection from the record store, as `0007_reproject_for_vibe.sql` does.
 /// Rows projected while the harness was unknown are then projected again under its name.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -34,6 +34,7 @@ pub enum HarnessKind {
     Amp = 8,
     Kiro = 9,
     Hermes = 10,
+    Vibe = 11,
     /// No harness atuin knows: unstated, or one a newer atuin added, whose records name it.
     #[serde(other)]
     Unknown = 0,
@@ -50,6 +51,7 @@ impl From<&AnyHarness> for HarnessKind {
             AnyHarness::Hermes(_) => Self::Hermes,
             AnyHarness::Kiro(_) => Self::Kiro,
             AnyHarness::Opencode(_) => Self::Opencode,
+            AnyHarness::Vibe(_) => Self::Vibe,
             AnyHarness::Pi(pi) => match pi.flavour() {
                 Flavour::Pi => Self::Pi,
                 Flavour::Omp => Self::Omp,
@@ -64,7 +66,7 @@ impl HarnessKind {
     #[must_use]
     pub fn harness(self) -> Option<AnyHarness> {
         use atuin_common::harnesstools::{
-            amp, ccode, codex, copilot, grok, hermes, kiro, opencode, pi,
+            amp, ccode, codex, copilot, grok, hermes, kiro, opencode, pi, vibe,
         };
         match self {
             Self::Amp => Some(AnyHarness::Amp(amp::Amp)),
@@ -77,6 +79,7 @@ impl HarnessKind {
             Self::Opencode => Some(AnyHarness::Opencode(opencode::Opencode)),
             Self::Pi => Some(AnyHarness::Pi(pi::Pi::PI)),
             Self::Omp => Some(AnyHarness::Pi(pi::Pi::OMP)),
+            Self::Vibe => Some(AnyHarness::Vibe(vibe::Vibe)),
             Self::Unknown => None,
         }
     }
@@ -626,6 +629,7 @@ mod tests {
     #[case::copilot(HarnessKind::Copilot, true)]
     #[case::kiro(HarnessKind::Kiro, true)]
     #[case::hermes(HarnessKind::Hermes, true)]
+    #[case::vibe(HarnessKind::Vibe, true)]
     #[case::unknown(HarnessKind::Unknown, false)]
     fn a_kind_has_harness_tools_only_when_atuin_knows_the_harness(
         #[case] kind: HarnessKind,

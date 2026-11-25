@@ -2,16 +2,15 @@ use std::num::NonZeroU32;
 
 use prost::Message;
 
-use super::{CapturedThreadMessage, History, InsertHistoryRequest, InsertThreadMessagesRequest};
+use super::{CapturedThreadMessage, InsertThreadMessagesRequest};
 
-/// The items of one `InsertHistory` or `InsertThreadMessages`: at most [`Self::MAX_ITEMS`],
-/// encoding to at most 1 MiB unless the batch holds one. Only [`Self::batches`] and [`Self::one`]
-/// build one and [`Self::halves`] splits one, so no request past those limits goes up.
+/// The items of one `InsertThreadMessages`: at most [`Self::MAX_ITEMS`], encoding to at most 1 MiB
+/// unless the batch holds one. Only [`Self::batches`] builds one and [`Self::halves`] splits one,
+/// so no request past those limits goes up.
 #[derive(Debug, Clone)]
 pub struct Batch<M>(Vec<M>);
 
 pub type ThreadBatch = Batch<CapturedThreadMessage>;
-pub type HistoryBatch = Batch<History>;
 
 impl<M: Message> Batch<M> {
     /// The most items one request takes.
@@ -45,11 +44,6 @@ impl<M: Message> Batch<M> {
         batches
     }
 
-    #[must_use]
-    pub fn one(item: M) -> Self {
-        Self(vec![item])
-    }
-
     /// The batch in two, the earlier items first, or the batch back whole when it holds one item.
     /// Each half of a batch is one too.
     pub fn halves(mut self) -> Result<(Self, Self), Self> {
@@ -76,11 +70,5 @@ impl<M: Message> Batch<M> {
 impl From<ThreadBatch> for InsertThreadMessagesRequest {
     fn from(Batch(messages): ThreadBatch) -> Self {
         Self { messages }
-    }
-}
-
-impl From<HistoryBatch> for InsertHistoryRequest {
-    fn from(Batch(entries): HistoryBatch) -> Self {
-        Self { entries }
     }
 }

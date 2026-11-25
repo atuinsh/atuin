@@ -263,7 +263,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "atuin"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "ansi-to-tui",
  "arboard",
@@ -293,6 +293,7 @@ dependencies = [
  "derive_more",
  "easy-cast",
  "enum_dispatch",
+ "enumset",
  "eyre",
  "frizbee",
  "futures-util",
@@ -347,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-ai"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "arboard",
  "async-stream",
@@ -393,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-client"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -436,6 +437,7 @@ dependencies = [
  "rust-embed",
  "rusty_paserk",
  "rusty_paseto",
+ "schemars 1.2.1",
  "secrecy",
  "semver",
  "serde",
@@ -448,6 +450,7 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.28.0",
  "tempfile",
+ "terminal-colorsaurus",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -464,13 +467,14 @@ dependencies = [
 
 [[package]]
 name = "atuin-common"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "async-stream",
  "atuin-vt100",
  "base64 0.22.1",
  "bytes",
  "bytesize",
+ "clap",
  "colored",
  "config",
  "crypto_secretbox",
@@ -546,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-daemon"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "async-stream",
  "atuin-client",
@@ -607,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-domain"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "async-trait",
  "atuin-common",
@@ -642,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-dotfiles"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -660,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-history"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "crossterm",
@@ -673,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-kv"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -694,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-octavo"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -722,12 +726,11 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "xxhash-rust",
 ]
 
 [[package]]
 name = "atuin-pty-proxy"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -752,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-scripts"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "atuin-client",
  "atuin-common",
@@ -780,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "atuin-server"
-version = "18.24.8"
+version = "18.25.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -808,8 +811,10 @@ dependencies = [
  "rpassword",
  "rstest",
  "rust-embed",
+ "schemars 1.2.1",
  "secrecy",
  "serde",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -1732,6 +1737,16 @@ dependencies = [
 
 [[package]]
 name = "darling"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
+dependencies = [
+ "darling_core 0.21.3",
+ "darling_macro 0.21.3",
+]
+
+[[package]]
+name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -1748,6 +1763,19 @@ checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
 dependencies = [
  "darling_core 0.24.1",
  "darling_macro 0.24.1",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1774,6 +1802,17 @@ dependencies = [
  "quote",
  "strsim",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
+dependencies = [
+ "darling_core 0.21.3",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2094,6 +2133,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumset"
+version = "1.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e6bd2d7c76d078cd7a460fa169f778c42c026fe16d90e37d7a45d37181bdce5"
+dependencies = [
+ "enumset_derive",
+]
+
+[[package]]
+name = "enumset_derive"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60587c2044cabd91c4d4c73e3912e9f1ea7d76905f31c7eec51869305dae044"
+dependencies = [
+ "darling 0.21.3",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2377,9 +2437,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -5329,9 +5389,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.9.0"
+version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
+checksum = "391f153431ab68664d946513ea0cb3edbca78eaf99c5a983036cacab6220d85b"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -5341,6 +5401,7 @@ dependencies = [
  "indexmap 2.14.0",
  "libc",
  "pastey",
+ "percent-encoding",
  "pin-project-lite",
  "reqwest",
  "schemars 1.2.1",
@@ -5353,6 +5414,8 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "unicode-general-category",
+ "unicode-normalization",
  "uuid",
 ]
 
@@ -5645,6 +5708,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -6459,6 +6523,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal-colorsaurus"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a46bb5364467da040298c573c8a95dbf9a512efc039630409a03126e3703e90"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "memchr",
+ "mio",
+ "terminal-trx",
+ "windows-sys 0.61.2",
+ "xterm-color",
+]
+
+[[package]]
+name = "terminal-trx"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b3f27d9a8a177e57545481faec87acb45c6e854ed1e5a3658ad186c106f38ed"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "terminfo"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6775,9 +6865,9 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "tonic"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
+checksum = "e2cdfc673aabd30fe8fee92e65837b644c37c5d47f0f97ae6d5e0f1237d15e1b"
 dependencies = [
  "async-trait",
  "axum",
@@ -6797,6 +6887,7 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
@@ -6817,9 +6908,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-prost"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50849f68853be452acf590cde0b146665b8d507b3b8af17261df47e02c209ea0"
+checksum = "eba464054e2226f182a34489b8b079bf4c6e3e7ab5fd7fc30e024f24aa92a484"
 dependencies = [
  "bytes",
  "prost",
@@ -7193,6 +7284,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
+name = "unicode-general-category"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7272,9 +7369,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -8140,6 +8237,12 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xterm-color"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7008a9d8ba97a7e47d9b2df63fcdb8dade303010c5a7cd5bf2469d4da6eba673"
 
 [[package]]
 name = "xxhash-rust"

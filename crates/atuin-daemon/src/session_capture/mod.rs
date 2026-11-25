@@ -964,7 +964,7 @@ pub struct AiHarnessSessionCapture {
     coordinator: Option<mpsc::UnboundedSender<Msg>>,
     /// How far the replay running has got.
     progress: ReprojectProgress,
-    /// Whether capture is enabled (`threads.capture`), followed once the store is ready.
+    /// Whether capture is enabled (`threads.enabled`), followed once the store is ready.
     capture: watch::Sender<bool>,
     /// The coordinator, and the capture engine once startup recovery succeeds; aborted on drop.
     background: Vec<JoinHandle<()>>,
@@ -1130,7 +1130,7 @@ impl AiHarnessSessionCapture {
         }
     }
 
-    /// Turn capture on or off, as `threads.capture` is changed in a running daemon. Takes
+    /// Turn capture on or off, as `threads.enabled` is changed in a running daemon. Takes
     /// effect once the store is first ready, as at startup; a nop facade never captures.
     pub fn set_capture(&self, enabled: bool) {
         self.capture.send_if_modified(|on| std::mem::replace(on, enabled) != enabled);
@@ -1416,7 +1416,7 @@ mod tests {
             .build()
     }
 
-    /// Turning `threads.capture` on or off in a running daemon starts or stops capture,
+    /// Turning `threads.enabled` on or off in a running daemon starts or stops capture,
     /// without a restart; setting it to what it already is leaves capture running as it was.
     #[rstest]
     #[tokio::test]

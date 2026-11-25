@@ -44,6 +44,7 @@ mod kiro;
 pub mod liveness;
 mod opencode;
 mod pi;
+mod vibe;
 
 pub use liveness::{Dirs, Liveness, ProcessInfo, Processes, RECENT, Seen, TableEntry};
 

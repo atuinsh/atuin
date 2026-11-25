@@ -646,15 +646,18 @@ struct PiEntry {
     usage: Option<serde_json::Value>,
     /// On `custom_message`: what an extension injected into the model's context.
     content: Option<serde_json::Value>,
-    /// This is set on a `custom_message` whose `customType` is omp's `irc:incoming`. Such an
-    /// entry is a message that another agent sent this one.
+    /// This is set on a `custom_message` whose `customType` is omp's `irc:incoming` (a message
+    /// another agent sent this one), `async-result` (a background job's result) or
+    /// `async-notify` (a background job's matched output).
     #[serde(rename = "customType", default, deserialize_with = "is_agent_message")]
     agent_message: bool,
 }
 
-/// This returns whether a `customType` is `irc:incoming`. Any other value, string or not, is not.
+/// This returns whether a `customType` is `irc:incoming`, `async-result` or `async-notify`. Any
+/// other value, string or not, is not.
 fn is_agent_message<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
-    Ok(serde_json::Value::deserialize(deserializer)? == "irc:incoming")
+    let kind = serde_json::Value::deserialize(deserializer)?;
+    Ok(["irc:incoming", "async-result", "async-notify"].iter().any(|k| kind == *k))
 }
 
 /// Entry types whose top-level `usage` records a model call of their own.
@@ -750,8 +753,9 @@ impl Message for PiMessage {
             // Summaries pi feeds back to the model as context (session-manager.ts
             // `sessionEntryToContextMessages`); neither the user nor the model said them.
             "compaction" | "branch_summary" => return Role::System,
-            // Since omp 18.18.9, a message from another agent reaches the agent as a user turn.
-            // It is the only copy of the message in this session.
+            // omp delivers a message from another agent (18.18.9+), a background job's result
+            // (e.g. an async subagent's answer) and its output matching a `notify` pattern
+            // (19.0.0+) as user turns. Each is the only copy of its text in this session.
             "custom_message" if self.entry.agent_message => return Role::User,
             "custom_message" => "custom",
             other => other,
@@ -1810,6 +1814,35 @@ mod tests {
             "timestamp": "2026-11-12T16:06:52.839Z"}));
         assert_eq!(m.role(), Role::User);
         assert!(texts(&m)[0].contains("PING"));
+    }
+
+    /// omp sends the model a background job's result (`async-result`, e.g. an async subagent's
+    /// answer) and, since 19.0.0, its output matching a `notify` pattern (`async-notify`) as user
+    /// turns. The parent session has no other copy of either.
+    #[rstest]
+    #[case::result(
+        "async-result",
+        "<system-notice>\nBackground job subagent has completed.\n<task-result id=\"subagent\" \
+         agent=\"task\" \
+         status=\"completed\">\n<output>\nSUBDONE-77\n</output>\n</task-result>\n</system-notice>",
+        "SUBDONE-77"
+    )]
+    #[case::notify(
+        "async-notify",
+        "<system-notice>\nBackground job bg_1 is still running. Its output matched \
+         /TICK/:\nTICK1\n</system-notice>",
+        "TICK1"
+    )]
+    fn a_background_job_notice_is_a_user_turn(
+        #[case] kind: &str,
+        #[case] content: &str,
+        #[case] marker: &str,
+    ) {
+        let m = pi(&serde_json::json!({"type": "custom_message", "customType": kind,
+            "content": content, "display": true, "attribution": "agent", "id": "x1",
+            "parentId": "a1", "timestamp": "2026-11-19T16:08:37.897Z"}));
+        assert_eq!(m.role(), Role::User);
+        assert!(texts(&m)[0].contains(marker));
     }
 
     /// A tool result's `usage` is "not part of main LLM context accounting" (pi-ai types.ts

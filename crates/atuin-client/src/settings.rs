@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use atuin_common::logs::LogLevel;
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
 // `AsDuration` is deprecated.
 #[allow(deprecated)]
-use atuin_common::time::{AsDuration, Days, Seconds};
+use atuin_common::time::{AsDuration, DurationSchema, Seconds};
 use atuin_common::userio;
 use atuin_domain::record::HostId;
 use clap::ValueEnum;
@@ -21,6 +20,7 @@ use jiff::civil::DateTime;
 use jiff::tz::Offset;
 use jiff::{Timestamp, ZonedDateTime};
 use regex::RegexSet;
+use schemars::JsonSchema;
 use secrecy::SecretString;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,7 @@ pub mod daemon;
 mod db_location;
 pub mod disk_usage_limit;
 mod kv;
+mod logs;
 pub mod meta;
 pub mod output;
 mod scripts;
@@ -53,6 +54,7 @@ pub mod watcher;
 pub use daemon::Daemon;
 pub use db_location::DbLocation;
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
+pub use logs::{LogConfig, Logs};
 use output::OutputCaptureConfig;
 pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use security::Security;
@@ -88,7 +90,7 @@ pub enum SearchMode {
     DaemonFuzzy,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RequestedSearchMode {
     Prefix,
@@ -98,6 +100,7 @@ pub enum RequestedSearchMode {
     DaemonFuzzy,
     /// Removed: falls back to [`Self::Fuzzy`] but shows a warning.
     #[clap(hide = true)]
+    #[schemars(skip)]
     Skim,
 }
 
@@ -149,7 +152,7 @@ impl SearchMode {
     }
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq, ValueEnum, Serialize, JsonSchema)]
 pub enum FilterMode {
     #[serde(rename = "global")]
     Global = 0,
@@ -184,7 +187,7 @@ impl FilterMode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize, JsonSchema)]
 pub enum ExitMode {
     #[serde(rename = "return-original")]
     ReturnOriginal,
@@ -195,7 +198,7 @@ pub enum ExitMode {
 
 // FIXME: Can use upstream Dialect enum if https://github.com/stevedonovan/chrono-english/pull/16 is merged
 // FIXME: Above PR was merged, but dependency was changed to interim (fork of chrono-english) in the ... interim
-#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Copy, Serialize, JsonSchema)]
 pub enum Dialect {
     #[default]
     #[serde(rename = "us")]
@@ -285,7 +288,7 @@ impl Dialect {
 
 use atuin_common::time::TimeZoneSpec;
 
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize, JsonSchema)]
 pub enum Style {
     #[serde(rename = "auto")]
     Auto,
@@ -297,7 +300,7 @@ pub enum Style {
     Compact,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub enum UpdateChannel {
     /// Stable releases only.
     #[serde(rename = "stable")]
@@ -309,7 +312,7 @@ pub enum UpdateChannel {
     Nightly,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, Serialize, JsonSchema)]
 pub enum WordJumpMode {
     #[serde(rename = "emacs")]
     Emacs,
@@ -318,7 +321,7 @@ pub enum WordJumpMode {
     Subl,
 }
 
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize, JsonSchema)]
 pub enum KeymapMode {
     #[serde(rename = "emacs")]
     Emacs,
@@ -350,7 +353,7 @@ impl KeymapMode {
 // It seems impossible to implement Deserialize for external types when it is
 // used in HashMap (https://stackoverflow.com/questions/67142663).  We instead
 // define an adapter type.
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize, JsonSchema)]
 pub enum CursorStyle {
     #[serde(rename = "default")]
     DefaultUserShape,
@@ -389,14 +392,17 @@ impl CursorStyle {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Stats {
+    /// Commands `atuin stats` strips from the front, such as `sudo`.
     #[serde(default = "Stats::common_prefix_default")]
-    pub common_prefix: Vec<String>, // sudo, etc. commands we want to strip off
+    pub common_prefix: Vec<String>,
+    /// Commands `atuin stats` counts with their subcommand, such as `kubectl get`.
     #[serde(default = "Stats::common_subcommands_default")]
-    pub common_subcommands: Vec<String>, // kubectl, commands we should consider subcommands for
+    pub common_subcommands: Vec<String>,
+    /// Commands `atuin stats` leaves out entirely.
     #[serde(default = "Stats::ignored_commands_default")]
-    pub ignored_commands: Vec<String>, // cd, ls, etc. commands we want to completely hide from stats
+    pub ignored_commands: Vec<String>,
 }
 
 impl Stats {
@@ -457,7 +463,7 @@ impl Default for Stats {
 ///
 /// Set explicitly to "hub" to use Hub authentication with a custom sync_address
 /// (useful for local development against a Hub instance).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, Default, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncProtocol {
     /// Use Hub authentication (Bearer token from Hub OAuth flow)
@@ -516,13 +522,20 @@ impl SyncAuth {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default, Serialize)]
+#[derive(Clone, Debug, Deserialize, Default, Serialize, JsonSchema)]
 pub struct Keys {
+    /// Leave search when scrolling past the first or the last result.
     pub scroll_exits: bool,
+    /// Leave search when moving left from the start of the query.
     pub exit_past_line_start: bool,
+    /// Moving right from the end of the query puts the selection on the command line, as tab does.
     pub accept_past_line_end: bool,
+    /// Moving left from the start of the query puts the selection on the command line, as tab does.
     pub accept_past_line_start: bool,
+    /// Backspace on an empty query puts the selection on the command line, as tab does.
     pub accept_with_backspace: bool,
+    /// The key that, with `ctrl`, starts a two-key shortcut. With `a`, `ctrl-a d` deletes the
+    /// selection.
     pub prefix: String,
 }
 
@@ -555,7 +568,7 @@ impl Keys {
 }
 
 /// A single rule within a conditional keybinding config.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct KeyRuleConfig {
     /// Optional condition expression (e.g. "cursor-at-start", "input-empty && no-results").
     /// If absent, the rule always matches.
@@ -566,7 +579,7 @@ pub struct KeyRuleConfig {
 }
 
 /// A keybinding config value: either a simple action string or an ordered list of conditional rules.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum KeyBindingConfig {
     /// Simple unconditional binding: `"ctrl-c" = "return-original"`
@@ -617,16 +630,21 @@ impl<'de> Deserialize<'de> for KeyBindingConfig {
 
 /// User-facing keymap configuration. Each mode maps key strings to bindings.
 /// Keys present here override the defaults for that key; unmentioned keys keep defaults.
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default, JsonSchema)]
 pub struct KeymapConfig {
+    /// Key bindings for the emacs keymap.
     #[serde(default)]
     pub emacs: HashMap<String, KeyBindingConfig>,
+    /// Key bindings for vim's normal mode.
     #[serde(default, rename = "vim-normal")]
     pub vim_normal: HashMap<String, KeyBindingConfig>,
+    /// Key bindings for vim's insert mode.
     #[serde(default, rename = "vim-insert")]
     pub vim_insert: HashMap<String, KeyBindingConfig>,
+    /// Key bindings for the inspector.
     #[serde(default)]
     pub inspector: HashMap<String, KeyBindingConfig>,
+    /// Key bindings for the second key of a prefix shortcut.
     #[serde(default)]
     pub prefix: HashMap<String, KeyBindingConfig>,
 }
@@ -643,18 +661,21 @@ impl KeymapConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Preview {
+    /// How tall the preview is: `auto` fits the selection, `static` fits the longest command,
+    /// `fixed` is always `max_preview_height`.
     pub strategy: PreviewStrategy,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Theme {
-    /// Name of desired theme ("default" for base)
+    /// The theme: `default`, another built-in one such as `autumn`, or the name of a `.toml` file
+    /// in `~/.atuin/themes/` without its extension.
     pub name: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct PtyProxy {
     /// If enabled, `atuin init` emits shell code that re-execs the shell
     /// inside `atuin pty-proxy`, so no separate `atuin pty-proxy init` line
@@ -665,170 +686,57 @@ pub struct PtyProxy {
     pub enabled: bool,
 }
 
-/// `[teams]`: Atuin for Teams, which `atuin setup --hub` turns on.
-#[cfg(feature = "octavo")]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Teams {
-    pub enabled: bool,
-    /// Whether the commands Atuin records go to Atuin for Teams too, while `enabled`. Off unless
-    /// set.
-    pub upload_history: bool,
-    /// Which agent threads go to Atuin for Teams, while `enabled`.
-    pub upload_threads: ThreadUploads,
-    /// Whether captured command output goes to Atuin for Teams too, while `enabled`,
-    /// `upload_history` and output capture are all on.
-    pub upload_output: bool,
-    #[serde(rename = "__debug__", default, skip_serializing)]
-    pub debug: TeamsDebug,
-}
-
-#[cfg(feature = "octavo")]
-impl Default for Teams {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            upload_history: false,
-            upload_threads: ThreadUploads::All,
-            upload_output: false,
-            debug: TeamsDebug::default(),
-        }
-    }
-}
-
-/// Which agent threads Atuin for Teams uploads while it's on, as `teams.upload_threads` says.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThreadUploads {
-    #[default]
-    All,
-    /// Those started in a workspace: at or under a project's config file, `.atuin.lua` say.
-    Workspaces,
-    Off,
-}
-
-impl ThreadUploads {
-    /// Its value in the config.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Workspaces => "workspaces",
-            Self::Off => "off",
-        }
-    }
-}
-
-/// Settings for pointing Atuin for Teams at a hub other than Atuin's, kept out of the docs on
-/// purpose.
+/// `[__debug__]`: settings kept out of the docs on purpose, for pointing Atuin Hub at a hub
+/// other than Atuin's. Whether it's on, and what goes up, is the user's own `atuin.lua` to say
+/// (see [`crate::lua_config`]).
 #[cfg(feature = "octavo")]
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct TeamsDebug {
-    /// The gRPC address Atuin for Teams uploads to, honored only while `sync_address` is a
+pub struct DebugSettings {
+    /// The gRPC address Atuin Hub uploads to, honored only while `sync_address` is a
     /// self-hosted hub.
-    pub address: Option<Url>,
+    pub hub_address: Option<Url>,
     /// `atuin mcp` forwards thread tools to this MCP server. It is honored only while
     /// `sync_address` is a self-hosted hub.
-    pub mcp_address: Option<Url>,
+    pub hub_mcp_address: Option<Url>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Search {
-    /// The list of enabled filter modes, in order of priority.
+    /// The filter modes that ctrl-r cycles through, in order. A mode left out can't be used.
     pub filters: Vec<FilterMode>,
 
-    /// The recency score multiplier for the search index (default: 1.0).
-    /// Values < 1.0 reduce weight, > 1.0 increase weight, 0.0 disables.
+    /// The weight of how recently a command last ran, in `daemon-fuzzy` ranking. `0` ignores it.
     pub recency_score_multiplier: f64,
 
-    /// The frequency score multiplier for the search index (default: 1.0).
-    /// Values < 1.0 reduce weight, > 1.0 increase weight, 0.0 disables.
+    /// The weight of how often a command has run, in `daemon-fuzzy` ranking. `0` ignores it.
     pub frequency_score_multiplier: f64,
 
-    /// The overall frecency score multiplier for the search index (default: 1.0).
-    /// Applied after combining recency and frequency scores.
+    /// The weight of recency and frequency together, against how well a command matches, in
+    /// `daemon-fuzzy` ranking. `0` ranks by the match alone.
     pub frecency_score_multiplier: f64,
 
-    /// Controls which shells' commands are shown in interactive search.
+    /// Which shells' commands interactive search shows: `auto`, `all`, or a list such as
+    /// `["bash", "zsh"]`.
     ///
-    /// One of: `"all"`, `"auto"`, or an array of strings.
+    /// `auto` shows the commands of the shell that search runs in. It also shows commands that
+    /// have no shell recorded, which a list includes with `""`.
     pub shells: Shells,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Tmux {
-    /// Enable using atuin with tmux popup (tmux >= 3.2)
+    /// Open search in a tmux popup while inside tmux. `ATUIN_TMUX_POPUP=false` turns it off for
+    /// one shell.
+    ///
+    /// iTerm2's tmux integration, `tmux -CC`, can't show the popup, and Atuin can't tell when it
+    /// is in use. Leave this off there.
     pub enabled: bool,
 
-    /// Width of the tmux popup (percentage)
+    /// The width of the popup: a share of the terminal such as `80%`, or a number of columns.
     pub width: String,
 
-    /// Height of the tmux popup (percentage)
+    /// The height of the popup: a share of the terminal such as `60%`, or a number of rows.
     pub height: String,
-}
-
-/// Configuration for a specific log type (search or daemon).
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct LogConfig {
-    /// Log file name (relative to dir) or absolute path.
-    #[serde_as(as = "ShellExpanded")]
-    pub file: PathBuf,
-
-    /// Override global enabled setting for this log type.
-    pub enabled: Option<bool>,
-
-    /// Override global level setting for this log type.
-    pub level: Option<LogLevel>,
-
-    /// Override the global retention for this log type (a bare number is days). `0` keeps nothing.
-    #[serde_as(as = "Option<AsDuration<Days>>")]
-    pub retention: Option<Duration>,
-}
-
-impl LogConfig {
-    pub fn new(file: impl Into<PathBuf>) -> Self {
-        Self {
-            file: file.into(),
-            ..Default::default()
-        }
-    }
-}
-
-#[allow(deprecated)]
-#[serde_as]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Logs {
-    /// Enable file logging globally. Defaults to true.
-    #[serde(default = "Logs::default_enabled")]
-    pub enabled: bool,
-
-    /// Directory for log files. Defaults to ~/.atuin/logs
-    #[serde_as(as = "RelativeTo<ConfigDir>")]
-    pub dir: AbsPathBuf,
-
-    /// Default log level for file logging. Defaults to "info".
-    /// Note: ATUIN_LOG environment variable overrides this.
-    #[serde(default)]
-    pub level: LogLevel,
-
-    /// Default retention for log files (a bare number is days). Defaults to 4 days. `0` keeps
-    /// nothing (prunes every rotated log).
-    #[serde(default = "Logs::default_retention")]
-    #[serde_as(as = "AsDuration<Days>")]
-    pub retention: Duration,
-
-    /// Search log settings; only used with `--interactive`
-    #[serde(default)]
-    pub search: LogConfig,
-
-    /// Daemon log settings
-    #[serde(default)]
-    pub daemon: LogConfig,
-
-    /// AI log settings
-    #[serde(default)]
-    pub ai: LogConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -847,16 +755,6 @@ impl Default for Theme {
         Self {
             name: "".to_string(),
         }
-    }
-}
-
-impl Logs {
-    fn default_enabled() -> bool {
-        true
-    }
-
-    fn default_retention() -> Duration {
-        Duration::from_secs(4 * 86_400)
     }
 }
 
@@ -891,7 +789,7 @@ impl Default for Tmux {
 }
 
 // The preview height strategy also takes max_preview_height into account.
-#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[derive(Clone, Debug, Deserialize, Copy, PartialEq, Eq, ValueEnum, Serialize, JsonSchema)]
 pub enum PreviewStrategy {
     // Preview height is calculated for the length of the selected command.
     #[serde(rename = "auto")]
@@ -907,24 +805,24 @@ pub enum PreviewStrategy {
 }
 
 /// Column types available for the interactive search UI.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UiColumnType {
-    /// Command execution duration (e.g., "123ms")
+    /// How long the command ran, such as `123ms`. It is 5 wide by default.
     Duration,
-    /// Relative time since execution (e.g., "59s ago")
+    /// How long ago the command ran, such as `59s ago`. It is 9 wide by default.
     Time,
-    /// Absolute timestamp (e.g., "2025-01-22 14:35")
+    /// When the command ran, such as `2025-01-22 14:35`. It is 16 wide by default.
     Datetime,
-    /// Working directory
+    /// The directory the command ran in. It is 20 wide by default.
     Directory,
-    /// Hostname
+    /// The host the command ran on. It is 15 wide by default.
     Host,
-    /// Username
+    /// The user who ran the command. It is 10 wide by default.
     User,
-    /// Exit code
+    /// The command's exit code. It is 3 wide by default, or 11 on Windows.
     Exit,
-    /// The command itself (should be last, expands to fill)
+    /// The command itself. It expands to fill the space left by default.
     Command,
 }
 
@@ -956,6 +854,7 @@ impl UiColumnType {
 /// Can be specified as just a string (uses default width) or as an object with type and width.
 #[derive(Clone, Debug, Serialize)]
 pub struct UiColumn {
+    #[serde(rename = "type")]
     pub column_type: UiColumnType,
     pub width: u16,
     /// If true, this column expands to fill remaining space. Only one column should expand.
@@ -979,6 +878,31 @@ impl UiColumn {
             width,
             expand: column_type == UiColumnType::Command,
         }
+    }
+}
+
+impl JsonSchema for UiColumn {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "UiColumn".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let column_type = generator.subschema_for::<UiColumnType>();
+        schemars::json_schema!({
+            "anyOf": [
+                column_type,
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": column_type,
+                        "width": { "type": "integer", "minimum": 0 },
+                        "expand": { "type": "boolean" },
+                    },
+                    "required": ["type"],
+                    "additionalProperties": false,
+                },
+            ],
+        })
     }
 }
 
@@ -1052,16 +976,21 @@ impl<'de> serde::Deserialize<'de> for UiColumn {
 }
 
 /// UI-specific settings for the interactive search.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Ui {
-    /// Columns to display in interactive search, from left to right.
-    /// The indicator column (" > ") is always shown first implicitly.
-    /// The "command" column should be last as it expands to fill remaining space.
-    /// Can be simple strings or objects with type and width.
+    /// The columns of interactive search, from left to right, after the selection marker. For
+    /// example, `["exit", { type = "directory", width = 30 }, "command"]`.
+    ///
+    /// A column is its type, or a table of its `type`, `width` and `expand`. At most one column
+    /// may expand to fill the space left.
     #[serde(default = "Ui::default_columns")]
     pub columns: Vec<UiColumn>,
 
-    /// Syntax highlight commands in the interactive search results.
+    /// Highlight the syntax of commands in the results. The `Syntax*` keys of a theme set the
+    /// colors.
+    ///
+    /// Commands from shells without a grammar, such as nu, xonsh and PowerShell, aren't
+    /// highlighted.
     #[serde(default = "Ui::default_syntax_highlight")]
     pub syntax_highlight: bool,
 }
@@ -1108,18 +1037,28 @@ impl Default for Ui {
 
 #[allow(deprecated)]
 #[serde_as]
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct Settings {
+    /// The directory that holds Atuin's data. The other paths default to files in it.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub data_dir: AbsPathBuf,
+    /// How `atuin stats` reads dates: `us` for month first, `uk` for day first.
     pub dialect: Dialect,
+    /// The time zone that times are shown in: `local`, `utc`, an offset from UTC such as `+9:30`,
+    /// or an IANA time zone name such as `Europe/Berlin`.
     pub timezone: TimeZoneSpec,
+    /// The look of interactive search: `compact`, `full`, or `auto`, which picks `compact` when the
+    /// terminal is short.
     pub style: Style,
+    /// Sync automatically while logged in, every `sync_frequency`.
     pub auto_sync: bool,
+    /// Check for a new release at most once an hour, and say so when one is out.
     pub update_check: bool,
+    /// Which releases the update check reports: `stable`, or `nightly` for prereleases as well.
     pub update_channel: UpdateChannel,
 
-    /// The sync address for atuin.
+    /// The server that Atuin syncs with. `atuin setup --only --sync <URL>` points it at your own
+    /// server.
     pub sync_address: Url,
 
     /// Sync protocol for authentication. When set to "auto" (default), the protocol
@@ -1128,131 +1067,229 @@ pub struct Settings {
     #[serde(default)]
     pub sync_protocol: SyncProtocol,
 
+    /// How often to sync automatically, such as `5m`. `0` syncs after every command.
     #[serde_as(as = "AsDuration<Seconds>")]
+    #[schemars(with = "DurationSchema<Seconds>")]
     pub sync_frequency: Duration,
+    /// The history database.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub db_path: DbLocation,
+    /// The record store, which holds what sync sends and receives.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub record_store_path: DbLocation,
+    /// The key that sync encrypts your data with.
     #[serde_as(as = "RelativeTo<ConfigDir>")]
     pub key_path: AbsPathBuf,
+    /// How interactive search matches what you type: `prefix`, `fulltext`, `fuzzy`, or
+    /// `daemon-fuzzy`. `atuin setup --only --daemon` sets `daemon-fuzzy` as it turns the daemon on.
     #[serde(rename = "search_mode")]
     pub requested_search_mode: RequestedSearchMode,
+    /// The filter interactive search starts in. If unset, the first of `search.filters`.
     pub filter_mode: Option<FilterMode>,
+    /// The filter search starts in when the up arrow opens it. If unset, `filter_mode`.
     pub filter_mode_shell_up_key_binding: Option<FilterMode>,
+    /// The search mode when the up arrow opens search. If unset, `search_mode`.
     #[serde(rename = "search_mode_shell_up_key_binding")]
     pub requested_search_mode_shell_up_key_binding: Option<RequestedSearchMode>,
 
     /// This is not a real setting. Instead, `atuin search` manually sets this field to true if
     /// the hidden `--shell-up-key-binding` option was passed.
+    #[schemars(skip)]
     pub shell_up_key_binding: bool,
-    /// Whether `atuin init` binds ctrl-r to search. `--disable-ctrl-r` turns it off either way.
+    /// Whether `atuin init` binds ctrl-r to search.
     pub bind_ctrl_r: bool,
-    /// Whether `atuin init` binds the up arrow to search. `--disable-up-arrow` turns it off either
-    /// way.
+    /// Whether `atuin init` binds the up arrow to search.
     pub bind_up_arrow: bool,
+    /// Whether `atuin init` binds ctrl-t to `atuin threads resume` in zsh, bash and fish.
+    ///
+    /// The binding applies only while `threads.enabled` is on.
+    pub bind_ai_resume: bool,
+    /// The most lines interactive search takes up. `0` uses the whole screen.
     pub inline_height: u16,
+    /// The most lines search takes up when the up arrow opens it. If unset, `inline_height`.
     pub inline_height_shell_up_key_binding: Option<u16>,
+    /// Put the search bar at the top, with the results below it.
     pub invert: bool,
+    /// Show the selected command in full below the results.
     pub show_preview: bool,
+    /// The most lines the preview takes up.
     pub max_preview_height: u16,
+    /// Show the help row: the version, a keymap hint, and how many commands your history holds.
     pub show_help: bool,
+    /// Show the search and inspector tabs.
     pub show_tabs: bool,
+    /// After an upgrade, show a short note about new features, once.
     pub show_whats_new: bool,
+    /// Show the `1` to `9` shortcuts beside the results.
     pub show_numeric_shortcuts: bool,
+    /// Hide extra lines of the `compact` style below this many rows. `0` never hides them.
     pub auto_hide_height: u16,
+    /// What escape does: `return-original` leaves what you typed, `return-query` leaves the search
+    /// query. Ctrl-c and ctrl-d always leave what you typed.
     pub exit_mode: ExitMode,
+    /// The keymap search starts in: `emacs`, `vim-normal`, `vim-insert`, or `auto`, which follows
+    /// the shell's mode.
+    ///
+    /// Nushell doesn't support `auto`, and starts search in `emacs`.
     pub keymap_mode: KeymapMode,
+    /// The shell's keymap, whose cursor style search restores on exit. `auto` leaves the cursor
+    /// as it is.
     pub keymap_mode_shell: KeymapMode,
+    /// The cursor style in each keymap, such as `{ vim_insert = "blink-bar" }`. The keymaps are
+    /// `emacs`, `vim_insert` and `vim_normal`.
     pub keymap_cursor: HashMap<String, CursorStyle>,
+    /// How word movement treats punctuation: `emacs`, or `subl` for Sublime Text's rules.
     pub word_jump_mode: WordJumpMode,
+    /// The characters word movement counts as part of a word, with `word_jump_mode = "subl"`.
     pub word_chars: String,
+    /// How many results stay visible above or below the selection as it scrolls.
     pub scroll_context_lines: usize,
+    /// The default format of `atuin history list`. `--format` overrides it.
     pub history_format: String,
+    /// Trim whitespace from the end of a command before saving it.
     pub strip_trailing_whitespace: bool,
+    /// Keep the interface still, without live-updating timestamps. Setting the `NO_MOTION`
+    /// environment variable turns it on too.
     pub prefers_reduced_motion: bool,
+    /// Save commands that exit with a non-zero status.
     pub store_failed: bool,
+    /// Leave the mouse to the terminal rather than using it in search.
     pub no_mouse: bool,
 
+    /// Regular expressions of commands to keep out of your history, such as `"^secret-cmd"`.
+    ///
+    /// An expression matches anywhere in the command unless `^` or `$` anchors it.
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
+    #[schemars(with = "Vec<String>")]
     pub history_filter: RegexSet,
 
+    /// Regular expressions of directories whose commands stay out of your history, such as
+    /// `"^/very/secret/directory"`.
+    ///
+    /// An expression matches anywhere in the path unless `^` or `$` anchors it.
     #[serde(with = "serde_regex", default = "RegexSet::empty", skip_serializing)]
+    #[schemars(with = "Vec<String>")]
     pub cwd_filter: RegexSet,
 
+    /// Refuse to save commands that look like they hold a secret, such as an AWS key or a GitHub
+    /// token.
+    ///
+    /// The same patterns redact captured output and threads.
     pub secrets_filter: bool,
+    /// Add a `workspace` filter that searches the Git or Jujutsu repository you are in.
     pub workspaces: bool,
+    /// Use `ctrl` rather than `alt` with the number keys to pick a result. This helps on macOS,
+    /// where Option may type characters rather than act as `alt`.
     pub ctrl_n_shortcuts: bool,
 
+    /// How long to wait for a connection to the sync server, such as `5s`.
     #[serde_as(as = "AsDuration<Seconds>")]
+    #[schemars(with = "DurationSchema<Seconds>")]
     pub network_connect_timeout: Duration,
+    /// How long a request to the sync server may take before it fails, such as `30s`.
     #[serde_as(as = "AsDuration<Seconds>")]
+    #[schemars(with = "DurationSchema<Seconds>")]
     pub network_timeout: Duration,
+    /// How long to wait for a connection to the local database, such as `2s`.
     #[serde_as(as = "AsDuration<Seconds>")]
+    #[schemars(with = "DurationSchema<Seconds>")]
     pub local_timeout: Duration,
 
-    /// Extra HTTP headers to send on every request to the sync server, e.g.
-    /// for services like Cloudflare Access that sit in front of a self-hosted
-    /// server. Headers that Atuin sets itself (e.g. Authorization) win over
-    /// values configured here.
+    /// HTTP headers to send with every request to the sync server, such as those that Cloudflare
+    /// Access asks for in front of a self-hosted server.
+    ///
+    /// Headers that Atuin sets itself, such as `Authorization`, win over these. While any are set,
+    /// Atuin doesn't follow a redirect to another origin.
     #[serde(default, skip_serializing)]
+    #[schemars(with = "HashMap<String, String>")]
     pub extra_headers: HashMap<String, SecretString>,
 
+    /// Run the selected command on enter, rather than putting it on the command line. Tab still
+    /// puts it there.
+    ///
+    /// The config file that a new install starts with sets it to `true`.
     pub enter_accept: bool,
+    /// Rank results that start with the query above those that only contain it, newest first among
+    /// equals.
     pub smart_sort: bool,
+    /// After `&&` or `||` on the command line, search for the next command and append it.
     pub command_chaining: bool,
 
+    /// What `atuin stats` counts.
     #[serde(default)]
     pub stats: Stats,
 
+    /// How the arrow keys, backspace and the prefix key behave in interactive search.
     #[serde(default)]
     pub keys: Keys,
 
+    /// Your own key bindings for interactive search, per keymap.
     #[serde(default)]
     pub keymap: KeymapConfig,
 
+    /// The preview of the selected command in interactive search.
     #[serde(default)]
     pub preview: Preview,
 
+    /// The background daemon, which can record history and sync in place of each shell.
     pub daemon: Daemon,
 
+    /// `atuin pty-proxy`, which wraps your shell so Atuin can capture command output.
     #[serde(default)]
     pub pty_proxy: PtyProxy,
 
+    /// Capturing the output of the commands you run.
     #[serde(default)]
     pub output: OutputCapture,
 
     #[cfg(feature = "octavo")]
-    #[serde(default)]
-    pub teams: Teams,
+    #[serde(rename = "__debug__", default, skip_serializing)]
+    #[schemars(skip)]
+    pub debug: DebugSettings,
 
+    /// Interactive search: its filters and how it ranks results.
     #[serde(default)]
     pub search: Search,
 
+    /// The colors of interactive search.
     #[serde(default)]
     pub theme: Theme,
 
+    /// The layout of interactive search.
     #[serde(default)]
     pub ui: Ui,
 
+    /// Scripts saved with `atuin scripts`.
     pub scripts: scripts::Settings,
 
+    /// The key-value store behind `atuin kv`.
     pub kv: kv::Settings,
 
+    /// Opening interactive search in a tmux popup.
+    ///
+    /// The popup needs tmux 3.2 or later, in zsh, bash or fish. Anywhere else, search opens as it
+    /// does outside tmux. `atuin init` reads these settings, so restart your shell after changing
+    /// them.
     #[serde(default)]
     pub tmux: Tmux,
 
+    /// Atuin's log files.
     pub logs: Logs,
 
+    /// Atuin's own state, such as your Hub session.
     pub meta: meta::Settings,
 
     /// Atuin AI's settings, from before it was removed, so that a typo in `[ai]` is still found.
+    /// Left out of the schema, as there is nothing in it to set.
     #[serde(default)]
+    #[schemars(skip)]
     pub ai: RetiredAi,
 
+    /// AI agent threads, which `atuin threads` lists and resumes.
     #[serde(default)]
     pub threads: Threads,
 
+    /// Credentials of your own for Atuin to redact.
     #[serde(default)]
     pub security: Security,
 }
@@ -1582,6 +1619,16 @@ impl Settings {
         None
     }
 
+    /// The JSON Schema of `config.toml`, with each setting's built-in default. `ATUIN_*`
+    /// overrides in the environment don't apply, so none of their values can reach the schema.
+    pub fn config_schema() -> Result<serde_json::Value> {
+        let data_dir = atuin_common::dirs::unconfigured_data_dir();
+        let defaults: serde_json::Value =
+            Self::with_legacy_keys(Self::defaults_builder(&data_dir)?.build()?)?
+                .try_deserialize()?;
+        Ok(atuin_common::json::schema::with_defaults(schemars::schema_for!(Self), &defaults))
+    }
+
     pub fn builder() -> Result<ConfigBuilder<DefaultState>> {
         Ok(Self::builder_with_data_dir(&atuin_common::dirs::unconfigured_data_dir())?)
     }
@@ -1676,6 +1723,7 @@ impl Settings {
             .set_default("style", "compact")?
             .set_default("bind_ctrl_r", true)?
             .set_default("bind_up_arrow", true)?
+            .set_default("bind_ai_resume", true)?
             .set_default("inline_height", 40)?
             .set_default("show_preview", true)?
             .set_default("preview.strategy", "auto")?
@@ -1698,10 +1746,10 @@ impl Settings {
             .set_default("ctrl_n_shortcuts", false)?
             .set_default("secrets_filter", true)?
             .set_default("strip_trailing_whitespace", true)?
-            .set_default("network_connect_timeout", 5)?
-            .set_default("network_timeout", 30)?
+            .set_default("network_connect_timeout", "5s")?
+            .set_default("network_timeout", "30s")?
             .set_default("extra_headers", HashMap::<String, String>::new())?
-            .set_default("local_timeout", 2.0)?
+            .set_default("local_timeout", "2s")?
             // enter_accept defaults to false here, but true in the default config file. The dissonance is
             // intentional!
             // Existing users will get the default "False", so we don't mess with any potential
@@ -1720,13 +1768,18 @@ impl Settings {
             .set_default("smart_sort", false)?
             .set_default("command_chaining", false)?
             .set_default("store_failed", true)?
-            .set_default("daemon.sync_frequency", 300)?
+            .set_default("daemon.sync_frequency", "5m")?
             .set_default("daemon.enabled", false)?
             .set_default("daemon.autostart", false)?
             .set_default("daemon.systemd_socket", false)?
             .set_default("daemon.tcp_port", 8889)?
             .set_default("output.enabled", output.enabled)?
-            .set_default("output.max_output_size", output.max_output_size.to_string())?
+            // In SI units, as `ByteSize::mb` sets it: its binary `to_string`, `976.6 KiB`, would
+            // read back as a few bytes more than 1MB.
+            .set_default(
+                "output.max_output_size",
+                output.max_output_size.display().si().to_string(),
+            )?
             .set_default("output.sync", output.sync)?
             .set_default("output.max_disk_usage", output.max_disk_usage.to_string())?
             .set_default("logs.enabled", true)?
@@ -1887,10 +1940,16 @@ impl Settings {
     }
 
     /// The renamed keys that [`Self::with_legacy_keys`] reads under their old names.
+    ///
+    /// When several old names of one key are set, the later one in this list wins.
     const LEGACY_KEYS: [Renamed; 4] = [
         Renamed {
             old: "ai.capture_sessions",
-            new: "threads.capture",
+            new: "threads.enabled",
+        },
+        Renamed {
+            old: "threads.capture",
+            new: "threads.enabled",
         },
         Renamed {
             old: "ai.capture_tools",
@@ -1900,17 +1959,13 @@ impl Settings {
             old: "ai.sessions",
             new: "threads",
         },
-        Renamed {
-            old: "octavo",
-            new: "teams",
-        },
     ];
 
     /// Keys that this build has no setting for, but that a build with other features reads, or
     /// that Atuin AI read before it was removed.
     const UNCHECKED_KEYS: &[&str] = &[
         #[cfg(not(feature = "octavo"))]
-        "teams",
+        "__debug__",
         "ai.api_token",
         "ai.capabilities",
         "ai.db_path",
@@ -1925,9 +1980,8 @@ impl Settings {
         "ai.yolo",
     ];
 
-    /// Read renamed keys under their new names, for any key the new name doesn't set itself:
-    /// `[threads]` was `ai.capture_sessions`, `ai.capture_tools` and `[ai.sessions]`, and `[teams]`
-    /// was `[octavo]`. The defaults are set here, under them, so they never hide a legacy value.
+    /// Read renamed keys under their new names, when the config doesn't already set those keys
+    /// under their new names.
     fn with_legacy_keys(config: Config) -> Result<Config, config::ConfigError> {
         fn leaves(prefix: String, value: config::Value, out: &mut Vec<(String, config::Value)>) {
             match value.kind {
@@ -1949,14 +2003,8 @@ impl Settings {
         legacy.retain(|(key, _)| config.get::<config::Value>(key).is_err());
 
         let defaults = Config::builder()
-            .set_default("threads.capture", false)?
+            .set_default("threads.enabled", false)?
             .set_default("threads.capture_tools", true)?;
-        #[cfg(feature = "octavo")]
-        let defaults = defaults
-            .set_default("teams.enabled", false)?
-            .set_default("teams.upload_history", false)?
-            .set_default("teams.upload_threads", "all")?
-            .set_default("teams.upload_output", false)?;
         legacy
             .into_iter()
             .try_fold(defaults.add_source(config), |builder, (key, value)| {
@@ -2185,8 +2233,6 @@ mod tests {
     use rstest::{fixture, rstest};
     use url::Url;
 
-    #[cfg(feature = "octavo")]
-    use super::ThreadUploads;
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
         ConfigFile, DbLocation, Dialect, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
@@ -2773,56 +2819,39 @@ mod tests {
     #[cfg(feature = "octavo")]
     #[rstest]
     #[case::set(
-        "[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
-        Some("http://127.0.0.1:50052/")
-    )]
-    #[case::legacy(
-        "[octavo.__debug__]\naddress = \"http://127.0.0.1:50052\"\n",
+        "[__debug__]\nhub_address = \"http://127.0.0.1:50052\"\n",
         Some("http://127.0.0.1:50052/")
     )]
     #[case::absent("", None)]
-    fn teams_debug_address_is_read_from_its_hidden_table(
+    fn the_hub_address_is_read_from_the_hidden_table(
         #[case] toml: &str,
         #[case] expected: Option<&str>,
     ) {
         let settings = parse_settings(toml);
-        assert_eq!(settings.teams.debug.address, expected.map(|url| Url::parse(url).unwrap()));
+        assert_eq!(settings.debug.hub_address, expected.map(|url| Url::parse(url).unwrap()));
     }
 
+    /// Whether Atuin Hub is on is the user's own `atuin.lua` to say, and its hub is in
+    /// `[__debug__]`, so `[teams]` and `[octavo]` are typos now.
     #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::unset("", false)]
-    #[case::teams("[teams]\nenabled = true\n", true)]
-    #[case::legacy("[octavo]\nenabled = true\n", true)]
-    #[case::teams_wins("[octavo]\nenabled = true\n\n[teams]\nenabled = false\n", false)]
-    fn teams_is_read_from_octavo_until_set_itself(#[case] toml: &str, #[case] enabled: bool) {
-        assert_eq!(parse_settings(toml).teams.enabled, enabled);
+    #[case::enabled("[teams]\nenabled = true\n", &["teams"])]
+    #[case::uploads("[teams]\nupload_threads = \"all\"\nupload_history = true\n", &["teams"])]
+    #[case::debug("[teams.__debug__]\naddress = \"http://127.0.0.1:50052\"\n", &["teams"])]
+    #[case::legacy("[octavo]\nenabled = true\n", &["octavo"])]
+    fn teams_in_config_toml_is_unknown(#[case] toml: &str, #[case] expected: &[&str]) {
+        assert_unknown(&load_file(toml).unknown, expected);
     }
 
-    #[cfg(feature = "octavo")]
     #[rstest]
-    #[case::unset("", false, ThreadUploads::All)]
-    #[case::legacy("[octavo]\nenabled = true\n", false, ThreadUploads::All)]
-    #[case::history_on("[teams]\nupload_history = true\n", true, ThreadUploads::All)]
-    #[case::workspaces(
-        "[teams]\nupload_threads = \"workspaces\"\n",
-        false,
-        ThreadUploads::Workspaces
-    )]
-    #[case::threads_off("[teams]\nupload_threads = \"off\"\n", false, ThreadUploads::Off)]
-    fn teams_uploads_threads_until_switched_off_and_history_once_switched_on(
-        #[case] toml: &str,
-        #[case] history: bool,
-        #[case] threads: ThreadUploads,
-    ) {
-        let teams = parse_settings(toml).teams;
-        assert_eq!((teams.upload_history, teams.upload_threads), (history, threads));
+    fn bind_ai_resume_defaults_on() {
+        assert!(parse_settings("").bind_ai_resume);
     }
 
     #[rstest]
     fn threads_default_off_with_tools() {
         let settings = parse_settings("");
-        assert!(!settings.threads.capture);
+        assert!(!settings.threads.enabled);
         assert!(settings.threads.capture_tools);
         assert!(settings.threads.resume_chooser);
     }
@@ -2834,7 +2863,7 @@ mod tests {
              false\n\n[ai.sessions]\nresume_chooser = false\n\n[ai.sessions.resume]\npi = \"pi \
              --session {id}\"\n",
         );
-        assert!(settings.threads.capture);
+        assert!(settings.threads.enabled);
         assert!(!settings.threads.capture_tools);
         assert!(!settings.threads.resume_chooser);
         assert_eq!(settings.threads.resume.pi.as_deref(), Some("pi --session {id}"));
@@ -2844,21 +2873,32 @@ mod tests {
     fn threads_settings_win_over_legacy_ones() {
         let settings = parse_settings(
             "[ai]\ncapture_sessions = true\n\n[ai.sessions]\ninline_height = 10\nmouse = \
-             false\n\n[ai.sessions.resume]\nclaude = \"old\"\npi = \"old\"\n\n[threads]\ncapture \
+             false\n\n[ai.sessions.resume]\nclaude = \"old\"\npi = \"old\"\n\n[threads]\nenabled \
              = false\ninline_height = 20\n\n[threads.resume]\npi = \"new\"\n",
         );
-        assert!(!settings.threads.capture);
+        assert!(!settings.threads.enabled);
         assert_eq!(settings.threads.inline_height, Some(20));
         assert_eq!(settings.threads.mouse, Some(false));
         assert_eq!(settings.threads.resume.claude.as_deref(), Some("old"));
         assert_eq!(settings.threads.resume.pi.as_deref(), Some("new"));
     }
 
+    #[rstest]
+    #[case::old_name("[threads]\ncapture = true\n", true)]
+    #[case::new_name_wins("[threads]\ncapture = true\nenabled = false\n", false)]
+    #[case::old_name_wins_over_older_name(
+        "[ai]\ncapture_sessions = false\n\n[threads]\ncapture = true\n",
+        true
+    )]
+    fn threads_capture_is_read_as_enabled(#[case] toml: &str, #[case] expected: bool) {
+        assert_eq!(parse_settings(toml).threads.enabled, expected);
+    }
+
     /// `atuin config get --resolved` shows the defaults, as it did for `ai.capture_sessions`.
     #[rstest]
     fn threads_defaults_resolve() {
         let config = Settings::with_legacy_keys(config::Config::default()).unwrap();
-        assert!(!config.get_bool("threads.capture").unwrap());
+        assert!(!config.get_bool("threads.enabled").unwrap());
         assert!(config.get_bool("threads.capture_tools").unwrap());
     }
 
@@ -3106,6 +3146,7 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
     #[case::legacy_keys(
         "[ai]\ncapture_sessions = true\ncapture_tools = false\n\n[ai.sessions]\nmouse = false\n"
     )]
+    #[case::threads_capture("[threads]\ncapture = true\n")]
     #[case::retired_ai_keys(
         "[ai]\nenabled = false\nmodel = \"m\"\nyolo = true\n\n[ai.opening]\nsend_cwd = true\n"
     )]
@@ -3134,17 +3175,6 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         "[threads]\nmouse_typo = true\n\n[ai.sessions]\nmouse_typo = false\n",
         &["ai.sessions.mouse_typo", "threads.mouse_typo"]
     )]
-    #[cfg_attr(
-        feature = "octavo",
-        case::under_legacy_octavo("[octavo]\nenabld = true\n", &["octavo.enabld"])
-    )]
-    #[cfg_attr(
-        feature = "octavo",
-        case::under_both_octavo_spellings(
-            "[teams]\nenabld = true\n\n[octavo]\nenabld = true\n",
-            &["octavo.enabld", "teams.enabld"]
-        )
-    )]
     fn typos_under_legacy_keys_are_reported_as_written(
         #[case] toml: &str,
         #[case] expected: &[&str],
@@ -3152,21 +3182,11 @@ columns = [{{ type = \"command\", not_a_column_field = true }}]
         assert_unknown(&load_file(toml).unknown, expected);
     }
 
-    #[cfg(feature = "octavo")]
-    #[rstest]
-    fn legacy_octavo_applies_quietly() {
-        let Checked {
-            value: settings,
-            unknown,
-        } = load_file("[octavo]\nenabled = true\n");
-        assert_unknown(&unknown, &[]);
-        assert!(settings.teams.enabled);
-    }
-
     #[cfg(not(feature = "octavo"))]
     #[rstest]
-    fn teams_is_not_unknown_without_octavo() {
-        assert_unknown(&load_file("[teams]\nenabled = true\n").unknown, &[]);
+    fn the_hidden_table_is_not_unknown_without_octavo() {
+        let toml = "[__debug__]\nhub_address = \"http://127.0.0.1:50052\"\n";
+        assert_unknown(&load_file(toml).unknown, &[]);
     }
 
     fn daemon_enabled(settings: &Settings) -> bool {

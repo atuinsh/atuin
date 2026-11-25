@@ -23,6 +23,7 @@ pub mod rehydrate;
 pub mod resume;
 pub mod session;
 pub mod sync;
+pub mod vibe;
 
 use amp::Amp;
 use ccode::Ccode;
@@ -40,6 +41,7 @@ use session::any::{AnySessions, ObservableExt};
 use sync::{
     AppendOptions, AppendOutcome, Liveness, LocalTip, ReplaceOutcome, SessionSync, SyncError,
 };
+use vibe::Vibe;
 
 use crate::sync::BlockingPool;
 
@@ -159,6 +161,7 @@ pub enum AnyHarness {
     Kiro(Kiro),
     Opencode(Opencode),
     Pi(Pi),
+    Vibe(Vibe),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -202,6 +205,9 @@ pub enum InstallHookError {
 
     #[error("hook already installed")]
     AlreadyInstalled,
+
+    #[error("this agent offers no hooks for atuin to record its commands with")]
+    Unsupported,
 }
 
 /// The line of a TypeScript plugin that names atuin, for [`plugin_with_executable`].
@@ -269,6 +275,7 @@ impl AnyHarness {
             Self::Opencode(Opencode),
             Self::Pi(Pi::PI),
             Self::Pi(Pi::OMP),
+            Self::Vibe(Vibe),
         ]
     }
 }

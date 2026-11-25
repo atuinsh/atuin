@@ -12,6 +12,9 @@ mod contributors;
 
 mod gen_completions;
 
+#[cfg(feature = "client")]
+mod gen_reference;
+
 mod external;
 
 #[derive(Subcommand, Couture)]
@@ -46,6 +49,11 @@ pub enum AtuinCmd {
     // Plumbing: every shell init calls `atuin uuid` to seed ATUIN_SESSION; not for interactive use.
     #[command(hide = true, about = fl!("cmd-uuid"))]
     Uuid,
+
+    // Plumbing: `web/apps/docs/scripts/gen-reference.ts` renders the docs site's reference from its output.
+    #[cfg(feature = "client")]
+    #[command(hide = true)]
+    GenReference,
 
     #[command(about = fl!("cmd-contributors"))]
     #[couture(category = "advanced")]
@@ -96,6 +104,8 @@ impl AtuinCmd {
                 Ok(())
             }
             Self::GenCompletions(gen_completions) => gen_completions.run(),
+            #[cfg(feature = "client")]
+            Self::GenReference => gen_reference::run(),
             Self::External(args) => external::run(&args),
         }
     }

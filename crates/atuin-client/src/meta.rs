@@ -9,6 +9,7 @@ use atuin_domain::record::HostId;
 use eyre::{Result, eyre};
 use jiff::Timestamp;
 use secrecy::{ExposeSecret, SecretString};
+use sqlx::SqliteExecutor;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -28,11 +29,21 @@ const KEY_HUB_SESSION: &str = "hub_session";
 const KEY_HUB_USER_ID: &str = "hub_user_id";
 const KEY_FILES_MIGRATED: &str = "files_migrated";
 const KEY_WHATS_NEW_SEEN: &str = "whats_new_seen";
+/// Present when sync is [`SyncChoice::Disabled`], so a missing key means that sync is enabled.
+const KEY_SYNC_TURNED_OFF: &str = "sync_turned_off";
 
 const HUB_TOKEN_PREFIX: &str = "atapi_";
 
 /// The longest to wait for another process's commit to the store before failing.
 const LOCK_WAIT: Duration = Duration::from_mins(1);
+
+/// Whether the user wants this machine to sync. Signing in sets it to [`Self::Enabled`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SyncChoice {
+    #[default]
+    Enabled,
+    Disabled,
+}
 
 /// Whether `token` is a Hub API token rather than a legacy CLI session token.
 #[must_use]
@@ -110,20 +121,28 @@ impl MetaStore {
     }
 
     pub async fn set(&self, key: &str, value: &str) -> Result<()> {
+        Self::set_in(self.sqlite.pool(), key, value).await
+    }
+
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        Self::delete_in(self.sqlite.pool(), key).await
+    }
+
+    async fn set_in<'e>(executor: impl SqliteExecutor<'e>, key: &str, value: &str) -> Result<()> {
         db::query(
             "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, strftime('%s', 'now'))
              ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = strftime('%s', 'now')",
         )
         .bind(key)
         .bind(value)
-        .execute(self.sqlite.pool())
+        .execute(executor)
         .await?;
 
         Ok(())
     }
 
-    pub async fn delete(&self, key: &str) -> Result<()> {
-        db::query("DELETE FROM meta WHERE key = ?1").bind(key).execute(self.sqlite.pool()).await?;
+    async fn delete_in<'e>(executor: impl SqliteExecutor<'e>, key: &str) -> Result<()> {
+        db::query("DELETE FROM meta WHERE key = ?1").bind(key).execute(executor).await?;
 
         Ok(())
     }
@@ -186,12 +205,34 @@ impl MetaStore {
         self.set(KEY_WHATS_NEW_SEEN, version).await
     }
 
+    /// Whether the user wants this machine to sync, as `atuin setup` last recorded it.
+    pub async fn sync_choice(&self) -> Result<SyncChoice> {
+        Ok(match self.get(KEY_SYNC_TURNED_OFF).await? {
+            Some(_) => SyncChoice::Disabled,
+            None => SyncChoice::Enabled,
+        })
+    }
+
+    pub async fn save_sync_choice(&self, choice: SyncChoice) -> Result<()> {
+        match choice {
+            SyncChoice::Enabled => self.delete(KEY_SYNC_TURNED_OFF).await,
+            SyncChoice::Disabled => self.set(KEY_SYNC_TURNED_OFF, "true").await,
+        }
+    }
+
     pub async fn session_token(&self) -> Result<Option<SecretString>> {
         Ok(self.get(KEY_SESSION).await?.map(SecretString::from))
     }
 
+    /// Saves `token` as the sync session, which sets [`Self::sync_choice`] to
+    /// [`SyncChoice::Enabled`].
     pub async fn save_session(&self, token: &SecretString) -> Result<()> {
-        self.set(KEY_SESSION, token.expose_secret()).await
+        let mut tx = self.sqlite.pool().begin().await?;
+        Self::set_in(&mut *tx, KEY_SESSION, token.expose_secret()).await?;
+        Self::delete_in(&mut *tx, KEY_SYNC_TURNED_OFF).await?;
+        tx.commit().await?;
+
+        Ok(())
     }
 
     pub async fn delete_session(&self) -> Result<()> {
@@ -217,33 +258,20 @@ impl MetaStore {
 
     /// Saves `token` as the hub session, with `user_id`, the user it logs in, when the hub said
     /// whose it is. Without one, [`Self::hub_user_id`] has none until
-    /// [`Self::save_hub_user_id`] records it.
+    /// [`Self::save_hub_user_id`] records it. Saving it sets [`Self::sync_choice`] to
+    /// [`SyncChoice::Enabled`].
     pub async fn save_hub_session(
         &self,
         token: &SecretString,
         user_id: Option<&str>,
     ) -> Result<()> {
-        const UPSERT: &str = "INSERT INTO meta (key, value, updated_at) VALUES (?1, ?2, \
-                              strftime('%s', 'now')) ON CONFLICT(key) DO UPDATE SET value = ?2, \
-                              updated_at = strftime('%s', 'now')";
-
         let mut tx = self.sqlite.pool().begin().await?;
-        db::query(UPSERT)
-            .bind(KEY_HUB_SESSION)
-            .bind(token.expose_secret())
-            .execute(&mut *tx)
-            .await?;
+        Self::set_in(&mut *tx, KEY_HUB_SESSION, token.expose_secret()).await?;
         match user_id {
-            Some(user_id) => {
-                db::query(UPSERT).bind(KEY_HUB_USER_ID).bind(user_id).execute(&mut *tx).await?;
-            }
-            None => {
-                db::query("DELETE FROM meta WHERE key = ?1")
-                    .bind(KEY_HUB_USER_ID)
-                    .execute(&mut *tx)
-                    .await?;
-            }
+            Some(user_id) => Self::set_in(&mut *tx, KEY_HUB_USER_ID, user_id).await?,
+            None => Self::delete_in(&mut *tx, KEY_HUB_USER_ID).await?,
         }
+        Self::delete_in(&mut *tx, KEY_SYNC_TURNED_OFF).await?;
         tx.commit().await?;
 
         Ok(())
@@ -407,6 +435,45 @@ mod tests {
 
         store.delete("foo").await.unwrap();
         assert_eq!(store.get("foo").await.unwrap(), None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sync_choice_is_kept_until_changed(#[future(awt)] store: MetaStore) {
+        assert_eq!(store.sync_choice().await.unwrap(), SyncChoice::Enabled);
+
+        for choice in [
+            SyncChoice::Disabled,
+            SyncChoice::Disabled,
+            SyncChoice::Enabled,
+            SyncChoice::Enabled,
+            SyncChoice::Disabled,
+        ] {
+            store.save_sync_choice(choice).await.unwrap();
+            assert_eq!(store.sync_choice().await.unwrap(), choice);
+        }
+    }
+
+    enum Session {
+        Sync,
+        Hub,
+    }
+
+    #[rstest]
+    #[case::sync(Session::Sync)]
+    #[case::hub(Session::Hub)]
+    #[tokio::test]
+    async fn signing_in_enables_sync(#[future(awt)] store: MetaStore, #[case] session: Session) {
+        store.save_sync_choice(SyncChoice::Disabled).await.unwrap();
+
+        let token = SecretString::from("tok123");
+        match session {
+            Session::Sync => store.save_session(&token).await.unwrap(),
+            Session::Hub => store.save_hub_session(&token, None).await.unwrap(),
+        }
+
+        assert_eq!(store.sync_choice().await.unwrap(), SyncChoice::Enabled);
+        assert!(store.logged_in().await.unwrap());
     }
 
     #[rstest]

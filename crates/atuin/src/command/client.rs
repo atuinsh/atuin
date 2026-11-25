@@ -428,12 +428,21 @@ impl Cmd {
                 // on, every time.
                 #[cfg(feature = "daemon")]
                 if let atuin_ai::commands::Command::Resume(cmd) = &cli
-                    && !settings.threads.capture
+                    && !settings.threads.enabled
                     && cmd.is_interactive()
                     && let Some(mut term) = ai_sessions::Terminal::tty()
-                    && let Some(enabled) = ai_sessions::offer(&settings, &mut term).await
                 {
-                    settings = enabled;
+                    match ai_sessions::offer(&settings, &mut term).await {
+                        ai_sessions::Offer::Enabled(enabled) => settings = *enabled,
+                        // Threads captured before capture was turned off can still be resumed.
+                        ai_sessions::Offer::Declined
+                            if !atuin_ai::commands::has_anything_to_resume(&settings).await =>
+                        {
+                            return Ok(());
+                        }
+                        ai_sessions::Offer::Declined => {}
+                        ai_sessions::Offer::Cancelled => return Ok(()),
+                    }
                 }
 
                 // Resume reads the threads database itself, which a daemon of an older build
