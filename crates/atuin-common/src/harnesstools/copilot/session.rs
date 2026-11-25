@@ -519,6 +519,8 @@ struct Envelope {
     kind: String,
     id: Option<String>,
     timestamp: Option<String>,
+    /// The subagent whose event it is (from 1.0.114); none on the parent's.
+    agent_id: Option<String>,
     #[serde(default)]
     data: serde_json::Value,
 }
@@ -545,6 +547,8 @@ struct Lane {
     call: String,
     /// The agent's name, as Copilot shows it (`agentDisplayName`, else `agentName`).
     name: Option<String>,
+    /// The `agentId` its events carry, where Copilot says it (from 1.0.114).
+    agent: Option<String>,
     /// Its interaction, once its first row (its prompt) said.
     interaction: Option<String>,
     /// The id of its last row, which its next row names as its parent.
@@ -628,8 +632,16 @@ impl Reading {
             }
             return Some(found);
         }
+        if let Some(agent) = &event.agent_id {
+            return self.lanes.iter().position(|lane| lane.agent.as_ref() == Some(agent));
+        }
+        // From 1.0.115 a subagent shares the parent's interaction, so an event without an
+        // `agentId` in a lane that has one is the parent's.
         let interaction = event.interaction()?;
-        self.lanes.iter().position(|lane| lane.interaction.as_deref() == Some(interaction))
+        self.lanes
+            .iter()
+            .position(|lane| lane.interaction.as_deref() == Some(interaction))
+            .filter(|&at| self.lanes[at].agent.is_none())
     }
 
     /// Take `event` in: the message it is, with the subagent (the `task` call) whose row it is
@@ -662,6 +674,7 @@ impl Reading {
                     self.lanes.push(Lane {
                         call: call.to_owned(),
                         name: name.map(str::to_owned),
+                        agent: event.agent_id.clone(),
                         interaction: None,
                         last_row: None,
                     });
@@ -669,11 +682,16 @@ impl Reading {
                 None
             }
             "user.message" => match event.str("source") {
-                // A subagent's prompt opens its interaction: the first started that has none
-                // yet, as Copilot starts them in order.
+                // A subagent's prompt opens its interaction: its agent's, or before 1.0.114 the
+                // first started that has none yet, as Copilot starts them in order.
                 Some(source) if source.starts_with(SUBAGENT_PREFIX) => {
                     let interaction = event.interaction()?.to_owned();
-                    let lane = self.lanes.iter_mut().find(|lane| lane.interaction.is_none())?;
+                    let lane = match &event.agent_id {
+                        Some(agent) => {
+                            self.lanes.iter_mut().find(|lane| lane.agent.as_ref() == Some(agent))
+                        }
+                        None => self.lanes.iter_mut().find(|lane| lane.interaction.is_none()),
+                    }?;
                     lane.interaction = Some(interaction);
                     let call = lane.call.clone();
                     Some(self.row(Some(call), event, None))
@@ -769,6 +787,7 @@ impl Reading {
                 kind: TITLE_ROW.to_owned(),
                 id: Some(id),
                 timestamp: None,
+                agent_id: None,
                 data: serde_json::Value::Null,
             },
             cwd: None,
@@ -1446,6 +1465,7 @@ mod tests {
         let lane = Lane {
             call: TASK_CALL.to_owned(),
             name: Some("count-lines".to_owned()),
+            agent: None,
             interaction: None,
             last_row: None,
         };
@@ -1505,6 +1525,36 @@ mod tests {
             "data": {"toolCallId": "d", "success": true, "result": {"content": "y"}, "interactionId": "i-main"}}))).unwrap();
         assert_eq!(owner, None, "the parent's");
         assert!(lanes_in(Path::new("/no/such")).is_err());
+    }
+
+    /// From 1.0.115 a subagent's events carry the parent's interaction, and its own `agentId`:
+    /// they are paired by the agent, and the parent's (with no agent) stay the parent's.
+    #[rstest]
+    fn lanes_are_found_by_agent_when_the_interaction_is_shared() {
+        let mut reading = Reading::default();
+        let mut absorb = |value: serde_json::Value| {
+            reading
+                .absorb(Envelope::decode(value.to_string().as_bytes()).unwrap())
+                .map(|(owner, _)| owner)
+        };
+        for (call, agent) in [("call_1", "a1"), ("call_2", "a2")] {
+            assert!(
+                absorb(json!({"type": "subagent.started", "id": call, "agentId": agent,
+                "data": {"toolCallId": call, "agentName": "task", "interactionId": "i"}}))
+                .is_none()
+            );
+        }
+        for (id, agent, call) in [("p1", "a1", "call_1"), ("p2", "a2", "call_2")] {
+            let owner = absorb(json!({"type": "user.message", "id": id, "agentId": agent,
+                "data": {"content": "go", "source": format!("{SUBAGENT_PREFIX}s"), "interactionId": "i"}}));
+            assert_eq!(owner, Some(Some(call.to_owned())));
+        }
+        let owner = absorb(json!({"type": "tool.execution_complete", "id": "e1", "agentId": "a2",
+            "data": {"toolCallId": "c", "success": true, "result": {"content": "x"}, "interactionId": "i"}}));
+        assert_eq!(owner, Some(Some("call_2".to_owned())));
+        let owner = absorb(json!({"type": "assistant.message", "id": "e2",
+            "data": {"messageId": "m", "content": "DONE", "toolRequests": [], "interactionId": "i"}}));
+        assert_eq!(owner, Some(None), "the parent's");
     }
 
     #[rstest]
@@ -1679,6 +1729,7 @@ mod tests {
         let child = session().child(&Lane {
             call: TASK_CALL.to_owned(),
             name: None,
+            agent: None,
             interaction: None,
             last_row: None,
         });
