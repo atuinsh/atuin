@@ -113,6 +113,7 @@ pub fn tool_note(name: &str, input: &Value) -> String {
         | "run_terminal_command"
         | "execute_bash"
         | "execute_pwsh"
+        | "powershell"
         | "terminal" => on(
             field(&["command", "cmd"])
                 .or_else(|| input["action"]["command"].as_array().map(|a| command_line(a))),

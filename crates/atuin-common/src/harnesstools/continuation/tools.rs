@@ -121,6 +121,7 @@ impl Canonical {
                 | "run_terminal_command"
                 | "execute_bash"
                 | "execute_pwsh"
+                | "powershell"
                 | "terminal"
                 | "read"
                 | "read_file"
@@ -156,6 +157,7 @@ impl Canonical {
             | "run_terminal_command"
             | "execute_bash"
             | "execute_pwsh"
+            | "powershell"
             | "terminal" => {
                 let (command, workdir) = if name == "local_shell" {
                     (command(input.get("command")), string(&input, &["working_directory"]))

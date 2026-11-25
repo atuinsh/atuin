@@ -52,7 +52,7 @@ impl Harness for Ccode {
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Claude Code reads hooks from its settings.json.
         let config_path = config_dir().joined("settings.json");
-        json_hooks::install(&config_path, "^Bash$", self.name(), SessionStarts::Heard).await?;
+        json_hooks::install(&config_path, "^(Bash|PowerShell)$", self.name(), SessionStarts::Heard).await?;
         Ok(config_path)
     }
 
@@ -129,6 +129,37 @@ mod tests {
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(settings["hooks"]["PreToolUse"].is_array(), "{settings}");
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "^(Bash|PowerShell)$");
         assert!(!dir.path().join(".claude").exists());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reinstall_upgrades_legacy_bash_matcher(home: (tempfile::TempDir, MockEnv)) {
+        let (dir, _env) = home;
+        let path = dir.path().join(".claude").join("settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [{"matcher": "^Bash$", "hooks": [{"type": "command", "command": "atuin hook claude-code"}]}],
+                    "PostToolUse": [{"matcher": "^Bash$", "hooks": [{"type": "command", "command": "atuin hook claude-code"}]}],
+                    "PostToolUseFailure": [{"matcher": "^Bash$", "hooks": [{"type": "command", "command": "atuin hook claude-code"}]}]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        Ccode::new().install_hooks().await.unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for stage in ["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
+            let entries = settings["hooks"][stage].as_array().unwrap();
+            assert_eq!(entries.len(), 1, "{settings}");
+            assert_eq!(entries[0]["matcher"], "^(Bash|PowerShell)$", "{settings}");
+        }
     }
 }
