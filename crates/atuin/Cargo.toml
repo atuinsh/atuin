@@ -13,6 +13,20 @@ version.workspace = true
 
 exclude = ["vendor/bash-preexec/.github", "vendor/bash-preexec/test"]
 
+[[bin]]
+name = "atuin"
+path = "src/main.rs"
+
+# The helper that reads the desktop for the daemon. It is a binary of its own so that the macOS
+# Accessibility permission covers only code that reads the desktop.
+[[bin]]
+name = "atuin-desktop-capture"
+path = "src/bin/atuin-desktop-capture/main.rs"
+required-features = ["desktop-capture"]
+# The library `atuin-desktop-capture` has the same crate name, and its documentation would share
+# the helper's directory.
+doc = false
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
@@ -60,6 +74,19 @@ sync = ["atuin-client/sync"]
 daemon = ["dep:async-stream", "atuin-client/daemon", "atuin-daemon"]
 ai = ["atuin-ai", "atuin-client/ai", "atuin-common/ai", "atuin-daemon?/ai"]
 pty-proxy = ["dep:atuin-pty-proxy"]
+# Desktop capture: the `atuin-desktop-capture` helper, the daemon that runs it, the
+# `desktop-capture` subcommand, its parts of `atuin setup` and `atuin doctor`, and the
+# `atuin_desktop_*` MCP tools.
+desktop-capture = [
+    "daemon",
+    "atuin-common/rmp-frame",
+    "dep:atuin-desktop-capture",
+    "atuin-desktop-capture/platform",
+    "atuin-daemon/desktop-capture",
+    "atuin-ai?/desktop-capture",
+    "dep:tokio-util",
+    "dep:toml",
+]
 # Compiled in, but nothing reaches Atuin Hub until the user's own atuin.lua sets
 # `upload.threads`, which `atuin setup --hub` writes.
 octavo = [
@@ -96,6 +123,7 @@ atuin-ai = { workspace = true, optional = true }
 atuin-client = { path = "../atuin-client", version = "18.25.1", optional = true, default-features = false }
 atuin-common = { workspace = true, features = ["cli-reference", "db", "os", "unicode"] }
 atuin-daemon = { workspace = true, optional = true }
+atuin-desktop-capture = { workspace = true, optional = true, features = ["link"] }
 atuin-domain = { workspace = true }
 atuin-dotfiles = { workspace = true }
 atuin-history = { workspace = true }
@@ -149,6 +177,8 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 # settings editor with comment and relative ordering preservation
 toml_edit = { workspace = true }
 tracing = { workspace = true }
@@ -180,6 +210,7 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 atuin-common = { workspace = true, features = ["test-utils"] }
+atuin-desktop-capture = { workspace = true, features = ["test-support"] }
 # An in-process sync server for the AI session e2e tests (tests/e2e_ai_sessions.rs).
 atuin-server = { workspace = true }
 parking_lot = { workspace = true }
@@ -190,7 +221,11 @@ rusqlite = { workspace = true }
 # Kiro buckets its sessions by a SHA-256 of the working directory: the e2e tests write one as it does.
 sha2 = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-stream = { workspace = true }
 toml_edit = { workspace = true, features = ["serde"] }
+# A fake daemon for the prompt hook's tests.
+tonic = { workspace = true }
 
 # for the PTY e2e tests (tests/e2e_pty.rs)
 [target.'cfg(unix)'.dev-dependencies]

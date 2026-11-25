@@ -9,10 +9,20 @@ use clap::builder::{StyledStr, Styles};
 use eyre::Result;
 
 use crate::Atuin;
-use crate::i18n::writet;
+use crate::i18n::{fl, writet};
+
+/// The subcommand of desktop capture, which [`run`] refuses.
+///
+/// The subcommand reaches [`run`] only in a build without desktop capture. The helper of desktop
+/// capture is named `atuin-desktop-capture`, as a plugin would be, so [`run`] would otherwise run
+/// a helper that an earlier build left on the `PATH`.
+const DESKTOP_CAPTURE: &str = "desktop-capture";
 
 pub fn run(args: &[String]) -> Result<()> {
     let subcommand = &args[0];
+    if subcommand == DESKTOP_CAPTURE {
+        return refuse_desktop_capture(&args[1..]);
+    }
     let bin = format!("atuin-{subcommand}");
     let mut cmd = Command::new(&bin);
     cmd.args(&args[1..]);
@@ -52,6 +62,18 @@ pub fn run(args: &[String]) -> Result<()> {
             process::exit(1);
         }
     }
+}
+
+/// Fails because this build lacks desktop capture, except for `login`, which succeeds and prints
+/// nothing.
+///
+/// A session that a build with desktop capture set up runs `desktop-capture login` at each login,
+/// which must never fail the login.
+fn refuse_desktop_capture(args: &[String]) -> Result<()> {
+    if args.first().is_some_and(|arg| arg == "login") {
+        return Ok(());
+    }
+    eyre::bail!(fl!("desktop-capture-not-built"))
 }
 
 fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
@@ -102,7 +124,7 @@ fn render_not_found(subcommand: &str, bin: &str) -> StyledStr {
 mod tests {
     use rstest::rstest;
 
-    use super::render_not_found;
+    use super::{DESKTOP_CAPTURE, render_not_found, run};
 
     #[rstest]
     fn not_found_names_the_subcommand_and_its_binary() {
@@ -114,5 +136,19 @@ mod tests {
             ),
             "{rendered:?}"
         );
+    }
+
+    #[rstest]
+    fn the_desktop_capture_helper_never_runs_as_a_plugin() {
+        let args = [DESKTOP_CAPTURE.to_owned(), "status".to_owned()];
+        let err = run(&args).unwrap_err();
+        assert_eq!(err.to_string(), "this atuin was built without desktop capture");
+    }
+
+    #[rstest]
+    fn a_login_that_desktop_capture_set_up_still_succeeds() {
+        let args =
+            [DESKTOP_CAPTURE.to_owned(), "login".to_owned(), "--shell".to_owned(), "sh".to_owned()];
+        assert!(run(&args).is_ok());
     }
 }

@@ -1,0 +1,6 @@
+{
+  "uuid": "desktop-capture-test@atuin.sh",
+  "name": "desktop capture test control",
+  "description": "Lets the desktop capture test harness focus and list windows over D-Bus. Only for private test sessions.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}

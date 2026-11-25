@@ -10,7 +10,7 @@ use atuin_client::settings::output::CommandFilter;
 use atuin_common::harnesstools::access::Access;
 use atuin_common::harnesstools::session::ToolUse;
 use atuin_common::secrets::files::SensitiveFiles;
-use atuin_common::secrets::{self, REDACT_BUDGET, Redactor};
+use atuin_common::secrets::{self, BuiltinSecrets, REDACT_BUDGET, Redactor};
 use regex::RegexSet;
 
 use super::tools;
@@ -53,7 +53,7 @@ impl Default for CapturePolicy {
             command_filter: CommandFilter::default(),
             files: SensitiveFiles::default(),
             redactor: Redactor::default(),
-            users: Redactor::new(Vec::new(), false),
+            users: Redactor::new(Vec::new(), BuiltinSecrets::Off),
         }
     }
 }
@@ -67,8 +67,8 @@ impl CapturePolicy {
             secrets_filter: settings.secrets_filter,
             command_filter: settings.output.command_filter().clone(),
             files: settings.security.sensitive_files(&settings.key_path),
-            redactor: settings.security.redactor(true),
-            users: settings.security.redactor(false),
+            redactor: settings.security.redactor(BuiltinSecrets::On),
+            users: settings.security.redactor(BuiltinSecrets::Off),
         }
     }
 
@@ -132,8 +132,8 @@ impl CapturePolicy {
     #[cfg(test)]
     pub(super) fn with_redact_patterns(patterns: Vec<regex::Regex>) -> Self {
         Self {
-            redactor: Redactor::new(patterns.clone(), true),
-            users: Redactor::new(patterns, false),
+            redactor: Redactor::new(patterns.clone(), BuiltinSecrets::On),
+            users: Redactor::new(patterns, BuiltinSecrets::Off),
             ..Self::default()
         }
     }
@@ -174,7 +174,7 @@ pub(super) mod tests {
                 Some(PathBuf::from("/home/me")),
             ),
             redactor: Redactor::default(),
-            users: Redactor::new(Vec::new(), false),
+            users: Redactor::new(Vec::new(), BuiltinSecrets::Off),
         }
     }
 

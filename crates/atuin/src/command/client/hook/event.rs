@@ -67,7 +67,14 @@ pub enum HookEvent {
     Cancel {
         tool_use_id: String,
     },
+    /// The user submitted a prompt in the session, which the hook can add context to.
+    PromptSubmitted {
+        session_id: String,
+    },
 }
+
+/// The harness whose prompts the hook adds context to (see `prompt_context::write_context`).
+const CLAUDE_CODE: &str = "claude-code";
 
 /// The harness whose bare `tool_response` ends in the exit code.
 const KIRO: &str = "kiro";
@@ -80,6 +87,7 @@ impl HookEvent {
     /// [`HookEvent`], or `None` when we don't care about the given event.
     ///
     /// We **don't** care about:
+    ///   - Prompts in a harness other than Claude Code, or without a session.
     ///   - Non-shell tool invocations.
     ///   - Tool invocations which are missing a `tool_use_id`, unless the session and the
     ///     command can stand in for it ([`correlation_key`]).
@@ -87,6 +95,11 @@ impl HookEvent {
     ///     `run_in_background`): their end says only that they started, so recording one would
     ///     give it the wrong exit and duration.
     fn reduce(wire: WireHookEvent, harness: &str) -> Option<Self> {
+        if wire.hook_event_name == HookEventName::UserPromptSubmit {
+            let session_id =
+                wire.session_id.filter(|id| !id.is_empty() && harness == CLAUDE_CODE)?;
+            return Some(HookEvent::PromptSubmitted { session_id });
+        }
         if matches!(wire.tool_name, WireToolName::Other) {
             return None;
         }
@@ -138,7 +151,7 @@ impl HookEvent {
                 transcript: wire.transcript_path,
                 duration: None,
             }),
-            HookEventName::Other => None,
+            HookEventName::UserPromptSubmit | HookEventName::Other => None,
         }
     }
 }

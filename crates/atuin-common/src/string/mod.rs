@@ -20,8 +20,10 @@ mod wrap;
 mod auto_os_string;
 mod bounded;
 mod escape_non_printable_posix_ext;
+mod excerpt;
 mod non_blank;
 mod non_nul_str;
+mod one_line;
 
 #[allow(clippy::manual_range_contains, clippy::must_use_candidate, reason = "vendored file")]
 mod normalize;
@@ -34,9 +36,11 @@ pub use bounded_buffer::BoundedBuffer;
 #[cfg(feature = "unicode")]
 pub use ellipsis::EllipsizeExt;
 pub use escape_non_printable_posix_ext::EscapeNonPrintablePosixExt;
+pub use excerpt::excerpt_around;
 pub use non_blank::{Blank, NonBlank, NonBlankString};
 pub use non_nul_str::{ContainsNul, NonNulStr};
 pub use normalize::normalize;
+pub use one_line::OneLine;
 pub use trim::TrimExt;
 #[cfg(feature = "unicode")]
 pub use wrap::{Wrap, wrap};
@@ -53,6 +57,20 @@ pub trait StrExt {
 
     /// Check whether the string consists entirely of whitespace or is empty.
     fn is_space_or_empty(&self) -> bool;
+
+    /// Like [`str::find`] with a string pattern, comparing the lowercase forms of the characters.
+    fn find_ignoring_case(&self, needle: &str) -> Option<usize>;
+
+    /// Like [`str::contains`] with a string pattern, leaving whitespace out of both strings.
+    ///
+    /// For example, `"Your code is 123456"` holds `"Your code\nis 123456"`.
+    fn contains_ignoring_whitespace(&self, needle: &str) -> bool;
+
+    /// Like `==`, comparing the lowercase forms of the characters.
+    fn eq_ignoring_case(&self, other: &str) -> bool;
+
+    /// The lowercase forms of the characters, which [`Self::eq_ignoring_case`] compares.
+    fn lowercase_chars(&self) -> impl Iterator<Item = char>;
 
     /// Like [`str::strip_prefix`], for dotted keys such as `a.b.c`, matching whole segments.
     ///
@@ -110,6 +128,31 @@ impl StrExt for str {
         self.chars().all(char::is_whitespace)
     }
 
+    fn find_ignoring_case(&self, needle: &str) -> Option<usize> {
+        self.char_indices().map(|(i, _)| i).chain([self.len()]).find(|&i| {
+            let mut rest = self[i..].chars().flat_map(char::to_lowercase);
+            needle.chars().flat_map(char::to_lowercase).all(|wanted| rest.next() == Some(wanted))
+        })
+    }
+
+    fn contains_ignoring_whitespace(&self, needle: &str) -> bool {
+        fn visible(text: &str) -> impl Iterator<Item = char> {
+            text.chars().filter(|c| !c.is_whitespace())
+        }
+        self.char_indices().map(|(i, _)| i).chain([self.len()]).any(|i| {
+            let mut rest = visible(&self[i..]);
+            visible(needle).all(|wanted| rest.next() == Some(wanted))
+        })
+    }
+
+    fn eq_ignoring_case(&self, other: &str) -> bool {
+        self.lowercase_chars().eq(other.lowercase_chars())
+    }
+
+    fn lowercase_chars(&self) -> impl Iterator<Item = char> {
+        self.chars().flat_map(char::to_lowercase)
+    }
+
     fn strip_dotted_prefix(&self, prefix: &str) -> Option<&str> {
         if prefix.is_empty() {
             return Some(self);
@@ -121,6 +164,50 @@ impl StrExt for str {
             rest.strip_prefix('.')
         }
     }
+}
+
+/// Puts the lines of `text` on one line, in `text`'s own buffer.
+///
+/// Line breaks become spaces, each run of spaces becomes one space, and the result has no space
+/// at either end.
+#[must_use]
+pub fn join_lines(text: String) -> String {
+    let mut bytes = text.into_bytes();
+    for byte in &mut bytes {
+        if matches!(*byte, b'\n' | b'\r') {
+            *byte = b' ';
+        }
+    }
+    bytes.dedup_by(|byte, previous| *byte == b' ' && *previous == b' ');
+    if bytes.last() == Some(&b' ') {
+        bytes.pop();
+    }
+    if bytes.first() == Some(&b' ') {
+        bytes.remove(0);
+    }
+    // Only ASCII bytes changed or went away, so the bytes are still UTF-8.
+    String::from_utf8(bytes).expect("joining lines keeps UTF-8")
+}
+
+/// Returns `text` with `inserted` before each character at one of `offsets`.
+///
+/// The offsets count characters and come in ascending order. An offset at or past the end of
+/// `text` inserts nothing.
+#[must_use]
+pub fn insert_before_chars(
+    text: &str,
+    inserted: char,
+    offsets: impl IntoIterator<Item = usize>,
+) -> String {
+    let mut offsets = offsets.into_iter().peekable();
+    let mut out = String::with_capacity(text.len() + offsets.size_hint().0 * inserted.len_utf8());
+    for (offset, c) in text.chars().enumerate() {
+        if offsets.next_if_eq(&offset).is_some() {
+            out.push(inserted);
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Extension methods for [`String`].
@@ -276,7 +363,41 @@ mod tests {
     use rstest::rstest;
     use url::Url;
 
-    use super::{FormatSafeUrlExt, NonEmptyOrExt, ReplaceWithinError, StrExt, StringExt as _};
+    use super::{
+        FormatSafeUrlExt, NonEmptyOrExt, ReplaceWithinError, StrExt, StringExt as _,
+        insert_before_chars, join_lines,
+    };
+
+    #[rstest]
+    #[case::between_words("Yesisgood", &[3, 5], "Yes is good")]
+    #[case::none("ab", &[], "ab")]
+    #[case::after_a_wide_character("日本", &[1], "日 本")]
+    #[case::past_the_end("ab", &[2], "ab")]
+    fn insertions_go_before_their_offsets(
+        #[case] text: &str,
+        #[case] offsets: &[usize],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(insert_before_chars(text, ' ', offsets.iter().copied()), expected);
+    }
+
+    #[rstest]
+    #[case::one_line("Error while copying.", "Error while copying.")]
+    #[case::two_lines("Error while copying.\nThe folder", "Error while copying. The folder")]
+    #[case::blank_lines_and_crlf("\r\na\r\n\r\n  b \n", "a b")]
+    #[case::multibyte("“atuin-1003”\nkann nicht", "“atuin-1003” kann nicht")]
+    #[case::only_breaks("\n\n", "")]
+    fn join_lines_puts_lines_on_one_line(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(join_lines(text.to_owned()), expected);
+    }
+
+    proptest! {
+        #[test]
+        fn join_lines_matches_joining_the_words(text in "[a-zé \r\n]{0,40}") {
+            let words: Vec<_> = text.split([' ', '\r', '\n']).filter(|w| !w.is_empty()).collect();
+            prop_assert_eq!(join_lines(text.clone()), words.join(" "));
+        }
+    }
 
     /// Only the text within the context changes, even when the same text comes earlier in the
     /// string.
@@ -335,6 +456,55 @@ mod tests {
             prop_assert_eq!(key.strip_dotted_prefix(&prefix), Some(rest.as_str()));
             prop_assert_eq!(prefix.strip_dotted_prefix(&prefix), Some(""));
         }
+    }
+
+    #[rstest]
+    #[case::same_case("a needle", "needle", Some(2))]
+    #[case::other_case("a NeEdLe", "nEeDlE", Some(2))]
+    #[case::the_first_match("xx xx", "XX", Some(0))]
+    #[case::after_multibyte("é x", "X", Some(3))]
+    #[case::non_ascii_case("Ça va: ÉCOLE", "école", Some(8))]
+    #[case::missing("abc", "abcd", None)]
+    #[case::empty_needle("abc", "", Some(0))]
+    #[case::empty_haystack("", "", Some(0))]
+    fn find_ignoring_case(
+        #[case] haystack: &str,
+        #[case] needle: &str,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(haystack.find_ignoring_case(needle), expected);
+    }
+
+    #[rstest]
+    #[case::same("a needle here", "needle", true)]
+    #[case::a_line_break("Your code is 123456", "Your code\nis 123456", true)]
+    #[case::spaces_in_the_haystack("Your  code is\t123456", "code is 123456", true)]
+    #[case::no_space_at_all("Yourcode", "Your code", true)]
+    #[case::after_multibyte("é x", "x", true)]
+    #[case::missing("Your code", "Your codes", false)]
+    #[case::other_case("Needle", "needle", false)]
+    #[case::empty_needle("abc", "", true)]
+    #[case::blank_needle("abc", " \n", true)]
+    #[case::empty_haystack("", "a", false)]
+    fn contains_ignoring_whitespace(
+        #[case] haystack: &str,
+        #[case] needle: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(haystack.contains_ignoring_whitespace(needle), expected);
+    }
+
+    #[rstest]
+    #[case::same("Firefox", "Firefox", true)]
+    #[case::ascii_case("FIREFOX", "firefox", true)]
+    #[case::non_ascii_case("Écrire", "éCRIRE", true)]
+    #[case::greek("ΣΟΦΙΑ", "σοφια", true)]
+    #[case::other_text("kate", "kwrite", false)]
+    #[case::prefix("kate", "kat", false)]
+    #[case::empty("", "", true)]
+    fn eq_ignoring_case(#[case] a: &str, #[case] b: &str, #[case] expected: bool) {
+        assert_eq!(a.eq_ignoring_case(b), expected);
+        assert_eq!(b.eq_ignoring_case(a), expected);
     }
 
     #[rstest]

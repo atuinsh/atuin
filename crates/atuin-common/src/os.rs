@@ -2,6 +2,7 @@
 
 pub mod disk;
 pub mod fs;
+pub mod private;
 pub mod process;
 pub mod umask;
 

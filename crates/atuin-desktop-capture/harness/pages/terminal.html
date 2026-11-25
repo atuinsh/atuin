@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- A web terminal in the shape that xterm.js 6.1 gives its elements in screen reader mode, as
+     VS Code and cloud shells show it. Capture must keep the text around the terminal and
+     leave out every row, the live region, and the input field. Browsers leave a plain div out of
+     their trees. They keep xterm.js's terminal element, which has listeners and attributes of
+     its own, so the page's element has an id and a listener. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cloud shell</title>
+</head>
+<body>
+<h1>Cloud shell</h1>
+<p>The text beside the terminal is kept: KEEPME-777.</p>
+<div class="terminal xterm xterm-dom-renderer-owner-1" id="terminal" dir="ltr">
+  <div class="xterm-accessibility">
+    <div class="xterm-accessibility-tree" role="list">
+      <div role="listitem">TERMPROBE-12345 export TOKEN=row-one</div>
+      <div role="listitem">TERMPROBE-12345 second row</div>
+    </div>
+    <div class="live-region" aria-live="assertive">TERMPROBE-12345 output</div>
+  </div>
+  <div class="xterm-viewport"></div>
+  <div class="xterm-screen">
+    <div class="xterm-helpers">
+      <textarea class="xterm-helper-textarea" aria-label="Terminal 1, TERMPROBE-12345"
+                rows="1">TERMPROBE-12345 typed</textarea>
+    </div>
+  </div>
+</div>
+<p>The text after the terminal is kept too: KEEPME-888.</p>
+<script>
+  document.querySelector(".xterm").addEventListener("mousedown", () => {});
+</script>
+</body>
+</html>

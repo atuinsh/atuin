@@ -25,6 +25,7 @@ pub use index::{
 use tracing::warn;
 
 use super::{OutputLine, OutputMatch};
+use crate::disk_budget::Evict;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReconcileError {
@@ -176,17 +177,6 @@ impl OutputStore {
         ChunkedStream::new(hits.chunks(SEARCH_CHUNK))
     }
 
-    pub fn estimated_disk_space(&self) -> u64 {
-        self.blob.estimated_disk_space()
-    }
-
-    pub async fn eviction_candidates(
-        &self,
-        reclaim_bytes: u64,
-    ) -> Result<Vec<HistoryId>, DeleteOutputError> {
-        self.blob.eviction_candidates(reclaim_bytes).await
-    }
-
     pub async fn reconcile(&self) -> Result<(), ReconcileError> {
         let blob = self.blob.all_ids().await.items().filter_map(|res| async move {
             match res {
@@ -235,6 +225,19 @@ impl OutputStore {
                 Ok(())
             })
             .await
+    }
+}
+
+impl Evict for OutputStore {
+    type Error = DeleteOutputError;
+
+    fn estimated_disk_space(&self) -> u64 {
+        self.blob.estimated_disk_space()
+    }
+
+    async fn evict(&self, bytes: u64) -> Result<(), DeleteOutputError> {
+        let victims = self.blob.eviction_candidates(bytes).await?;
+        self.remove(&victims).await
     }
 }
 

@@ -5,6 +5,8 @@ use crate::daemon::DaemonHandle;
 use crate::grpc;
 #[cfg(feature = "ai")]
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
+#[cfg(feature = "desktop-capture")]
+use crate::grpc::desktop_capture::pb::desktop_capture_server::DesktopCaptureServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::grpc::request::RequestSpanLayer;
 use crate::grpc::userio::pb::user_io_server::UserIoServer;
@@ -27,6 +29,9 @@ pub fn run_grpc_server(
     search_service: SearchServer<SearchGrpcService>,
     #[cfg(feature = "ai")] ai_session_service: AiSessionServer<grpc::AiSessionService>,
     userio_service: UserIoServer<grpc::UserIoService>,
+    #[cfg(feature = "desktop-capture")] desktop_capture_service: DesktopCaptureServer<
+        grpc::DesktopCaptureService,
+    >,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tonic::transport::Server;
@@ -56,6 +61,8 @@ pub fn run_grpc_server(
     #[cfg(feature = "ai")]
     let router = router.add_service(ai_session_service);
     let router = router.add_service(userio_service);
+    #[cfg(feature = "desktop-capture")]
+    let router = router.add_service(desktop_capture_service);
 
     // Spawn the server in the background
     tokio::spawn(async move {

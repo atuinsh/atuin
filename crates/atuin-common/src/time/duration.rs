@@ -485,6 +485,115 @@ impl<U> SerializeAs<Option<NonZeroDuration>> for AsDisableableDuration<U> {
     }
 }
 
+/// `serde_with` marker for a duration written with its units, such as `"500ms"` or `"30s"`;
+/// serializes the same way.
+///
+/// Targets [`std::time::Duration`], and `Option<NonZeroDuration>`, where a zero duration such as
+/// `"0s"` is `None`. Use as `#[serde_as(as = "AsUnitsDuration")]`.
+pub struct AsUnitsDuration;
+
+/// Parses a duration that names its units.
+fn parse_units<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<std::time::Duration, D::Error> {
+    struct UnitsVisitor;
+
+    impl Visitor<'_> for UnitsVisitor {
+        type Value = std::time::Duration;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a duration with units, such as \"500ms\" or \"30s\"")
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            humantime::parse_duration(value)
+                .map_err(|error| E::custom(format_args!("invalid duration {value:?}: {error}")))
+        }
+    }
+
+    deserializer.deserialize_str(UnitsVisitor)
+}
+
+impl<'de> DeserializeAs<'de, std::time::Duration> for AsUnitsDuration {
+    fn deserialize_as<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<std::time::Duration, D::Error> {
+        parse_units(deserializer)
+    }
+}
+
+impl<'de> DeserializeAs<'de, Option<NonZeroDuration>> for AsUnitsDuration {
+    fn deserialize_as<D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<NonZeroDuration>, D::Error> {
+        Ok(NonZeroDuration::new(parse_units(deserializer)?))
+    }
+}
+
+impl SerializeAs<std::time::Duration> for AsUnitsDuration {
+    fn serialize_as<S: Serializer>(
+        source: &std::time::Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&humantime::format_duration(*source))
+    }
+}
+
+impl SerializeAs<Option<NonZeroDuration>> for AsUnitsDuration {
+    fn serialize_as<S: Serializer>(
+        source: &Option<NonZeroDuration>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let duration = source.map_or(std::time::Duration::ZERO, NonZeroDuration::get);
+        Self::serialize_as(&duration, serializer)
+    }
+}
+
+/// The schema of a duration that [`AsUnitsDuration`] reads.
+fn units_schema(disableable: bool) -> Schema {
+    let off = if disableable {
+        " `0s` turns it off."
+    } else {
+        ""
+    };
+    json_schema!({
+        "type": "string",
+        "description": format!("A duration such as `500ms`, `30s` or `5m`.{off}"),
+    })
+}
+
+impl JsonSchema for AsUnitsDuration {
+    fn schema_name() -> Cow<'static, str> {
+        "UnitsDuration".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        units_schema(false)
+    }
+}
+
+/// The JSON Schema of an `Option<NonZeroDuration>` field that [`AsUnitsDuration`] reads, for
+/// `#[schemars(with = "DisableableUnitsDurationSchema")]`.
+pub struct DisableableUnitsDurationSchema;
+
+impl JsonSchema for DisableableUnitsDurationSchema {
+    fn schema_name() -> Cow<'static, str> {
+        "DisableableUnitsDuration".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        units_schema(true)
+    }
+}
+
 /// The schema of a duration field: a units string, or a bare number in the field's unit.
 fn duration_schema<U: DurationUnit>(disableable: bool) -> Schema {
     let unit = match U::SECS_PER_UNIT {
@@ -565,6 +674,43 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[serde_with::serde_as]
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Units {
+        #[serde_as(as = "AsUnitsDuration")]
+        exact: std::time::Duration,
+        #[serde_as(as = "AsUnitsDuration")]
+        disableable: Option<NonZeroDuration>,
+    }
+
+    fn units(exact_ms: u64, disableable_ms: u64) -> Units {
+        Units {
+            exact: std::time::Duration::from_millis(exact_ms),
+            disableable: NonZeroDuration::new(std::time::Duration::from_millis(disableable_ms)),
+        }
+    }
+
+    /// A duration names its units, and a zero turns a disableable duration off.
+    #[rstest]
+    #[case::units(r#"{"exact": "1500ms", "disableable": "30s"}"#, Some(units(1_500, 30_000)))]
+    #[case::compound(r#"{"exact": "1m 30s", "disableable": "1h"}"#, Some(units(90_000, 3_600_000)))]
+    #[case::off(r#"{"exact": "0s", "disableable": "0s"}"#, Some(units(0, 0)))]
+    #[case::bare_number_string(r#"{"exact": "30", "disableable": "30s"}"#, None)]
+    #[case::bare_number(r#"{"exact": 30, "disableable": "30s"}"#, None)]
+    #[case::negative(r#"{"exact": "-1s", "disableable": "30s"}"#, None)]
+    fn units_durations_parse(#[case] json: &str, #[case] expected: Option<Units>) {
+        assert_eq!(serde_json::from_str::<Units>(json).ok(), expected);
+    }
+
+    proptest! {
+        #[test]
+        fn units_durations_round_trip(exact_ms in 0u64..10_000_000, disableable_ms in 0u64..10_000_000) {
+            let units = units(exact_ms, disableable_ms);
+            let json = serde_json::to_string(&units).unwrap();
+            prop_assert_eq!(serde_json::from_str::<Units>(&json).unwrap(), units);
+        }
+    }
 
     #[rstest]
     fn nonzero_duration_rejects_zero() {

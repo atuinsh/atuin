@@ -32,6 +32,8 @@ io = ["os"]
 os = ["dep:libc", "dep:objc2", "dep:objc2-foundation", "dep:objc2-service-management", "dep:windows-sys"]
 # Enables protobuf derives and conversions throughout the crate.
 proto = ["dep:prost"]
+# Enables `atuin_common::rmp::frame`.
+rmp-frame = ["dep:rmp-serde"]
 # Enables `atuin_common::db::sqlite`.
 sqlite = ["db", "sqlx/sqlite", "sqlx/regexp", "dep:libsqlite3-sys", "dep:tokio-util"]
 # Enables `atuin_common::test_utils` and `atuin_common::env::MockEnv`, for use in tests.
@@ -75,6 +77,7 @@ prost = { workspace = true, optional = true }
 ref-cast = { workspace = true }
 regex = { workspace = true }
 rmp = { workspace = true }
+rmp-serde = { workspace = true, optional = true }
 rust-embed = { workspace = true }
 schemars = { workspace = true }
 rusty_paserk = { workspace = true }

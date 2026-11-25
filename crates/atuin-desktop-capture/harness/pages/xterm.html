@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- A terminal of the real xterm.js in screen reader mode. The harness doesn't ship xterm.js:
+     the `terminals` scenario copies it next to this page when XTERM names a directory with
+     its `lib/xterm.js` and `css/xterm.css`, such as the `@xterm/xterm` package. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>xterm.js terminal</title>
+<link rel="stylesheet" href="xterm/css/xterm.css">
+<script src="xterm/lib/xterm.js"></script>
+</head>
+<body>
+<h1>xterm.js terminal</h1>
+<p>The text beside the terminal is kept: KEEPME-777.</p>
+<div id="term" style="width: 700px; height: 300px"></div>
+<p>The text after the terminal is kept too: KEEPME-888.</p>
+<script>
+  const term = new Terminal({ screenReaderMode: true, cols: 80, rows: 12 });
+  term.open(document.getElementById("term"));
+  term.write("TERMPROBE-12345 first row\r\nTERMPROBE-12345 second row\r\n$ ");
+  term.focus();
+</script>
+</body>
+</html>

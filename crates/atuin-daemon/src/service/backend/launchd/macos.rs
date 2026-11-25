@@ -4,7 +4,7 @@ use std::fs::Permissions;
 use std::io;
 use std::io::Write as _;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt as _, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -152,10 +152,8 @@ impl Launchd {
     /// Nobody else has a `gui/<uid>` domain, and launchd starts the agent with `HOME` set to the
     /// user's home, whatever this client's is.
     fn is_available() -> bool {
-        let console = std::fs::metadata("/dev/console")
-            .is_ok_and(|console| console.uid() == atuin_common::os::unix::uid());
         // The user's agents live in `~/Library/LaunchAgents`, `~` being the home launchd uses.
-        console
+        atuin_common::os::macos::console::is_at_screen()
             && LaunchdServiceManager::user().domain.plist_dir().is_ok_and(|agents| {
                 agents.parent().and_then(Path::parent)
                     == atuin_common::dirs::try_home_dir().ok().as_deref()

@@ -16,6 +16,33 @@ pub(crate) fn config_dir() -> PathBuf {
     var_nonempty("CLAUDE_CONFIG_DIR").map_or_else(|| home_dir().joined(".claude"), PathBuf::from)
 }
 
+/// The settings file that Claude Code reads its hooks from.
+fn settings_path() -> PathBuf {
+    config_dir().joined("settings.json")
+}
+
+/// Registers Atuin's hook for the prompts that the user submits in Claude Code, returning the
+/// settings file that holds it.
+pub async fn install_prompt_hook() -> Result<PathBuf, InstallHookError> {
+    let config_path = settings_path();
+    json_hooks::install_prompt_hook(&config_path, Ccode.name()).await?;
+    Ok(config_path)
+}
+
+/// Takes Atuin's hook for the prompts that the user submits out of Claude Code's settings,
+/// keeping Atuin's other hooks. Returns `false` when the settings didn't hold that hook.
+pub async fn uninstall_prompt_hook() -> Result<bool, InstallHookError> {
+    json_hooks::uninstall_prompt_hook(&settings_path(), Ccode.name()).await
+}
+
+/// Whether Atuin's Claude Code hook is installed for every Bash event.
+pub async fn is_installed() -> bool {
+    let config_path = settings_path();
+    tokio::task::spawn_blocking(move || json_hooks::has_installed(&config_path, Ccode.name()))
+        .await
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ccode;
 
@@ -49,8 +76,7 @@ impl Harness for Ccode {
 
     /// Install the hooks on the current active user's machine
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
-        // Claude Code reads hooks from its settings.json.
-        let config_path = config_dir().joined("settings.json");
+        let config_path = settings_path();
         json_hooks::install(&config_path, "^Bash$", self.name()).await?;
         Ok(config_path)
     }
@@ -129,5 +155,46 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(settings["hooks"]["PreToolUse"].is_array(), "{settings}");
         assert!(!dir.path().join(".claude").exists());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_prompt_hook_joins_the_installed_hooks(home: (tempfile::TempDir, MockEnv)) {
+        let (_dir, _env) = home;
+        assert!(!is_installed().await);
+        Ccode::new().install_hooks().await.unwrap();
+        assert!(is_installed().await);
+
+        let path = install_prompt_hook().await.unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["hooks"]["UserPromptSubmit"].as_array().map(Vec::len), Some(1));
+    }
+
+    /// Taking the prompt hook out keeps the Bash hooks and the user's own prompt hook, and a
+    /// second run finds nothing to take out.
+    #[rstest]
+    #[tokio::test]
+    async fn uninstalling_the_prompt_hook_keeps_the_other_hooks(
+        home: (tempfile::TempDir, MockEnv),
+    ) {
+        let (_dir, _env) = home;
+        Ccode::new().install_hooks().await.unwrap();
+        let path = install_prompt_hook().await.unwrap();
+        let mut settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let theirs = serde_json::json!({"hooks": [{"type": "command", "command": "notify"}]});
+        settings["hooks"]["UserPromptSubmit"].as_array_mut().unwrap().push(theirs.clone());
+        std::fs::write(&path, settings.to_string()).unwrap();
+
+        let first = uninstall_prompt_hook().await.unwrap();
+        let second = uninstall_prompt_hook().await.unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["hooks"]["UserPromptSubmit"], serde_json::json!([theirs]));
+        assert!(is_installed().await);
+        assert_eq!((first, second), (true, false));
     }
 }

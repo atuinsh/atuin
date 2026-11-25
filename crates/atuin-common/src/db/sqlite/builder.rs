@@ -65,6 +65,7 @@ pub struct SqliteBuilder<'a> {
     foreign_keys: bool,
     restrict_permissions: bool,
     regexp: bool,
+    secure_delete: bool,
     access: Access,
 }
 
@@ -116,6 +117,7 @@ impl<'a> SqliteBuilder<'a> {
             foreign_keys: true,
             restrict_permissions: false,
             regexp: false,
+            secure_delete: false,
             access: Access::ReadWrite,
         }
     }
@@ -167,6 +169,14 @@ impl<'a> SqliteBuilder<'a> {
     #[must_use]
     pub fn regexp(mut self) -> Self {
         self.regexp = true;
+        self
+    }
+
+    /// Makes every connection overwrite the content that a deletion frees with zeros, so that
+    /// the database's files don't keep a copy of deleted rows once the WAL is checkpointed.
+    #[must_use]
+    pub fn secure_delete(mut self) -> Self {
+        self.secure_delete = true;
         self
     }
 
@@ -241,6 +251,9 @@ impl<'a> SqliteBuilder<'a> {
 
         if self.regexp {
             opts = opts.with_regexp();
+        }
+        if self.secure_delete {
+            opts = opts.pragma("secure_delete", "ON");
         }
 
         let is_memory = self.is_memory();

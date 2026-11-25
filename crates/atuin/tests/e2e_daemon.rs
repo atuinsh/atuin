@@ -171,6 +171,79 @@ async fn foreground_daemon_replaces_a_stale_socket(mut daemon: Daemon) {
     daemon.start_foreground().await;
 }
 
+/// `desktop-capture login --in-desktop-session`, as the autostart entry calls it, tells a running
+/// daemon that a desktop session started. A login file's call of `login` doesn't.
+///
+/// Only Linux has the autostart entry. The daemon on macOS ignores reported sessions, because its
+/// watch knows whether the user is at the screen.
+#[cfg(all(feature = "desktop-capture", not(target_os = "macos")))]
+#[rstest]
+#[case::autostart_entry(&["desktop-capture", "login", "--in-desktop-session"], true)]
+#[case::login_file(&["desktop-capture", "login", "--shell", "sh"], false)]
+#[tokio::test]
+async fn login_reports_the_session_to_a_running_daemon(
+    mut daemon: Daemon,
+    #[case] login: &[&str],
+    #[case] reports: bool,
+) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let starts = daemon.env.home().join("helper-starts");
+    // A helper that finds no desktop session, which `CaptureExit::NoDesktop` reports as 4.
+    let helper = daemon.env.home().join("fake-helper");
+    let script = format!("#!/bin/sh\necho started >> '{}'\nexit 4\n", starts.display());
+    std::fs::write(&helper, script).unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    daemon.env.write_config(&format!(
+        "[daemon]\nenabled = true\nautostart = false\n\n[desktop_capture]\nenabled = true\napps = \
+         \"all\"\nhelper_path = \"{}\"\n",
+        helper.display()
+    ));
+    daemon.start_foreground().await;
+    wait_until("the first helper", || starts.exists());
+    let heard = || {
+        daemon.foreground.as_ref().unwrap().logs().contains("a desktop session may have started")
+    };
+    assert!(!heard());
+
+    output(daemon.env.atuin(login));
+
+    if reports {
+        wait_until("the daemon heard of the session", heard);
+    } else {
+        // The login returns once a report would have reached the daemon.
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!heard());
+    }
+}
+
+/// `desktop-capture start` prints the outcome of the helper that it starts, rather than the state
+/// from before the start, and names the setting that keeps capture off.
+#[cfg(feature = "desktop-capture")]
+#[rstest]
+#[case::no_desktop("\"all\"", "Desktop capture: waiting for a desktop session to start")]
+#[case::no_apps("[]", "Desktop capture can't start: the `apps` setting")]
+#[tokio::test]
+async fn start_prints_its_outcome(mut daemon: Daemon, #[case] apps: &str, #[case] printed: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // A helper that finds no desktop session a second after its start, which
+    // `CaptureExit::NoDesktop` reports as 4.
+    let helper = daemon.env.home().join("fake-helper");
+    std::fs::write(&helper, "#!/bin/sh\nsleep 1\nexit 4\n").unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    daemon.env.write_config(&format!(
+        "[daemon]\nenabled = true\nautostart = false\n\n[desktop_capture]\nenabled = true\napps = \
+         {apps}\nhelper_path = \"{}\"\n",
+        helper.display()
+    ));
+    daemon.start_foreground().await;
+
+    let started = output(daemon.env.atuin(&["desktop-capture", "start"]));
+
+    assert!(started.starts_with(printed), "{started}");
+}
+
 /// With the daemon enabled but not running (and not allowed to start), history is saved locally
 /// instead of being dropped (#3866). The fallback warns, unless `--hook` silences logging.
 #[rstest]

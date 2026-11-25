@@ -1,5 +1,6 @@
 unrecognized-subcommand =
     unrecognized subcommand '{ $subcommand }' and no executable named '{ $bin }' found in your PATH
+desktop-capture-not-built = this atuin was built without desktop capture
 cmd-contributors = List the people who have contributed to Atuin
 arg-gen-completions-shell = Set the shell for generating completions
 arg-gen-completions-out-dir = Set the output directory
@@ -425,6 +426,10 @@ daemon-restarted = Daemon restarted
 config-unknown-keys = { $file } contains unrecognized settings: { $keys }
 config-check-ok = { $file } has no unrecognized settings.
 config-managed-daemon-restart-failed = could not restart the Atuin daemon: { $error }
+config-enabled = Enabled.
+config-disabled = Disabled.
+config-reload-failed = could not read the new config to restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
+config-daemon-restart-failed = could not restart the Atuin daemon: { $error }; run `atuin daemon restart` manually
 import-banner =
             Atuin         
     ======================
@@ -560,3 +565,205 @@ setup-no-changes = No settings changed
 search-keymap-invalid-key = invalid key in keymap config: { $key }: { $error }
 search-keymap-invalid-binding = invalid binding for { $key } in keymap config: { $error }
 client-internal-decoy = this command is not meant to be accessed directly
+desktop-capture-session-no-executable = could not find the path of this `atuin` executable
+desktop-capture-session-path-not-utf8 = the path of this `atuin` executable, { $path }, is not valid UTF-8, so a login file cannot name it
+desktop-capture-session-no-home = could not find your home directory
+desktop-capture-session-read-failed = could not read { $path }
+desktop-capture-session-write-failed = could not write { $path }
+desktop-capture-session-changed = { $path } changed after setup read it, so setup left it as it is
+desktop-capture-logins-started =
+    changed { $count ->
+        [one] 1 file
+       *[other] { $count } files
+    } so that capture starts at each login
+desktop-capture-logins-stopped =
+    took the start of capture out of { $count ->
+        [one] 1 file
+       *[other] { $count } files
+    } that sessions read at login
+desktop-capture-logins-start-failed = could not start capture at login: { $error }
+desktop-capture-logins-stop-failed = could not stop capture at login: { $error }
+desktop-capture-logins-unknown-shell = setup doesn't know your login shell. If your login shell doesn't read any of the files that setup changed, add these two lines to its login file: `{ $marker }` and `{ $line }`
+desktop-capture-logins-zdotdir-unknown = Zsh didn't say where its `ZDOTDIR` is, so setup wrote { $path }. If your `.zshenv` sets `ZDOTDIR`, move the block that setup added to the `.zprofile` in that directory
+desktop-capture-logins-block-after-exec = setup couldn't tell where the `exec` statement of { $path } starts, so setup added its block at the end of the file. Sessions that the `exec` starts don't run the block. To capture in those sessions, move the line `{ $marker }` and the line after it above the `exec` statement
+desktop-capture-logins-config-home = this session sets `XDG_CONFIG_HOME` to { $path }, so setup wrote { $files } there. Your login files don't seem to set `XDG_CONFIG_HOME`, and a login that doesn't set it looks in `~/.config` instead. If your logins set it elsewhere, you can ignore this note
+desktop-capture-toolkit-turned-on = turned the toolkit-accessibility setting on
+desktop-capture-toolkit-turned-off = turned the toolkit-accessibility setting back off
+desktop-capture-toolkit-left-alone = left the toolkit-accessibility setting alone, because GSettings doesn't have a dconf backend that would keep the setting
+desktop-capture-toolkit-run-failed = could not run gsettings
+desktop-capture-toolkit-set-failed = gsettings failed: { $error }
+desktop-capture-toolkit-record-failed = could not record the old value of toolkit-accessibility in { $path }
+desktop-capture-toolkit-no-home = could not find Atuin's home directory, where setup records the old value of toolkit-accessibility
+desktop-capture-hiding-session = this session sets { $assignment }, which keeps applications from exposing their content
+desktop-capture-hiding-file = { $path } sets { $assignment }, which keeps applications from exposing their content in the sessions that read the file
+desktop-capture-hiding-session-overridden = this session sets { $assignment }. From the next login on, the files that start capture override it
+desktop-capture-hiding-file-overridden = { $path } sets { $assignment }, and the files that start capture override it
+desktop-capture-signing-copy-failed = could not sign a copy of the desktop capture helper
+desktop-capture-status-unsigned = The helper doesn't have a certificate of its own, so each update needs a new grant. Run `atuin setup` to create one.
+desktop-capture-other-daemon = The daemon was started by { $program } (Atuin { $build }), { $capture ->
+        [yes] another build with desktop capture.
+       *[no] which doesn't have desktop capture.
+    }
+desktop-capture-other-daemon-unnamed = The daemon is running Atuin { $build }, { $capture ->
+        [yes] another build with desktop capture.
+       *[no] which doesn't have desktop capture.
+    }
+desktop-capture-path-runs-daemon = That `atuin` comes first on PATH, so it will replace the daemon again after your next command.
+desktop-capture-path-runs-other = Desktop capture will stop after your next command, because PATH runs { $path }, another `atuin`, which replaces the daemon.
+desktop-capture-path-runs-this = PATH runs this `atuin`, so something other than your PATH ran { $program }. For example, a terminal that was open before PATH changed still runs it. If desktop capture stops again, close the terminals that are older than that change.
+desktop-capture-path-fix = To keep desktop capture running, rename { $path }, or put { $dir } first on PATH. Then open a new terminal, because a terminal that is already open keeps its old PATH.
+desktop-capture-path-fix-brew = To keep desktop capture running, run `brew unlink { $formula }`, or put { $dir } first on PATH. Then open a new terminal, because a terminal that is already open keeps its old PATH. `brew unlink` removes only the link { $path }, and Homebrew keeps the package installed.
+desktop-capture-path-fix-this-dir = the directory of this `atuin`
+desktop-capture-brew-service = A `brew services` job runs Homebrew's `atuin` as the daemon. launchd starts the job at each login and again whenever the job's daemon exits, so Homebrew's daemon takes over once the daemon of this `atuin` stops, and desktop capture will stop. To use desktop capture, stop the job with `brew services stop { $formula }`. The Homebrew package will stay installed.
+desktop-capture-replacing-daemon = Replacing the daemon with this `atuin`, { $program }.
+doctor-desktop-capture-conflict = [Desktop capture] { $explanation }
+desktop-capture-conflict = { $explanation }
+cmd-desktop-capture = Control desktop capture and read what it stored
+cmd-desktop-capture-status = Show whether desktop capture is running, and how much it stored
+cmd-desktop-capture-stop = Stop desktop capture until `atuin desktop-capture start`
+cmd-desktop-capture-start = Resume desktop capture after `atuin desktop-capture stop`
+cmd-desktop-capture-log = List the most recent segments, with their ids
+arg-desktop-capture-log-limit = The maximum number of segments to list
+arg-desktop-capture-log-kind = Only the segments of these kinds, separated by commas
+arg-desktop-capture-list-style = How to print the listing
+value-desktop-capture-list-style-table = A table with a header, for reading
+value-desktop-capture-list-style-json = A JSON array of the entries, with their exact times
+value-desktop-capture-list-style-ndjson = One JSON object per entry, on a line of its own
+cmd-desktop-capture-search = Search the text, applications, and titles of captured windows and notifications
+arg-desktop-capture-search-query = Words that every hit must contain, ignoring case
+arg-desktop-capture-search-app = Only the windows and notifications of this application, ignoring case
+arg-desktop-capture-search-kind = Only the segments of these kinds, separated by commas
+arg-desktop-capture-search-after = Only the windows and notifications that were open after this time: an RFC 3339 time, a duration back from now, or a day. For example, "2h", "1d 12h", "today", "yesterday", or "3 days ago". A day means the start of that day
+arg-desktop-capture-search-before = Only the windows and notifications that were open before this time, in the forms of `--after`. A day means the start of that day, so "today" leaves out today
+arg-desktop-capture-search-limit = The maximum number of windows and notifications to list, up to 100
+arg-desktop-capture-search-style = How to print the hits
+value-desktop-capture-search-style-json = A JSON array of the hits
+value-desktop-capture-search-style-ndjson = One JSON object per hit, on a line of its own
+desktop-capture-search-empty-query = the search needs at least one word
+desktop-capture-search-no-hits = No captured window, dialog, or notification matches.
+desktop-capture-search-ago = { $age } ago
+cmd-desktop-capture-delete = Delete the captured windows and notifications of an application, of a time range, with one id, or all of them
+arg-desktop-capture-delete-app = Delete only the windows and notifications of this application, ignoring case
+arg-desktop-capture-delete-after = Delete only the windows that were open after this time, and the notifications that arrived after it: an RFC 3339 time, a duration back from now, or a day. For example, "2h", "1d 12h", "today", "yesterday", or "3 days ago". A day means the start of that day
+arg-desktop-capture-delete-before = Delete only the windows that were open before this time, and the notifications that arrived before it, in the forms of `--after`. A day means the start of that day, so "today" leaves out today
+arg-desktop-capture-delete-all = Delete everything that desktop capture stored
+arg-desktop-capture-delete-id = Delete only the segment with this id, as `log` and `search` list it
+arg-desktop-capture-delete-yes = Delete without asking
+desktop-capture-delete-nothing = No captured window or notification matches, so there is nothing to delete.
+desktop-capture-delete-preview =
+    Found { $segments ->
+        [one] 1 window segment
+       *[other] { $segments } window segments
+    } and { $notifications ->
+        [one] 1 notification
+       *[other] { $notifications } notifications
+    }, from { $from } to { $to }.
+desktop-capture-delete-preview-damaged =
+    Found { $damaged ->
+        [one] 1 damaged segment or record
+       *[other] { $damaged } damaged segments or records
+    }, which the deletion also removes.
+desktop-capture-delete-preview-segment = Found the { $kind } segment { $id } of { $app }, titled "{ $title }", from { $from } to { $to }.
+desktop-capture-delete-preview-open-segment = Found the { $kind } segment { $id } of { $app }, titled "{ $title }", open since { $from }.
+desktop-capture-delete-open-windows = Capture will resume after the deletion and will read every open window again. Close the windows that still show what you want to delete, or run `atuin desktop-capture stop` first.
+desktop-capture-delete-confirm = Delete them?
+desktop-capture-delete-confirm-one = Delete it?
+desktop-capture-delete-needs-terminal = the deletion needs confirmation, but there is no terminal to ask. Pass --yes to delete without asking
+desktop-capture-delete-declined = Deleted nothing.
+desktop-capture-delete-done =
+    Deleted { $segments ->
+        [one] 1 segment
+       *[other] { $segments } segments
+    }.
+desktop-capture-delete-done-orphans =
+    Deleted { $orphans ->
+        [one] 1 damaged record
+       *[other] { $orphans } damaged records
+    } that no segment listed.
+desktop-capture-delete-undecided =
+    Warning: { $undecided ->
+        [one] 1 damaged segment or record stayed
+       *[other] { $undecided } damaged segments or records stayed
+    } in the store, because the damage hides whether they belong to the application. `atuin desktop-capture delete --all` removes them.
+desktop-capture-delete-notes =
+    The files of the desktop capture store and of its search index no longer hold the deleted content.
+    A window that still shows deleted content will be captured again.
+    Copies outside desktop capture stay where they are. For example, recorded terminal output and agent threads keep what they recorded.
+cmd-desktop-capture-show = Print the text of a snapshot, of a segment's latest snapshot, or of a notification
+arg-desktop-capture-show-id = The id of a snapshot, as `search` and `snapshots` list it, or of a segment, as `log` and `search` list it
+arg-desktop-capture-show-segment = The id of a segment, as `log` and `search` list it, or of one of its snapshots
+arg-desktop-capture-show-first = Print the segment's first snapshot instead
+arg-desktop-capture-show-snapshot = Print this snapshot of the segment instead
+desktop-capture-show-snapshot = Snapshot { $record }
+cmd-desktop-capture-snapshots = List every snapshot of a segment, with the ids that `show` takes
+cmd-desktop-capture-stats = Show the store's totals, and each application's segments of the last 24 hours
+cmd-desktop-capture-apps = List the running applications that expose readable content, and add them to the apps setting
+arg-desktop-capture-apps-write = Add the applications to the configuration's list without asking. Refuses to replace `apps = "all"`
+desktop-capture-apps-write-refuses-all = `--write` only adds to a list, and `desktop_capture.apps` is "all", which captures every application already. Run `atuin desktop-capture apps` in a terminal to replace "all" with this list
+arg-desktop-capture-apps-no-write = Print the apps setting without writing it into the configuration
+desktop-capture-apps-pipe-failed = could not open a pipe for the desktop capture helper
+desktop-capture-apps-wait-failed = could not wait for the desktop capture helper
+desktop-capture-apps-read-failed = could not read the applications that the desktop capture helper found
+desktop-capture-apps-nothing-new = The configuration selects or excludes each of these applications already.
+desktop-capture-apps-adds = This list adds { $names } to `desktop_capture.apps`:
+desktop-capture-apps-narrows = `desktop_capture.apps` is "all". This list captures only the applications in it:
+desktop-capture-apps-confirm-add = Write the list into the configuration?
+desktop-capture-apps-confirm-narrow = Capture only these applications instead of every application?
+desktop-capture-apps-written = Wrote the list into the configuration. A running daemon will apply the list by itself.
+desktop-capture-apps-declined = The configuration stays as it is.
+desktop-capture-apps-unwritten = To capture these applications, put this line into the [desktop_capture] section of the Atuin configuration, or run `atuin desktop-capture apps --write`.
+cmd-desktop-capture-doctor = List the running applications and what each one exposes
+arg-desktop-capture-doctor-outline = Print the role tree of this application's windows instead, without any text
+desktop-capture-bad-time = could not read { $flag } "{ $time }": { $error }
+desktop-capture-backwards-range = `--after` is later than `--before`
+desktop-capture-before-default-start = `--before` is earlier than { $start }, which is where the range starts if `--after` isn't given
+desktop-capture-daemon-failed = the daemon could not answer the desktop capture request
+desktop-capture-helper-missing = the desktop capture helper is missing: there is no file at { $path }. Build Atuin with `--features desktop-capture`, or set `helper_path` in the [desktop_capture] section of the config to the helper's path
+desktop-capture-access-check-failed = the desktop capture helper could not check the Accessibility permission: { $status }
+desktop-capture-access-request-wait = could not wait for the desktop capture helper
+desktop-capture-access-request-failed = the request for the Accessibility permission ended without a grant: { $status }
+desktop-capture-helper-failed = could not run the desktop capture helper at { $path }
+desktop-capture-stop-unreached = could not reach the daemon, so desktop capture will stop when the daemon next starts
+desktop-capture-start-disabled = Desktop capture can't start: it is off, because `enabled` in the [desktop_capture] section of the config isn't `true`. Set `enabled = true` there, or run `atuin setup --desktop-capture`.
+desktop-capture-start-no-apps = Desktop capture can't start: the `apps` setting in the [desktop_capture] section of the config doesn't select any application. Set `apps = "all"` there, or run `atuin setup` to choose the applications.
+desktop-capture-stopped = Desktop capture stopped. It will stay stopped across daemon restarts until `atuin desktop-capture start`.
+desktop-capture-state-unknown = Desktop capture: in a state that this client does not know
+desktop-capture-state-disabled = Desktop capture: off. Run `atuin setup --desktop-capture` to turn it on.
+desktop-capture-state-no-apps = Desktop capture: on, but no application is selected. Set `apps = "all"` in [desktop_capture], or run `atuin desktop-capture apps` to add the applications that expose their content.
+desktop-capture-state-stopped = Desktop capture: stopped. Run `atuin desktop-capture start` to resume.
+desktop-capture-state-starting = Desktop capture: starting
+desktop-capture-state-running = Desktop capture: running
+desktop-capture-state-needs-permission = Desktop capture: waiting for permission to read the desktop. Run `atuin setup` to grant it.
+desktop-capture-state-no-desktop = Desktop capture: waiting for a desktop session to start
+desktop-capture-state-screen-locked = Desktop capture: paused while the screen is locked
+desktop-capture-state-failed = Desktop capture: failed: { $error }
+desktop-capture-status-stopped = Stopped: capture stays off until you run `atuin desktop-capture start`.
+desktop-capture-status-segments = Segments:     { $count }
+desktop-capture-status-records = Records:      about { $count }
+desktop-capture-kind-unknown = unknown
+desktop-capture-kind-active = active
+desktop-capture-kind-dialog = dialog
+desktop-capture-kind-background = background
+desktop-capture-kind-notification = notification
+desktop-capture-column-id = id
+desktop-capture-column-secs = secs
+desktop-capture-column-kind = kind
+desktop-capture-column-app = app
+desktop-capture-column-snapshots = snaps
+desktop-capture-column-snapshots-long = snapshots
+desktop-capture-column-segments = segments
+desktop-capture-column-title = title
+desktop-capture-column-secs-in = secs in
+desktop-capture-column-trigger = trigger
+desktop-capture-column-nodes = nodes
+desktop-capture-column-content = content
+desktop-capture-content-changed = changed
+desktop-capture-content-same = same
+desktop-capture-stats-segments = segments:      { $count }
+desktop-capture-stats-segments-unknown = segments:      unknown
+desktop-capture-stats-records = records:       about { $count }
+desktop-capture-stats-records-unknown = records:       unknown
+desktop-capture-stats-recent = last 24 hours:
+desktop-capture-stats-recent-segments = segments:      { $count }
+desktop-capture-stats-recent-notifications = notifications: { $count }
+desktop-capture-stats-by-app = last 24 hours, by application:

@@ -145,7 +145,7 @@ fn semantic_command_capture_config() -> Option<atuin_pty_proxy::CaptureConfig> {
             return;
         };
 
-        let redactor = Arc::new(settings.security.redactor(settings.secrets_filter));
+        let redactor = Arc::new(settings.security.redactor(settings.builtin_secrets()));
         while let Some((history_id, capture)) = rx.recv().await {
             // Output can carry credentials the command line never showed, e.g. `cat .env`.
             // Swap the string only when something was actually taken out, so that clean

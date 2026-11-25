@@ -7,6 +7,7 @@ use rustix::fs;
 use crate::path::AbsPathBuf;
 
 pub mod disk;
+pub mod display;
 pub mod io;
 pub mod process;
 pub mod tty;

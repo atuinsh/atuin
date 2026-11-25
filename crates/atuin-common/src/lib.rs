@@ -6,6 +6,7 @@ pub mod ansi;
 pub mod atuin_exe;
 #[cfg(feature = "cli-reference")]
 pub mod cli_reference;
+pub mod collections;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "db")]
@@ -14,12 +15,14 @@ pub mod dirs;
 pub mod docs;
 pub mod encryption;
 pub mod env;
+pub mod error;
 pub mod executable;
 pub mod filter;
 pub mod fs;
 pub mod futures;
 #[cfg(feature = "ai")]
 pub mod harnesstools;
+pub mod homebrew;
 pub mod i18n;
 #[cfg(feature = "io")]
 pub mod io;
@@ -28,7 +31,9 @@ pub mod logs;
 pub mod num;
 #[cfg(feature = "os")]
 pub mod os;
+pub mod panic;
 pub mod path;
+pub mod quote;
 pub mod range;
 pub mod rmp;
 pub mod secrets;

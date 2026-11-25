@@ -37,7 +37,8 @@ const NAME: &str = "atuin";
 /// `executable` is atuin by absolute path, since the gateway that runs hooks doesn't have the
 /// shell's `PATH`: the one [`launch_path`](crate::atuin_exe::launch_path) gives, which
 /// outlasts a package manager's upgrade. Nor does it have the shell's `ATUIN_` settings, so the
-/// plugin runs atuin with `env` ([`atuin_env`](super::atuin_env)) on top of the gateway's own.
+/// plugin runs atuin with `env` ([`location_env`](crate::atuin_exe::location_env)) on top of
+/// the gateway's own.
 pub async fn install(
     home: &InstallHome,
     executable: &Path,

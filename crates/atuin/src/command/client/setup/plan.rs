@@ -2,12 +2,24 @@
 //! each other.
 
 use atuin_client::meta::SyncChoice;
+use atuin_client::settings::AppSelection;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches};
 
 use super::super::init::Shell;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Choice, Flag, Form, Needs, Visit, toggles};
-use super::{AGENTS, Found, HUB, Hub, OffBecause, SYNC, Sync, THREADS, parse_sync};
+use super::{
+    AGENTS, DESKTOP_CAPTURE, Found, HUB, Hub, OffBecause, SYNC, Sync, THREADS, parse_sync,
+};
+
+/// Whether setup asks the user to confirm the plan before setup sets the plan up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Confirm {
+    /// The first screen shows the plan, and the user confirms it there.
+    Ask,
+    /// Setup sets the plan up without asking, as `--yes` and `--only` do.
+    Yes,
+}
 
 /// What setup asks about here, besides what this atuin was built with. What it doesn't ask
 /// about, it leaves as it is.
@@ -24,6 +36,13 @@ pub(super) struct Asks {
     pub(super) searchable: bool,
     /// Whether `--only --no-shell-history` takes shell history out, of the shells named beside it.
     pub(super) unhooks: bool,
+    /// Whether `--no-desktop-capture` removes what setup wrote for desktop capture. The flag
+    /// removes it even when capture is already off.
+    pub(super) removes_desktop_capture: bool,
+    /// Whether desktop capture is off, and turning it on needs this user at the Mac's screen,
+    /// where the user isn't. Only the user at the screen can grant the Accessibility
+    /// permission, and only that user's daemon starts again at each login.
+    pub(super) away_from_screen: bool,
 }
 
 /// What to set up, as chosen on the first screen and by the flags. Setup sets up its
@@ -34,6 +53,8 @@ pub(super) struct Plan {
     pub(super) shell: ShellHistory,
     pub(super) shells: Shells,
     pub(super) output: OutputCapture,
+    pub(super) desktop_capture: DesktopCapture,
+    pub(super) desktop_apps: DesktopApps,
     pub(super) threads: Threads,
     pub(super) agent_history: AgentHistory,
     pub(super) agents: Agents,
@@ -58,6 +79,11 @@ toggles! {
     OutputCapture("output-capture", "Capture") {
         on: "Capture what your commands print",
         off: "Don't capture what your commands print",
+    }
+    /// Capturing what the desktop's windows show, through the daemon's desktop capture helper.
+    DesktopCapture("desktop-capture", "Capture") {
+        on: "Capture what your desktop's windows show",
+        off: "Don't capture your desktop",
     }
     /// Capturing the agents' threads.
     Threads("threads", "Capture") {
@@ -192,6 +218,68 @@ impl Flag for UploadThreads {
     }
 }
 
+/// Which applications desktop capture reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum DesktopApps {
+    /// Every application, which setup proposes.
+    All,
+    /// Those that `desktop_capture.apps` lists, which may be none. When desktop capture is off,
+    /// setup leaves the list as it is.
+    #[default]
+    Listed,
+}
+
+impl DesktopApps {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Listed => "listed",
+        }
+    }
+
+    /// The choice that `config` makes, for the first screen. An empty list when capture is off
+    /// reads as every application, which setup proposes.
+    pub(super) fn found(config: &atuin_client::settings::DesktopCapture) -> Self {
+        match config.selection() {
+            AppSelection::Only(_) => Self::Listed,
+            AppSelection::None if config.enabled => Self::Listed,
+            AppSelection::All | AppSelection::None => Self::All,
+        }
+    }
+}
+
+fn parse_desktop_apps(value: &str) -> Result<DesktopApps, String> {
+    [DesktopApps::All, DesktopApps::Listed]
+        .into_iter()
+        .find(|apps| apps.as_str() == value)
+        .ok_or_else(|| "expected all or listed".to_owned())
+}
+
+impl Flag for DesktopApps {
+    fn args(cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("desktop-apps")
+                .long("desktop-apps")
+                .value_name("all|listed")
+                .value_parser(parse_desktop_apps)
+                .overrides_with("desktop-apps")
+                .help(
+                    "Which applications desktop capture reads: all of them, or those that \
+                     `desktop_capture.apps` lists",
+                )
+                .help_heading("Capture"),
+        )
+    }
+
+    fn from_args(matches: &ArgMatches) -> Option<Self> {
+        matches.get_one::<Self>("desktop-apps").copied()
+    }
+
+    fn flag(&self) -> String {
+        format!("--desktop-apps {}", self.as_str())
+    }
+}
+
 /// The shells setup hooks into: those `atuin init` knows that setup can write the rc file of.
 pub(super) const HOOKABLE: [Shell; 4] = [Shell::Zsh, Shell::Bash, Shell::Fish, Shell::PowerShell];
 
@@ -276,6 +364,8 @@ impl Form for Plan {
         visit.field(&mut self.shell);
         visit.field(&mut self.shells);
         visit.field(&mut self.output);
+        visit.field(&mut self.desktop_capture);
+        visit.field(&mut self.desktop_apps);
         visit.field(&mut self.threads);
         visit.field(&mut self.agent_history);
         visit.field(&mut self.agents);
@@ -330,6 +420,16 @@ const SYNCING: Needs = Needs {
     flags: "`--sync cloud`, or your own server's address",
 };
 
+const AT_SCREEN: Needs = Needs {
+    what: "you to run setup at this Mac's screen",
+    flags: "log in there, then run `atuin setup` in a terminal there",
+};
+
+const DESKTOP_CAPTURE_ON: Needs = Needs {
+    what: "desktop capture",
+    flags: "`--desktop-capture`",
+};
+
 const CONNECTED_AGENT: Needs = Needs {
     what: "a connected agent",
     flags: "`--agents`",
@@ -364,6 +464,33 @@ impl Choice<Plan> for OutputCapture {
     fn allowed(plan: &Plan) -> Result<(), Needs> {
         needs(plan.shell.0, SHELL_HISTORY)?;
         needs(plan.daemon.0, DAEMON)
+    }
+}
+
+/// Desktop capture needs the daemon, because the daemon stores what capture reads. Setup asks about
+/// desktop capture only where the desktop has an accessibility API that capture reads.
+impl Choice<Plan> for DesktopCapture {
+    fn asked(_: &Plan) -> Result<(), &'static str> {
+        if DESKTOP_CAPTURE {
+            Ok(())
+        } else {
+            Err("this atuin was built without desktop capture")
+        }
+    }
+
+    fn allowed(plan: &Plan) -> Result<(), Needs> {
+        needs(!plan.asks.away_from_screen, AT_SCREEN)?;
+        needs(plan.daemon.0, DAEMON)
+    }
+}
+
+impl Choice<Plan> for DesktopApps {
+    fn asked(plan: &Plan) -> Result<(), &'static str> {
+        DesktopCapture::asked(plan)
+    }
+
+    fn allowed(plan: &Plan) -> Result<(), Needs> {
+        needs(plan.desktop_capture.0, DESKTOP_CAPTURE_ON)
     }
 }
 
@@ -535,6 +662,8 @@ impl Plan {
             shell: ShellHistory(found.hooked || !found.inits.is_empty()),
             shells: Shells(shells),
             output: OutputCapture(found.output),
+            desktop_capture: DesktopCapture(found.desktop_capture),
+            desktop_apps: found.desktop_apps,
             threads: Threads(found.threads),
             agent_history: AgentHistory(!found.hooked_agents().is_empty()),
             agents: Agents(agents),
@@ -559,21 +688,22 @@ impl Plan {
     /// - The MCP server is on whenever this machine has a coding agent.
     /// - Agent history and thread capture are on when Atuin isn't in any agent yet. Once Atuin is
     ///   in an agent, both stay as they are.
-    /// - Sync stays as it is when this machine is signed in. Otherwise, sync is off when `yes` is
-    ///   set, when the user turned it off in an earlier setup, or when this build lacks sync. In
-    ///   every other case, sync uses the configured server, or Atuin Cloud when there isn't one.
+    /// - Sync stays as it is when this machine is signed in. Otherwise, sync is off when `confirm`
+    ///   is [`Confirm::Yes`], when the user turned it off in an earlier setup, or when this build
+    ///   lacks sync. In every other case, sync uses the configured server, or Atuin Cloud when
+    ///   there isn't one.
     /// - Atuin for Teams is on when its flag is given.
     ///
-    /// Everything else stays as it is, including output capture and the key bindings. Pass `yes`
-    /// when nobody is there to sign in.
+    /// Everything else stays as it is, including output capture and the key bindings. Pass
+    /// [`Confirm::Yes`] when nobody is there to sign in.
     #[must_use]
-    pub(super) fn proposal(self, found: &Found, yes: bool) -> Self {
+    pub(super) fn proposal(self, found: &Found, confirm: Confirm) -> Self {
         let agents = agents(&self).is_ok();
         let fresh = agents && found.connections.is_empty();
         let sync = match found.syncing() {
             // Left as it is, rather than signing them out.
             Some(syncing) => syncing,
-            None if yes => Sync::Off(OffBecause::NobodyToSignIn),
+            None if confirm == Confirm::Yes => Sync::Off(OffBecause::NobodyToSignIn),
             None if !SYNC || found.sync_choice == SyncChoice::Disabled => {
                 Sync::Off(OffBecause::Chosen)
             }

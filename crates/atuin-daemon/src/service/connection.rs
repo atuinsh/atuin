@@ -106,6 +106,12 @@ impl Connection {
         HistoryClient::from(self.channel.clone())
     }
 
+    /// A client of the service's desktop capture API, over this connection.
+    #[cfg(feature = "desktop-capture")]
+    pub fn desktop_capture_client(&self) -> crate::DesktopCaptureClient {
+        crate::DesktopCaptureClient::from(self.channel.clone())
+    }
+
     /// Starts showing what the service logs for the user, over this connection.
     pub(crate) async fn listen_logs(&self) -> Result<LogListener, tonic::Status> {
         LogListener::listen(self.channel.clone()).await

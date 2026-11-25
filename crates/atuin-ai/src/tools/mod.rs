@@ -8,6 +8,8 @@ use strum_macros::{EnumIter, EnumString, IntoStaticStr};
 /// Page-size bounds for `atuin_history`; mirrored in the MCP schema.
 pub const DEFAULT_HISTORY_RESULTS: i64 = 10;
 pub const MAX_HISTORY_RESULTS: i64 = 50;
+#[cfg(feature = "desktop-capture")]
+pub mod desktop;
 pub mod output;
 pub mod search_terms;
 pub mod session;

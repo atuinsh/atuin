@@ -43,6 +43,7 @@ enum_dispatch = { workspace = true }
 eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
+humantime = { workspace = true }
 i18n-embed = { workspace = true }
 interim = { workspace = true }
 itertools = { workspace = true }

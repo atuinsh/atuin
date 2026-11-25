@@ -14,7 +14,8 @@ use std::time::{Duration, SystemTime};
 use atuin_client::database::Sqlite;
 use atuin_client::meta::SyncChoice;
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::{RequestedSearchMode, Settings};
+use atuin_client::settings::desktop_capture::{APPS_KEY, ENABLED_KEY};
+use atuin_client::settings::{Apps, RequestedSearchMode, Settings};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::executable::is_executable_with_path_search;
@@ -39,6 +40,8 @@ use toml_edit::Value;
 use tracing::instrument;
 
 mod agents;
+#[cfg(feature = "desktop-capture")]
+mod desktop;
 mod form;
 #[cfg(feature = "octavo")]
 mod hub;
@@ -50,23 +53,26 @@ mod upload;
 #[cfg(feature = "octavo")]
 mod users_file;
 mod view;
+mod widgets;
 
 use agents::AnyHarness;
 #[cfg(feature = "ai")]
 use agents::Harness;
+#[cfg(feature = "desktop-capture")]
+use desktop::{AppsWrite, DesktopChange, capture_desktop};
 use form::{Flag, Form as _};
 #[cfg(feature = "ai")]
 use plan::{AgentHistory, Mcp};
 use plan::{
-    AiResume, Asks, AtuinHub, Choices, CtrlR, Daemon, OutputCapture, Plan, ShellHistory,
-    ThreadUploads, Threads, UpArrow,
+    AiResume, Asks, AtuinHub, Choices, Confirm, CtrlR, Daemon, DesktopApps, DesktopCapture,
+    OutputCapture, Plan, ShellHistory, ThreadUploads, Threads, UpArrow,
 };
 use shell_init::{
     RcDirs, Stripped, Unhooked, install_shell_init, remove_shell_init, shell_inits, shells_here,
     strip_init_flags,
 };
 
-use super::config::update_config_file;
+use super::config::{every_app_value, listed_apps_value, update_config_file};
 use super::init::{Key, KeyContext, KeySet, Keybindings, Shell, keys_set_by_env};
 
 /// Each flag sets a choice on the first screen, which starts from what's found here.
@@ -91,11 +97,15 @@ pub struct Cmd {
 impl Cmd {
     #[instrument(level = "trace", skip_all, err)]
     pub async fn run(self, settings: &Settings, db: &Sqlite, store: &SqliteStore) -> Result<()> {
-        let yes = self.yes || self.only || !io::stdout().is_terminal();
+        let confirm = if self.yes || self.only || !io::stdout().is_terminal() {
+            Confirm::Yes
+        } else {
+            Confirm::Ask
+        };
         let found = Found::detect(settings, db).await;
-        let plan = self.plan(&found, yes)?;
+        let plan = self.plan(&found, confirm)?;
 
-        if yes {
+        if confirm == Confirm::Yes {
             let plan = plan.effective();
             if plan.sync == Sync::Cloud && found.syncing() != Some(Sync::Cloud) {
                 eyre::bail!("signing in to Atuin Cloud needs you: run `atuin setup` without --yes");
@@ -114,10 +124,15 @@ impl Cmd {
                 // Not watched: there's no screen to watch it on.
                 let _upload = turn_on_hub(store, backfill, plan.upload_threads.0, &tx).await;
             }
+            #[cfg(feature = "desktop-capture")]
+            desktop::report_what_capture_waits_for(&plan, scope, settings, &tx).await;
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
-                if let Update::Step(step, status) = update {
-                    view::set(&mut steps, step, status);
+                match update {
+                    Update::Step(step, status) => view::set(&mut steps, step, status),
+                    #[cfg(feature = "desktop-capture")]
+                    Update::Also(step, status) => view::also(&mut steps, step, status),
+                    Update::Browser { .. } | Update::NeedKey(_) => {}
                 }
             }
             print_summary(&plan, &found, scope, &steps).await;
@@ -129,7 +144,7 @@ impl Cmd {
         } else {
             view::Mouse::Capture
         };
-        Box::pin(view::run(found, &plan, !self.no_import, mouse, store)).await
+        Box::pin(view::run(found, &plan, settings, !self.no_import, mouse, store)).await
     }
 
     /// What setup sets up: with `--only`, just what the flags name.
@@ -143,7 +158,24 @@ impl Cmd {
 
     /// What's set up here, with what setup proposes unless `--only` says to leave it, and then the
     /// flags: the first screen starts from this, and `--yes` sets it up.
-    fn plan(&self, found: &Found, yes: bool) -> Result<Plan, form::FlagError> {
+    fn plan(&self, found: &Found, confirm: Confirm) -> Result<Plan, form::FlagError> {
+        self.plan_for(found, confirm, Login::current())
+    }
+
+    /// [`plan`](Self::plan) for a user at the screen, so that a test's plan doesn't depend on
+    /// where the test runs.
+    #[cfg(test)]
+    fn plan_at_screen(&self, found: &Found, confirm: Confirm) -> Result<Plan, form::FlagError> {
+        self.plan_for(found, confirm, Login::AtScreen)
+    }
+
+    /// [`plan`](Self::plan) for a user who is logged in at `login`.
+    fn plan_for(
+        &self,
+        found: &Found,
+        confirm: Confirm,
+        login: Login,
+    ) -> Result<Plan, form::FlagError> {
         let flags = self.choices.matches();
         let asks = Asks {
             // As long as Atuin is in one, so it can come out.
@@ -153,12 +185,15 @@ impl Cmd {
             hub: AtuinHub::from_args(flags).is_some(),
             searchable: found.imported > 0 || found.threads_here > 0,
             unhooks: self.only && ShellHistory::from_args(flags) == Some(ShellHistory(false)),
+            removes_desktop_capture: DesktopCapture::from_args(flags)
+                == Some(DesktopCapture(false)),
+            away_from_screen: !found.desktop_capture && login == Login::Elsewhere,
         };
         let here = Plan::from_current_state(found, asks);
         let mut plan = if self.only {
             here
         } else {
-            here.proposal(found, yes)
+            here.proposal(found, confirm)
         };
         plan.set_from(flags);
         plan.check(flags)?;
@@ -201,6 +236,31 @@ impl Scope<'_> {
 
 /// Agents' hooks and Atuin's MCP server need the `ai` feature.
 const AGENTS: bool = cfg!(feature = "ai");
+
+/// Desktop capture needs the `desktop-capture` feature, and reads the accessibility APIs of Linux
+/// and macOS.
+const DESKTOP_CAPTURE: bool =
+    cfg!(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")));
+
+/// Where the user who runs setup is logged in, which decides whether desktop capture can get its
+/// permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Login {
+    /// At the screen, or on a platform that doesn't tie the permission to the screen.
+    AtScreen,
+    /// Elsewhere, such as over SSH, on a Mac.
+    Elsewhere,
+}
+
+impl Login {
+    fn current() -> Self {
+        #[cfg(target_os = "macos")]
+        if !atuin_common::os::macos::console::is_at_screen() {
+            return Self::Elsewhere;
+        }
+        Self::AtScreen
+    }
+}
 
 /// Agent threads need a daemon to capture them, and the `ai` feature to read them.
 const THREADS: bool = cfg!(all(feature = "ai", feature = "daemon"));
@@ -261,6 +321,10 @@ pub struct Found {
     threads: bool,
     /// Whether output is captured, as configured now.
     output: bool,
+    /// Whether the desktop is captured, as configured now.
+    desktop_capture: bool,
+    /// Which applications desktop capture reads, as the first screen offers it.
+    desktop_apps: DesktopApps,
     /// Whether the daemon keeps the output proxies send it, `output.enabled`, which it does for
     /// one started by hand without `pty_proxy.enabled`.
     saves_output: bool,
@@ -363,6 +427,8 @@ impl Found {
             keys_set_by_env,
             threads: settings.threads.enabled,
             output: settings.output.limits().is_some() && settings.pty_proxy.enabled,
+            desktop_capture: settings.desktop_capture.enabled,
+            desktop_apps: DesktopApps::found(&settings.desktop_capture),
             saves_output: settings.output.limits().is_some(),
             daemon: settings.daemon.enabled,
             daemon_running: daemon_running(settings),
@@ -465,6 +531,12 @@ pub enum Step {
     Config,
     Shells,
     Output,
+    #[cfg(feature = "desktop-capture")]
+    DesktopCapture,
+    /// Another `atuin` binary that will stop desktop capture. The step's explanation needs a line
+    /// of its own to read whole.
+    #[cfg(feature = "desktop-capture")]
+    DesktopCaptureConflict,
     #[cfg(feature = "ai")]
     AgentHooks,
     #[cfg(feature = "ai")]
@@ -487,10 +559,37 @@ pub enum Status {
     Failed(String),
 }
 
+impl Status {
+    /// This status with the phrase of `later` after its own, as [`summary`] joins phrases. The
+    /// joined status fails when either status failed, and `later` replaces a running status.
+    #[cfg(feature = "desktop-capture")]
+    fn and(self, later: Self) -> Self {
+        let failed = matches!(self, Self::Failed(_)) || matches!(later, Self::Failed(_));
+        let (Self::Done(mut text) | Self::Failed(mut text)) = self else {
+            return later;
+        };
+        let (Self::Done(added) | Self::Failed(added)) = &later else {
+            return later;
+        };
+        text.push_str("; ");
+        let mut chars = added.chars();
+        text.extend(chars.next().into_iter().flat_map(char::to_lowercase));
+        text.push_str(chars.as_str());
+        if failed {
+            Self::Failed(text)
+        } else {
+            Self::Done(text)
+        }
+    }
+}
+
 /// What the steps tell the screen.
 #[derive(Debug)]
 pub enum Update {
     Step(Step, Status),
+    /// A status whose phrase joins what the step says already, as [`Status::and`] joins them.
+    #[cfg(feature = "desktop-capture")]
+    Also(Step, Status),
     /// Sign-in is waiting on the browser, at this address, showing this code.
     Browser {
         url: String,
@@ -514,6 +613,12 @@ type Updates = mpsc::UnboundedSender<Update>;
 
 fn send(tx: &Updates, step: Step, status: Status) {
     let _ = tx.send(Update::Step(step, status));
+}
+
+/// Adds the phrase of `status` to what `step` says already.
+#[cfg(feature = "desktop-capture")]
+fn send_also(tx: &Updates, step: Step, status: Status) {
+    let _ = tx.send(Update::Also(step, status));
 }
 
 /// Do what `plan` says, telling the screen as it goes, up to the imports and Atuin Hub.
@@ -566,9 +671,18 @@ async fn apply(
             send(tx, Step::Shells, status);
         }
         #[cfg(feature = "ai")]
-        connect(plan, found, scope, tx).await;
+        connect(plan, found, scope, &settings, tx).await;
         if scope.covers::<OutputCapture>() && found.output_changes(plan.output.0) {
             capture_output(plan.output.0, &settings, tx).await;
+        }
+        #[cfg(feature = "desktop-capture")]
+        if let Some(change) = DesktopChange::of(plan, found, scope) {
+            let apps = if changed.contains(&APPS_KEY) {
+                AppsWrite::Written
+            } else {
+                AppsWrite::Kept
+            };
+            capture_desktop(change, apps, &settings, tx).await;
         }
         if stops_daemon(plan, found, scope) {
             stop_daemon(&settings, tx).await;
@@ -968,6 +1082,21 @@ fn config_changes(
         }
     }
 
+    if scope.covers::<DesktopCapture>()
+        && plan.desktop_capture.0 != settings.desktop_capture.enabled
+    {
+        changes.push((ENABLED_KEY, Value::from(plan.desktop_capture.0)));
+    }
+    // A hand-written list stays as it is when the choice stays on the listed applications.
+    if sets_desktop_apps(plan, found, scope) {
+        let all = settings.desktop_capture.apps == Apps::All;
+        match plan.desktop_apps {
+            DesktopApps::All if !all => changes.push((APPS_KEY, every_app_value())),
+            DesktopApps::Listed if all => changes.push((APPS_KEY, listed_apps_value([]))),
+            DesktopApps::All | DesktopApps::Listed => {}
+        }
+    }
+
     if scope.covers::<Threads>() && plan.threads.0 != settings.threads.enabled {
         changes.push(("threads.enabled", Value::from(plan.threads.0)));
     }
@@ -991,6 +1120,15 @@ fn config_changes(
         }
     }
     changes
+}
+
+/// Whether setup writes the applications that desktop capture reads, as far as `scope` reaches.
+///
+/// Setup writes them when capture ends up on and either `scope` names them or `scope` turns
+/// capture on. Capture that turns on without the applications captures nothing.
+fn sets_desktop_apps(plan: &Plan, found: &Found, scope: Scope<'_>) -> bool {
+    let turns_on = scope.covers::<DesktopCapture>() && !found.desktop_capture;
+    plan.desktop_capture.0 && (scope.covers::<DesktopApps>() || turns_on)
 }
 
 /// Put `atuin init` into the rc files of the shells `changes` adds, and take it out of those it
@@ -1045,10 +1183,10 @@ fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, notes: ShellNotes, tx:
 
 /// Hook the agents into Atuin and connect them to its MCP server, as far as `scope` reaches.
 #[cfg(feature = "ai")]
-async fn connect(plan: &Plan, found: &Found, scope: Scope<'_>, tx: &Updates) {
+async fn connect(plan: &Plan, found: &Found, scope: Scope<'_>, settings: &Settings, tx: &Updates) {
     let AgentChanges { hooks, mcp } = agent_changes(plan, found, scope);
     if let Some(hooks) = hooks {
-        hook_agents(&hooks, tx).await;
+        hook_agents(&hooks, settings, tx).await;
     }
     if let Some(mcp) = mcp {
         connect_agents(&mcp, tx).await;
@@ -1086,8 +1224,11 @@ fn agent_changes(plan: &Plan, found: &Found, scope: Scope<'_>) -> AgentChanges {
 }
 
 /// Install the hooks of the agents `changes` adds, and take out those of the agents it removes.
+///
+/// When desktop capture is on, Claude Code's hooks include the prompt hook, which adds recent
+/// desktop activity to each prompt.
 #[cfg(feature = "ai")]
-async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
+async fn hook_agents(changes: &Changes<AnyHarness>, settings: &Settings, tx: &Updates) {
     if changes.add.is_empty() && changes.remove.is_empty() {
         return;
     }
@@ -1098,6 +1239,10 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     for &agent in &changes.add {
         match agent.install_hooks().await {
             Ok(_) | Err(InstallHookError::AlreadyInstalled) => {
+                if let Err(e) = add_prompt_hook(agent, settings).await {
+                    failed.push(format!("{} ({e})", agent.display_name()));
+                    continue;
+                }
                 hooked.push(agent.display_name());
                 if loads_hooks_on_restart(agent) {
                     restart.push(agent.display_name());
@@ -1142,6 +1287,22 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     if let Some(status) = summary(done, failures) {
         send(tx, Step::AgentHooks, status);
     }
+}
+
+/// Registers the prompt hook of desktop capture for `agent` when capture is on and `agent` is
+/// Claude Code.
+#[cfg(all(feature = "ai", feature = "desktop-capture"))]
+async fn add_prompt_hook(agent: AnyHarness, settings: &Settings) -> Result<(), InstallHookError> {
+    if settings.desktop_capture.enabled && matches!(agent, AnyHarness::ClaudeCode(_)) {
+        super::desktop_capture::ensure_prompt_hook().await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "ai", not(feature = "desktop-capture")))]
+#[expect(clippy::unused_async, reason = "matches the desktop capture build")]
+async fn add_prompt_hook(_: AnyHarness, _: &Settings) -> Result<(), InstallHookError> {
+    Ok(())
 }
 
 /// Whether `agent` loads new hooks only once restarted, and keeps those it loaded until then:
@@ -1212,12 +1373,15 @@ const fn daemon_running(_: &Settings) -> bool {
     false
 }
 
-/// Whether `plan` turns on the daemon, or thread capture, as far as `scope` reaches, so the daemon
-/// starts now. Left for the shell to start, it wouldn't without shell history.
+/// Whether `plan` turns on the daemon, thread capture, or desktop capture, as far as `scope`
+/// reaches, so the daemon starts now. Left for the shell to start, the daemon wouldn't start
+/// without shell history.
 fn wakes_daemon(plan: &Plan, found: &Found, scope: Scope<'_>) -> bool {
     let daemon = scope.covers::<Daemon>() && !found.daemon;
     let threads = scope.covers::<Threads>() && plan.threads.0 && !found.threads;
-    plan.daemon.0 && (daemon || threads)
+    let desktop =
+        scope.covers::<DesktopCapture>() && plan.desktop_capture.0 && !found.desktop_capture;
+    plan.daemon.0 && (daemon || threads || desktop)
 }
 
 /// Start the daemon, quietly, unless something else manages it: one without `autostart`.
@@ -1235,9 +1399,11 @@ async fn start_daemon(settings: &Settings, tx: &Updates) {
     drop(quiet);
     let status = match started {
         Ok(_) => Status::Done("Started the daemon".into()),
-        Err(e) => {
-            Status::Failed(format!("Couldn't start the daemon ({e:#}): run `atuin daemon start`"))
-        }
+        // A refusal already says how to let this atuin run the daemon.
+        Err(e) => Status::Failed(e.other_program().map_or_else(
+            || format!("Couldn't start the daemon ({e:#}): run `atuin daemon start`"),
+            |refusal| format!("Couldn't start the daemon: {refusal}"),
+        )),
     };
     send(tx, Step::Daemon, status);
 }
@@ -1287,6 +1453,11 @@ async fn connect_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     for &agent in &changes.add {
         match McpAction::for_agent(agent, now, &pool).await {
             McpAction::Connect => connect.push(agent),
+            McpAction::ReportStale { command } => failed.push(format!(
+                "{} (`{command}` isn't on your PATH, so setup couldn't point its Atuin MCP server \
+                 at this atuin: run setup again where `{command}` is on your PATH)",
+                agent.display_name(),
+            )),
             McpAction::ReportMissing { command, ago } => failed.push(format!(
                 "{} (`{command}` isn't on your PATH, though it was used here {})",
                 agent.display_name(),
@@ -1361,9 +1532,22 @@ enum McpAction {
         command: &'static str,
         ago: Duration,
     },
+    /// Setup reports that the agent's command isn't on `PATH`, so setup can't update the MCP
+    /// server that the agent already has. That server may run another atuin, or one that is gone.
+    ReportStale {
+        command: &'static str,
+    },
     /// Setup leaves the agent alone and doesn't mention it. The agent's command isn't on `PATH`,
     /// and the agent hasn't been used here recently.
     Skip,
+}
+
+/// Whether an agent's configuration already holds Atuin's MCP server.
+#[cfg(feature = "ai")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpEntry {
+    Present,
+    Absent,
 }
 
 #[cfg(feature = "ai")]
@@ -1375,19 +1559,30 @@ impl McpAction {
         if is_executable_with_path_search(command) {
             return Self::Connect;
         }
+        let entry = match agent.has_mcp().await {
+            Ok(true) => McpEntry::Present,
+            Ok(false) | Err(_) => McpEntry::Absent,
+        };
         let sessions = agent.sessions(pool);
         let last_active = tokio::task::spawn_blocking(move || sessions?.last_active());
         let last_active = last_active.await.ok().flatten();
         // A session with a timestamp in the future counts as brand new.
         Self::without_command(
             command,
+            entry,
             last_active.map(|at| now.duration_since(at).unwrap_or_default()),
         )
     }
 
-    /// The action for an agent whose `command` isn't on `PATH`. The agent was last used here
-    /// `ago`.
-    fn without_command(command: &'static str, ago: Option<Duration>) -> Self {
+    /// The action for an agent whose `command` isn't on `PATH`, and whose configuration holds
+    /// Atuin's MCP server as `entry` says. The agent was last used here `ago`.
+    ///
+    /// An entry that setup can't update is reported however long ago the agent was used, because
+    /// the entry keeps the path of whichever atuin set it up.
+    fn without_command(command: &'static str, entry: McpEntry, ago: Option<Duration>) -> Self {
+        if entry == McpEntry::Present {
+            return Self::ReportStale { command };
+        }
         match ago {
             Some(ago) if ago < STILL_USED => Self::ReportMissing { command, ago },
             _ => Self::Skip,
@@ -2052,7 +2247,17 @@ mod tests {
         #[case] ago: Option<Duration>,
         #[case] expected: McpAction,
     ) {
-        assert_eq!(McpAction::without_command("grok", ago), expected);
+        assert_eq!(McpAction::without_command("grok", McpEntry::Absent, ago), expected);
+    }
+
+    /// An agent that already has Atuin's MCP server, but whose command isn't on `PATH`, keeps the
+    /// server's old path, so setup says so however long ago the agent was used.
+    #[rstest]
+    fn an_mcp_server_that_setup_cannot_update_is_reported(
+        #[values(Some(Duration::ZERO), Some(90 * DAY), None)] ago: Option<Duration>,
+    ) {
+        let action = McpAction::without_command("claude", McpEntry::Present, ago);
+        assert_eq!(action, McpAction::ReportStale { command: "claude" });
     }
 
     const fn reported(ago: Duration) -> McpAction {
@@ -2144,13 +2349,15 @@ mod tests {
             hub: false,
             searchable: false,
             unhooks: false,
+            removes_desktop_capture: false,
+            away_from_screen: false,
         };
         let here = Plan::from_current_state(&found, asks);
         let names = |plan: &Plan| plan.agents.0.iter().map(Harness::name).collect::<Vec<_>>();
         assert_eq!(names(&here), ["codex"]);
         assert_eq!((here.agent_history, here.mcp), (AgentHistory(true), Mcp(false)));
 
-        let proposed = here.proposal(&found, false);
+        let proposed = here.proposal(&found, Confirm::Ask);
         assert_eq!(names(&proposed), ["codex"]);
         assert_eq!((proposed.agent_history, proposed.mcp), (AgentHistory(true), Mcp(true)));
     }
@@ -2279,7 +2486,7 @@ mod tests {
         found.keys = inits.flags.chosen(settings);
         found.threads = settings.threads.enabled;
         let cmd = setup(args);
-        let plan = cmd.plan(found, true).unwrap().effective();
+        let plan = cmd.plan(found, Confirm::Yes).unwrap().effective();
         let mut changed = false;
         for (key, value) in config_changes(&plan, found, cmd.scope(), settings) {
             let value = value.as_bool();
@@ -2438,7 +2645,7 @@ mod tests {
     }
 
     #[fixture]
-    fn found() -> Found {
+    pub(super) fn found() -> Found {
         Found {
             history: Some(("zsh", 48210)),
             imported: 0,
@@ -2456,6 +2663,8 @@ mod tests {
             keys_set_by_env: KeySet::empty(),
             threads: false,
             output: false,
+            desktop_capture: false,
+            desktop_apps: DesktopApps::All,
             saves_output: false,
             daemon: false,
             daemon_running: false,
@@ -2470,7 +2679,7 @@ mod tests {
     }
 
     /// `atuin setup` with `args`.
-    fn setup(args: &[&str]) -> Cmd {
+    pub(super) fn setup(args: &[&str]) -> Cmd {
         Cmd::parse_from(std::iter::once("setup").chain(args.iter().copied()))
     }
 
@@ -2557,16 +2766,20 @@ mod tests {
     #[rstest]
     fn flags_turn_choices_off(found: Found) {
         let flags = ["--no-agent-history", "--no-up-arrow", "--no-mcp", "--sync", "off"];
-        assert_eq!(setup(&flags).plan(&found, false).unwrap(), Plan {
+        assert_eq!(setup(&flags).plan_at_screen(&found, Confirm::Ask).unwrap(), Plan {
             asks: Asks {
                 agents: true,
                 hub: false,
                 searchable: false,
                 unhooks: false,
+                removes_desktop_capture: false,
+                away_from_screen: false,
             },
             shell: ShellHistory(true),
             shells: plan::Shells(vec![Shell::Zsh, Shell::Bash]),
             output: OutputCapture(false),
+            desktop_capture: DesktopCapture(false),
+            desktop_apps: DesktopApps::All,
             threads: Threads(THREADS),
             agent_history: AgentHistory(false),
             agents: plan::Agents(found.agents()),
@@ -2610,6 +2823,57 @@ mod tests {
         assert!(help.contains("--no-up-arrow"), "{help}");
     }
 
+    /// On a Mac, setup turns desktop capture on only for the user at the screen, and leaves
+    /// capture that is on already to the user wherever the user is.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    #[case::away_turning_on(
+        false,
+        Login::Elsewhere,
+        Err(
+            "`--desktop-capture` needs you to run setup at this Mac's screen: log in there, then \
+             run `atuin setup` in a terminal there"
+        )
+    )]
+    #[case::at_screen_turning_on(false, Login::AtScreen, Ok(true))]
+    #[case::away_keeping_on(true, Login::Elsewhere, Ok(true))]
+    fn desktop_capture_turns_on_only_at_the_screen(
+        #[case] on_already: bool,
+        #[case] login: Login,
+        #[case] expected: Result<bool, &str>,
+        found: Found,
+    ) {
+        let found = Found {
+            daemon: true,
+            desktop_capture: on_already,
+            ..found
+        };
+
+        let plan = setup(&["--only", "--desktop-capture"]).plan_for(&found, Confirm::Yes, login);
+
+        let on = plan.map(|plan| plan.effective().desktop_capture.0);
+        assert_eq!(on.map_err(|error| error.to_string()), expected.map_err(str::to_owned));
+    }
+
+    /// Away from the screen, the first screen shows capture as needing setup at the screen, and
+    /// the proposal leaves capture off.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    fn away_from_the_screen_capture_stays_off(found: Found) {
+        let found = Found {
+            daemon: true,
+            ..found
+        };
+
+        let plan = setup(&["--desktop-capture"]).plan_for(&found, Confirm::Ask, Login::Elsewhere);
+
+        assert!(plan.is_err());
+        let plan = setup(&[]).plan_for(&found, Confirm::Ask, Login::Elsewhere).unwrap();
+        let needs = plan.ask::<DesktopCapture>().and_then(Result::err).map(|needs| needs.what);
+        assert_eq!(needs, Some("you to run setup at this Mac's screen"));
+        assert!(!plan.effective().desktop_capture.0);
+    }
+
     #[rstest]
     #[case::ctrl_r(&["--no-shell-history", "--ctrl-r"], "`--ctrl-r` needs shell history: `--shell-history`")]
     #[case::up_arrow(&["--no-shell-history", "--up-arrow"], "`--up-arrow` needs shell history: `--shell-history`")]
@@ -2624,6 +2888,20 @@ mod tests {
     #[cfg_attr(
         all(feature = "ai", feature = "daemon"),
         case::threads(&["--no-daemon", "--threads"], "`--threads` needs the daemon: `--daemon`")
+    )]
+    #[cfg_attr(
+        all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")),
+        case::desktop_capture(
+            &["--no-daemon", "--desktop-capture"],
+            "`--desktop-capture` needs the daemon: `--daemon`",
+        )
+    )]
+    #[cfg_attr(
+        all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")),
+        case::desktop_apps(
+            &["--desktop-apps", "all"],
+            "`--desktop-apps all` needs desktop capture: `--desktop-capture`",
+        )
     )]
     #[cfg_attr(
         feature = "octavo",
@@ -2660,7 +2938,7 @@ mod tests {
         #[case] args: &[&str],
         #[case] expected: &str,
     ) {
-        let error = setup(args).plan(&found, false).unwrap_err();
+        let error = setup(args).plan_at_screen(&found, Confirm::Ask).unwrap_err();
         assert_eq!(error.to_string(), expected);
     }
 
@@ -2676,7 +2954,7 @@ mod tests {
     ) {
         (found.imported, found.threads_here) = (imported, threads);
         let args = ["--no-shell-history", "--no-threads", "--no-agent-history", "--mcp"];
-        assert_eq!(setup(&args).plan(&found, false).unwrap().mcp, Mcp(true));
+        assert_eq!(setup(&args).plan_at_screen(&found, Confirm::Ask).unwrap().mcp, Mcp(true));
     }
 
     #[rstest]
@@ -2687,9 +2965,9 @@ mod tests {
         } else {
             "`--mcp` can't be on here: this atuin was built without agent support"
         };
-        let error = setup(&["--mcp"]).plan(&found, false).unwrap_err();
+        let error = setup(&["--mcp"]).plan_at_screen(&found, Confirm::Ask).unwrap_err();
         assert_eq!(error.to_string(), expected);
-        assert!(setup(&["--no-mcp"]).plan(&found, false).is_ok());
+        assert!(setup(&["--no-mcp"]).plan_at_screen(&found, Confirm::Ask).is_ok());
     }
 
     /// `--only` changes what its flags name and nothing else, as the commands it replaced did.
@@ -2703,8 +2981,12 @@ mod tests {
             hub: false,
             searchable: false,
             unhooks: false,
+            removes_desktop_capture: false,
+            away_from_screen: false,
         });
-        let plan = setup(&["--only", "--mcp", "--no-threads"]).plan(&found, true).unwrap();
+        let plan = setup(&["--only", "--mcp", "--no-threads"])
+            .plan_at_screen(&found, Confirm::Yes)
+            .unwrap();
         assert_eq!(plan, Plan {
             mcp: Mcp(true),
             threads: Threads(false),
@@ -2715,7 +2997,7 @@ mod tests {
     /// What `atuin setup <args>` writes, against a config that reads as `settings`.
     fn changes(found: &Found, settings: &Settings, args: &[&str]) -> Vec<(&'static str, String)> {
         let cmd = setup(args);
-        let plan = cmd.plan(found, true).unwrap().effective();
+        let plan = cmd.plan_at_screen(found, Confirm::Yes).unwrap().effective();
         let changes = config_changes(&plan, found, cmd.scope(), settings);
         changes.into_iter().map(|(key, value)| (key, value.to_string().trim().to_owned())).collect()
     }
@@ -2724,6 +3006,15 @@ mod tests {
     fn daemon_on(found: &mut Found, settings: &mut Settings) {
         found.daemon = true;
         settings.daemon.enabled = true;
+    }
+
+    /// Turns desktop capture on, here and in its config, capturing `apps`.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    fn desktop_on(found: &mut Found, settings: &mut Settings, apps: Apps) {
+        found.desktop_capture = true;
+        settings.desktop_capture.enabled = true;
+        settings.desktop_capture.apps = apps;
+        found.desktop_apps = DesktopApps::found(&settings.desktop_capture);
     }
 
     #[rstest]
@@ -2740,6 +3031,48 @@ mod tests {
         ("daemon.autostart", "false"),
         ("search_mode", "\"fuzzy\""),
     ])]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_capture_on(&["--only", "--desktop-capture"], daemon_on, &[
+        ("desktop_capture.enabled", "true"),
+        ("desktop_capture.apps", "\"all\""),
+    ]))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_capture_on_in_a_full_setup(
+        &["--desktop-capture", "--no-threads"],
+        daemon_on,
+        &[
+            ("search_mode", "\"daemon-fuzzy\""),
+            ("desktop_capture.enabled", "true"),
+            ("desktop_capture.apps", "\"all\""),
+        ],
+    ))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_apps_all_as_capture_turns_on(
+        &["--only", "--desktop-capture", "--desktop-apps", "all"],
+        daemon_on,
+        &[("desktop_capture.enabled", "true"), ("desktop_capture.apps", "\"all\"")],
+    ))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_apps_keep_a_written_list(
+        &["--only", "--desktop-capture", "--desktop-apps", "listed"],
+        |found: &mut Found, settings: &mut Settings| {
+            daemon_on(found, settings);
+            desktop_on(found, settings, Apps::Listed(vec!["firefox".to_owned()]));
+        },
+        &[],
+    ))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_apps_listed_instead_of_all(
+        &["--only", "--desktop-apps", "listed"],
+        |found: &mut Found, settings: &mut Settings| {
+            daemon_on(found, settings);
+            desktop_on(found, settings, Apps::All);
+        },
+        &[("desktop_capture.apps", "[]")],
+    ))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_apps_left_while_capture_is_off(
+        &["--only", "--no-desktop-capture", "--desktop-apps", "listed"],
+        |found: &mut Found, settings: &mut Settings| {
+            daemon_on(found, settings);
+            desktop_on(found, settings, Apps::All);
+        },
+        &[("desktop_capture.enabled", "false")],
+    ))]
     #[case::daemon_off_keeps_another_search(&["--only", "--no-daemon"], |found: &mut Found, settings: &mut Settings| {
         daemon_on(found, settings);
         settings.requested_search_mode = RequestedSearchMode::Prefix;
@@ -2898,7 +3231,7 @@ mod tests {
     ) {
         (found.daemon, found.daemon_running) = (daemon, running);
         let cmd = setup(args);
-        let plan = cmd.plan(&found, true).unwrap().effective();
+        let plan = cmd.plan_at_screen(&found, Confirm::Yes).unwrap().effective();
         assert_eq!(stops_daemon(&plan, &found, cmd.scope()), expected);
     }
 
@@ -2907,11 +3240,13 @@ mod tests {
     #[rstest]
     fn shells_named_narrow_unhooking(mut found: Found) {
         found.inits = vec![Shell::Zsh, Shell::Bash];
-        let plan = setup(&["--only", "--no-shell-history", "--shells", "bash"]).plan(&found, true);
+        let plan = setup(&["--only", "--no-shell-history", "--shells", "bash"])
+            .plan_at_screen(&found, Confirm::Yes);
         assert_eq!(plan.unwrap().effective().shells, plan::Shells(vec![Shell::Bash]));
 
         found.inits.clear();
-        let error = setup(&["--only", "--shells", "zsh"]).plan(&found, true).unwrap_err();
+        let error =
+            setup(&["--only", "--shells", "zsh"]).plan_at_screen(&found, Confirm::Yes).unwrap_err();
         assert_eq!(error.to_string(), "`--shells zsh` needs shell history: `--shell-history`");
     }
 
@@ -2923,6 +3258,7 @@ mod tests {
     #[cfg_attr(all(feature = "ai", feature = "daemon"), case::threads_on(&["--only", "--threads", "--daemon"], false, false, true))]
     #[cfg_attr(all(feature = "ai", feature = "daemon"), case::threads_on_already(&["--only", "--threads"], true, true, false))]
     #[cfg_attr(all(feature = "ai", feature = "daemon"), case::threads_with_daemon_on(&["--only", "--threads"], true, false, true))]
+    #[cfg_attr(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")), case::desktop_capture_on(&["--only", "--desktop-capture"], true, false, true))]
     #[case::daemon_off(&["--only", "--no-daemon"], true, false, false)]
     #[case::elsewhere(&["--only", "--no-up-arrow"], false, false, false)]
     fn the_daemon_wakes_for_what_needs_it(
@@ -2934,8 +3270,79 @@ mod tests {
     ) {
         (found.daemon, found.threads) = (daemon, threads);
         let cmd = setup(args);
-        let plan = cmd.plan(&found, true).unwrap().effective();
+        let plan = cmd.plan_at_screen(&found, Confirm::Yes).unwrap().effective();
         assert_eq!(wakes_daemon(&plan, &found, cmd.scope()), expected);
+    }
+
+    /// `--desktop-apps` sets which applications capture reads, beside `--desktop-capture`.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    fn desktop_apps_flag_sets_the_applications(mut found: Found) {
+        found.daemon = true;
+        let args = ["--only", "--desktop-apps", "listed", "--desktop-capture"];
+        let plan = setup(&args).plan_at_screen(&found, Confirm::Yes).unwrap();
+        assert_eq!(plan.desktop_apps, DesktopApps::Listed);
+    }
+
+    /// The first screen proposes every application, unless capture is on with a list, or on
+    /// with an empty list, which the user may be about to fill.
+    #[rstest]
+    #[case::all(false, Apps::All, DesktopApps::All)]
+    #[case::listed(false, Apps::Listed(vec!["firefox".to_owned()]), DesktopApps::Listed)]
+    #[case::empty_while_on(true, Apps::Listed(Vec::new()), DesktopApps::Listed)]
+    #[case::empty_while_off(false, Apps::Listed(Vec::new()), DesktopApps::All)]
+    fn found_desktop_apps(
+        #[case] enabled: bool,
+        #[case] apps: Apps,
+        #[case] expected: DesktopApps,
+    ) {
+        let config = atuin_client::settings::DesktopCapture {
+            enabled,
+            apps,
+            ..Default::default()
+        };
+        assert_eq!(DesktopApps::found(&config), expected);
+    }
+
+    /// Setup turns desktop capture on and off as the flags say, brings the login files up to
+    /// date when capture stays on, and removes them for `--no-desktop-capture` even when
+    /// capture is already off.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    #[case::turn_on(&["--only", "--desktop-capture"], false, Some(DesktopChange::TurnOn))]
+    #[case::keep_on(&["--only", "--desktop-capture"], true, Some(DesktopChange::KeepOn))]
+    #[case::keep_on_in_a_full_setup(&[], true, Some(DesktopChange::KeepOn))]
+    #[case::turn_off(&["--only", "--no-desktop-capture"], true, Some(DesktopChange::TurnOff))]
+    #[case::left_on_by_daemon_flags(&["--only", "--no-daemon"], true, None)]
+    #[case::keep_off(&["--only", "--no-desktop-capture"], false, Some(DesktopChange::KeepOff))]
+    #[case::keep_off_in_a_full_setup(&["--no-desktop-capture"], false, Some(DesktopChange::KeepOff))]
+    #[case::left_off_in_a_full_setup(&[], false, None)]
+    #[case::elsewhere(&["--only", "--no-up-arrow"], true, None)]
+    fn desktop_capture_changes(
+        mut found: Found,
+        #[case] args: &[&str],
+        #[case] on: bool,
+        #[case] expected: Option<DesktopChange>,
+    ) {
+        found.daemon = true;
+        found.desktop_capture = on;
+        let cmd = setup(args);
+        let plan = cmd.plan_at_screen(&found, Confirm::Yes).unwrap().effective();
+        assert_eq!(DesktopChange::of(&plan, &found, cmd.scope()), expected);
+    }
+
+    #[cfg(feature = "desktop-capture")]
+    #[rstest]
+    #[case::done_and_done(Status::Done("A".into()), Status::Done("B c".into()), Status::Done("A; b c".into()))]
+    #[case::done_and_failed(Status::Done("A".into()), Status::Failed("B".into()), Status::Failed("A; b".into()))]
+    #[case::failed_and_done(Status::Failed("A".into()), Status::Done("B".into()), Status::Failed("A; b".into()))]
+    #[case::running_gives_way(Status::Running("A".into()), Status::Done("B".into()), Status::Done("B".into()))]
+    fn statuses_join_their_phrases(
+        #[case] earlier: Status,
+        #[case] later: Status,
+        #[case] expected: Status,
+    ) {
+        assert_eq!(earlier.and(later), expected);
     }
 
     /// With `--only`, agents named alone get each part as it's on, and named beside a part's
@@ -2961,7 +3368,7 @@ mod tests {
             (AnyHarness::Codex(Codex), with(false, true)),
         ];
         let cmd = setup(args);
-        let plan = cmd.plan(&found, true).unwrap().effective();
+        let plan = cmd.plan_at_screen(&found, Confirm::Yes).unwrap().effective();
         let changes = agent_changes(&plan, &found, cmd.scope());
         let names = |agents: &[AnyHarness]| agents.iter().map(Harness::name).collect::<Vec<_>>();
         let names = |changes: Option<Changes<AnyHarness>>| {
@@ -2994,23 +3401,31 @@ mod tests {
         #[case] expected: bool,
     ) {
         found.daemon_off = daemon_off;
-        assert_eq!(setup(&[]).plan(&found, false).unwrap().daemon, Daemon(expected));
+        assert_eq!(
+            setup(&[]).plan_at_screen(&found, Confirm::Ask).unwrap().daemon,
+            Daemon(expected)
+        );
     }
 
     #[rstest]
-    #[case::asked(false, None, SyncChoice::Enabled, Sync::Cloud)]
-    #[case::not_asked(true, None, SyncChoice::Enabled, Sync::Off(OffBecause::NobodyToSignIn))]
-    #[case::their_server(false, Some("https://atuin.example.com"), SyncChoice::Enabled, Sync::Server("https://atuin.example.com".into()))]
-    #[case::turned_off(false, None, SyncChoice::Disabled, Sync::Off(OffBecause::Chosen))]
+    #[case::asked(Confirm::Ask, None, SyncChoice::Enabled, Sync::Cloud)]
+    #[case::not_asked(
+        Confirm::Yes,
+        None,
+        SyncChoice::Enabled,
+        Sync::Off(OffBecause::NobodyToSignIn)
+    )]
+    #[case::their_server(Confirm::Ask, Some("https://atuin.example.com"), SyncChoice::Enabled, Sync::Server("https://atuin.example.com".into()))]
+    #[case::turned_off(Confirm::Ask, None, SyncChoice::Disabled, Sync::Off(OffBecause::Chosen))]
     #[case::turned_off_with_their_server(
-        false,
+        Confirm::Ask,
         Some("https://atuin.example.com"),
         SyncChoice::Disabled,
         Sync::Off(OffBecause::Chosen)
     )]
     fn sync_without_the_flag(
         mut found: Found,
-        #[case] yes: bool,
+        #[case] confirm: Confirm,
         #[case] server: Option<&str>,
         #[case] sync_choice: SyncChoice,
         #[case] expected: Sync,
@@ -3020,17 +3435,20 @@ mod tests {
         // Without sync, there's nowhere to sync to.
         let expected = if cfg!(feature = "sync") {
             expected
-        } else if yes {
+        } else if confirm == Confirm::Yes {
             Sync::Off(OffBecause::NobodyToSignIn)
         } else {
             Sync::Off(OffBecause::Chosen)
         };
-        assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
+        assert_eq!(setup(&[]).plan_at_screen(&found, confirm).unwrap().sync, expected);
     }
 
     #[rstest]
-    fn sync_off_from_the_flag_is_chosen(found: Found, #[values(false, true)] yes: bool) {
-        let sync = setup(&["--sync", "off"]).plan(&found, yes).unwrap().sync;
+    fn sync_off_from_the_flag_is_chosen(
+        found: Found,
+        #[values(Confirm::Ask, Confirm::Yes)] confirm: Confirm,
+    ) {
+        let sync = setup(&["--sync", "off"]).plan_at_screen(&found, confirm).unwrap().sync;
         assert_eq!(sync, Sync::Off(OffBecause::Chosen));
     }
 
@@ -3039,7 +3457,7 @@ mod tests {
     #[case::their_server(Some("https://atuin.example.com"), Sync::Server("https://atuin.example.com".into()))]
     fn sync_stays_where_it_is_signed_in(
         mut found: Found,
-        #[values(false, true)] yes: bool,
+        #[values(Confirm::Ask, Confirm::Yes)] confirm: Confirm,
         #[values(SyncChoice::Enabled, SyncChoice::Disabled)] sync_choice: SyncChoice,
         #[case] server: Option<&str>,
         #[case] expected: Sync,
@@ -3047,7 +3465,7 @@ mod tests {
         found.signed_in = true;
         found.sync_choice = sync_choice;
         found.server = server.map(Into::into);
-        assert_eq!(setup(&[]).plan(&found, yes).unwrap().sync, expected);
+        assert_eq!(setup(&[]).plan_at_screen(&found, confirm).unwrap().sync, expected);
     }
 
     #[rstest]
@@ -3065,7 +3483,7 @@ mod tests {
         if !agents {
             found.agents.clear();
         }
-        assert_eq!(setup(flags).plan(&found, false).unwrap().threads.0, expected);
+        assert_eq!(setup(flags).plan_at_screen(&found, Confirm::Ask).unwrap().threads.0, expected);
     }
 
     #[cfg(feature = "octavo")]
@@ -3081,7 +3499,10 @@ mod tests {
         #[case] expected: Option<Hub>,
     ) {
         found.signed_in = true;
-        assert_eq!(setup(flags).plan(&found, false).unwrap().effective().hub(), expected);
+        assert_eq!(
+            setup(flags).plan_at_screen(&found, Confirm::Ask).unwrap().effective().hub(),
+            expected
+        );
     }
 
     #[rstest]
@@ -3105,7 +3526,7 @@ mod tests {
         #[case] args: &[&str],
         #[case] expected: &[Shell],
     ) {
-        assert_eq!(setup(args).plan(&found, false).unwrap().shells.0, expected);
+        assert_eq!(setup(args).plan_at_screen(&found, Confirm::Ask).unwrap().shells.0, expected);
     }
 
     #[rstest]
@@ -3119,7 +3540,9 @@ mod tests {
     #[rstest]
     fn agents_are_those_the_flags_name(mut found: Found) {
         found.agents.clear();
-        let plan = setup(&["--agents", "codex", "--agent-history"]).plan(&found, false).unwrap();
+        let plan = setup(&["--agents", "codex", "--agent-history"])
+            .plan_at_screen(&found, Confirm::Ask)
+            .unwrap();
         let names: Vec<_> = plan.agents.0.iter().map(Harness::name).collect();
         assert_eq!((names, plan.agent_history), (vec!["codex"], AgentHistory(true)));
     }

@@ -26,6 +26,9 @@ mod account;
 #[cfg(feature = "daemon")]
 mod daemon;
 
+#[cfg(feature = "desktop-capture")]
+mod desktop_capture;
+
 #[cfg(all(feature = "ai", feature = "daemon"))]
 mod ai_sessions;
 
@@ -71,6 +74,10 @@ pub enum Cmd {
     #[cfg(feature = "daemon")]
     #[command(subcommand)]
     Output(output::Cmd),
+
+    #[cfg(feature = "desktop-capture")]
+    #[command(subcommand, about = fl!("cmd-desktop-capture"))]
+    DesktopCapture(desktop_capture::Cmd),
 
     #[command(about = fl!("cmd-stats"))]
     Stats(stats::Cmd),
@@ -251,9 +258,19 @@ impl Cmd {
         #[cfg(not(feature = "ai"))]
         let use_multi_thread_runtime = false;
 
-        let Some(future) = self.run_inner()? else {
-            // The command was handled synchronously; return.
-            return Ok(());
+        // A session's login runs `desktop-capture login`, which must never fail the login, even
+        // when the settings do not load.
+        #[cfg(feature = "desktop-capture")]
+        let at_login = matches!(&self, Self::DesktopCapture(cmd) if cmd.is_login());
+        #[cfg(not(feature = "desktop-capture"))]
+        let at_login = false;
+
+        let future = match self.run_inner() {
+            Ok(Some(future)) => future,
+            // The command was handled synchronously.
+            Ok(None) => return Ok(()),
+            Err(_) if at_login => return Ok(()),
+            Err(err) => return Err(err),
         };
 
         let runtime = if use_multi_thread_runtime {
@@ -340,6 +357,8 @@ impl Cmd {
             // Opens the databases itself, once no other daemon can be using them.
             #[cfg(feature = "daemon")]
             Self::Daemon(cmd) => return cmd.run(Arc::new(settings)).await,
+            #[cfg(feature = "desktop-capture")]
+            Self::DesktopCapture(cmd) => return cmd.run(&settings).await,
             Self::InternalDecoy => {
                 userio::log::error!("client-internal-decoy");
                 std::process::exit(1);
@@ -416,6 +435,9 @@ impl Cmd {
             #[cfg(feature = "daemon")]
             Self::Daemon(_) => unreachable!(),
 
+            #[cfg(feature = "desktop-capture")]
+            Self::DesktopCapture(_) => unreachable!(),
+
             #[cfg(feature = "octavo")]
             Self::Workspace(_) => unreachable!(),
 
@@ -480,6 +502,8 @@ impl Cmd {
             #[cfg(feature = "ai")]
             Self::Ai(cmd) if cmd.is_widget() => Some(Quiet::Drop),
             Self::Internal(_) => Some(Quiet::Drop),
+            #[cfg(feature = "desktop-capture")]
+            Self::DesktopCapture(cmd) if cmd.is_login() => Some(Quiet::Drop),
             _ => None,
         }
     }

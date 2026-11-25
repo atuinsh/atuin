@@ -1,4 +1,5 @@
 //! Utilities for use in tests.
+pub mod ansi;
 pub mod capture;
 #[cfg(unix)]
 pub mod read_only;

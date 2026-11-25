@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -100,7 +99,7 @@ where
             }
             Err(panic) => {
                 tracing::error!(
-                    panic = panic_message(&*panic),
+                    panic = atuin_common::panic::message(&*panic),
                     ?kind,
                     ?delay,
                     "ai-session capture panicked; restarting it"
@@ -141,15 +140,6 @@ async fn listen(
     };
     capture(kind, &sink, listener.events(since, checkpoint), &opened, UNTIMED_GRACE).await;
     Ok(())
-}
-
-/// What a panic said, when it said it as text.
-fn panic_message(panic: &(dyn Any + Send)) -> &str {
-    panic
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("(not text)")
 }
 
 /// Capture every event of one harness's listener until it ends. Rows waiting for a timestamp
@@ -234,7 +224,7 @@ async fn capture(
                 };
                 if let Err(panic) = AssertUnwindSafe(line).catch_unwind().await {
                     tracing::error!(
-                        panic = panic_message(&*panic),
+                        panic = atuin_common::panic::message(&*panic),
                         ?kind,
                         %session,
                         "capturing an ai-session line panicked; passing over it"

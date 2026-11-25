@@ -1,0 +1,363 @@
+// What the desktop capture helper read from the desktop, as the daemon stores it.
+//
+// Times are milliseconds since the Unix epoch. Ids are hyphenated UUIDs.
+syntax = "proto3";
+
+package desktop_capture;
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  // The `enabled` setting is off.
+  STATE_DISABLED = 1;
+  // The `apps` setting doesn't select any application.
+  STATE_NO_APPS = 2;
+  // The user ran `atuin desktop-capture stop`.
+  STATE_STOPPED = 3;
+  STATE_STARTING = 4;
+  // The helper is connected and is capturing.
+  STATE_RUNNING = 5;
+  // The desktop refuses the helper's reads until the user grants access.
+  STATE_NEEDS_PERMISSION = 6;
+  STATE_FAILED = 7;
+  // No desktop session is running, so the helper is waiting for one.
+  STATE_NO_DESKTOP = 8;
+  // The screen is locked, so the helper doesn't read anything until the screen unlocks.
+  STATE_SCREEN_LOCKED = 9;
+}
+
+enum SegmentKind {
+  SEGMENT_KIND_UNSPECIFIED = 0;
+  // A window that the user had active.
+  SEGMENT_KIND_ACTIVE = 1;
+  // A dialog, as it appeared.
+  SEGMENT_KIND_DIALOG = 2;
+  // A window that capture read while it was in the background.
+  SEGMENT_KIND_BACKGROUND = 3;
+  // A notification, as it arrived.
+  SEGMENT_KIND_NOTIFICATION = 4;
+}
+
+// A stretch of time with one window.
+message Segment {
+  string id = 1;
+  SegmentKind kind = 2;
+  string app = 3;
+  string title = 4;
+  optional string url = 5;
+  int64 started_ms = 6;
+  // Absent while the segment is open.
+  optional int64 ended_ms = 7;
+  // How many snapshots of the window the segment holds.
+  uint32 snapshots = 8;
+}
+
+// A dialog with its message.
+message Dialog {
+  Segment segment = 1;
+  // The text of the dialog's latest snapshot, cut short when it is long. Empty when the daemon
+  // could not read the snapshot.
+  string text = 2;
+}
+
+message StatusRequest {}
+
+message StatusReply {
+  State state = 1;
+  // Why capture failed. Empty unless the state is FAILED.
+  string error = 2;
+  // Absent when the store is not open or could not count.
+  optional uint64 segments = 3;
+  // An estimate of the stored records. Absent when the store is not open or could not count.
+  optional uint64 records = 4;
+  // The user ran `atuin desktop-capture stop`, and capture stays off until `start`, regardless of
+  // the state.
+  bool stopped = 5;
+}
+
+message StopRequest {}
+
+message StopReply {}
+
+message StartRequest {
+  // How long the reply waits for the outcome of the helper that the start runs, in milliseconds:
+  // until the helper starts capturing, or until the helper ends, as when it finds no desktop
+  // session. The daemon waits at most 30 s. 0 replies at once.
+  uint32 outcome_wait_ms = 1;
+}
+
+message StartReply {}
+
+message SessionStartedRequest {}
+
+message SessionStartedReply {}
+
+message RecentActivityRequest {
+  int64 since_ms = 1;
+}
+
+// What happened on the desktop since a time, from the stored records only.
+message RecentActivityReply {
+  // Whether the helper is capturing right now.
+  bool capture_running = 1;
+  // The segments of active windows and the notification segments, oldest first.
+  repeated Segment segments = 2;
+  repeated Dialog dialogs = 3;
+}
+
+message ListSegmentsRequest {
+  int64 from_ms = 1;
+  // 0 means now.
+  int64 to_ms = 2;
+  // Only the segments of this application, compared without regard to case, as
+  // `str::to_lowercase` folds it.
+  optional string app = 3;
+  // Only the segments of these kinds. Empty means every kind.
+  repeated SegmentKind kinds = 4;
+  // Only the newest segments, by their start, up to this many.
+  optional uint32 limit = 5;
+}
+
+message ListSegmentsReply {
+  // The segments that overlap the range, oldest first.
+  repeated Segment segments = 1;
+}
+
+// Which snapshot of a segment a read returns.
+enum Which {
+  WHICH_UNSPECIFIED = 0;
+  WHICH_FIRST = 1;
+  WHICH_LATEST = 2;
+  // The snapshot of `record_id`.
+  WHICH_RECORD = 3;
+}
+
+message ReadSegmentRequest {
+  // The id of a segment, or of one of its snapshots. With a snapshot's id, `which` chooses among
+  // the snapshots of that snapshot's segment.
+  string id = 1;
+  // Which snapshot of the segment to read. UNSPECIFIED reads the snapshot that `id` names, or the
+  // latest snapshot when `id` names a segment.
+  Which which = 2;
+  // The record of the snapshot, when `which` is RECORD.
+  string record_id = 3;
+  // The longest text to return, in bytes. A longer text keeps its beginning and its end. 0
+  // returns the whole text.
+  uint64 max_bytes = 4;
+}
+
+// The rendered text of one snapshot. The text is cut to the request's `max_bytes` when
+// `truncated` is set.
+message ReadSegmentReply {
+  Segment segment = 1;
+  // When capture took the snapshot.
+  int64 at_ms = 2;
+  string text = 3;
+  // Whether `text` was cut to the request's `max_bytes`.
+  bool truncated = 4;
+  // The record of the snapshot, which a read with `which` RECORD returns again.
+  string record_id = 5;
+}
+
+message ListSnapshotsRequest {
+  // The id of a segment, or of one of its snapshots, which lists the snapshots of its segment.
+  string id = 1;
+}
+
+// One snapshot of a segment, without its text.
+message Snapshot {
+  // The record of the snapshot, for a read with `which` RECORD.
+  string record_id = 1;
+  // When capture took the snapshot.
+  int64 at_ms = 2;
+  // What led capture to read the window, such as `activated` or `edited`. Empty for a dialog or
+  // a notification, which capture reads as it appears.
+  string trigger = 3;
+  // How many elements the read stored.
+  uint64 nodes = 4;
+  // Whether the snapshot read the same content as the snapshot before it.
+  bool same_as_previous = 5;
+}
+
+message ListSnapshotsReply {
+  Segment segment = 1;
+  // The segment's snapshots, oldest first.
+  repeated Snapshot snapshots = 2;
+}
+
+message ReadSnapshotsRequest {
+  // The id of a segment, or of one of its snapshots, which reads from its segment.
+  string id = 1;
+  // The records of the snapshots to read, as a listing of the segment's snapshots names them.
+  // A request that names more than 256 records is refused.
+  repeated string record_ids = 2;
+  // The longest text of each snapshot, in bytes. A longer text keeps its beginning and its end.
+  // 0 limits each text only by `max_total_bytes`.
+  uint64 max_bytes = 3;
+  // The most bytes that the texts of the reply hold together. The reply ends before the first
+  // text that would pass this budget, but it always holds the first text. A text longer than
+  // this budget keeps its beginning and its end. 0 and any budget above 16 MiB mean 16 MiB.
+  uint64 max_total_bytes = 4;
+}
+
+// The rendered text of one snapshot.
+message SnapshotText {
+  string record_id = 1;
+  string text = 2;
+  // Whether `text` was cut to the request's `max_bytes` or `max_total_bytes`.
+  bool truncated = 3;
+}
+
+message ReadSnapshotsReply {
+  // The text of each snapshot that the request names, in the order of the segment's snapshots,
+  // up to the request's `max_total_bytes`.
+  repeated SnapshotText texts = 1;
+  // How many of the named snapshots, after the last of `texts`, the reply leaves out to keep
+  // within `max_total_bytes`.
+  uint64 left_out = 2;
+}
+
+message SearchRequest {
+  // Every word must appear in a snapshot's text, application, or title.
+  string query = 1;
+  // The most hits to return. 0 means 20, and more than 100 means 100.
+  uint32 limit = 2;
+  // Only the segments of this application, compared without regard to case, as
+  // `str::to_lowercase` folds it.
+  optional string app = 3;
+  // Only the segments of these kinds. Empty means every kind.
+  repeated SegmentKind kinds = 4;
+  // Only the segments that overlap the range from `from_ms` to `to_ms`.
+  int64 from_ms = 5;
+  // 0 means now.
+  int64 to_ms = 6;
+}
+
+// The best matching snapshot of one segment.
+message SearchHit {
+  // The id of the segment whose snapshot matched.
+  string segment = 1;
+  string app = 2;
+  string title = 3;
+  // About 200 characters of the snapshot's text, around the earliest word of the query that the
+  // text holds, ignoring case. When the text holds none of the query's words, the snippet is the
+  // start of the text.
+  string snippet = 4;
+  // The record of the snapshot, for a read with `which` RECORD. When several snapshots of the
+  // segment held the same text, the record is the latest of them.
+  string record_id = 5;
+  // When capture took the snapshot.
+  int64 at_ms = 6;
+  SegmentKind kind = 7;
+}
+
+message SearchReply {
+  // One hit per segment, the best first. A hit whose snapshot could not be read is left out.
+  repeated SearchHit hits = 1;
+}
+
+// The segments that a deletion selects by application and time. A filter sets at least one of
+// its fields, and a deletion of everything uses `DeleteEverything`.
+message DeleteFilter {
+  // Only the segments of this application, compared without regard to case, as
+  // `str::to_lowercase` folds it.
+  optional string app = 1;
+  // The segments that overlap the range from `from_ms` to `to_ms`. 0 means the start of time.
+  int64 from_ms = 2;
+  // Absent selects everything up to the moment of the deletion.
+  optional int64 to_ms = 3;
+}
+
+// Every segment, and every damaged record.
+message DeleteEverything {}
+
+message DeleteRequest {
+  // A request without a selection is refused.
+  oneof selection {
+    DeleteFilter filter = 1;
+    // The id of a segment or of one of its records, which deletes that segment.
+    string id = 2;
+    DeleteEverything everything = 3;
+  }
+}
+
+message LookupRequest {
+  string id = 1;
+}
+
+message LookupReply {
+  Segment segment = 1;
+}
+
+message DeleteReply {
+  uint64 segments = 1;
+  // How many damaged segments and records a deletion by application left in the store, because
+  // their damage hides whether they belong to the application. A deletion of everything removes
+  // them.
+  uint64 undecided = 2;
+  // The number of damaged records that the deletion removed and that no segment listed.
+  // `segments` leaves these records out.
+  uint64 orphans = 3;
+}
+
+message TallySegmentsRequest {
+  int64 from_ms = 1;
+  // 0 means now.
+  int64 to_ms = 2;
+  // Only the segments of this application, compared without regard to case, as
+  // `str::to_lowercase` folds it.
+  optional string app = 3;
+}
+
+// The totals of one application's segments in a tally.
+message AppTally {
+  string app = 1;
+  // The segments other than notifications.
+  uint64 windows = 2;
+  uint64 notifications = 3;
+  // The snapshots of the segments other than notifications.
+  uint64 snapshots = 4;
+  // How long the segments other than notifications lasted, together. A segment that is still
+  // open lasts until the end of the range.
+  int64 duration_ms = 5;
+}
+
+message TallySegmentsReply {
+  // One tally per application that has a segment in the range, by the application's name.
+  repeated AppTally apps = 1;
+  // The earliest start of a tallied segment. Absent when the range doesn't hold any segment.
+  optional int64 from_ms = 2;
+  // The latest end of a tallied segment, where a segment that is still open ends at the end of
+  // the range. Absent when the range doesn't hold any segment.
+  optional int64 to_ms = 3;
+  // How many damaged segments and records a deletion with the same range and application
+  // removes. `apps`, `from_ms` and `to_ms` leave them out.
+  uint64 damaged = 4;
+}
+
+service DesktopCapture {
+  rpc Status(StatusRequest) returns (StatusReply);
+  // Stops capture until Start, across daemon restarts.
+  rpc Stop(StopRequest) returns (StopReply);
+  rpc Start(StartRequest) returns (StartReply);
+  // Tells the daemon that a desktop session started, so that capture starts a helper at once if
+  // capture is waiting for a session.
+  rpc SessionStarted(SessionStartedRequest) returns (SessionStartedReply);
+  rpc RecentActivity(RecentActivityRequest) returns (RecentActivityReply);
+  rpc ListSegments(ListSegmentsRequest) returns (ListSegmentsReply);
+  // Renders one snapshot of a segment as text.
+  rpc ReadSegment(ReadSegmentRequest) returns (ReadSegmentReply);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsReply);
+  // Renders several snapshots of one segment as text, in one pass over the segment.
+  rpc ReadSnapshots(ReadSnapshotsRequest) returns (ReadSnapshotsReply);
+  rpc Search(SearchRequest) returns (SearchReply);
+  // Deletes the segments that match, or the one segment that `id` names, from the store and the
+  // search index. The helper stops for the deletion, and a new helper starts after the deletion.
+  // A deletion by filter also removes the damaged segments and records that the filter can
+  // select. When damage hides whether `app` selects a segment or record, the segment or record
+  // stays, and the reply counts it as undecided.
+  rpc Delete(DeleteRequest) returns (DeleteReply);
+  // Answers which segment an id names: the id of the segment or of one of its records.
+  rpc Lookup(LookupRequest) returns (LookupReply);
+  // Counts the segments that overlap a range, per application, without sending the segments.
+  rpc TallySegments(TallySegmentsRequest) returns (TallySegmentsReply);
+}

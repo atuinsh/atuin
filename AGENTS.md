@@ -94,7 +94,8 @@ atuin-server-sqlite    SQLite implementation (sqlx)
 - Serialization: MessagePack for encrypted payloads, JSON for API, TOML for config.
 - Storage traits: `Database` (client), `Store` (record store), `Database` (server) -- all `async_trait`.
 - History builders: `HistoryImported`, `HistoryCaptured`, `HistoryFromDb` with compile-time field validation.
-- Feature flags: `client`, `sync`, `daemon`, `check-update`.
+- Feature flags: `client`, `sync`, `daemon`, `check-update`, `desktop-capture` (builds the
+  `atuin-desktop-capture` helper as a second binary of `atuin`).
 - Use `#[cfg()]` only for code that actually needs conditional compilation; prefer `if cfg!()` otherwise.
 - Use `let _ = ...` rather than `_ = ...` except where an expression, rather than a statement, is needed.
 

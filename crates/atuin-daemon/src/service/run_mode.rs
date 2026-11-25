@@ -45,7 +45,7 @@ pub enum ExternalManager {
     SystemdUnit {
         name: String,
     },
-    /// A launchd job other than Atuin's agent, such as `brew services`' `homebrew.mxcl.atuin`.
+    /// A launchd job other than Atuin's agent, such as `brew services`' `sh.brew.atuin`.
     #[error("{}", Self::launchd_job_refusal(label))]
     LaunchdJob {
         label: String,
@@ -74,9 +74,18 @@ impl ExternalManager {
             .or_else(|| Systemd::unit_of_this_process().map(|name| Self::SystemdUnit { name }))
     }
 
+    /// The Homebrew formula whose `brew services` job runs the daemon, if such a job does.
+    #[must_use]
+    pub fn brew_formula(&self) -> Option<&str> {
+        match self {
+            Self::LaunchdJob { label } => atuin_common::homebrew::service_formula(label),
+            Self::SystemdSocket | Self::SystemdUnit { .. } => None,
+        }
+    }
+
     /// The refusal for the launchd job `label`, with the command that restarts it.
     fn launchd_job_refusal(label: &str) -> String {
-        match label.strip_prefix("homebrew.mxcl.") {
+        match atuin_common::homebrew::service_formula(label) {
             Some(formula) => format!(
                 "the daemon is managed by `brew services`; use `brew services restart {formula}` \
                  to restart it, or `brew services stop {formula}` to let Atuin manage it"
@@ -96,7 +105,8 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::brew_services("homebrew.mxcl.atuin", "`brew services restart atuin`")]
+    #[case::brew_services("sh.brew.atuin", "`brew services restart atuin`")]
+    #[case::older_brew_services("homebrew.mxcl.atuin", "`brew services restart atuin`")]
     #[case::other_job(
         "org.nix-community.home.atuin-daemon",
         "`launchctl kickstart -k gui/$(id -u)/org.nix-community.home.atuin-daemon`"

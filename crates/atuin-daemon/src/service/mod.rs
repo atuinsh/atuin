@@ -19,7 +19,7 @@ use std::time::Duration;
 use atuin_client::settings::{Daemon as DaemonSettings, Settings};
 use atuin_common::futures::Backoff;
 use atuin_common::userio::log::RequestId;
-pub use backend::{DaemonizeError, SpawnError, StopError, Subproc};
+pub use backend::{DaemonizeError, ExternalRestartError, SpawnError, StopError, Subproc};
 pub use claim::{ClaimError, ServiceClaim};
 pub use connection::FindError;
 use pidfile::Pidfile;
@@ -35,6 +35,15 @@ use crate::grpc::versioning::VersionMatchError;
 use crate::service::address::DaemonAddress;
 use crate::service::backend::{AnyBackend, Backend, Launchd};
 use crate::service::connection::Connection;
+
+/// What [`ActiveService::launch_unless_running`] found or did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Launching {
+    /// A daemon held the pidfile, so none was launched.
+    AlreadyRunning,
+    /// No daemon held the pidfile, so a daemon was launched.
+    Launched,
+}
 
 /// Represents an active service.
 pub struct ActiveService {
@@ -94,6 +103,24 @@ pub enum ReadyError {
          manually"
     )]
     NeedsRestart(VersionMatchError),
+}
+
+impl ReadyError {
+    /// The refusal to replace a daemon that another program runs, when that refusal is why the
+    /// daemon isn't ready.
+    ///
+    /// The refusal's message says how the user can let this `atuin` run the daemon.
+    #[must_use]
+    pub fn other_program(&self) -> Option<&ExternalRestartError> {
+        let Self::Find(ServiceFindError::Replace(replace)) = self else {
+            return None;
+        };
+        match replace {
+            ReplaceError::Stop(StopError::Backend(err))
+            | ReplaceError::Spawn(SpawnError::Backend(err)) => err.other_program(),
+            _ => None,
+        }
+    }
 }
 
 impl ActiveService {
@@ -175,6 +202,19 @@ impl ActiveService {
             startup,
             timeout,
         })
+    }
+
+    /// Starts the service that `daemon` describes unless a daemon holds its pidfile, without
+    /// waiting for the service to answer.
+    ///
+    /// It neither connects to a running service nor replaces one of another build, so it costs
+    /// little more than a look at the pidfile when a daemon is running.
+    pub async fn launch_unless_running(daemon: &DaemonSettings) -> Result<Launching, SpawnError> {
+        if Pidfile::new(&daemon.pidfile_path).is_live() {
+            return Ok(Launching::AlreadyRunning);
+        }
+        AnyBackend::new(daemon).launch().await?;
+        Ok(Launching::Launched)
     }
 
     /// Find the service that a daemon holding the pidfile but not yet listening boots, as the
@@ -274,6 +314,13 @@ impl ActiveService {
     #[must_use]
     pub fn history_client(&self) -> HistoryClient {
         self.connection.history_client()
+    }
+
+    /// A client of the service's desktop capture API.
+    #[cfg(feature = "desktop-capture")]
+    #[must_use]
+    pub fn desktop_capture_client(&self) -> crate::DesktopCaptureClient {
+        self.connection.desktop_capture_client()
     }
 
     /// Runs `request`, showing on this process's [`SINK`](atuin_common::userio::log::SINK) what the

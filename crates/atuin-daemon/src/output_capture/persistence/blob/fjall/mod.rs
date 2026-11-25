@@ -10,31 +10,29 @@ mod schema;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_common::futures::stream::ChunkedStream;
 use fjall::{OptimisticTxDatabase, OptimisticTxKeyspace, PersistMode, Readable};
 use schema::{Schema as _, SchemaV2};
-use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use super::{BlobStore, CaptureError, DeleteOutputError, GetOutputError};
+use crate::flusher::{DirtyFlag, Flusher, Persist};
 
 /// The schema currently in use for stored output.
 type ActiveSchema = SchemaV2;
 
 /// The store and every operation on it.
 ///
-/// This structure is shared between the [`FjallBlobStore`] and the task in [`Flusher`].
+/// This structure is shared between the [`FjallBlobStore`] and the task of its [`Flusher`].
 struct FjallStorageInner {
     db: OptimisticTxDatabase,
     keyspace: OptimisticTxKeyspace,
-    /// Set on every mutation; the flusher clears it and persists. See `Flusher` for the
-    /// memory-ordering rationale.
-    dirty: Arc<AtomicBool>,
+    /// Marked after every mutation. The flusher clears the flag and then persists the store.
+    dirty: Arc<DirtyFlag>,
     /// Running estimate of stored bytes for the disk budget.
     estimated_usage: AtomicU64,
 }
@@ -75,7 +73,7 @@ impl FjallStorageInner {
             tx.insert(&keyspace, key, value);
             match tx.commit().map_err(|err| CaptureError::Storage(Box::new(err)))? {
                 Ok(()) => {
-                    dirty.store(true, Ordering::Release);
+                    dirty.mark();
                     Ok(())
                 }
                 // Another writer committed this key first, so it's already captured.
@@ -148,7 +146,7 @@ impl FjallStorageInner {
             }
             match tx.commit().map_err(|err| DeleteOutputError::Storage(Box::new(err)))? {
                 Ok(()) => {
-                    dirty.store(true, Ordering::Release);
+                    dirty.mark();
                     Ok(freed)
                 }
                 // fjall only reports conflicts for transactions that read; this one never does.
@@ -243,86 +241,13 @@ impl FjallStorageInner {
     }
 }
 
-/// Task responsible for flushing fjall data buffered in memory onto the disk.
-#[derive(Debug)]
-struct Flusher {
-    /// Handle to the background task.
-    task: JoinHandle<()>,
-}
-
-impl Flusher {
-    /// How often to try to flush.
-    ///
-    /// We'd expect flush itself to take anywhere between 1-10ms, so this is plenty of overhead.
-    const SYNC_INTERVAL: Duration = Duration::from_secs(5);
-
-    pub fn spawn(inner: Arc<FjallStorageInner>) -> Self {
-        let task = tokio::task::spawn(async move {
-            let mut interval = tokio::time::interval(Self::SYNC_INTERVAL);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-
-                // TODO(markovejnovic): @taylordotfish and I were wondering whether it is possible
-                // to use relaxed here. @taylordotfish claims that's not possible and I am more and
-                // more convinced by her argument.
-                //
-                // The concern is that one thread may perform some writes
-                //
-                // db-write
-                // db-write
-                // dirty-set
-                //
-                // while another thread does
-                //
-                // dirty-load
-                // persist
-                //
-                // In the pathological case, the db writes can be re-ordered after the dirty-set
-                // (under relaxed semantics):
-                //
-                // dirty-set
-                // db-write
-                // db-write
-                //
-                // while the other thread does
-                //
-                // dirty-load
-                // persist
-                //
-                // Well the persist won't observe those db-writes.
-                //
-                // The counter-argument is that both db-write and persist acquire the same mutex,
-                // so must be seq-cst-ordered?
-                //
-                // Unsure but would be curious to learn more.
-                //
-                // @taylordotfish mentioned we shouldn't rely on the internal implementation
-                // details.
-                if !inner.dirty.swap(false, Ordering::Acquire) {
-                    continue;
-                }
-
-                let db = inner.db.clone();
-                if let Err(err) =
-                    tokio::task::spawn_blocking(move || db.persist(PersistMode::SyncAll))
-                        .await
-                        .expect("persistence task shouldn't panic")
-                {
-                    error!(?err, "failed to persist data on disk. will try again...");
-                    inner.dirty.store(true, Ordering::Relaxed);
-                }
-            }
-        });
-
-        Self { task }
+impl Persist for FjallStorageInner {
+    fn dirty(&self) -> &DirtyFlag {
+        &self.dirty
     }
-}
 
-impl Drop for Flusher {
-    fn drop(&mut self) {
-        // Stop the background loop once nothing is holding the flusher any more.
-        self.task.abort();
+    fn persist(&self) -> fjall::Result<()> {
+        self.db.persist(PersistMode::SyncAll)
     }
 }
 
@@ -348,11 +273,11 @@ impl FjallBlobStore {
         let inner = Arc::new(FjallStorageInner {
             db,
             keyspace,
-            dirty: Arc::new(AtomicBool::new(false)),
+            dirty: Arc::default(),
             estimated_usage: AtomicU64::new(seed),
         });
 
-        let flusher = Arc::new(Flusher::spawn(inner.clone()));
+        let flusher = Arc::new(Flusher::spawn(Arc::downgrade(&inner), "output capture"));
 
         Ok(Self {
             inner,

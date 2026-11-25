@@ -1,8 +1,8 @@
 //! The `[security]` section of `config.toml`: what Atuin keeps out of what it stores, on top of
 //! its built-in rules.
 
-use atuin_common::secrets::Redactor;
 use atuin_common::secrets::files::SensitiveFiles;
+use atuin_common::secrets::{BuiltinSecrets, Redactor};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,10 +26,10 @@ pub struct Security {
 }
 
 impl Security {
-    /// Redaction with [`Self::redact_patterns`], and the built-in patterns while `builtin`
-    /// (`secrets_filter`).
+    /// Redaction with [`Self::redact_patterns`], and with the built-in patterns as `builtin`
+    /// says.
     #[must_use]
-    pub fn redactor(&self, builtin: bool) -> Redactor {
+    pub fn redactor(&self, builtin: BuiltinSecrets) -> Redactor {
         Redactor::new(self.redact_patterns.clone(), builtin)
     }
 

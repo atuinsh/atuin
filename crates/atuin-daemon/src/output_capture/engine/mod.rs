@@ -1,4 +1,3 @@
-mod gc;
 mod reconciler;
 
 use std::path::Path;
@@ -6,7 +5,6 @@ use std::sync::Arc;
 
 use atuin_client::history::{CommandCapture, HistoryId};
 use atuin_client::settings::DiskUsageLimit;
-use gc::Gc;
 use reconciler::Reconciler;
 use tracing::{error, warn};
 
@@ -14,6 +12,7 @@ use super::persistence::{
     AnyBlobStore, AnyIndex, FjallBlobStore, NopBlobStore, NopIndex, OutputStore, SqliteIndex,
 };
 use super::{CaptureError, DeleteOutputError, GetOutputError};
+use crate::disk_budget::Gc;
 
 #[derive(Debug)]
 pub struct OutputCaptureEngine {

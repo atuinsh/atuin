@@ -7,7 +7,6 @@
 //!
 //! [`Harness::resume`]: super::Harness::resume
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 /// A session to resume, as the harness recorded it.
@@ -187,41 +186,7 @@ pub enum ResumeError {
     TemplateValueMissing(&'static str),
 }
 
-/// Quote `word` so that zsh, bash and fish all read it as that one word.
-///
-/// A word of only unremarkable characters is left bare. Anything else goes in single quotes,
-/// inside which none of the three shells expands anything; the two characters fish still treats
-/// specially there, `'` and `\`, are left outside the quotes and backslash-escaped, which reads
-/// the same in all three: `it's` is `'it'\''s'`.
-#[must_use]
-pub fn quote(word: &str) -> Cow<'_, str> {
-    let bare = |c: char| c.is_ascii_alphanumeric() || "_-./:@,+".contains(c);
-    // `=` too, but not first: zsh expands a leading `=cmd` to the command's path.
-    if !word.is_empty() && word.chars().all(|c| bare(c) || c == '=') && !word.starts_with('=') {
-        return Cow::Borrowed(word);
-    }
-    let mut out = String::with_capacity(word.len() + 2);
-    let mut open = false;
-    for c in word.chars() {
-        let special = c == '\'' || c == '\\';
-        if open == special {
-            // Close the quotes before a special character, reopen them after it.
-            out.push('\'');
-            open = !open;
-        }
-        if special {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    if open {
-        out.push('\'');
-    }
-    if out.is_empty() {
-        out.push_str("''");
-    }
-    Cow::Owned(out)
-}
+pub use crate::quote::sh as quote;
 
 /// A plan to run `program` with `args` for `target`, which needs its directory as `cwd`
 /// describes.
@@ -288,27 +253,6 @@ mod tests {
 
     use super::*;
     use crate::path::{AbsPathBuf, PathBufExt as _};
-
-    #[rstest]
-    #[case::bare("abc-123_x.y/z", "abc-123_x.y/z")]
-    #[case::uuid("0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000", "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000")]
-    #[case::empty("", "''")]
-    #[case::space("/home/u/my project", "'/home/u/my project'")]
-    #[case::single_quote("it's", r"'it'\''s'")]
-    #[case::only_quote("'", r"\'")]
-    #[case::backslash(r"a\b", r"'a'\\'b'")]
-    #[case::double_backslash_quote(r"a\\'", r"'a'\\\\\'")]
-    #[case::leading_equals("=ls", "'=ls'")]
-    #[case::inner_equals("a=b", "a=b")]
-    #[case::dollar("$HOME", "'$HOME'")]
-    #[case::glob("*?[x]", "'*?[x]'")]
-    #[case::tilde("~/x", "'~/x'")]
-    #[case::unicode("/tmp/プロジェクト ü", "'/tmp/プロジェクト ü'")]
-    #[case::newline("a\nb", "'a\nb'")]
-    #[case::bang("hi!", "'hi!'")]
-    fn quote_words(#[case] word: &str, #[case] expected: &str) {
-        assert_eq!(quote(word), expected);
-    }
 
     // These run the real shells, which only means anything for the POSIX shells' quoting on Unix: on
     // Windows the script reaches `bash -c` through the Windows command line, which mangles it.

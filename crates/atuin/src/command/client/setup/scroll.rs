@@ -5,7 +5,7 @@ use std::ops::Range;
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 
-use super::view::ACCENT;
+use super::widgets::ACCENT;
 
 /// How far down a page taller than the terminal is scrolled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

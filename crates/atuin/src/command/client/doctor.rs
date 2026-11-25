@@ -389,23 +389,33 @@ impl AtuinInfo {
 }
 
 #[derive(Debug, Serialize)]
-struct DoctorDump {
+struct DoctorDump<'a> {
     pub atuin: AtuinInfo,
     pub shell: ShellInfo,
     pub system: SystemInfo,
+    #[cfg(feature = "desktop-capture")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_capture: Option<super::desktop_capture::Report<'a>>,
+    #[cfg(not(feature = "desktop-capture"))]
+    #[serde(skip)]
+    pub settings: std::marker::PhantomData<&'a Settings>,
 }
 
-impl DoctorDump {
-    pub async fn new(settings: &Settings) -> Self {
+impl<'a> DoctorDump<'a> {
+    pub async fn new(settings: &'a Settings) -> Self {
         Self {
             atuin: AtuinInfo::new(settings).await,
             shell: ShellInfo::new(),
             system: SystemInfo::new(),
+            #[cfg(feature = "desktop-capture")]
+            desktop_capture: super::desktop_capture::report(settings).await,
+            #[cfg(not(feature = "desktop-capture"))]
+            settings: std::marker::PhantomData,
         }
     }
 }
 
-fn checks(info: &DoctorDump, settings: &Settings) {
+fn checks(info: &DoctorDump<'_>, settings: &Settings) {
     println!(); // spacing
     //
     if cfg!(target_os = "openbsd") {
@@ -418,6 +428,13 @@ fn checks(info: &DoctorDump, settings: &Settings) {
     }
 
     info.atuin.setting_paths.verify();
+
+    #[cfg(feature = "desktop-capture")]
+    if let Some(explanation) =
+        info.desktop_capture.as_ref().and_then(super::desktop_capture::Report::conflict)
+    {
+        userio::log::warn!("doctor-desktop-capture-conflict", explanation = explanation);
+    }
     super::config::warn_about_unknown_keys();
 
     if let Some(legacy) = atuin_common::dirs::shadowed_legacy_config() {

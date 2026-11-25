@@ -39,6 +39,8 @@ use strum::IntoEnumIterator;
 use tokio::sync::Mutex;
 
 use crate::commands::session::harness_name;
+#[cfg(feature = "desktop-capture")]
+use crate::tools::desktop::{self, DesktopTools};
 use crate::tools::output::search::AtuinOutputSearchToolCall;
 use crate::tools::session::caller::{Caller, OwnSession};
 use crate::tools::session::list::AtuinThreadsListToolCall;
@@ -54,6 +56,8 @@ struct AtuinMcp {
     settings: Arc<Settings>,
     own_session: OwnSession,
     octavo: Option<Arc<Remote>>,
+    #[cfg(feature = "desktop-capture")]
+    desktop: DesktopTools,
 }
 
 /// This says where Octavo's MCP server is. It is given while the user uploads threads to it.
@@ -74,14 +78,27 @@ struct Remote {
     cache: PathBuf,
 }
 
-/// Returns the tools to list. Octavo's tools take the place of the local thread tools.
-fn listed_tools(octavo: Option<&[Tool]>) -> Vec<Tool> {
+/// Returns the tools to list. Octavo's tools take the place of the local thread tools. The
+/// desktop capture tools are local, so they stay in either case, once the store exists.
+fn listed_tools(
+    #[cfg_attr(
+        not(feature = "desktop-capture"),
+        expect(unused_variables, reason = "only the desktop capture tools depend on the settings")
+    )]
+    settings: &Settings,
+    octavo: Option<&[Tool]>,
+) -> Vec<Tool> {
+    let local = TOOLS.iter();
+    #[cfg(feature = "desktop-capture")]
+    let local = {
+        let desktop = desktop::is_listed(settings);
+        local.filter(move |t| desktop || !desktop::is_desktop_tool(&t.name))
+    };
     match octavo {
         Some(octavo) => {
-            let local = TOOLS.iter().filter(|t| !t.name.starts_with("atuin_threads_"));
-            local.chain(octavo).cloned().collect()
+            local.filter(|t| !t.name.starts_with("atuin_threads_")).chain(octavo).cloned().collect()
         }
-        None => TOOLS.clone(),
+        None => local.cloned().collect(),
     }
 }
 
@@ -263,7 +280,8 @@ impl ServerHandler for AtuinMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = listed_tools(self.octavo.as_ref().map(|remote| &remote.tools[..]));
+        let tools =
+            listed_tools(&self.settings, self.octavo.as_ref().map(|remote| &remote.tools[..]));
         Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(0)
             .with_cache_scope(CacheScope::Private))
@@ -322,9 +340,14 @@ impl ServerHandler for AtuinMcp {
                     Err(e) => Err(e),
                 }
             }
-            name => {
-                return Err(ErrorData::invalid_params(format!("unknown tool: {name}"), None));
+            #[cfg(feature = "desktop-capture")]
+            name if desktop::is_desktop_tool(name) => {
+                match self.desktop.call(name, arguments, &self.settings).await {
+                    Some(outcome) => outcome,
+                    None => return Err(unknown_tool(name)),
+                }
             }
+            name => return Err(unknown_tool(name)),
         };
 
         let result = match outcome {
@@ -353,7 +376,14 @@ fn always_load() -> MetaObject {
     meta
 }
 
-fn parse<T: serde::de::DeserializeOwned>(tool: &str, arguments: JsonObject) -> Result<T, String> {
+fn unknown_tool(name: &str) -> ErrorData {
+    ErrorData::invalid_params(format!("unknown tool: {name}"), None)
+}
+
+pub(crate) fn parse<T: serde::de::DeserializeOwned>(
+    tool: &str,
+    arguments: JsonObject,
+) -> Result<T, String> {
     serde_json::from_value(Value::Object(arguments)).map_err(|e| invalid_arguments(tool, e))
 }
 
@@ -402,6 +432,8 @@ pub async fn run(db: &Sqlite, settings: Arc<Settings>, octavo: Option<Octavo>) -
         settings,
         own_session: OwnSession::default(),
         octavo: octavo.filter(|remote| !remote.tools.is_empty()),
+        #[cfg(feature = "desktop-capture")]
+        desktop: DesktopTools::default(),
     }
     .serve(rmcp::transport::stdio())
     .await?;
@@ -502,7 +534,11 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
-    vec![
+    #[cfg_attr(
+        not(feature = "desktop-capture"),
+        expect(unused_mut, reason = "only the desktop capture tools are added later")
+    )]
+    let mut tools = vec![
         Tool::new(
             "atuin_history",
             format!(
@@ -580,7 +616,10 @@ fn tool_definitions() -> Vec<Tool> {
             schema_for_type::<AtuinThreadsReadToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Read an agent thread").read_only(true)),
-    ]
+    ];
+    #[cfg(feature = "desktop-capture")]
+    tools.extend(DesktopTools::definitions());
+    tools
 }
 
 #[cfg(test)]
@@ -593,18 +632,25 @@ mod tests {
     /// every session, so the block must stay small.
     const MAX_INSTRUCTIONS_LEN: usize = 2_000;
 
+    const DESKTOP_TOOLS: [&str; 3] =
+        ["atuin_desktop_activity", "atuin_desktop_read", "atuin_desktop_search"];
+
     #[rstest]
     fn tool_definitions_list_all_tools_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert_eq!(names, [
+        let mut expected = vec![
             "atuin_history",
             "atuin_output",
             "atuin_output_search",
             "atuin_threads_search",
             "atuin_threads_list",
             "atuin_threads_read",
-        ]);
+        ];
+        if cfg!(feature = "desktop-capture") {
+            expected.extend(DESKTOP_TOOLS);
+        }
+        assert_eq!(names, expected);
 
         for tool in &tools {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
@@ -732,22 +778,51 @@ mod tests {
         );
     }
 
+    /// Puts a file in the desktop capture directory, which makes the directory count as a store.
+    fn make_desktop_store(settings: &Settings) {
+        let store = settings.desktop_capture_dir();
+        fs_err::create_dir_all(&store).unwrap();
+        fs_err::write(store.join("db-1"), "").unwrap();
+    }
+
     fn octavo_tool(name: &'static str) -> Tool {
         Tool::new(name, "", JsonObject::new())
     }
 
     #[rstest]
     fn octavo_thread_tools_replace_the_local_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::utc();
+        settings.data_dir = dir.path().to_path_buf().try_into().unwrap();
+        make_desktop_store(&settings);
         let octavo = ["search_threads", "get_thread"].map(octavo_tool).to_vec();
-        let names: Vec<_> = listed_tools(Some(&octavo)).into_iter().map(|t| t.name).collect();
-        assert_eq!(names, [
-            "atuin_history",
-            "atuin_output",
-            "atuin_output_search",
-            "search_threads",
-            "get_thread",
-        ]);
-        assert_eq!(listed_tools(None).len(), TOOLS.len());
+        let names: Vec<_> =
+            listed_tools(&settings, Some(&octavo)).into_iter().map(|t| t.name).collect();
+        let mut expected = vec!["atuin_history", "atuin_output", "atuin_output_search"];
+        if cfg!(feature = "desktop-capture") {
+            expected.extend(DESKTOP_TOOLS);
+        }
+        expected.extend(["search_threads", "get_thread"]);
+        assert_eq!(names, expected);
+        assert_eq!(listed_tools(&settings, None).len(), TOOLS.len());
+    }
+
+    #[cfg(feature = "desktop-capture")]
+    #[rstest]
+    #[case::with_the_store(true, 9)]
+    #[case::without_the_store(false, 6)]
+    fn desktop_tools_are_listed_when_the_store_exists(#[case] exists: bool, #[case] count: usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = Settings::utc();
+        settings.data_dir = dir.path().to_path_buf().try_into().unwrap();
+        if exists {
+            make_desktop_store(&settings);
+        }
+
+        let tools = listed_tools(&settings, None);
+
+        assert_eq!(tools.len(), count);
+        assert_eq!(tools.iter().any(|t| t.name == "atuin_desktop_read"), exists);
     }
 
     #[rstest]

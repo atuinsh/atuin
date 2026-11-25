@@ -7,10 +7,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 use atuin_client::record::sqlite_store::SqliteStore;
+use atuin_client::settings::Settings;
 use atuin_client::tui::background::Background;
 use atuin_client::tui::cursor::Cursor;
 use atuin_common::env::var_nonempty;
-use atuin_common::string::wrap;
 use atuin_common::userio::log::{Held, SINK};
 use crossterm::cursor::MoveTo;
 use crossterm::event::{
@@ -30,19 +30,19 @@ use tokio::sync::mpsc;
 use super::agents::{AnyHarness, Harness};
 use super::form::{Form as _, Needs};
 use super::plan::{
-    AgentHistory, Agents, AiResume, AtuinHub, Backfill, CtrlR, HOOKABLE, OutputCapture, Plan,
-    ShellHistory, Shells, ThreadUploads, Threads, UpArrow,
+    AgentHistory, Agents, AiResume, AtuinHub, Backfill, CtrlR, DesktopApps, DesktopCapture,
+    HOOKABLE, OutputCapture, Plan, ShellHistory, Shells, ThreadUploads, Threads, UpArrow,
 };
 use super::scroll::Scroll;
 #[cfg(feature = "octavo")]
 use super::upload::{Gauge, Progress, State, Tracker, Upload};
+use super::widgets::{
+    ACCENT, Fold, SPINNER, button, dim, fold_arrow, hints, lead, paragraph, target, title,
+};
 use super::{
     Answer, Found, OffBecause, Offer, Scope, Status, Step, Sync, Update, count, is_address,
     join_with_and,
 };
-
-pub(super) const ACCENT: Color = Color::LightGreen;
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Whether setup takes the mouse while they choose, so that the scrollbar's handle drags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +56,7 @@ pub(super) enum Mouse {
 pub(super) async fn run(
     found: Found,
     plan: &Plan,
+    settings: &Settings,
     ask_import: bool,
     mouse: Mouse,
     store: &SqliteStore,
@@ -71,8 +72,9 @@ pub(super) async fn run(
     // until the screen is gone.
     let held = Held::default();
     let holding = SINK.push(held.clone());
-    let result =
-        Box::pin(drive(&mut terminal, &found, plan, ask_import, mouse, shade, store)).await;
+    let screen = ChooseScreen { mouse, shade };
+    let drive = drive(&mut terminal, &found, plan, settings, ask_import, screen, store);
+    let result = Box::pin(drive).await;
     // Back on the screen they ran it from, for the summary.
     ratatui::restore();
     drop(holding);
@@ -92,12 +94,20 @@ async fn drive(
     terminal: &mut ratatui::DefaultTerminal,
     found: &Found,
     plan: &Plan,
+    #[cfg_attr(
+        not(feature = "desktop-capture"),
+        expect(unused_variables, reason = "only desktop capture reads the settings here")
+    )]
+    settings: &Settings,
     ask_import: bool,
-    mouse: Mouse,
-    shade: Option<Color>,
+    screen: ChooseScreen,
     store: &SqliteStore,
 ) -> Result<Option<(Plan, Vec<(Step, Status)>)>> {
-    let Some(plan) = choose(terminal, found, plan, mouse, shade).await? else {
+    #[cfg_attr(
+        not(feature = "desktop-capture"),
+        expect(unused_mut, reason = "only the permission page changes the plan")
+    )]
+    let Some(mut plan) = choose(terminal, found, plan, screen).await? else {
         return Ok(None);
     };
 
@@ -135,6 +145,7 @@ async fn drive(
             }
         }
     };
+    drop(work);
 
     let Some(offer) = offer else {
         // ctrl-c: what was running stays as it was.
@@ -167,6 +178,9 @@ async fn drive(
                 let import = super::import(&take, &tx, plan.waits_for_imports(), plan.daemon.0);
                 let imported = drawn(terminal, &mut running, &mut updates, &mut tick, import);
                 if imported.await?.is_none() {
+                    #[cfg(feature = "desktop-capture")]
+                    super::desktop::report_what_capture_waits_for(&plan, Scope::All, settings, &tx)
+                        .await;
                     return Ok(Some(outcome(&plan, running, &mut updates)));
                 }
             }
@@ -181,21 +195,40 @@ async fn drive(
                 watch(terminal, &mut running, &mut updates, &mut tick, &upload).await?;
             }
             Some(None) => {}
-            None => return Ok(Some(outcome(&plan, running, &mut updates))),
+            None => {
+                #[cfg(feature = "desktop-capture")]
+                super::desktop::report_what_capture_waits_for(&plan, Scope::All, settings, &tx)
+                    .await;
+                return Ok(Some(outcome(&plan, running, &mut updates)));
+            }
         }
     }
+
+    #[cfg(feature = "desktop-capture")]
+    super::desktop::offer_start(terminal, &plan, settings, &tx).await?;
+    #[cfg(feature = "desktop-capture")]
+    super::desktop::ask_for_permission(terminal, &mut plan, settings, &tx).await?;
+    #[cfg(feature = "desktop-capture")]
+    super::desktop::warn_about_conflict(terminal, &plan, &tx).await?;
     Ok(Some(outcome(&plan, running, &mut updates)))
 }
 
-/// What they choose to set up, starting from `plan`, or `None` if they quit. The screen is in
-/// colour when there's a `shade` for the row that they're on.
+/// How the screen where they choose takes the mouse and shades the row that they're on.
+#[derive(Clone, Copy)]
+struct ChooseScreen {
+    mouse: Mouse,
+    /// The screen is in colour when there's a shade for the row that they're on.
+    shade: Option<Color>,
+}
+
+/// What they choose to set up, starting from `plan`, or `None` if they quit.
 async fn choose(
     terminal: &mut DefaultTerminal,
     found: &Found,
     plan: &Plan,
-    mouse: Mouse,
-    shade: Option<Color>,
+    screen: ChooseScreen,
 ) -> Result<Option<Plan>> {
+    let ChooseScreen { mouse, shade } = screen;
     let mut choose = Choose::new(found, plan).coloured(shade.is_some()).shaded(shade);
     // Only while they choose, because the screens after it show a sign-in link to select.
     let _mouse = match mouse {
@@ -356,12 +389,25 @@ async fn next_input() -> Result<Option<Input>> {
 }
 
 /// The next key pressed, `None` once a moment passes without one, so spinners keep turning.
-async fn next_key() -> Result<Option<KeyEvent>> {
+pub(super) async fn next_key() -> Result<Option<KeyEvent>> {
     let input = next_input().await?;
     Ok(input.and_then(|input| match input {
         Input::Key(key) => Some(key),
         Input::Mouse(_) => None,
     }))
+}
+
+/// Adds the phrase of `status` to what `step` says, as [`Status::and`] joins them, or records
+/// `status` for a step that says nothing yet.
+#[cfg(feature = "desktop-capture")]
+pub(super) fn also(steps: &mut Vec<(Step, Status)>, step: Step, status: Status) {
+    match steps.binary_search_by_key(&step, |&(s, _)| s) {
+        Ok(i) => {
+            let earlier = std::mem::replace(&mut steps[i].1, Status::Running(String::new()));
+            steps[i].1 = earlier.and(status);
+        }
+        Err(i) => steps.insert(i, (step, status)),
+    }
 }
 
 /// Record `status` for `step`, keeping the steps in the order they're shown.
@@ -380,6 +426,10 @@ enum Row {
     /// One of [`HOOKABLE`], in the open list of shells.
     ShellPick(usize),
     Output,
+    /// Desktop capture, which only a build for Linux or macOS with the daemon asks about.
+    Desktop,
+    /// Which applications desktop capture reads, under [`Self::Desktop`] when capture is on.
+    DesktopApps(DesktopApps),
     Threads,
     AgentHistory,
     /// The agents setup hooks into and connects: a list that opens under agent shell history.
@@ -407,10 +457,13 @@ enum Row {
 
 impl Row {
     /// Every row but the entries of a list, in the order the screen shows them.
-    const ORDER: [Self; 16] = [
+    const ORDER: [Self; 19] = [
         Self::Shell,
         Self::Shells,
         Self::Output,
+        Self::Desktop,
+        Self::DesktopApps(DesktopApps::All),
+        Self::DesktopApps(DesktopApps::Listed),
         Self::Agents,
         Self::AgentHistory,
         Self::Threads,
@@ -436,6 +489,8 @@ impl Row {
             | Self::Shells
             | Self::ShellPick(_)
             | Self::Output
+            | Self::Desktop
+            | Self::DesktopApps(_)
             | Self::Threads
             | Self::AgentHistory
             | Self::Agents
@@ -455,6 +510,8 @@ impl Row {
             Self::Keys | Self::CtrlR | Self::UpArrow | Self::AiResume => Some(List::Keys),
             Self::Shell
             | Self::Output
+            | Self::Desktop
+            | Self::DesktopApps(_)
             | Self::Threads
             | Self::AgentHistory
             | Self::SyncTo(_)
@@ -472,7 +529,15 @@ impl Row {
 
     /// Whether the row has a checkbox.
     const fn checked(self) -> bool {
-        !matches!(self, Self::Keys | Self::SyncTo(_) | Self::Server | Self::Sharing(_) | Self::Go)
+        !matches!(
+            self,
+            Self::Keys
+                | Self::SyncTo(_)
+                | Self::Server
+                | Self::Sharing(_)
+                | Self::DesktopApps(_)
+                | Self::Go
+        )
     }
 
     /// The state of the ctrl-t row, which the screen leaves out when threads are disabled.
@@ -488,6 +553,9 @@ impl Row {
             Self::Shells | Self::ShellPick(_) => plan.ask::<Shells>(),
             Self::Agents | Self::AgentPick(_) => plan.ask::<Agents>(),
             Self::Output => plan.ask::<OutputCapture>(),
+            Self::Desktop => plan.ask::<DesktopCapture>(),
+            // Hidden when capture is off. The row would otherwise show that it needs capture.
+            Self::DesktopApps(_) => plan.ask::<DesktopApps>().filter(Result::is_ok),
             Self::Threads => plan.ask::<Threads>(),
             Self::AgentHistory => plan.ask::<AgentHistory>(),
             // The row opens if any key can change. When none can, the row shows what the first key
@@ -520,6 +588,9 @@ impl Row {
             Self::Agents => "Connected agents",
             Self::AgentPick(_) => "Agent",
             Self::Output => "Command output",
+            Self::Desktop => "Desktop",
+            Self::DesktopApps(DesktopApps::All) => "Every application",
+            Self::DesktopApps(DesktopApps::Listed) => "Only the applications I list",
             Self::Threads => "Threads",
             Self::Keys => "Advanced keybindings",
             Self::CtrlR => "Ctrl-R",
@@ -536,9 +607,12 @@ impl Row {
     /// The question the row comes under. The keys come under their fold's row instead.
     const fn heading(self) -> Option<&'static str> {
         match self {
-            Self::Shell | Self::Shells | Self::ShellPick(_) | Self::Output => {
-                Some("What should Atuin capture?")
-            }
+            Self::Shell
+            | Self::Shells
+            | Self::ShellPick(_)
+            | Self::Output
+            | Self::Desktop
+            | Self::DesktopApps(_) => Some("What should Atuin capture?"),
             Self::Agents | Self::AgentPick(_) | Self::AgentHistory | Self::Threads => {
                 Some("Agent integration")
             }
@@ -546,6 +620,20 @@ impl Row {
             Self::Sharing(_) | Self::Backfill => Some("Atuin Hub"),
             Self::Keys | Self::CtrlR | Self::UpArrow | Self::AiResume | Self::Go => None,
         }
+    }
+}
+
+/// That desktop capture is a preview, and who reads what capture records, regardless of which
+/// applications capture reads.
+const DESKTOP_ABOUT: &str = "An early preview. Agents that you connect can read the capture, and \
+                             Claude Code gets recent window titles, URLs, dialog text, and \
+                             notifications with each prompt";
+
+/// What capturing `apps` means.
+const fn apps_about(apps: DesktopApps) -> &'static str {
+    match apps {
+        DesktopApps::All => "Recommended: scrubs secrets",
+        DesktopApps::Listed => "Starts once `atuin desktop-capture apps` lists them",
     }
 }
 
@@ -862,7 +950,7 @@ impl Choose {
             self.held = None;
             return;
         }
-        let (lines, focus) = self.lines(found);
+        let (lines, focus) = self.lines(found, size.width);
         let keep = focus.map_or(0, |focus| focus.end);
         let Some(scroll) = self.scroll(lines.len(), keep, size.height) else {
             return;
@@ -929,6 +1017,8 @@ impl Choose {
                 plan.agents.0 = picked(&self.agents, &plan.agents.0, pick, same);
             }
             Row::Output => plan.output.0 = !plan.output.0,
+            Row::Desktop => plan.desktop_capture.0 = !plan.desktop_capture.0,
+            Row::DesktopApps(apps) => plan.desktop_apps = apps,
             Row::Threads => plan.threads.0 = !plan.threads.0,
             Row::AgentHistory => plan.agent_history.0 = !plan.agent_history.0,
             Row::Keys => {
@@ -1059,9 +1149,9 @@ impl Choose {
     }
 
     fn draw(&self, frame: &mut Frame<'_>, found: &Found) {
-        let (mut lines, focus) = self.lines(found);
-        let focused = focus.as_ref().map(|focus| focus.start);
         let area = frame.area();
+        let (mut lines, focus) = self.lines(found, area.width);
+        let focused = focus.as_ref().map(|focus| focus.start);
         let footer = self.footer();
         if fits(lines.len(), area.height) {
             lines.extend([Line::default(), footer]);
@@ -1128,8 +1218,9 @@ impl Choose {
         Scroll::new(lines, height, top)
     }
 
-    /// The page's lines, and those of the row they're on: its own, then any description under it.
-    fn lines(&self, found: &Found) -> (Vec<Line<'static>>, Option<Range<usize>>) {
+    /// The page's lines on a screen `width` columns wide, and those of the row they're on: its
+    /// own, then any description under it.
+    fn lines(&self, found: &Found, width: u16) -> (Vec<Line<'static>>, Option<Range<usize>>) {
         let mut lines = title(self.crumbs());
         if self.page == Page::Features {
             lines.extend(found_lines(found));
@@ -1158,17 +1249,21 @@ impl Choose {
                 let about = "Atuin Hub allows you to share your threads, visualize stats, read \
                              your threads in the browser, and avoid storing your data on your \
                              computer. It is not E2E encrypted.";
-                lines.extend(paragraph(about, UNDER_ARROW, Style::new()));
+                lines.extend(paragraph(about, UNDER_ARROW, width, Style::new()));
                 lines.push(Line::default());
             }
             let at = row == self.row;
             let line = |needs| ruled_out(row, needs, self.colour);
             let start = lines.len();
             lines.push(needs.map_or_else(|| self.line(row, at, found), line));
-            if let Row::SyncTo(to) = row
-                && let Some(about) = to.about()
-            {
-                lines.extend(paragraph(about, UNDER_LABEL, Style::new().dim()));
+            let about = match row {
+                Row::SyncTo(to) => to.about(),
+                Row::Desktop => Some(DESKTOP_ABOUT),
+                Row::DesktopApps(apps) => Some(apps_about(apps)),
+                _ => None,
+            };
+            if let Some(about) = about {
+                lines.extend(paragraph(about, UNDER_LABEL, width, Style::new().dim()));
             }
             if at {
                 focus = Some(start..lines.len());
@@ -1189,7 +1284,7 @@ impl Choose {
             (Some(error), _) => Line::from(Span::raw(format!("  {error}")).yellow()),
             (None, Row::Go) => hints(&[("enter", "continue"), ("↑↓", "move"), esc]),
             (None, Row::Server) => hints(&[("enter", "next"), ("↑↓", "move"), esc]),
-            (None, Row::SyncTo(_) | Row::Sharing(_)) => {
+            (None, Row::SyncTo(_) | Row::Sharing(_) | Row::DesktopApps(_)) => {
                 hints(&[("enter", "pick"), ("↑↓", "move"), esc])
             }
             (None, Row::Shells | Row::Agents) if self.part == Part::Check => {
@@ -1212,6 +1307,7 @@ impl Choose {
                 Row::Shell
                 | Row::ShellPick(_)
                 | Row::Output
+                | Row::Desktop
                 | Row::Threads
                 | Row::AgentHistory
                 | Row::AgentPick(_)
@@ -1288,6 +1384,13 @@ impl Choose {
                 entry(at, on, agent.display_name())
             }
             Row::Output => choice(at, self.plan.output.0, row.label(), "what your commands print"),
+            Row::Desktop => choice(
+                at,
+                self.plan.desktop_capture.0,
+                row.label(),
+                "what your windows show, from each login on",
+            ),
+            Row::DesktopApps(apps) => option(at, self.plan.desktop_apps == apps, row.label(), None),
             Row::Threads => choice(
                 at,
                 self.plan.threads.0,
@@ -1398,6 +1501,8 @@ impl Running {
                 }
                 set(&mut self.steps, step, status);
             }
+            #[cfg(feature = "desktop-capture")]
+            Update::Also(step, status) => also(&mut self.steps, step, status),
             Update::Browser { url, code, opened } => {
                 self.sign_in = SignIn::Browser { url, code, opened };
             }
@@ -1614,13 +1719,6 @@ fn status_lines(marker: Span<'static>, text: &str) -> impl Iterator<Item = Line<
     })
 }
 
-/// "atuin setup", then `after` on the same line.
-fn title(after: Vec<Span<'static>>) -> Vec<Line<'static>> {
-    let mut title = vec![Span::raw("  "), "atuin".fg(ACCENT).bold(), " setup".bold()];
-    title.extend(after);
-    vec![Line::default(), Line::from(title), Line::default()]
-}
-
 /// "Found 48,210 commands in your zsh history / and 353 threads from Claude Code and Codex."
 fn found_lines(found: &Found) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -1828,12 +1926,13 @@ fn ruled_out(row: Row, needs: Needs, colour: bool) -> Line<'static> {
         "  "
     };
     let box_ = match row {
-        Row::SyncTo(_) | Row::Sharing(_) => "( ) ",
+        Row::SyncTo(_) | Row::Sharing(_) | Row::DesktopApps(_) => "( ) ",
         Row::Keys => "",
         Row::Shell
         | Row::Shells
         | Row::ShellPick(_)
         | Row::Output
+        | Row::Desktop
         | Row::Threads
         | Row::AgentHistory
         | Row::Agents
@@ -1914,13 +2013,6 @@ enum Check {
     Off,
 }
 
-/// Whether a list is open, as the arrow left of its row's checkbox.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fold {
-    Open,
-    Closed,
-}
-
 /// A part of a row that Enter can act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
@@ -1928,33 +2020,6 @@ enum Part {
     Arrow,
     /// The checkbox.
     Check,
-}
-
-/// What's left of a row's checkbox: the margin and room for a list's arrow.
-fn lead(at: bool, fold: Option<Fold>) -> [Span<'static>; 3] {
-    let [arrow, gap] = fold_arrow(at, fold);
-    [Span::raw("    "), arrow, gap]
-}
-
-/// A list's arrow, or room for one, and the gap after it. When the cursor is `at` the arrow, the
-/// arrow is underlined to indicate Enter acts on it.
-fn fold_arrow(at: bool, fold: Option<Fold>) -> [Span<'static>; 2] {
-    let arrow = match fold {
-        Some(Fold::Open) => "▾",
-        Some(Fold::Closed) => "▸",
-        None => return [Span::raw(" "), Span::raw(" ")],
-    };
-    target(at, Span::raw(arrow))
-}
-
-/// What Enter acts on, underlined when the cursor is `at` the item, and the gap after it.
-fn target(at: bool, mark: Span<'static>) -> [Span<'static>; 2] {
-    let mark = if at {
-        mark.underlined()
-    } else {
-        mark
-    };
-    [mark, Span::raw(" ")]
 }
 
 /// A row: a list's arrow, if `fold` is one, a checkbox, its name and what it means, dim when not
@@ -1984,19 +2049,6 @@ fn toggle(
     }
 }
 
-/// The button at the bottom of a screen, that does what it says.
-fn button(at: bool, label: &'static str) -> Line<'static> {
-    let text = Span::raw(format!(" {label} "));
-    let text = if at {
-        text.fg(Color::Black).bg(ACCENT).bold()
-    } else {
-        text.fg(ACCENT)
-    };
-    let mut spans = lead(at, None).to_vec();
-    spans.push(text);
-    Line::from(spans)
-}
-
 /// How wide a row's name is padded to, so that what it means lines up.
 const LABEL_WIDTH: usize = 21;
 
@@ -2019,20 +2071,6 @@ fn row_shade(background: Option<Background>) -> Color {
     }
 }
 
-/// Where text that runs on wraps, so that it reads in an 80-column terminal at the deepest indent.
-const WRAP_COLUMNS: usize = 62;
-
-/// `text`, wrapped, each line `indent` columns in and in `style`.
-fn paragraph(text: &str, indent: usize, style: Style) -> Vec<Line<'static>> {
-    let indent = " ".repeat(indent);
-    let lines = wrap(text, WRAP_COLUMNS);
-    lines
-        .map(|line| {
-            Line::from(vec![Span::raw(indent.clone()), Span::styled(line.to_owned(), style)])
-        })
-        .collect()
-}
-
 /// How much further in an entry under a row starts than the row.
 const NESTED: &str = "    ";
 
@@ -2047,36 +2085,23 @@ fn pad(label: &'static str) -> Span<'static> {
     Span::raw(format!("{label:<LABEL_WIDTH$}"))
 }
 
-fn dim(text: impl Into<String>) -> Span<'static> {
-    Span::raw(text.into()).dim()
-}
-
-/// "enter toggle · ↑↓ move", the keys bold.
-fn hints(keys: &[(&'static str, &'static str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
-    for (i, (key, what)) in keys.iter().enumerate() {
-        if i > 0 {
-            spans.push(dim("   "));
-        }
-        spans.push(Span::raw(*key).bold());
-        spans.push(dim(format!(" {what}")));
-    }
-    Line::from(spans)
-}
-
 #[cfg(test)]
 mod tests {
     use atuin_common::harnesstools::AnyHarness;
     use atuin_common::harnesstools::ccode::Ccode;
     use atuin_common::harnesstools::codex::Codex;
+    #[cfg(feature = "sync")]
+    use atuin_common::string::wrap;
     use clap::Parser as _;
     use rstest::{fixture, rstest};
 
     use super::super::super::init::{KeySet, Keybindings, Shell};
     #[cfg(feature = "octavo")]
     use super::super::Hub;
-    use super::super::plan::{Asks, Backfill, Mcp, UploadThreads};
-    use super::super::{SYNC, THREADS};
+    use super::super::plan::{Asks, Backfill, Confirm, Mcp, UploadThreads};
+    #[cfg(feature = "sync")]
+    use super::super::widgets::WRAP_COLUMNS;
+    use super::super::{DESKTOP_CAPTURE, SYNC, THREADS};
     use super::*;
 
     #[fixture]
@@ -2098,6 +2123,8 @@ mod tests {
             keys_set_by_env: KeySet::empty(),
             threads: false,
             output: false,
+            desktop_capture: false,
+            desktop_apps: DesktopApps::All,
             saves_output: false,
             daemon: false,
             daemon_running: false,
@@ -2113,7 +2140,7 @@ mod tests {
 
     /// The plan `atuin setup` with no flags starts the screen from.
     fn preset(found: &Found) -> Plan {
-        super::super::Cmd::parse_from(["setup"]).plan(found, false).unwrap()
+        super::super::Cmd::parse_from(["setup"]).plan_at_screen(found, Confirm::Ask).unwrap()
     }
 
     fn press(choose: &mut Choose, keys: &[KeyCode]) -> Option<Chosen> {
@@ -2152,7 +2179,9 @@ mod tests {
     /// The plan `atuin setup --hub` starts the screen from.
     #[cfg(feature = "octavo")]
     fn hub(found: &Found) -> Plan {
-        super::super::Cmd::parse_from(["setup", "--hub"]).plan(found, false).unwrap()
+        super::super::Cmd::parse_from(["setup", "--hub"])
+            .plan_at_screen(found, Confirm::Ask)
+            .unwrap()
     }
 
     /// The text of each row of the screen.
@@ -2162,8 +2191,13 @@ mod tests {
 
     /// A screen 80 columns wide and `height` rows tall.
     fn screen(choose: &Choose, found: &Found, height: u16) -> Buffer {
+        screen_of(choose, found, 80, height)
+    }
+
+    /// A screen `width` columns wide and `height` rows tall.
+    fn screen_of(choose: &Choose, found: &Found, width: u16, height: u16) -> Buffer {
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| choose.draw(frame, found)).unwrap().buffer.clone()
     }
 
@@ -2212,10 +2246,20 @@ mod tests {
                 hub: false,
                 searchable: false,
                 unhooks: false,
+                removes_desktop_capture: false,
+                away_from_screen: false,
             },
             shell: ShellHistory(true),
             shells: Shells(vec![Shell::Zsh, Shell::Bash]),
             output: OutputCapture(false),
+            desktop_capture: DesktopCapture(false),
+            // Ruled out when capture is off. A build that doesn't ask about capture keeps the
+            // proposal.
+            desktop_apps: if DESKTOP_CAPTURE {
+                DesktopApps::Listed
+            } else {
+                DesktopApps::All
+            },
             threads: Threads(THREADS),
             agent_history: AgentHistory(THREADS),
             agents: Agents(found.agents()),
@@ -2355,7 +2399,7 @@ mod tests {
         assert_eq!(row_shade(background), expected);
     }
 
-    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[cfg(all(feature = "ai", feature = "desktop-capture"))]
     #[rstest]
     fn the_agents_have_a_section_of_their_own(found: Found) {
         let shown = shown(&Choose::new(&found, &preset(&found)), &found);
@@ -2550,14 +2594,14 @@ mod tests {
         assert!(choose.error.is_some());
     }
 
-    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[cfg(all(feature = "ai", feature = "desktop-capture"))]
     #[rstest]
     fn a_connected_agent_gets_its_hooks_and_atuins_mcp_server(found: Found) {
         let plan = finish(&mut Choose::new(&found, &preset(&found)));
         assert_eq!((plan.agent_history, plan.mcp), (AgentHistory(true), Mcp(true)));
     }
 
-    #[cfg(all(feature = "ai", feature = "daemon"))]
+    #[cfg(all(feature = "ai", feature = "desktop-capture"))]
     #[rstest]
     fn with_no_agent_connected_there_is_nothing_to_hook_or_connect(found: Found) {
         let mut choose = Choose::new(&found, &preset(&found));
@@ -2608,6 +2652,107 @@ mod tests {
         choose.plan.sync = Sync::Cloud;
         let plan = finish(&mut choose);
         assert!(!plan.ctrl_r.0 && !plan.up_arrow.0);
+    }
+
+    /// Whether a row of the screen holds `text`.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    fn shows(choose: &Choose, found: &Found, text: &str) -> bool {
+        shown(choose, found).iter().any(|row| row.contains(text))
+    }
+
+    /// When desktop capture is on, the screen offers the choices of applications under the
+    /// capture row, each with what the choice means.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    fn desktop_capture_offers_its_applications_while_it_is_on(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        let offered = [
+            "(*) Every application",
+            "Recommended: scrubs secrets",
+            "( ) Only the applications I list",
+            "Starts once `atuin desktop-capture apps` lists them",
+        ];
+        assert!(!shows(&choose, &found, "Every application"), "{:#?}", shown(&choose, &found));
+        choose.row = Row::Desktop;
+        press(&mut choose, &[KeyCode::Enter]);
+        for text in offered {
+            assert!(shows(&choose, &found, text), "{text}: {:#?}", shown(&choose, &found));
+        }
+        press(&mut choose, &[KeyCode::Enter]);
+        assert!(!shows(&choose, &found, "Every application"), "{:#?}", shown(&choose, &found));
+    }
+
+    /// The notes under the applications wrap to the screen's width, so that they read whole on a
+    /// narrow terminal.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    #[case::narrow(60, 20)]
+    #[case::standard(80, 24)]
+    fn the_notes_of_the_applications_fit_the_screen(
+        found: Found,
+        #[case] width: u16,
+        #[case] height: u16,
+    ) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Desktop;
+        press(&mut choose, &[KeyCode::Enter]);
+        choose.row = Row::DesktopApps(DesktopApps::Listed);
+
+        let shown = screen_of(&choose, &found, width, height);
+
+        let rows: Vec<String> = shown
+            .content()
+            .chunks(usize::from(width))
+            // Without the scrollbar's column.
+            .map(|cells| {
+                cells[..cells.len() - 1].iter().map(ratatui::buffer::Cell::symbol).collect()
+            })
+            .collect();
+        let words =
+            rows.iter().flat_map(|row| row.split_whitespace()).collect::<Vec<_>>().join(" ");
+        for note in [
+            DESKTOP_ABOUT,
+            "Recommended: scrubs secrets",
+            "Starts once `atuin desktop-capture apps` lists them",
+        ] {
+            assert!(words.contains(note), "{note}: {rows:#?}");
+        }
+    }
+
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    fn picking_the_listed_applications_sets_them(found: Found) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        choose.row = Row::Desktop;
+        press(&mut choose, &[KeyCode::Enter, KeyCode::Down, KeyCode::Down]);
+        assert_eq!(choose.row, Row::DesktopApps(DesktopApps::Listed));
+        press(&mut choose, &[KeyCode::Enter]);
+        assert_eq!(choose.plan.desktop_apps, DesktopApps::Listed);
+        assert!(shows(&choose, &found, "(*) Only the applications I list"));
+    }
+
+    /// The screen says who reads the capture, whether desktop capture is on or off, and
+    /// regardless of which applications capture reads.
+    #[cfg(all(feature = "desktop-capture", any(target_os = "linux", target_os = "macos")))]
+    #[rstest]
+    #[case::off(None)]
+    #[case::every_application(Some(DesktopApps::All))]
+    #[case::the_listed_applications(Some(DesktopApps::Listed))]
+    fn desktop_capture_says_who_reads_it(found: Found, #[case] apps: Option<DesktopApps>) {
+        let mut choose = Choose::new(&found, &preset(&found));
+        if let Some(apps) = apps {
+            choose.row = Row::Desktop;
+            press(&mut choose, &[KeyCode::Enter]);
+            choose.plan.desktop_apps = apps;
+        }
+
+        let words = shown(&choose, &found)
+            .iter()
+            .flat_map(|row| row.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(words.contains(DESKTOP_ABOUT), "{words}");
     }
 
     #[rstest]
@@ -2790,7 +2935,8 @@ mod tests {
         } else {
             &["setup"]
         };
-        let plan = super::super::Cmd::parse_from(flags).plan(&found, false).unwrap();
+        let plan =
+            super::super::Cmd::parse_from(flags).plan_at_screen(&found, Confirm::Ask).unwrap();
         let mut choose = on_page(&found, &plan, Page::Sync);
         let rows: Vec<_> = choose.rows().into_iter().map(|(row, _)| row).collect();
         assert_eq!(rows, [

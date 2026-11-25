@@ -3,9 +3,11 @@ use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
+mod coalesced;
 mod debounce;
 pub mod stream;
 
+pub use coalesced::Coalesced;
 pub use debounce::Debounce;
 
 /// Jitter a delay by up to +/-10%.

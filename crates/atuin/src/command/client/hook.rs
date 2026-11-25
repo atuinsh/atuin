@@ -14,6 +14,8 @@ use tracing::instrument;
 use super::history;
 
 mod event;
+#[cfg(feature = "desktop-capture")]
+mod prompt_context;
 mod wire;
 
 use event::HookEvent;
@@ -149,11 +151,33 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
                 let _ = history::cancel_history_entry(settings, history_id).await;
             }
         }
-        None => {}
+        // Grok Build runs Claude Code's hooks too, and Grok Build's handling of prompt output is
+        // undocumented, so only Claude Code itself gets the context.
+        Some(HookEvent::PromptSubmitted { session_id }) if author == harness.name() => {
+            add_prompt_context(harness, settings, &session_id).await;
+        }
+        Some(HookEvent::PromptSubmitted { .. }) | None => {}
     }
 
     Ok(())
 }
+
+/// Writes recent desktop activity to stdout, for `harness` to add to the prompt. A hook that
+/// fails shows the user an error, so a failed write adds nothing, quietly.
+#[cfg(feature = "desktop-capture")]
+async fn add_prompt_context(harness: AnyHarness, settings: &Settings, session_id: &str) {
+    if let Some(summary) = prompt_context::recent_activity(settings, session_id).await
+        && let Err(err) =
+            prompt_context::write_context(harness, &summary, &mut std::io::stdout().lock())
+    {
+        tracing::debug!(%err, "could not write the prompt's context");
+    }
+}
+
+/// Leaves the prompt as it is, because this build doesn't include desktop capture.
+#[cfg(not(feature = "desktop-capture"))]
+#[expect(clippy::unused_async, reason = "matches the desktop capture build")]
+async fn add_prompt_context(_harness: AnyHarness, _settings: &Settings, _session_id: &str) {}
 
 #[cfg(test)]
 mod tests {
@@ -207,6 +231,26 @@ mod tests {
         assert_eq!(
             resolve_hook_author_with(harness_name, inside_grok, grok_hook_installed),
             expected
+        );
+    }
+
+    /// A `UserPromptSubmit` payload in the shape that Claude Code sends it.
+    const PROMPT_SUBMIT: &str = r#"{
+        "session_id": "4b3c9f6e-2a1d-4e8b-9c7f-0d5e6a7b8c9d",
+        "transcript_path": "/home/user/.claude/projects/-home-user-src-cc/4b3c9f6e-2a1d-4e8b-9c7f-0d5e6a7b8c9d.jsonl",
+        "cwd": "/home/user/src/cc",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "does my compiler have any issues related to n3254?"
+    }"#;
+
+    #[rstest]
+    fn prompt_submit_parses() {
+        assert_eq!(
+            HookEvent::from_json_str(PROMPT_SUBMIT, "claude-code").unwrap(),
+            Some(HookEvent::PromptSubmitted {
+                session_id: "4b3c9f6e-2a1d-4e8b-9c7f-0d5e6a7b8c9d".into()
+            })
         );
     }
 

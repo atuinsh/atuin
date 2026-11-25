@@ -1,0 +1,7 @@
+<html><head><title>#infra - Chat</title></head><body><h1>#infra</h1><div id="log" role="log"></div>
+<script>
+const msgs=["jo: hi","kim: brb","jo: lunch?","kim: sure","alex: morning all","sam: anyone seen the flaky test in ci?","alex: looking at it now","riley: reminder, the migration deadline is Friday 18:00 UTC","sam: thanks, noted","alex: deploy is green again","riley: pushing the schema change after lunch","sam: ok"];
+let i=0;const log=document.getElementById('log');
+for(let k=0;k<40;k++){const p=document.createElement('p');p.textContent='old: message '+k;log.appendChild(p);}
+setInterval(()=>{const p=document.createElement('p');p.textContent=msgs[i%msgs.length]+" ("+(i++)+")";log.appendChild(p);},6000);
+</script></body></html>

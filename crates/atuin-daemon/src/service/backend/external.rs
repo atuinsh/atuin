@@ -1,6 +1,6 @@
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::{fmt, io};
 
 use atuin_client::settings::Daemon as DaemonSettings;
 use atuin_common::path::AbsPathBuf;
@@ -21,18 +21,20 @@ pub struct External {
     program: Option<PathBuf>,
 }
 
-/// Errors from [`External::restart`].
+/// Errors from asking the manager that runs the daemon to restart the daemon.
 #[derive(Debug, thiserror::Error)]
 pub enum ExternalRestartError {
     #[error(
         "what runs the daemon starts {}, not this atuin at {}, so restarting it wouldn't bring up \
-         this build",
+         this build{}",
         .program.display(),
-        .ours.display()
+        .ours.display(),
+        stop_advice(.manager)
     )]
     OtherProgram {
         program: PathBuf,
         ours: PathBuf,
+        manager: ExternalManager,
     },
     #[allow(dead_code, reason = "only launchd and systemd have a command to run")]
     #[error("could not run `{command}` to restart the daemon: {source}")]
@@ -50,6 +52,17 @@ pub enum ExternalRestartError {
     Missing {
         manager: &'static str,
     },
+}
+
+/// The end of [`ExternalRestartError::OtherProgram`], which says how to stop `manager` when the
+/// user can stop it with a command, so that this `atuin` can run the daemon.
+fn stop_advice(manager: &ExternalManager) -> impl fmt::Display {
+    fmt::from_fn(move |f| match manager.brew_formula() {
+        Some(formula) => {
+            write!(f, ". Run `brew services stop {formula}` to let this atuin run the daemon")
+        }
+        None => Ok(()),
+    })
 }
 
 impl External {
@@ -127,6 +140,7 @@ impl External {
             _ => Err(BackendError::new(ExternalRestartError::OtherProgram {
                 program: program.clone(),
                 ours: exe.to_owned(),
+                manager: self.manager.clone(),
             })),
         }
     }
@@ -240,5 +254,30 @@ mod tests {
 
         let restart = external.ensure_restarts_as(&dir.path().join("new")).await;
         assert_eq!(restart.is_ok(), restarts);
+    }
+
+    /// A daemon that `brew services` runs from another atuin stays until the user stops the
+    /// service, so the error says how.
+    #[rstest]
+    #[case::brew_services(
+        "sh.brew.atuin",
+        "what runs the daemon starts /opt/homebrew/opt/atuin/bin/atuin, not this atuin at \
+         /opt/preview/atuin, so restarting it wouldn't bring up this build. Run `brew services \
+         stop atuin` to let this atuin run the daemon"
+    )]
+    #[case::other_job(
+        "org.nix-community.home.atuin-daemon",
+        "what runs the daemon starts /opt/homebrew/opt/atuin/bin/atuin, not this atuin at \
+         /opt/preview/atuin, so restarting it wouldn't bring up this build"
+    )]
+    fn other_program_says_how_to_stop_brew_services(#[case] label: &str, #[case] expected: &str) {
+        let error = ExternalRestartError::OtherProgram {
+            program: PathBuf::from("/opt/homebrew/opt/atuin/bin/atuin"),
+            ours: PathBuf::from("/opt/preview/atuin"),
+            manager: ExternalManager::LaunchdJob {
+                label: label.to_owned(),
+            },
+        };
+        assert_eq!(error.to_string(), expected);
     }
 }

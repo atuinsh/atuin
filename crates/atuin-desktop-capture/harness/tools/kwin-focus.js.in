@@ -1,0 +1,10 @@
+// Focuses the first window whose application name contains @APP@, ignoring case.
+// lib/inner.sh fills in the name and runs the script through KWin's scripting interface.
+const wanted = "@APP@".toLowerCase();
+for (const window of workspace.windowList()) {
+    const names = [window.resourceClass, window.resourceName, window.desktopFileName];
+    if (names.some(name => (name || "").toLowerCase().includes(wanted))) {
+        workspace.activeWindow = window;
+        break;
+    }
+}

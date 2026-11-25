@@ -54,12 +54,18 @@ pub enum Feature {
     OutputCapture,
     #[value(alias = "ai-sessions")]
     Threads,
+    #[cfg(feature = "desktop-capture")]
+    DesktopCapture,
 }
 
 impl Feature {
     /// The flags of `atuin setup` that turn it on, or off.
     const fn flags(self, on: bool) -> &'static str {
         match (self, on) {
+            #[cfg(feature = "desktop-capture")]
+            (Self::DesktopCapture, true) => "--desktop-capture --daemon",
+            #[cfg(feature = "desktop-capture")]
+            (Self::DesktopCapture, false) => "--no-desktop-capture",
             (Self::Daemon, true) => "--daemon",
             (Self::Daemon, false) => "--no-daemon",
             (Self::OutputCapture, true) => "--output-capture --daemon",
@@ -341,6 +347,16 @@ pub(super) async fn update_config_file(changes: Vec<(&str, Value)>) -> Result<()
         .map_err(|e| eyre::eyre!("cannot update config: it would be invalid\n\n{e}"))?;
     tokio::fs::write(config_file, updated).await?;
     Ok(())
+}
+
+/// The value of `desktop_capture.apps` that selects every application.
+pub(super) fn every_app_value() -> Value {
+    Value::from(atuin_client::settings::desktop_capture::ALL)
+}
+
+/// The value of `desktop_capture.apps` that lists `names`.
+pub(super) fn listed_apps_value<'a>(names: impl IntoIterator<Item = &'a str>) -> Value {
+    Value::Array(names.into_iter().collect())
 }
 
 #[derive(Args, Debug)]

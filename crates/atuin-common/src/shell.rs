@@ -120,6 +120,16 @@ impl Shell {
         Ok(Self::Unknown)
     }
 
+    /// The file name of the user's login shell in the password database, such as `dash`.
+    ///
+    /// The name can belong to a shell that Atuin does not know. [`Self::default_shell`] reports
+    /// such a shell as [`Shell::Unknown`].
+    #[cfg(all(feature = "os", unix, not(target_os = "macos")))]
+    pub fn login_shell_name() -> Result<String, ShellLookupError> {
+        let uid = crate::os::unix::uid().to_string();
+        shell_name_from_command("getent".as_ref(), &["passwd".as_ref(), uid.as_ref()], parse_getent)
+    }
+
     #[must_use]
     pub fn from_string(name: &str) -> Self {
         match name {
@@ -192,6 +202,19 @@ fn shell_from_command<F>(
 where
     F: FnOnce(&[u8]) -> Option<&[u8]>,
 {
+    shell_name_from_command(command, args, parse).map(|name| Shell::from_string(&name))
+}
+
+/// Like [`shell_from_command`], but returns the file name of the shell.
+#[cfg(all(unix, any(feature = "os", test)))]
+fn shell_name_from_command<F>(
+    command: &OsStr,
+    args: &[&OsStr],
+    parse: F,
+) -> Result<String, ShellLookupError>
+where
+    F: FnOnce(&[u8]) -> Option<&[u8]>,
+{
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
     use std::process::Command;
@@ -223,7 +246,7 @@ where
         command: command_string(),
     })?;
 
-    Ok(shell.to_str().map_or(Shell::Unknown, Shell::from_string))
+    Ok(shell.to_string_lossy().into_owned())
 }
 
 /// Extract the shell from the output of `dscl localhost -read <user> shell`.

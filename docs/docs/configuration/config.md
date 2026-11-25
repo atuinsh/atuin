@@ -1270,6 +1270,131 @@ Reserved for syncing captured output between machines, which isn't
 implemented yet: captured output never leaves your machine, whatever this is
 set to.
 
+## Desktop capture
+
+Settings under `[desktop_capture]` control the daemon's capture of what
+applications show on the desktop. Turn it on with
+`atuin setup --desktop-capture`, which also asks which applications to
+capture. `atuin desktop-capture apps` lists the applications that expose
+content, and adds them to `apps` after it asks.
+
+Desktop capture needs a build of Atuin with the `desktop-capture` feature.
+For example, `cargo install --path crates/atuin --locked --features
+desktop-capture` makes one from a clone of the repository. Other builds
+ignore these settings, and refuse `atuin setup --desktop-capture`.
+Turn capture off before you switch to a build without the feature, because
+only a build with the feature can remove what setup wrote for capture.
+
+Desktop capture is an early preview, and these settings can change from one
+build to the next.
+
+```toml
+[desktop_capture]
+enabled = false
+apps = []
+exclude = []
+private_windows = "exclude"
+hook_minutes = 10
+max_disk_usage = "10%"
+poll_interval = "30s"
+read_budget = "1500ms"
+```
+
+### `enabled`
+
+Default: `false`
+
+Whether the daemon captures the desktop. Capture doesn't run when
+[`apps`](#apps) is empty, even if `enabled` is `true`.
+
+### `apps`
+
+Default: `[]`
+
+The applications to capture. A list names the applications, and the string
+`"all"` selects every application. A list that contains `"*"` is rejected.
+`atuin setup` writes `"all"` when you pick "Every application".
+
+```toml
+[desktop_capture]
+apps = ["firefox", "kate"]
+```
+
+```toml
+[desktop_capture]
+apps = "all"
+```
+
+### `exclude`
+
+Default: `[]`
+
+Applications that are never captured, on top of the built-in list of
+terminals.
+
+### `private_windows`
+
+Default: `"exclude"`
+
+Whether the private windows of browsers are captured. With `"exclude"`, capture
+doesn't store the title, the content, or the background tabs of a private
+window. On Linux, dialogs that a private window opens, such as a Save As
+dialog, may still be captured. `"capture"` treats a private window like any
+other window.
+
+Capture recognizes the private windows of Firefox, Safari, Chrome, Chromium,
+Edge, and Brave, in every language that the browser ships. It recognizes a
+private Firefox window by the toolbar button that clears the private session.
+If you removed that button, capture recognizes the window only by an English
+title. Other browsers, such as Vivaldi and Opera, aren't recognized yet, so
+capture stores their private windows unless you add them to
+[`exclude`](#exclude).
+
+### `helper_path`
+
+Default: unset
+
+The capture helper's executable, for development.
+
+### `hook_minutes`
+
+Default: `10`
+
+How many minutes of desktop activity the Claude Code prompt hook adds to each
+prompt. Setup installs the hook when desktop capture is on.
+
+### `max_disk_usage`
+
+Default: `"10%"`
+
+The most disk space that captured windows may use: a size (`"10GB"`), a share
+of the total size of the disk that holds Atuin's data directory (`"10%"`), or
+`"unlimited"`. Past the limit, the daemon deletes the oldest windows and
+notifications first. A window that capture is still reading is kept. Restart
+the daemon after you change this setting.
+
+```toml
+[desktop_capture]
+max_disk_usage = "10%"
+```
+
+### `poll_interval`
+
+Default: `"30s"`
+
+How long the active window may go without a snapshot before capture reads it
+anyway, because an application can change its text without telling capture.
+If these reads don't find anything new, the wait doubles, up to five minutes.
+`"0s"` turns these reads off, so that capture reads a window only when the
+application reports a change.
+
+### `read_budget`
+
+Default: `"1500ms"`
+
+How long one read of a window may take. A read that takes longer keeps the
+part of the window that it read, and capture reads the window again later.
+
 ## Security
 
 Settings under `[security]` add to Atuin's built-in rules for keeping

@@ -108,6 +108,14 @@ pub fn is_alive(pid: Pid) -> bool {
     !matches!(process::test_kill_process(pid), Err(Errno::SRCH))
 }
 
+/// Check whether the process with the [`u32`] PID `pid` is alive.
+///
+/// A PID that doesn't fit in a [`Pid`] is never alive.
+#[must_use]
+pub fn is_u32_alive(pid: u32) -> bool {
+    pid_from_u32(pid).is_some_and(is_alive)
+}
+
 /// Get when the process was started in seconds.
 pub fn process_start_time(pid: Pid) -> Option<u64> {
     let pid = sysinfo::Pid::from_u32(pid.as_raw_nonzero().get().unsigned_abs());
@@ -147,6 +155,38 @@ pub fn name(pid: Pid) -> Option<OsString> {
         return None;
     }
     Some(system.process(pid)?.name().to_owned())
+}
+
+/// Get the path of the executable that a process runs.
+///
+/// On Linux, the path of an executable that was deleted or replaced after the process started ends
+/// with ` (deleted)`.
+#[must_use]
+pub fn exe(pid: Pid) -> Option<PathBuf> {
+    let pid = u32::try_from(pid.as_raw_pid()).ok()?;
+
+    if cfg!(target_os = "linux") {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    } else {
+        exe_generic(pid)
+    }
+}
+
+/// Implementation of [`exe`] that works on all Unix-like systems.
+///
+/// Linux has a specific, more efficient implementation.
+fn exe_generic(pid: u32) -> Option<PathBuf> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = sysinfo::System::new();
+    if system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
+    ) == 0
+    {
+        return None;
+    }
+    system.process(pid)?.exe().map(Into::into)
 }
 
 /// Implementation of [`cwd`] that works on all Unix-like systems.
@@ -254,6 +294,29 @@ mod tests {
         let pid = Pid::from_raw(renamed_sleep.0.id().cast_signed()).unwrap();
         let expected = std::ffi::OsStr::new("sleep");
         assert_eq!(settles_on(expected, || name(pid)).as_deref(), Some(expected));
+    }
+
+    /// Both routes find the executable of this process, which no other process can replace while
+    /// the test runs.
+    #[rstest]
+    fn reads_the_executable_of_a_process() {
+        let expected = AbsPathBuf::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let pid = std::process::id();
+
+        let found = exe(pid_from_u32(pid).unwrap()).unwrap();
+        assert_eq!(AbsPathBuf::canonicalize(found).unwrap(), expected);
+        let generic = exe_generic(pid).unwrap();
+        assert_eq!(AbsPathBuf::canonicalize(generic).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn a_process_that_has_gone_has_no_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, pid) = sleeper(dir.path());
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        assert_eq!(exe(pid), None);
     }
 
     #[rstest]

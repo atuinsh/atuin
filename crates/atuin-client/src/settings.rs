@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use atuin_common::path::{AbsPathBuf, ExpandError, PathAnchor, PathExt, RelativeTo, ShellExpanded};
+use atuin_common::secrets::BuiltinSecrets;
 // `AsDuration` is deprecated.
 #[allow(deprecated)]
 use atuin_common::time::{AsDuration, DurationSchema, Seconds};
@@ -39,6 +40,7 @@ static EXAMPLE_CONFIG: &str = include_str!("../config.toml");
 mod aliases;
 pub mod daemon;
 mod db_location;
+pub mod desktop_capture;
 pub mod disk_usage_limit;
 mod kv;
 mod logs;
@@ -48,11 +50,13 @@ mod scripts;
 pub mod security;
 pub mod shells;
 pub mod threads;
+mod time_range;
 mod unknown_keys;
 pub mod watcher;
 
 pub use daemon::Daemon;
 pub use db_location::DbLocation;
+pub use desktop_capture::{AppSelection, Apps, DesktopCapture, PrivateWindows};
 pub use disk_usage_limit::{DiskUsageLimit, DiskUsageLimitParseError};
 pub use logs::{LogConfig, Logs};
 use output::OutputCaptureConfig;
@@ -60,6 +64,7 @@ pub use output::{CaptureLimits, CommandFilter, OutputCapture};
 pub use security::Security;
 pub use shells::Shells;
 pub use threads::{AiSessionFilterMode, AiSessionResume, Threads};
+pub use time_range::{GivenEnd, TimeRange, TimeRangeError};
 
 /// Default sync address for Atuin's hosted service, parsed once.
 pub static DEFAULT_SYNC_URL: LazyLock<Url> =
@@ -284,6 +289,105 @@ impl Dialect {
             .to_offset(offset);
         Ok(interim::parse_date_string(text, now, self.into())?)
     }
+
+    /// Read `text` as one end of a time range: an RFC 3339 time, how long ago the time was, or a
+    /// date as [`Self::parse_date`] reads it. For example, `2h` and `1d 12h` say how long ago.
+    ///
+    /// A day without a clock time, such as `yesterday` or `2026-11-01`, stands for the whole day,
+    /// and `end` says which moment of the day it means. A start that is later than `now` is an
+    /// error, because no range that starts there holds anything yet.
+    pub fn parse_range_end(
+        self,
+        text: &str,
+        now: &ZonedDateTime,
+        end: RangeEnd,
+    ) -> Result<Timestamp, ParseRangeEndError> {
+        let text = text.trim();
+        let ago = || humantime::parse_duration(text).ok();
+        let at = if let Ok(at) = text.parse::<Timestamp>() {
+            at
+        } else if let Some(ago) = ago() {
+            now.timestamp().checked_sub(ago).map_err(|_| ParseRangeEndError::OutOfRange)?
+        } else {
+            self.parse_day_or_date(text, now, end)?
+        };
+        if end == RangeEnd::Start && at > now.timestamp() {
+            return Err(ParseRangeEndError::Future);
+        }
+        Ok(at)
+    }
+
+    /// `text`, a date as [`Self::parse_date`] reads it, as the end `end` of a range.
+    fn parse_day_or_date(
+        self,
+        text: &str,
+        now: &ZonedDateTime,
+        end: RangeEnd,
+    ) -> Result<Timestamp, ParseRangeEndError> {
+        let at = self.parse_date(text, now).map_err(|err| match err {
+            ParseDateError::Unrecognized(_) => ParseRangeEndError::Unrecognized,
+            ParseDateError::OutOfRange => ParseRangeEndError::OutOfRange,
+        })?;
+        if !self.names_a_day(text, now, &at) {
+            return Ok(at.timestamp());
+        }
+        // `start_of_day` resolves a midnight that a DST change skips to the day's first moment.
+        let day = match end {
+            RangeEnd::Start | RangeEnd::Before => at.start_of_day(),
+            RangeEnd::Through => at.tomorrow().and_then(|next| next.start_of_day()),
+        };
+        day.map(|day| day.timestamp()).map_err(|_| ParseRangeEndError::OutOfRange)
+    }
+
+    /// Whether `text`, which [`Self::parse_date`] read as `at`, names a day without a clock time.
+    ///
+    /// interim reads `today`, `yesterday`, and `tomorrow` at now's time of day, and other days,
+    /// such as `2026-11-01` or `last monday`, at the day's first moment. A clock time after the
+    /// text of a day sets the time that interim reads. interim ignores a clock time after a text
+    /// that holds a clock time already, or fails on it.
+    fn names_a_day(self, text: &str, now: &ZonedDateTime, at: &ZonedDateTime) -> bool {
+        const DAYS: [&str; 3] = ["today", "yesterday", "tomorrow"];
+        if DAYS.iter().any(|day| text.eq_ignore_ascii_case(day)) {
+            return true;
+        }
+        if at.start_of_day().ok().as_ref() != Some(at) {
+            return false;
+        }
+        let at_clock = |clock: &str| {
+            let mut timed = String::with_capacity(text.len() + clock.len() + 1);
+            timed.push_str(text);
+            timed.push(' ');
+            timed.push_str(clock);
+            self.parse_at(&timed, now.timestamp(), now.offset().seconds()).ok()
+        };
+        matches!((at_clock("01:00"), at_clock("02:00")), (Some(one), Some(two)) if one != two)
+    }
+}
+
+/// Which end of a time range [`Dialect::parse_range_end`] reads, which also says what a day
+/// means there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeEnd {
+    /// The start, which takes in a day that it names: a day means its first moment.
+    Start,
+    /// The end, which takes in a day that it names: a day means the next day's first moment.
+    Through,
+    /// The end, which leaves out a day that it names: a day means its first moment.
+    Before,
+}
+
+/// Errors returned by [`Dialect::parse_range_end`].
+#[derive(Debug, thiserror::Error)]
+pub enum ParseRangeEndError {
+    #[error(
+        "give an RFC 3339 time (2026-11-14T09:30:00+01:00), how long ago (2h, 1d 12h), or a date \
+         such as 'yesterday' or '3 days ago'"
+    )]
+    Unrecognized,
+    #[error("the time is out of range")]
+    OutOfRange,
+    #[error("the start of the range is later than now")]
+    Future,
 }
 
 use atuin_common::time::TimeZoneSpec;
@@ -1292,9 +1396,22 @@ pub struct Settings {
     /// Credentials of your own for Atuin to redact.
     #[serde(default)]
     pub security: Security,
+
+    #[serde(default)]
+    pub desktop_capture: DesktopCapture,
 }
 
 impl Settings {
+    /// Whether redaction removes the built-in secrets, as `secrets_filter` says.
+    #[must_use]
+    pub const fn builtin_secrets(&self) -> BuiltinSecrets {
+        if self.secrets_filter {
+            BuiltinSecrets::On
+        } else {
+            BuiltinSecrets::Off
+        }
+    }
+
     #[must_use]
     pub fn utc() -> Self {
         Self::builder()
@@ -1337,6 +1454,13 @@ impl Settings {
     #[must_use]
     pub fn command_capture_dir(&self) -> PathBuf {
         self.data_dir.join("output-capture")
+    }
+
+    /// Directory of the desktop capture store, under the [data dir](Self::data_dir).
+    /// The directory holds the store's fjall database in a `db-<n>` directory.
+    #[must_use]
+    pub fn desktop_capture_dir(&self) -> PathBuf {
+        self.data_dir.join("desktop-capture")
     }
 
     /// The threads sidecar database, under the [data dir](Self::data_dir). The daemon owns and
@@ -2223,20 +2347,24 @@ pub(crate) fn test_local_timeout() -> Duration {
 mod tests {
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
+    use std::time::Duration;
 
     use atuin_common::db::SqliteDbUrl;
     use atuin_common::env::MockEnv;
     use atuin_common::path::{AbsPathBuf, PathBufExt as _};
+    use atuin_common::secrets::BuiltinSecrets;
+    use atuin_common::time::NonZeroDuration;
+    use atuin_common::units::{ByteSize, Percent};
     use config::{Config, ValueKind};
     use eyre::Result;
-    use jiff::ZonedDateTime;
+    use jiff::{Timestamp, ZonedDateTime};
     use rstest::{fixture, rstest};
     use url::Url;
 
     use super::unknown_keys::{Checked, UnknownKeys};
     use super::{
-        ConfigFile, DbLocation, Dialect, FileFormat, FilterMode, RequestedSearchMode, SearchMode,
-        Settings, TimeZoneSpec,
+        ConfigFile, DbLocation, Dialect, DiskUsageLimit, FileFormat, FilterMode, RangeEnd,
+        RequestedSearchMode, SearchMode, Settings, TimeZoneSpec,
     };
 
     #[rstest]
@@ -2311,6 +2439,81 @@ mod tests {
     ) -> Result<()> {
         let now: ZonedDateTime = now.parse()?;
         assert_eq!(Dialect::Uk.parse_date(text, &now)?, expected.parse::<ZonedDateTime>()?);
+        Ok(())
+    }
+
+    /// Reads `text` as the end `end` of a range at noon UTC on 2026-11-14, and gives the time in
+    /// RFC 3339, or the error's name.
+    fn range_end(text: &str, end: RangeEnd) -> String {
+        let now = "2026-11-14T12:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC);
+        match Dialect::Uk.parse_range_end(text, &now, end) {
+            Ok(at) => at.to_string(),
+            Err(err) => format!("{err:?}"),
+        }
+    }
+
+    #[rstest]
+    #[case::ago("2h", "2026-11-14T10:00:00Z")]
+    #[case::compound_ago("1d 12h", "2026-11-13T00:00:00Z")]
+    #[case::padded(" 30m ", "2026-11-14T11:30:00Z")]
+    #[case::rfc_3339("2026-11-14T09:30:00+01:00", "2026-11-14T08:30:00Z")]
+    #[case::words_ago("3 days ago", "2026-11-11T12:00:00Z")]
+    #[case::a_date("2026-11-01", "2026-11-01T00:00:00Z")]
+    #[case::today("today", "2026-11-14T00:00:00Z")]
+    #[case::yesterday("Yesterday", "2026-11-13T00:00:00Z")]
+    #[case::a_clock_time("yesterday 3pm", "2026-11-13T15:00:00Z")]
+    #[case::a_weekday("last monday", "2026-11-09T00:00:00Z")]
+    #[case::now("now", "2026-11-14T12:00:00Z")]
+    #[case::tomorrow("tomorrow", "Future")]
+    #[case::next_monday("monday", "Future")]
+    #[case::a_later_time("2026-11-20T00:00:00Z", "Future")]
+    #[case::nonsense("soon", "Unrecognized")]
+    #[case::empty("", "Unrecognized")]
+    fn range_starts(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(range_end(text, RangeEnd::Start), expected);
+    }
+
+    /// As the end of a range, a day ends where the next day starts, and a later time is fine.
+    #[rstest]
+    #[case::yesterday("yesterday", "2026-11-14T00:00:00Z")]
+    #[case::a_date("2026-11-01", "2026-11-02T00:00:00Z")]
+    #[case::tomorrow("tomorrow", "2026-11-16T00:00:00Z")]
+    #[case::a_weekday("last monday", "2026-11-10T00:00:00Z")]
+    #[case::a_clock_time("yesterday 3pm", "2026-11-13T15:00:00Z")]
+    #[case::midnight("2026-11-01 00:00", "2026-11-01T00:00:00Z")]
+    #[case::ago("2h", "2026-11-14T10:00:00Z")]
+    #[case::words_ago("3 days ago", "2026-11-11T12:00:00Z")]
+    fn range_ends(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(range_end(text, RangeEnd::Through), expected);
+    }
+
+    /// An end that leaves out the day that it names ends where that day starts.
+    #[rstest]
+    #[case::yesterday("yesterday", "2026-11-13T00:00:00Z")]
+    #[case::a_date("2026-11-01", "2026-11-01T00:00:00Z")]
+    #[case::tomorrow("tomorrow", "2026-11-15T00:00:00Z")]
+    #[case::a_clock_time("yesterday 3pm", "2026-11-13T15:00:00Z")]
+    fn range_ends_before(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(range_end(text, RangeEnd::Before), expected);
+    }
+
+    /// A day starts at its own midnight, so a DST change since doesn't shift it by an hour. US
+    /// Eastern falls back from -4 to -5 at 06:00 UTC on 2026-11-01.
+    #[rstest]
+    #[case::today("today", RangeEnd::Start, "2026-11-01T00:00:00-04:00")]
+    #[case::yesterday("yesterday", RangeEnd::Start, "2026-10-31T00:00:00-04:00")]
+    #[case::the_end_of_today("today", RangeEnd::Through, "2026-11-02T00:00:00-05:00")]
+    fn range_ends_across_dst(
+        #[case] text: &str,
+        #[case] end: RangeEnd,
+        #[case] expected: &str,
+    ) -> Result<()> {
+        let now = "2026-11-01T19:30:00-05:00[America/New_York]".parse::<ZonedDateTime>()?;
+        let at = Dialect::Uk.parse_range_end(text, &now, end)?;
+        assert_eq!(at, expected.parse::<Timestamp>()?);
         Ok(())
     }
 
@@ -2844,6 +3047,52 @@ mod tests {
     }
 
     #[rstest]
+    fn desktop_capture_defaults() {
+        let settings = parse_settings("");
+        assert!(!settings.desktop_capture.enabled);
+        assert_eq!(settings.desktop_capture.hook_minutes, 10);
+        assert_eq!(settings.desktop_capture.apps, super::Apps::Listed(Vec::new()));
+        assert_eq!(settings.desktop_capture.helper_path, None);
+        assert_eq!(
+            settings.desktop_capture.max_disk_usage,
+            DiskUsageLimit::Percent(Percent::new(10.0))
+        );
+        assert_eq!(
+            settings.desktop_capture.poll_interval,
+            NonZeroDuration::new(Duration::from_secs(30))
+        );
+        assert_eq!(settings.desktop_capture.read_budget, Duration::from_millis(1500));
+    }
+
+    /// A poll interval of zero turns polling off.
+    #[rstest]
+    #[case::off("0s", None)]
+    #[case::minutes("2m", Some(120))]
+    fn desktop_capture_reads_its_timing(#[case] poll: &str, #[case] poll_secs: Option<u64>) {
+        let settings = parse_settings(&format!(
+            "[desktop_capture]\npoll_interval = \"{poll}\"\nread_budget = \"150ms\"\n"
+        ));
+        assert_eq!(
+            settings.desktop_capture.poll_interval,
+            poll_secs.and_then(|secs| NonZeroDuration::new(Duration::from_secs(secs)))
+        );
+        assert_eq!(settings.desktop_capture.read_budget, Duration::from_millis(150));
+    }
+
+    #[rstest]
+    fn desktop_capture_is_read_from_the_config() {
+        let settings = parse_settings(
+            "[desktop_capture]\nenabled = true\napps = \"all\"\nexclude = [\"kate\"]\nhelper_path \
+             = \"/opt/helper\"\nhook_minutes = 3\nmax_disk_usage = \"2GB\"\n",
+        );
+        assert!(settings.desktop_capture.enabled);
+        assert_eq!(settings.desktop_capture.exclude, ["kate"]);
+        assert_eq!(settings.desktop_capture.hook_minutes, 3);
+        assert_eq!(settings.desktop_capture.max_disk_usage, DiskUsageLimit::Bytes(ByteSize::gb(2)));
+        assert_eq!(settings.desktop_capture.selection(), super::AppSelection::All);
+    }
+
+    #[rstest]
     fn bind_ai_resume_defaults_on() {
         assert!(parse_settings("").bind_ai_resume);
     }
@@ -2956,7 +3205,10 @@ mod tests {
             "redact_patterns = [\"ACME-[0-9]{6}\"]\n",
             "sensitive_files = [\"*.secret\"]\n",
         ));
-        assert_eq!(settings.security.redactor(true).redact("id ACME-123456"), "id ****");
+        assert_eq!(
+            settings.security.redactor(BuiltinSecrets::On).redact("id ACME-123456"),
+            "id ****"
+        );
         let files = settings.security.sensitive_files(&settings.key_path);
         assert!(files.matches("notes.secret", None));
         assert!(files.matches(&settings.key_path.to_string_lossy(), None));

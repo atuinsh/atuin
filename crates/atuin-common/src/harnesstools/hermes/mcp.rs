@@ -19,10 +19,11 @@ pub fn config_path(home: &Path) -> PathBuf {
 /// `hermes_cli/config.py`, v0.23.0). Not `hermes mcp add`: it asks whether to enable the tools,
 /// and gives up without a terminal. A running gateway picks the server up within about a minute.
 ///
-/// `env` ([`atuin_env`](super::atuin_env)) goes in the server's `env`: Hermes starts an MCP server from its
-/// gateway with only a few of the gateway's variables (`PATH`, `HOME`, `XDG_*` and others,
-/// `_build_safe_env` in `tools/mcp_tool_config.py`) and never an `ATUIN_` one, so without them
-/// `atuin mcp` would read the default config and data rather than this shell's.
+/// `env` comes from [`location_env`](crate::atuin_exe::location_env) and goes in the server's
+/// `env`. Hermes starts an MCP server from its gateway with only a few of the gateway's variables,
+/// and never with an `ATUIN_` one. `_build_safe_env` in `tools/mcp_tool_config.py` passes `PATH`,
+/// `HOME`, `XDG_*`, and a few others. Without the server's `env`, `atuin mcp` would read the
+/// default config and data instead of the config and data of this shell.
 pub async fn install(
     hermes: &impl HermesCli,
     atuin: &str,

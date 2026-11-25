@@ -43,6 +43,12 @@ use crate::service::{ActiveService, FindError};
 mod ai;
 #[cfg(feature = "ai")]
 pub use ai::AiClient;
+#[cfg(feature = "desktop-capture")]
+mod desktop_capture;
+#[cfg(feature = "desktop-capture")]
+pub use desktop_capture::{
+    DesktopCaptureClient, MAX_SNIPPET_CHARS, SnapshotChoice, SnapshotsBudget, Tallied,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {
@@ -79,7 +85,10 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
             return DaemonClientErrorKind::Connect;
         }
 
-        if let Some(status) = cause.downcast_ref::<tonic::Status>() {
+        let status = cause
+            .downcast_ref::<tonic::Status>()
+            .or_else(|| cause.downcast_ref::<DaemonStatusError>().map(DaemonStatusError::status));
+        if let Some(status) = status {
             // A status with no build isn't a refusal: tonic makes one up when a call never reaches
             // the daemon, and a daemon from before builds were exchanged sends none.
             if let Err(
@@ -100,6 +109,52 @@ pub fn classify_error(error: &eyre::Report) -> DaemonClientErrorKind {
     }
 
     DaemonClientErrorKind::NonGrpc
+}
+
+/// A request that the daemon refused or failed, shown as the daemon's message.
+///
+/// A [`tonic::Status`] shows its code and its metadata as well, which a user doesn't need to see.
+#[derive(Debug, thiserror::Error)]
+#[error("{}", status_message(.status))]
+pub struct DaemonStatusError {
+    status: tonic::Status,
+}
+
+/// The daemon's message in `status`, or the description of the status code without one.
+fn status_message(status: &tonic::Status) -> &str {
+    match status.message() {
+        "" => status.code().description(),
+        message => message,
+    }
+}
+
+impl DaemonStatusError {
+    #[must_use]
+    pub const fn status(&self) -> &tonic::Status {
+        &self.status
+    }
+
+    /// Whether the daemon refused the request because the request named something that doesn't
+    /// exist, such as an unknown segment or snapshot.
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
+        self.status.code() == tonic::Code::NotFound
+    }
+
+    /// Whether the daemon refused the request because of what the request asked, rather than
+    /// because the daemon failed.
+    #[must_use]
+    pub fn is_refusal(&self) -> bool {
+        matches!(self.status.code(), tonic::Code::NotFound | tonic::Code::InvalidArgument)
+    }
+}
+
+// `#[from]` would make the status the error's source, so an error chain would show the status a
+// second time.
+impl From<tonic::Status> for DaemonStatusError {
+    fn from(status: tonic::Status) -> Self {
+        Self { status }
+    }
 }
 
 impl From<Channel> for HistoryClient {
@@ -554,5 +609,40 @@ mod tests {
                 .insert(BUILD_HEADER_KEY, tonic::metadata::MetadataValue::from_static(build));
         }
         assert_eq!(classify_error(&status.into()), expected);
+    }
+
+    #[rstest]
+    #[case::message(
+        tonic::Status::not_found("segment 1 has no such snapshot"),
+        "segment 1 has no such snapshot"
+    )]
+    #[case::no_message(tonic::Status::unavailable(""), "The service is currently unavailable")]
+    fn a_status_error_shows_the_daemons_message(
+        #[case] status: tonic::Status,
+        #[case] shown: &str,
+    ) {
+        assert_eq!(DaemonStatusError::from(status).to_string(), shown);
+    }
+
+    #[rstest]
+    #[case::not_found(tonic::Status::not_found("no such segment"), true, true)]
+    #[case::invalid(tonic::Status::invalid_argument("not an id"), false, true)]
+    #[case::unavailable(tonic::Status::unavailable("the store isn't open"), false, false)]
+    #[case::internal(tonic::Status::internal("broken"), false, false)]
+    fn a_status_error_tells_refusals_apart(
+        #[case] status: tonic::Status,
+        #[case] not_found: bool,
+        #[case] refusal: bool,
+    ) {
+        let error = DaemonStatusError::from(status);
+
+        assert_eq!((error.is_not_found(), error.is_refusal()), (not_found, refusal));
+    }
+
+    #[rstest]
+    fn a_status_error_classifies_as_its_status() {
+        let error = eyre::Report::new(DaemonStatusError::from(tonic::Status::unavailable("gone")));
+
+        assert_eq!(classify_error(&error), DaemonClientErrorKind::Unavailable);
     }
 }

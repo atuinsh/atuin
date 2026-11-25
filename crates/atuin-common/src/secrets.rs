@@ -647,7 +647,7 @@ fn redact_once<'a>(
 ) -> Result<Cow<'a, str>, TooSlow> {
     let late = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut spans: Vec<Range<usize>> = Vec::new();
-    let tables: &[Table] = if redactor.builtin {
+    let tables: &[Table] = if redactor.builtin == BuiltinSecrets::On {
         &*REDACTION
     } else {
         &[]
@@ -728,31 +728,38 @@ pub const REDACT_BUDGET: Duration = if cfg!(debug_assertions) {
     Duration::from_millis(250)
 };
 
+/// Whether a [`Redactor`] removes the secrets that Atuin recognizes by default, which the
+/// `secrets_filter` setting turns on and off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum BuiltinSecrets {
+    On,
+    Off,
+}
+
 /// [`redact`], taking out what the user's own patterns (`[security] redact_patterns`) match too:
 /// a pattern's `secret` group where it names one, else all it matches.
 #[derive(Clone, Debug)]
 pub struct Redactor {
     extra: Vec<Regex>,
-    /// Whether the built-in patterns apply (`secrets_filter`), or only `extra`.
-    builtin: bool,
+    builtin: BuiltinSecrets,
 }
 
 impl Default for Redactor {
     fn default() -> Self {
-        Self::new(Vec::new(), true)
+        Self::new(Vec::new(), BuiltinSecrets::On)
     }
 }
 
 impl Redactor {
     #[must_use]
-    pub const fn new(extra: Vec<Regex>, builtin: bool) -> Self {
+    pub const fn new(extra: Vec<Regex>, builtin: BuiltinSecrets) -> Self {
         Self { extra, builtin }
     }
 
     /// Whether this redacts anything at all.
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        self.builtin || !self.extra.is_empty()
+        matches!(self.builtin, BuiltinSecrets::On) || !self.extra.is_empty()
     }
 
     /// See [`redact`].
@@ -1694,7 +1701,8 @@ mod tests {
         #[case] input: &str,
         #[case] expected: &str,
     ) {
-        let redactor = Redactor::new(vec![regex::Regex::new(pattern).unwrap()], true);
+        let redactor =
+            Redactor::new(vec![regex::Regex::new(pattern).unwrap()], super::BuiltinSecrets::On);
         assert_eq!(redactor.redact(input), expected);
     }
 

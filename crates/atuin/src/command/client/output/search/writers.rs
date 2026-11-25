@@ -339,6 +339,7 @@ mod tests {
 
     use atuin_client::theme::ThemeManager;
     use atuin_common::string::highlighted::{HighlightedString, TextHighlighter};
+    use atuin_common::test_utils::ansi::strip_sgr;
     use rstest::rstest;
 
     use super::*;
@@ -353,23 +354,6 @@ mod tests {
         h.duration = duration_nanos;
         h.exit = exit;
         h
-    }
-
-    fn strip_ansi(s: &str) -> String {
-        let mut out = String::new();
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' {
-                for c in chars.by_ref() {
-                    if c == 'm' {
-                        break;
-                    }
-                }
-            } else {
-                out.push(c);
-            }
-        }
-        out
     }
 
     /// Rebuild a daemon match's highlighted output from plain `text` and the byte ranges that should
@@ -487,7 +471,7 @@ mod tests {
             .write_stream(&mut buf, &ctx, futures_util::stream::iter(rows))
             .await
             .unwrap();
-        let out = strip_ansi(&String::from_utf8(buf).unwrap());
+        let out = strip_sgr(&String::from_utf8(buf).unwrap());
         let body = out.split_once('\n').map(|(_, body)| body.to_string()).unwrap();
         // "[skipped 6 lines...]" is 20 wide; centered in 40 leaves 10 on the left.
         assert_eq!(body, format!("  a\n{:10}[skipped 6 lines...]\n  b\n", ""));
@@ -541,7 +525,7 @@ mod tests {
 
         let mut buf = Vec::new();
         PrettyWriter::write_header(&mut buf, &hit).unwrap();
-        let plain = strip_ansi(&String::from_utf8(buf).unwrap());
+        let plain = strip_sgr(&String::from_utf8(buf).unwrap());
         let plain = plain.trim_end_matches('\n');
 
         assert_eq!(plain.chars().count(), width, "header should fill the terminal: {plain:?}");

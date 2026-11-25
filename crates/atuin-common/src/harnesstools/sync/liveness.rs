@@ -217,8 +217,7 @@ fn read_table(pid: Option<u32>) -> io::Result<Vec<TableEntry>> {
 /// Whether process `pid` is there to be signalled, if perhaps not by this one.
 #[cfg(unix)]
 fn signalable(pid: u32) -> bool {
-    use crate::os::unix::process::{is_alive, pid_from_u32};
-    pid_from_u32(pid).is_some_and(is_alive)
+    crate::os::unix::process::is_u32_alive(pid)
 }
 
 /// Windows' process snapshot lists every process, whoever runs it.

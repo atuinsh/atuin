@@ -17,6 +17,7 @@ atuin-ai = { path = "crates/atuin-ai", version = "18.25.1", default-features = f
 atuin-client = { path = "crates/atuin-client", version = "18.25.1" }
 atuin-common = { path = "crates/atuin-common", version = "18.25.1" }
 atuin-daemon = { path = "crates/atuin-daemon", version = "18.25.1", default-features = false }
+atuin-desktop-capture = { path = "crates/atuin-desktop-capture", default-features = false }
 atuin-domain = { path = "crates/atuin-domain", version = "18.25.1" }
 atuin-dotfiles = { path = "crates/atuin-dotfiles", version = "18.25.1" }
 atuin-history = { path = "crates/atuin-history", version = "18.25.1" }
@@ -38,6 +39,8 @@ axoupdater = "0.10"
 axum = "0.8"
 # held at 0.22: sqlx-postgres 0.9 pins base64 0.22; bumping would add a 2nd copy
 base64 = "0.22"
+blake3 = "1.8"
+block2 = "0.6"
 bytes = "1"
 bytesize = { version = "2", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
@@ -47,12 +50,14 @@ clap_complete_nushell = "4"
 colored = "3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 const_format = "0.2"
+core-foundation = "0.10"
 crossterm = "0.29"
 crypto_secretbox = "0.1"
 daemonix = "0.1"
 dashmap = "6"
 derive_more = { version = "2", features = ["add", "add_assign", "as_ref", "deref", "display", "error", "from", "into", "debug"] }
 dirs = "6"
+dispatch2 = "0.3"
 # easy-cast 0.5.5+ raises its MSRV to 1.96.
 #
 # The assert_nonzero feature patches a bug fixed in:
@@ -102,6 +107,7 @@ notify = "8"
 notify-debouncer-full = "0.7"
 num-traits = "0.2"
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 opentelemetry = "0.32"
@@ -198,6 +204,7 @@ wiremock = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # held at 0.11: 0.12 pulls hashlink 0.12 (a 2nd copy vs sqlx's 0.11) + an encoding_rs/multiversion subtree
 yaml-rust2 = "0.11"
+zbus = { version = "6.2", default-features = false, features = ["tokio"] }
 zeroize = "1"
 zstd = "0.14"
 

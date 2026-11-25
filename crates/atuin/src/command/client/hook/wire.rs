@@ -17,14 +17,16 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub enum WireToolName {
     /// The tool the agent requested is a shell command: `Bash` in Claude Code, Codex and
     /// Copilot; `run_terminal_command` in Grok Build; `execute_bash` in Kiro (`execute_pwsh` on
     /// Windows).
     #[serde(alias = "run_terminal_command", alias = "execute_bash", alias = "execute_pwsh")]
     Bash,
-    /// Unrecognized wire tool name.
+    /// Unrecognized wire tool name, or a missing one. Events that are not about a tool omit the
+    /// name. For example, `UserPromptSubmit` omits it.
+    #[default]
     #[serde(other)]
     Other,
 }
@@ -35,6 +37,7 @@ pub struct WireHookEvent {
     /// The lifecycle stage. An unrecognized value decodes to [`HookEventName::Other`].
     pub hook_event_name: HookEventName,
     /// The tool that ran; we only record `Bash`.
+    #[serde(default)]
     pub tool_name: WireToolName,
     /// Correlates a command's start and end across two `atuin hook` invocations. Copilot and
     /// Kiro send none: their events correlate by session and command instead (see
@@ -74,6 +77,8 @@ pub enum HookEventName {
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
+    /// The user submitted a prompt, which the hook can add context to.
+    UserPromptSubmit,
     #[serde(other)]
     Other,
 }

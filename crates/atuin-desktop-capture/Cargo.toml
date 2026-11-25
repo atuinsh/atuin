@@ -1,0 +1,73 @@
+[package]
+name = "atuin-desktop-capture"
+edition = "2024"
+description = "Captures desktop context through accessibility APIs"
+publish = false
+
+authors.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+default = ["platform"]
+# Adds `Desktop`, the backend of the current platform.
+platform = [
+    "dep:block2",
+    "dep:core-foundation",
+    "dep:dispatch2",
+    "dep:futures",
+    "dep:libc",
+    "dep:memchr",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
+    "dep:parking_lot",
+    "dep:zbus",
+    "dep:serde",
+]
+# Makes the element tree serializable.
+serde = ["dep:serde"]
+# Adds `link`, the protocol between the helper and the daemon.
+link = ["serde", "atuin-common/rmp-frame"]
+# Adds `testing`, a scripted backend for the tests of other crates.
+test-support = ["dep:parking_lot"]
+
+[dependencies]
+atuin-common = { workspace = true }
+blake3 = { workspace = true }
+parking_lot = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "time", "sync"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rmp-serde = { workspace = true }
+tempfile = { workspace = true }
+parking_lot = { workspace = true }
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["rt", "test-util"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+futures = { workspace = true, optional = true }
+memchr = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+atuin-common = { workspace = true, features = ["os"] }
+block2 = { workspace = true, optional = true }
+core-foundation = { workspace = true, optional = true }
+dispatch2 = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-app-kit = { workspace = true, optional = true, features = ["libc", "NSRunningApplication", "NSWorkspace"] }
+parking_lot = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true, features = ["block2", "NSArray", "NSBundle", "NSDistributedNotificationCenter", "NSDictionary", "NSFileManager", "NSNotification", "NSOperation", "NSProcessInfo", "NSString", "NSURL"] }
+
+[lints]
+workspace = true

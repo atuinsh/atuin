@@ -151,6 +151,20 @@ const BUILD_HEADER_VALUE: HeaderValue = HeaderValue::from_static(BUILD_STR);
 static BUILD_METADATA_VALUE: LazyLock<MetadataValue<Ascii>> =
     LazyLock::new(|| MetadataValue::from_static(BUILD_STR));
 
+/// The identifier that a build with desktop capture adds to the metadata of its build string.
+///
+/// See `emit_build_sha` in crates/atuin-daemon/build_sha.rs.
+const DESKTOP_CAPTURE_IDENTIFIER: &str = "desktop-capture";
+
+/// Whether the build string `build`, in the format of [`BUILD_STR`], names a build with desktop
+/// capture.
+#[must_use]
+pub fn has_desktop_capture(build: &str) -> bool {
+    build
+        .split_once('+')
+        .is_some_and(|(_, metadata)| metadata.split('.').any(|id| id == DESKTOP_CAPTURE_IDENTIFIER))
+}
+
 /// An error thrown when the version announced by the peer doesn't match our version.
 #[derive(Debug, Clone, Error)]
 pub enum VersionMatchError {
@@ -315,6 +329,25 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::release("18.25.1", false)]
+    #[case::commit("18.25.1+a4c2f00", false)]
+    #[case::capture("18.25.1+a4c2f00.desktop-capture", true)]
+    #[case::capture_without_commit("18.25.1+desktop-capture", true)]
+    #[case::prerelease_named_like_it("18.25.1-desktop-capture", false)]
+    fn the_build_string_says_whether_it_has_desktop_capture(
+        #[case] build: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(has_desktop_capture(build), expected);
+    }
+
+    /// This build's own string says what its features are.
+    #[rstest]
+    fn this_build_says_whether_it_has_desktop_capture() {
+        assert_eq!(has_desktop_capture(BUILD_STR), cfg!(feature = "desktop-capture"));
+    }
 
     /// The check's report of a daemon of build `theirs`.
     fn mismatched(theirs: &str) -> VersionMatchError {

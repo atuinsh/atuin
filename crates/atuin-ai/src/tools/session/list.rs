@@ -2,9 +2,8 @@
 
 use std::fmt::Write as _;
 
-use atuin_client::settings::{Dialect, ParseDateError, Settings};
+use atuin_client::settings::{RangeEnd, Settings};
 use atuin_common::range::Clamped;
-use jiff::ZonedDateTime;
 use jiff::tz::TimeZone;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -26,8 +25,11 @@ pub struct AtuinThreadsListToolCall {
     /// Only sessions from this AI harness. Omit for every harness.
     #[serde(default)]
     pub harness: Option<HarnessArg>,
-    /// Only sessions active at or after this time, e.g. 'today', 'yesterday', '3 days ago',
-    /// '2026-09-01'. Relative dates are in the user's local time.
+    /// Only sessions active at or after this time.
+    ///
+    /// The time is an RFC 3339 time, how long ago, such as '2h' or '1d 12h', or a date such as
+    /// 'today', 'yesterday', '3 days ago', or '2026-09-01'. Relative dates are in the user's
+    /// local time.
     #[serde(default)]
     pub since: Option<String>,
     /// Maximum number of sessions to return, newest first.
@@ -54,14 +56,9 @@ impl AtuinThreadsListToolCall {
             Some(since) => {
                 let now = jiff::Timestamp::now().to_zoned_datetime(tz.clone());
 
-                match parse_since(since, &now, settings.dialect) {
+                match settings.dialect.parse_range_end(since, &now, RangeEnd::Start) {
                     Ok(parsed) => Some(parsed),
-                    Err(e) => {
-                        return Err(format!(
-                            "Could not parse since {since:?} ({e}). Try 'today', '2 days ago' or \
-                             a date like '2026-09-01'."
-                        ));
-                    }
+                    Err(e) => return Err(format!("Could not read since {since:?}: {e}.")),
                 }
             }
         };
@@ -115,61 +112,12 @@ impl AtuinThreadsListToolCall {
     }
 }
 
-/// [`Dialect::parse_date`] resolves "today" and "yesterday" to now's time of day on that date,
-/// but as a lower bound they mean the whole day. That day starts at its own midnight in `now`'s
-/// zone, so a DST change since doesn't shift the bound by an hour.
-fn parse_since(
-    since: &str,
-    now: &ZonedDateTime,
-    dialect: Dialect,
-) -> Result<jiff::Timestamp, ParseDateError> {
-    let parsed = dialect.parse_date(since, now)?;
-
-    if !since.eq_ignore_ascii_case("today") && !since.eq_ignore_ascii_case("yesterday") {
-        return Ok(parsed.timestamp());
-    }
-
-    // The date the parse landed on at the offset it worked in, which is `now`'s.
-    let date = now.offset().to_datetime(parsed.timestamp()).date();
-    date.to_zoned_datetime(now.time_zone().clone())
-        .map(|midnight| midnight.timestamp())
-        .map_err(|_| ParseDateError::OutOfRange)
-}
-
 #[cfg(test)]
 mod tests {
-    use jiff::tz::offset;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
-
-    #[rstest]
-    #[case("today", "2026-09-29T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
-    #[case("Yesterday", "2026-09-28T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
-    #[case("3 hours ago", "2026-09-29T16:30:00+01:00".parse::<jiff::Timestamp>().unwrap())]
-    #[case("2026-09-01", "2026-09-01T00:00:00+01:00".parse::<jiff::Timestamp>().unwrap())]
-    fn since_bounds(#[case] since: &str, #[case] expected: jiff::Timestamp) {
-        let now = "2026-09-29T19:30:00+01:00"
-            .parse::<jiff::Timestamp>()
-            .unwrap()
-            .to_zoned_datetime(TimeZone::fixed(offset(1)));
-
-        assert_eq!(parse_since(since, &now, Dialect::Uk).unwrap(), expected);
-    }
-
-    // US Eastern falls back from -4 to -5 at 06:00 UTC on 2026-11-01.
-    #[rstest]
-    #[case("today", "2026-11-01T00:00:00-04:00".parse::<jiff::Timestamp>().unwrap())]
-    #[case("yesterday", "2026-10-31T00:00:00-04:00".parse::<jiff::Timestamp>().unwrap())]
-    fn since_bounds_across_dst(#[case] since: &str, #[case] expected: jiff::Timestamp) {
-        let now = "2026-11-01T19:30:00-05:00"
-            .parse::<jiff::Timestamp>()
-            .unwrap()
-            .to_zoned_datetime(TimeZone::get("America/New_York").unwrap());
-
-        assert_eq!(parse_since(since, &now, Dialect::Uk).unwrap(), expected);
-    }
 
     #[rstest]
     fn defaults() {

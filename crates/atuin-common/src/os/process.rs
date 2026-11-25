@@ -46,6 +46,14 @@ pub fn current_exe() -> std::io::Result<PathBuf> {
     AbsPathBuf::from_current_dir(exe).map(PathBuf::from)
 }
 
+/// The file name of the running executable, by which the user calls it. Returns `None` when the
+/// OS can't say where the running executable is.
+#[must_use]
+pub fn current_exe_name() -> Option<String> {
+    let exe = current_exe().ok()?;
+    Some(exe.file_name()?.to_string_lossy().into_owned())
+}
+
 /// Gracefully (and then forcefully) terminate the process.
 ///
 /// TODO(taylordotfish): On Unix, if the process doesn't exist, this function returns [`Ok`], but on
@@ -66,5 +74,19 @@ pub async fn force_terminate(pid: u32, timeout: Duration) -> Result<(), std::io:
         windows::process::Handle::open(pid, PROCESS_TERMINATE | PROCESS_SYNCHRONIZE)?
             .force_stop(timeout)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// The name of a test binary starts with the name of its crate.
+    #[rstest]
+    fn the_running_executable_has_a_name() {
+        let name = current_exe_name().expect("the test binary has a path");
+        assert!(name.starts_with("atuin_common"), "{name}");
     }
 }

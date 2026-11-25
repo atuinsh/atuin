@@ -1,5 +1,6 @@
 //! Provides the path to the `atuin` binary.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -191,6 +192,68 @@ async fn calculate_launch_path(
     Ok(link.unwrap_or(exe))
 }
 
+/// What a shell runs as `atuin`, compared with the running executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathAtuin {
+    /// The first `atuin` in `$PATH`, at this path, runs this executable. It is this executable, a
+    /// link to it, or a shim that runs it.
+    This(PathBuf),
+    /// The first `atuin` in `$PATH` runs another executable.
+    Other {
+        /// The first `atuin` in `$PATH`.
+        first: PathBuf,
+        /// The first of the later `atuin`s in `$PATH` that is this executable or a link to it.
+        later: Option<PathBuf>,
+    },
+    /// `$PATH` holds no `atuin`.
+    Absent,
+}
+
+/// Finds out whether the `atuin` that a shell runs is this executable.
+///
+/// Only the absolute entries of `$PATH` count, as in [`launch_path`]. A relative entry finds a
+/// different file in each directory, so it can't say what the shell usually runs.
+///
+/// # Errors
+///
+/// When the OS can't say where the running executable is, or the executable is gone.
+pub async fn path_atuin() -> std::io::Result<PathAtuin> {
+    compare_path_atuin(current_exe()?, PROBE_TIMEOUT).await
+}
+
+/// The core of [`path_atuin`]: compares the first `atuin` in `$PATH` with `exe`.
+///
+/// A first `atuin` that isn't `exe` itself or a link to it is probed, because a shim runs `exe`
+/// from a path of its own. If `timeout` passes before the probe answers, the `atuin` counts as
+/// another executable.
+async fn compare_path_atuin(exe: PathBuf, timeout: Duration) -> std::io::Result<PathAtuin> {
+    let ours = AbsPathBuf::canonicalize_async(&exe).await?;
+    let paths = crate::env::var_os("PATH").unwrap_or_default();
+    let mut atuins = atuins_in(&paths);
+    let Some(first) = atuins.next() else {
+        return Ok(PathAtuin::Absent);
+    };
+    let is_ours = async |atuin: &Path| {
+        AbsPathBuf::canonicalize_async(atuin).await.is_ok_and(|theirs| theirs == ours)
+    };
+    if is_ours(&first).await {
+        return Ok(PathAtuin::This(first));
+    }
+    if let Some(answer) = probe_exe(&first, timeout).await
+        && is_ours(&answer.exe).await
+    {
+        return Ok(PathAtuin::This(first));
+    }
+    let mut later = None;
+    for atuin in atuins {
+        if is_ours(&atuin).await {
+            later = Some(atuin);
+            break;
+        }
+    }
+    Ok(PathAtuin::Other { first, later })
+}
+
 /// Searches `paths` (formatted like `$PATH`) for `atuin` binaries that the user can run.
 ///
 /// Only absolute directories are searched.
@@ -309,6 +372,51 @@ enum Launch {
     Child,
 }
 
+/// The variables of `environment` that tell Atuin where its configuration and data are: the
+/// `ATUIN_` variables whose names end in `_HOME`, `_DIR`, or `_PATH`, such as `ATUIN_HOME`,
+/// `ATUIN_CONFIG_DIR`, or `ATUIN_DB_PATH`.
+///
+/// A program that runs `atuin` without the variables of the user's shell needs these variables to
+/// read the same configuration and data. For example, Hermes's gateway and a session's login both
+/// run `atuin` without them, so installers write these variables next to [`launch_path`]. The
+/// list holds only locations, because people share those files, and an `ATUIN_` variable can hold
+/// a secret, such as `ATUIN_AI__API_TOKEN`. Atuin reads a setting that the list leaves out from
+/// its configuration.
+///
+/// A relative `ATUIN_CONFIG_DIR` becomes absolute against this process's directory, because
+/// `dirs::config_path` reads it from there, and the program that runs `atuin` has a directory of
+/// its own. The other relative values stay as they are, because Atuin reads them the same way
+/// anywhere: `ATUIN_HOME` must be absolute or Atuin ignores it, and a setting's path is relative
+/// to the configuration directory.
+pub fn location_env(
+    environment: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    environment
+        .into_iter()
+        .filter(|(name, _)| {
+            name.starts_with("ATUIN_")
+                && ["_HOME", "_DIR", "_PATH"].iter().any(|suffix| name.ends_with(suffix))
+        })
+        .map(|(name, value)| {
+            let value = if name == "ATUIN_CONFIG_DIR" {
+                absolute(value)
+            } else {
+                value
+            };
+            (name, value)
+        })
+        .collect()
+}
+
+/// `path` made absolute against this process's directory, or `path` itself when the directory is
+/// gone or is not Unicode.
+fn absolute(path: String) -> String {
+    AbsPathBuf::from_current_dir(&path)
+        .ok()
+        .and_then(|absolute| PathBuf::from(absolute).into_os_string().into_string().ok())
+        .unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::{fixture, rstest};
@@ -316,6 +424,40 @@ mod tests {
     use super::*;
     use crate::env::MockEnv;
     use crate::path::PathBufExt as _;
+
+    /// The list holds only where Atuin's configuration and data are, and never a secret, shell
+    /// state, or anything else.
+    #[rstest]
+    #[case::home("ATUIN_HOME", true)]
+    #[case::config_dir("ATUIN_CONFIG_DIR", true)]
+    #[case::db_path("ATUIN_DB_PATH", true)]
+    #[case::nested_path("ATUIN_DAEMON__SOCKET_PATH", true)]
+    #[case::key_path("ATUIN_KEY_PATH", true)]
+    #[case::ai_token("ATUIN_AI__API_TOKEN", false)]
+    #[case::extra_header("ATUIN_EXTRA_HEADERS__CF_ACCESS_CLIENT_SECRET", false)]
+    #[case::password("ATUIN_PASSWORD", false)]
+    #[case::session("ATUIN_SESSION", false)]
+    #[case::other_setting("ATUIN_SEARCH_MODE", false)]
+    #[case::not_atuin("HISTDIR", false)]
+    fn location_env_holds_only_locations(#[case] name: &str, #[case] kept: bool) {
+        let env = location_env([(name.to_owned(), "x".to_owned())]);
+        assert_eq!(env.contains_key(name), kept);
+    }
+
+    /// A relative `ATUIN_CONFIG_DIR` names the directory where it was set. A relative setting's
+    /// path is relative to the configuration directory wherever `atuin` runs, so it stays.
+    #[rstest]
+    fn a_relative_config_dir_is_made_absolute() {
+        let env = location_env([
+            ("ATUIN_CONFIG_DIR".to_owned(), "config".to_owned()),
+            ("ATUIN_DB_PATH".to_owned(), "history.db".to_owned()),
+            ("ATUIN_HOME".to_owned(), "/srv/atuin".to_owned()),
+        ]);
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(env["ATUIN_CONFIG_DIR"], here.join("config").to_str().unwrap());
+        assert_eq!(env["ATUIN_DB_PATH"], "history.db");
+        assert_eq!(env["ATUIN_HOME"], "/srv/atuin");
+    }
 
     /// A temporary home that holds `bin/`, the `PATH`, and `real/atuin`, which stands for the
     /// running executable.
@@ -667,6 +809,125 @@ mod tests {
         write_shim(&in_path.bin, &body);
 
         assert_eq!(calculate(in_path.real).await, in_path.bin.join("atuin"));
+    }
+
+    /// [`compare_path_atuin`] with a timeout that only a hung shim reaches.
+    async fn compare(exe: PathBuf) -> PathAtuin {
+        compare_path_atuin(exe, Duration::from_secs(30)).await.unwrap()
+    }
+
+    /// What `bin/atuin` is, for [`the_first_atuin_in_path_is_compared_with_this_one`].
+    #[cfg(unix)]
+    #[derive(Debug, Clone, Copy)]
+    enum BinAtuin {
+        /// Nothing: `PATH` holds no `atuin`.
+        Missing,
+        /// A symbolic link to the running executable, as Homebrew links into its Cellar.
+        Link,
+        /// A shim that runs the running executable.
+        Shim,
+        /// Another executable.
+        Other,
+        /// A shim that runs another executable.
+        ShimOfOther,
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    #[case::missing(BinAtuin::Missing, None)]
+    #[case::link(BinAtuin::Link, Some(true))]
+    #[case::shim(BinAtuin::Shim, Some(true))]
+    #[case::other(BinAtuin::Other, Some(false))]
+    #[case::shim_of_other(BinAtuin::ShimOfOther, Some(false))]
+    #[tokio::test]
+    async fn the_first_atuin_in_path_is_compared_with_this_one(
+        in_path: InPath,
+        #[case] atuin: BinAtuin,
+        #[case] this: Option<bool>,
+    ) {
+        let elsewhere = in_path.dir.path().join("elsewhere");
+        let bin_atuin = in_path.bin.join("atuin");
+        match atuin {
+            BinAtuin::Missing => {}
+            BinAtuin::Link => std::os::unix::fs::symlink(&in_path.real, &bin_atuin).unwrap(),
+            BinAtuin::Shim => {
+                let _ = write_shim(&in_path.bin, &answer(in_path.real.display()));
+            }
+            BinAtuin::Other => {
+                std::fs::write(&bin_atuin, "").unwrap();
+                set_mode(&bin_atuin, 0o755);
+            }
+            BinAtuin::ShimOfOther => {
+                std::fs::write(&elsewhere, "").unwrap();
+                let _ = write_shim(&in_path.bin, &answer(elsewhere.display()));
+            }
+        }
+
+        let expected = match this {
+            None => PathAtuin::Absent,
+            Some(true) => PathAtuin::This(bin_atuin),
+            Some(false) => PathAtuin::Other {
+                first: bin_atuin,
+                later: None,
+            },
+        };
+        assert_eq!(compare(in_path.real).await, expected);
+    }
+
+    /// Only the first `atuin` is what the shell runs. A later link to this executable is found as
+    /// well, because putting its directory first fixes `PATH`.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_link_later_in_path_is_found_behind_another_atuin(in_path: InPath) {
+        std::fs::write(in_path.bin.join("atuin"), "").unwrap();
+        set_mode(&in_path.bin.join("atuin"), 0o755);
+        let later = in_path.dir.path().join("later");
+        std::fs::create_dir(&later).unwrap();
+        std::os::unix::fs::symlink(&in_path.real, later.join("atuin")).unwrap();
+        in_path.env.set("PATH", std::env::join_paths([&in_path.bin, &later]).unwrap());
+
+        let expected = PathAtuin::Other {
+            first: in_path.bin.join("atuin"),
+            later: Some(later.joined("atuin")),
+        };
+        assert_eq!(compare(in_path.real).await, expected);
+    }
+
+    /// The running executable, reached through a directory link or a `..` in `PATH`, is still the
+    /// running executable.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::directory_link("linked")]
+    #[case::dot_dot("bin/../real")]
+    #[tokio::test]
+    async fn the_same_file_through_another_path_is_this_one(in_path: InPath, #[case] dir: &str) {
+        let linked = in_path.dir.path().join("linked");
+        std::os::unix::fs::symlink(in_path.real.parent().unwrap(), &linked).unwrap();
+        let entry = in_path.dir.path().join(dir);
+        in_path.env.set("PATH", &entry);
+
+        assert_eq!(compare(in_path.real).await, PathAtuin::This(entry.joined("atuin")));
+    }
+
+    /// A relative entry of `PATH` is skipped, even when it finds another `atuin` from the current
+    /// directory, because the shell finds something else there in another directory.
+    #[cfg(unix)]
+    #[rstest]
+    #[tokio::test]
+    async fn a_relative_path_entry_is_skipped(in_path: InPath) {
+        let other = in_path.dir.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("atuin"), "").unwrap();
+        set_mode(&other.join("atuin"), 0o755);
+        std::os::unix::fs::symlink(&in_path.real, in_path.bin.join("atuin")).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let up: PathBuf = std::iter::repeat_n("..", cwd.components().count() - 1).collect();
+        let relative = up.joined(other.strip_prefix("/").unwrap());
+        assert!(relative.join("atuin").is_file());
+        in_path.env.set("PATH", std::env::join_paths([&relative, &in_path.bin]).unwrap());
+
+        assert_eq!(compare(in_path.real).await, PathAtuin::This(in_path.bin.joined("atuin")));
     }
 
     /// The ways that a probe can end before the shim does.

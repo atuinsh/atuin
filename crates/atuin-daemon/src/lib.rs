@@ -1,3 +1,4 @@
+#[cfg(feature = "ai")]
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -8,14 +9,19 @@ use atuin_client::history::store::HistoryStore;
 use atuin_client::record::sqlite_store::SqliteStore;
 use atuin_client::settings::Settings;
 use atuin_client::settings::watcher::global_settings_watcher;
+#[cfg(feature = "ai")]
 use atuin_common::sync::BlockingPool;
 use atuin_common::userio::log::SINK;
 use atuin_kv::database::Database as KvDatabase;
 use atuin_scripts::database::Database as ScriptsDatabase;
 use eyre::{Context, Result};
 
+#[cfg(feature = "desktop-capture")]
+use crate::desktop_capture::DesktopCapture;
 #[cfg(feature = "ai")]
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
+#[cfg(feature = "desktop-capture")]
+use crate::grpc::desktop_capture::pb::desktop_capture_server::DesktopCaptureServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
 use crate::grpc::userio::pb::user_io_server::UserIoServer;
 use crate::service::address::DaemonListener;
@@ -25,7 +31,11 @@ use crate::session_capture::AiHarnessSessionCapture;
 pub mod client;
 pub mod components;
 pub mod daemon;
+#[cfg(feature = "desktop-capture")]
+mod desktop_capture;
+mod disk_budget;
 pub mod events;
+mod flusher;
 pub mod grpc;
 pub(crate) mod history_journal;
 #[cfg(feature = "octavo")]
@@ -42,10 +52,20 @@ mod sync;
 // Re-export client helpers
 #[cfg(feature = "ai")]
 pub use client::AiClient;
-pub use client::HistoryClient;
+pub use client::{DaemonStatusError, HistoryClient};
+#[cfg(feature = "desktop-capture")]
+pub use client::{
+    DesktopCaptureClient, MAX_SNIPPET_CHARS, SnapshotChoice, SnapshotsBudget, Tallied,
+};
 // Re-export components
 pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
+#[cfg(feature = "desktop-capture")]
+pub use desktop_capture::signing::{Signing, SigningError, SigningFiles};
+#[cfg(feature = "desktop-capture")]
+pub use desktop_capture::{
+    HELPER_NAME, Requested, StopFile, StopFileError, helper_path, store_exists,
+};
 pub use events::DaemonEvent;
 pub use history_journal::{
     CmdCancelError, CmdDeleteError, CmdEvent, CmdFinishError, CmdRebuildError, FinishedCmd,
@@ -57,6 +77,7 @@ pub use output_capture::{
 
 /// Blocking work running at once in the daemon's [`BlockingPool`]. Tokio's own blocking pool
 /// allows 512 threads, past macOS's default soft limit of 256 open files.
+#[cfg(feature = "ai")]
 const MAX_BLOCKING_WORKERS: NonZeroUsize = NonZeroUsize::new(32).expect("32 is non-zero");
 
 /// The daemon's version (the Atuin version).
@@ -78,6 +99,7 @@ pub async fn boot(
 
     // Create the components
     let search_component = SearchComponent::new(Arc::clone(&settings)).await;
+    #[cfg(feature = "ai")]
     let blocking_pool = BlockingPool::new(MAX_BLOCKING_WORKERS);
 
     let output_capture = match settings.output.limits() {
@@ -86,6 +108,8 @@ pub async fn boot(
         }
         None => OutputCaptureEngine::nop(),
     };
+    #[cfg(feature = "desktop-capture")]
+    let desktop_capture = Arc::new(DesktopCapture::open(&settings).await);
 
     // Get the gRPC services before moving components into the daemon
     // (The services share state with the components via Arc)
@@ -206,6 +230,8 @@ pub async fn boot(
         let watcher_handle = handle.clone();
         #[cfg(feature = "ai")]
         let ai_session_capture = ai_session_capture.clone();
+        #[cfg(feature = "desktop-capture")]
+        let desktop_capture = Arc::clone(&desktop_capture);
         tokio::spawn(async move {
             tracing::info!("config file watcher started");
             while settings_rx.changed().await.is_ok() {
@@ -214,6 +240,8 @@ pub async fn boot(
                 let new_settings = (*settings_rx.borrow()).clone();
                 #[cfg(feature = "ai")]
                 ai_session_capture.set_capture(new_settings.threads.enabled);
+                #[cfg(feature = "desktop-capture")]
+                desktop_capture.apply_settings(&new_settings);
                 watcher_handle.apply_settings(new_settings).await;
             }
             tracing::debug!("config file watcher stopped");
@@ -240,6 +268,8 @@ pub async fn boot(
         #[cfg(feature = "ai")]
         ai_session_service,
         UserIoServer::new(userio),
+        #[cfg(feature = "desktop-capture")]
+        DesktopCaptureServer::new(grpc::DesktopCaptureService::new(Arc::clone(&desktop_capture))),
         handle,
     )?;
 
@@ -248,6 +278,8 @@ pub async fn boot(
 
     // Stop all components on shutdown
     daemon.stop_components().await;
+    #[cfg(feature = "desktop-capture")]
+    desktop_capture.shutdown().await;
 
     tracing::info!("daemon shut down complete");
     Ok(())

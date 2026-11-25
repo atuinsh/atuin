@@ -41,7 +41,7 @@ pub(super) trait Choice<F>: Clone + PartialEq + Default + Flag {
 pub(super) struct Needs {
     /// What it needs, as the screen says it: `shell history`.
     pub(super) what: &'static str,
-    /// The flags that give it: `` `--shell-history` ``.
+    /// How to give it, such as the flags that give it: `` `--shell-history` ``.
     pub(super) flags: &'static str,
 }
 

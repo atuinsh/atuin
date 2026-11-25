@@ -53,7 +53,26 @@ impl<P: AsRef<Path>> std::ops::Deref for RemoveOnDropPath<P> {
 ///
 /// The temporary file's name starts with `.` and ends in `.tmp`, so a watcher filtering on the
 /// final file's extension never picks it up.
+///
+/// On Unix, the new file is readable by its owner alone.
 pub fn write_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_new_as(path, contents, NewFileMode::Private)
+}
+
+/// [`write_new`], giving the new file the permissions that the umask leaves for a new file, as
+/// a file that a shell or an editor creates gets: `0o666 & !umask` on Unix.
+pub fn write_new_with_umask(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_new_as(path, contents, NewFileMode::Umask)
+}
+
+/// The permissions of a file that [`write_new_as`] creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewFileMode {
+    Private,
+    Umask,
+}
+
+fn write_new_as(path: &Path, contents: &[u8], mode: NewFileMode) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind, Write as _};
 
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
@@ -65,10 +84,73 @@ pub fn write_new(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let mut prefix = std::ffi::OsString::from(".");
     prefix.push(name);
     prefix.push(".");
-    let mut tmp = tempfile::Builder::new().prefix(&prefix).suffix(".tmp").tempfile_in(dir)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(&prefix).suffix(".tmp");
+    // The kernel applies the umask to the mode of a file that it creates.
+    #[cfg(unix)]
+    if mode == NewFileMode::Umask {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut tmp = builder.tempfile_in(dir)?;
     tmp.write_all(contents)?;
     tmp.as_file().sync_all()?;
     persist_new(tmp, path, contents)
+}
+
+/// Creates `dir` and its missing parents with the permissions `mode`, regardless of the process's
+/// umask, and returns the directories that it created, outermost first.
+///
+/// A directory that appears meanwhile counts as one that existed.
+#[cfg(unix)]
+pub fn create_dir_all_with_mode(dir: &Path, mode: u32) -> std::io::Result<Vec<PathBuf>> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // The missing directories are known only innermost first, and have to be created outermost
+    // first.
+    let missing: Vec<&Path> =
+        dir.ancestors().take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists()).collect();
+    let mut created = Vec::with_capacity(missing.len());
+    for dir in missing.into_iter().rev() {
+        match std::fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => continue,
+            Err(err) => return Err(err),
+        }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode))?;
+        created.push(dir.to_path_buf());
+    }
+    Ok(created)
+}
+
+/// The path that `path` leads to through the symbolic links at its end, as the path of a link
+/// names it. A link to a file that doesn't exist yet leads to that file's path.
+///
+/// The directories along the way stay as `path` and the links name them.
+pub fn follow_links(mut path: PathBuf) -> std::io::Result<PathBuf> {
+    use std::io::ErrorKind;
+
+    /// As many links as Linux follows before it gives up with `ELOOP`.
+    const MAX_LINKS: usize = 40;
+
+    for _ in 0..=MAX_LINKS {
+        let link = match std::fs::read_link(&path) {
+            Ok(link) => link,
+            // `InvalidInput` means that `path` is not a link.
+            Err(err) if matches!(err.kind(), ErrorKind::InvalidInput | ErrorKind::NotFound) => {
+                return Ok(path);
+            }
+            Err(err) => return Err(err),
+        };
+        // A relative link is relative to the link's directory, and an absolute one replaces the
+        // whole path.
+        path.pop();
+        path.push(link);
+    }
+    Err(std::io::Error::other("too many symbolic links lead on"))
 }
 
 /// Why [`replace`] failed, and whether the file was replaced all the same.
@@ -236,6 +318,29 @@ mod tests {
 
     use super::*;
 
+    /// Every missing directory gets the mode, also one that the umask would narrow, and a
+    /// directory that existed keeps its own.
+    #[cfg(unix)]
+    #[rstest]
+    fn create_dir_all_with_mode_sets_the_mode_of_each_created_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let dir = existing.join("a/b");
+
+        let created = create_dir_all_with_mode(&dir, 0o777).unwrap();
+
+        assert_eq!(created, [existing.join("a"), dir.clone()]);
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&existing), 0o700);
+        assert_eq!(mode(&existing.join("a")), 0o777);
+        assert_eq!(mode(&dir), 0o777);
+        assert!(create_dir_all_with_mode(&dir, 0o777).unwrap().is_empty());
+    }
+
     /// A replace moves a new file into place (a new inode, so readers following the path see it
     /// replaced), leaving no temporary file; one whose file changed since it was read leaves it.
     #[rstest]
@@ -331,6 +436,68 @@ mod tests {
         let other = dir.path().join("b.jsonl");
         copy_new(&other, b"mine").unwrap();
         assert_eq!(std::fs::read(&other).unwrap(), b"mine");
+    }
+
+    /// A new file gets the permissions that the umask leaves, unlike the private file of
+    /// [`write_new`].
+    #[cfg(target_os = "linux")]
+    #[rstest]
+    fn write_new_with_umask_gives_the_umasks_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let umask = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Umask:"))
+            .map(|umask| u32::from_str_radix(umask.trim(), 8).unwrap())
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, private) = (dir.path().join("shared"), dir.path().join("private"));
+
+        write_new_with_umask(&shared, b"one").unwrap();
+        write_new(&private, b"one").unwrap();
+
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&shared), 0o666 & !umask);
+        assert_eq!(mode(&private), 0o600);
+    }
+
+    /// Links lead to their file, also when the file doesn't exist yet, and relative links are
+    /// relative to their directory.
+    #[cfg(unix)]
+    #[rstest]
+    #[case::a_file("file", "file")]
+    #[case::a_missing_file("missing", "missing")]
+    #[case::an_absolute_link("absolute", "dir/target")]
+    #[case::a_relative_link("relative", "dir/target")]
+    #[case::two_links("twice", "dir/target")]
+    fn follow_links_finds_the_file(#[case] start: &str, #[case] expected: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("dir")).unwrap();
+        std::fs::write(root.join("file"), "").unwrap();
+        std::os::unix::fs::symlink(root.join("dir/target"), root.join("absolute")).unwrap();
+        std::os::unix::fs::symlink("dir/target", root.join("relative")).unwrap();
+        std::os::unix::fs::symlink("../relative", root.join("dir/up")).unwrap();
+        std::os::unix::fs::symlink("dir/up", root.join("twice")).unwrap();
+
+        let followed = follow_links(root.join(start)).unwrap();
+
+        assert_eq!(
+            crate::path::AbsPathBuf::canonicalize(followed.parent().unwrap()).unwrap(),
+            crate::path::AbsPathBuf::canonicalize(root.join(expected).parent().unwrap()).unwrap()
+        );
+        assert_eq!(followed.file_name(), Path::new(expected).file_name());
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn follow_links_stops_at_a_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("b", dir.path().join("a")).unwrap();
+        std::os::unix::fs::symlink("a", dir.path().join("b")).unwrap();
+
+        assert!(follow_links(dir.path().join("a")).is_err());
     }
 
     #[rstest]

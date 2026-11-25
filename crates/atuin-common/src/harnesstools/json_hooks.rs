@@ -12,6 +12,10 @@ use super::InstallHookError;
 /// Hook lifecycle events atuin registers itself for.
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
 
+/// The event for the prompts that the user submits, which Atuin registers only for desktop
+/// capture. [`install_prompt_hook`] registers it.
+const PROMPT_EVENT_TYPE: &str = "UserPromptSubmit";
+
 /// How a hook entry tells the harness to run atuin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookStyle {
@@ -46,7 +50,34 @@ pub async fn install_in(
     skeleton: Value,
 ) -> Result<(), InstallHookError> {
     let hook = hook_entry(crate::atuin_exe::launch_path().await?, harness, style)?;
+    edit_hooks(config_path, skeleton, |hooks| add_hook_entries(hooks, matcher, harness, &hook))
+        .await
+}
 
+/// Merge Atuin's hook for the prompts that the user submits into the JSON hook config at
+/// `config_path`, leaving the other hooks as they are.
+///
+/// The hook has no matcher, so it runs for every prompt.
+pub async fn install_prompt_hook(
+    config_path: &Path,
+    harness: &str,
+) -> Result<(), InstallHookError> {
+    let hook = hook_entry(crate::atuin_exe::launch_path().await?, harness, HookStyle::Shell)?;
+    edit_hooks(config_path, Value::Object(Map::new()), |hooks| {
+        let before = hooks.clone();
+        add_hook_entry(hooks, PROMPT_EVENT_TYPE, json!({"hooks": [hook]}), harness)?;
+        Ok(*hooks != before)
+    })
+    .await
+}
+
+/// Applies `edit` to the `hooks` object of the JSON config at `config_path`, or of `skeleton`
+/// when there is no config yet, and writes the config back when `edit` says that it changed.
+async fn edit_hooks(
+    config_path: &Path,
+    skeleton: Value,
+    edit: impl FnOnce(&mut Map<String, Value>) -> Result<bool, InstallHookError>,
+) -> Result<(), InstallHookError> {
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -65,7 +96,7 @@ pub async fn install_in(
         .as_object_mut()
         .ok_or(InstallHookError::Malformed("`hooks` is not an object"))?;
 
-    if !add_hook_entries(hooks, matcher, harness, &hook)? {
+    if !edit(hooks)? {
         return Err(InstallHookError::AlreadyInstalled);
     }
 
@@ -89,35 +120,46 @@ fn add_hook_entries(
 ) -> Result<bool, InstallHookError> {
     let before = hooks.clone();
     for event_type in HOOK_EVENT_TYPES {
-        let entries = hooks
-            .entry(*event_type)
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
-
         let installed = json!({
             "matcher": matcher,
             "hooks": [hook],
         });
-        let kept = entries.iter().position(|entry| *entry == installed);
-        for (at, entry) in entries.iter_mut().enumerate() {
-            if Some(at) == kept {
-                continue;
-            }
-            if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
-                entry_hooks.retain(|hook| !hook_invokes_atuin(hook, harness));
-            }
-        }
-        entries.retain(|entry| {
-            entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
-        });
-
-        if kept.is_none() {
-            entries.push(installed);
-        }
+        add_hook_entry(hooks, event_type, installed, harness)?;
     }
 
     Ok(*hooks != before)
+}
+
+/// Make `installed` the only entry of `event_type` in `hooks` that runs `atuin hook <harness>`.
+fn add_hook_entry(
+    hooks: &mut Map<String, Value>,
+    event_type: &str,
+    installed: Value,
+    harness: &str,
+) -> Result<(), InstallHookError> {
+    let entries = hooks
+        .entry(event_type)
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or(InstallHookError::Malformed("a hook event is not an array"))?;
+
+    let kept = entries.iter().position(|entry| *entry == installed);
+    for (at, entry) in entries.iter_mut().enumerate() {
+        if Some(at) == kept {
+            continue;
+        }
+        if let Some(entry_hooks) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+            entry_hooks.retain(|hook| !hook_invokes_atuin(hook, harness));
+        }
+    }
+    entries.retain(|entry| {
+        entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
+    });
+
+    if kept.is_none() {
+        entries.push(installed);
+    }
+    Ok(())
 }
 
 /// Build the hook entry that runs `atuin hook <harness>` through `executable`.
@@ -197,6 +239,26 @@ pub async fn uninstall(config_path: &Path, harness: &str) -> Result<bool, Instal
     Ok(true)
 }
 
+/// Take Atuin's hook for the prompts that the user submits out of the JSON hook config at
+/// `config_path`, keeping Atuin's other hooks and the rest of the config as they are. Returns
+/// `false` when the config didn't hold that hook.
+pub async fn uninstall_prompt_hook(
+    config_path: &Path,
+    harness: &str,
+) -> Result<bool, InstallHookError> {
+    let Some(mut root) = read(config_path).await? else {
+        return Ok(false);
+    };
+    let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return Ok(false);
+    };
+    if !remove_from_stages(hooks, [PROMPT_EVENT_TYPE], harness) {
+        return Ok(false);
+    }
+    tokio::fs::write(config_path, serde_json::to_string_pretty(&root)?).await?;
+    Ok(true)
+}
+
 /// [`uninstall`] for a config atuin made from `skeleton`, which goes once only that's left of it.
 /// What another tool merged into it keeps it, and stays.
 pub async fn uninstall_own(
@@ -230,13 +292,24 @@ async fn read(path: &Path) -> Result<Option<Value>, InstallHookError> {
     }
 }
 
-/// Take atuin's hooks out of each stage of `hooks`, then the entries and stages that leaves
-/// empty, returning whether that changed it.
+/// Take Atuin's hooks out of each stage of `hooks`, including the prompt hook's stage. Then remove
+/// the entries and stages that the removal leaves empty, and return whether `hooks` changed.
 fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
+    let stages = HOOK_EVENT_TYPES.iter().copied().chain([PROMPT_EVENT_TYPE]);
+    remove_from_stages(hooks, stages, harness)
+}
+
+/// Take Atuin's hooks out of `stages` of `hooks`. Then remove the entries and stages that the
+/// removal leaves empty, and return whether `hooks` changed.
+fn remove_from_stages<'a>(
+    hooks: &mut Map<String, Value>,
+    stages: impl IntoIterator<Item = &'a str>,
+    harness: &str,
+) -> bool {
     let before = hooks.clone();
     let ours = this_atuins(harness);
-    for stage in HOOK_EVENT_TYPES {
-        let Some(entries) = hooks.get_mut(*stage).and_then(Value::as_array_mut) else {
+    for stage in stages {
+        let Some(entries) = hooks.get_mut(stage).and_then(Value::as_array_mut) else {
             continue;
         };
         let had_some = !entries.is_empty();
@@ -249,7 +322,7 @@ fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
             entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
         });
         if had_some && entries.is_empty() {
-            hooks.remove(*stage);
+            hooks.remove(stage);
         }
     }
     *hooks != before
@@ -407,6 +480,29 @@ mod tests {
         assert_eq!(left, json!({"model": "opus", "hooks": {"PreToolUse": theirs_alone}}));
         assert!(!has(&path, "claude-code").await.unwrap());
         assert!(!uninstall(&path, "claude-code").await.unwrap());
+    }
+
+    /// Taking Atuin's hooks out also takes desktop capture's prompt hook out, and leaves the
+    /// user's prompt hooks behind.
+    #[rstest]
+    #[tokio::test]
+    async fn uninstall_takes_the_prompt_hook_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let atuin = json!({"type": "command", "command": "/opt/atuin/bin/atuin hook claude-code"});
+        let theirs = json!({"type": "command", "command": "printf keep-me"});
+        let config = json!({
+            "hooks": {
+                "PreToolUse": [{"matcher": "^Bash$", "hooks": [atuin]}],
+                "UserPromptSubmit": [{"hooks": [atuin]}, {"hooks": [theirs]}],
+            },
+        });
+        std::fs::write(&path, config.to_string()).unwrap();
+
+        assert!(uninstall(&path, "claude-code").await.unwrap());
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(left, json!({"hooks": {"UserPromptSubmit": [{"hooks": [theirs]}]}}));
     }
 
     #[rstest]
@@ -567,6 +663,36 @@ mod tests {
 
         assert_eq!(command, r#""C:\Program Files\Atuin\atuin.exe" hook codex"#);
         assert!(invokes_atuin_hook(&command, "codex"));
+    }
+
+    /// The prompt hook joins the Bash hooks and the user's own prompt hooks, once.
+    #[rstest]
+    #[tokio::test]
+    async fn prompt_hook_merges_without_matcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let theirs = json!({"hooks": [{"type": "command", "command": "echo hi"}]});
+        let settings = json!({"model": "opus", "hooks": {"UserPromptSubmit": [theirs]}});
+        std::fs::write(&path, settings.to_string()).unwrap();
+        install(&path, "^Bash$", "claude-code").await.unwrap();
+        let read =
+            || -> Value { serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap() };
+        let before = read();
+
+        install_prompt_hook(&path, "claude-code").await.unwrap();
+        assert!(matches!(
+            install_prompt_hook(&path, "claude-code").await,
+            Err(InstallHookError::AlreadyInstalled)
+        ));
+
+        let after = read();
+        let hook =
+            hook_entry(&std::env::current_exe().unwrap(), "claude-code", HookStyle::Shell).unwrap();
+        assert_eq!(after["hooks"]["UserPromptSubmit"], json!([theirs, {"hooks": [hook]}]));
+        assert_eq!(after["model"], "opus");
+        for event in HOOK_EVENT_TYPES {
+            assert_eq!(after["hooks"][event], before["hooks"][event], "{event}");
+        }
     }
 
     #[rstest]

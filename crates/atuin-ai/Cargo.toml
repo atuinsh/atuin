@@ -11,6 +11,10 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# Adds the MCP tools that read what the daemon's desktop capture stored.
+desktop-capture = ["atuin-daemon/desktop-capture"]
+
 [dependencies]
 atuin-client = { workspace = true, features = ["ai"] }
 atuin-common = { workspace = true, features = ["ai", "sqlite", "unicode"] }
@@ -27,6 +31,8 @@ eyre = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+humantime = { workspace = true }
+imara-diff = { workspace = true }
 i18n-embed = { workspace = true }
 jiff = { workspace = true }
 parking_lot = { workspace = true }

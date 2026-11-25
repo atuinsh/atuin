@@ -26,6 +26,12 @@ impl BackendError {
     fn new(err: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self(Box::new(err))
     }
+
+    /// The refusal to replace a daemon that another program runs, when that is this error.
+    #[must_use]
+    pub fn other_program(&self) -> Option<&ExternalRestartError> {
+        self.0.downcast_ref().filter(|err| matches!(err, ExternalRestartError::OtherProgram { .. }))
+    }
 }
 
 /// Errors from spawning a service.
@@ -104,5 +110,44 @@ impl AnyBackend {
 
         // Whatever runs it, the daemon publishes its socket in the pidfile.
         Subproc::new(daemon).locate()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use rstest::rstest;
+
+    use super::*;
+    use crate::service::{ReadyError, ReplaceError, ServiceFindError};
+
+    fn other_program() -> BackendError {
+        BackendError::new(ExternalRestartError::OtherProgram {
+            program: PathBuf::from("/opt/homebrew/opt/atuin/bin/atuin"),
+            ours: PathBuf::from("/opt/preview/atuin"),
+            manager: ExternalManager::LaunchdJob {
+                label: "sh.brew.atuin".to_owned(),
+            },
+        })
+    }
+
+    fn replace(err: ReplaceError) -> ReadyError {
+        ReadyError::Find(ServiceFindError::Replace(err))
+    }
+
+    /// Only a daemon that another program runs is a refusal that the user can act on.
+    #[rstest]
+    #[case::stopping(replace(ReplaceError::Stop(StopError::Backend(other_program()))), true)]
+    #[case::spawning(replace(ReplaceError::Spawn(SpawnError::Backend(other_program()))), true)]
+    #[case::missing_manager(
+        replace(ReplaceError::Stop(StopError::Backend(BackendError::new(
+            ExternalRestartError::Missing { manager: "launchd" }
+        )))),
+        false
+    )]
+    #[case::not_running(ReadyError::NotRunning, false)]
+    fn finds_the_refusal_of_another_program(#[case] err: ReadyError, #[case] refused: bool) {
+        assert_eq!(err.other_program().is_some(), refused);
     }
 }
