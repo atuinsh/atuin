@@ -1,7 +1,7 @@
 <p align="center">
  <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/atuinsh/atuin/assets/53315310/13216a1d-1ac0-4c99-b0eb-d88290fe0efd">
-  <img alt="Text changing depending on mode. Light: 'So light!' Dark: 'So dark!'" src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129" width="55%">
+  <img alt="The Atuin turtle logo next to the word 'Atuin'" src="https://github.com/atuinsh/atuin/assets/53315310/08bc86d4-a781-4aaa-8d7e-478ae6bcd129" width="55%">
 </picture>
 </p>
 
@@ -28,12 +28,12 @@
 Atuin gives you, and your agents, a history of everything that happened in your
 terminal.
 
-**Shell history** Atuin replaces your shell history with a SQLite database that
-records exit codes, working directories, hosts and durations. Hit
-<kbd>Ctrl</kbd><kbd>r</kbd> and find any command you've ever run, on any
+**Shell history:** Atuin replaces your shell history with a SQLite database
+that records exit codes, working directories, hosts and durations. Hit
+<kbd>Ctrl</kbd>+<kbd>R</kbd> and find any command you've ever run, on any
 machine.
 
-**Agent Threads** Atuin captures your Claude Code, Codex, OpenCode and other
+**Agent threads:** Atuin captures your Claude Code, Codex, OpenCode and other
 agent sessions. Start a thread on your laptop, then `atuin resume` it on a
 different machine, in a different harness.
 
@@ -41,7 +41,7 @@ Your agents can, optionally, search everything that's ever happened through the
 built-in MCP server.
 
 Atuin can also sync both history and threads across all of your machines,
-end-to-end encrypted. Or it can work totally offline! 
+end-to-end encrypted. Or it can work totally offline!
 
 # Quick Start
 
@@ -54,11 +54,11 @@ Then, **restart your shell**.
 ## History
 
 Atuin captures everything you do in the terminal, storing it into a SQLite
-database. Hitting <kbd>CTRL</kbd><kbd>r</kbd> opens a pretty pane with all
-your bash history. Atuin logs your _exit codes_, _working directories_,
-_hostnames_, _command duration_ and much much more. You can
-hit <kbd>Return</kbd> to execute a command, <kbd>Tab</kbd> to edit any
-highlighted command.
+database. Hitting <kbd>Ctrl</kbd>+<kbd>R</kbd> opens a pretty pane with all
+your bash history. Atuin logs your *exit codes*, *working directories*,
+*hostnames*, *command duration* and much much more. You can hit
+<kbd>Enter</kbd> to execute a command, <kbd>Tab</kbd> to edit any highlighted
+command.
 
 <p align="center">
   <picture>
@@ -79,27 +79,26 @@ Finally, agents can search your history too, through our
 [MCP](https://docs.atuin.sh/latest/ai/mcp/).
 
 Atuin supports
-[<img src="assets/icons/zsh.svg" height="16" align="absmiddle" alt=""> `zsh`](https://www.zsh.org/),
-[<img src="assets/icons/bash.svg" height="16" align="absmiddle" alt=""> `bash`](https://www.gnu.org/software/bash/),
-[<img src="assets/icons/fish.svg" height="16" align="absmiddle" alt=""> `fish`](https://fishshell.com/),
-[<img src="assets/icons/nushell.svg" height="16" align="absmiddle" alt=""> `nushell`](https://www.nushell.sh/),
-[<img src="assets/icons/xonsh.svg" height="16" align="absmiddle" alt=""> `xonsh`](https://xon.sh/) and
-[<img src="assets/icons/powershell.svg" height="16" align="absmiddle" alt=""> `PowerShell`](https://learn.microsoft.com/en-us/powershell/).
+[<img src="assets/icons/zsh.svg" height="16" align="absmiddle" alt=""> Zsh](https://www.zsh.org/),
+[<img src="assets/icons/bash.svg" height="16" align="absmiddle" alt=""> Bash](https://www.gnu.org/software/bash/),
+[<img src="assets/icons/fish.svg" height="16" align="absmiddle" alt=""> fish](https://fishshell.com/),
+[<img src="assets/icons/nushell.svg" height="16" align="absmiddle" alt=""> Nushell](https://www.nushell.sh/),
+[<img src="assets/icons/xonsh.svg" height="16" align="absmiddle" alt=""> Xonsh](https://xon.sh/) and
+[<img src="assets/icons/powershell.svg" height="16" align="absmiddle" alt=""> PowerShell](https://learn.microsoft.com/en-us/powershell/).
 
 ### Sync
 
 Atuin can sync all your shell activity, across all your machines (even
-ephemeral ones). You can either use the official [Atuin
-Service](https://atuin.sh) or you can self-host the sync server. **Everything
+ephemeral ones). You can either use the official [Atuin Hub](https://atuin.sh)
+or you can self-host the sync server. **Everything
 it syncs is end-to-end encrypted.**
 
 ## Threads
 
-Atuin captures what your agents do. Automatically move your
-context and thread history from one machine to another, or from one harness to
-another.
+Atuin captures what your agents do. Automatically move your context and thread
+history from one machine to another, or from one harness to another.
 
-With _Atuin Threads_, your agent has access to your full history, and the
+With *Atuin Threads*, your agent has access to your full history, and the
 built-in Atuin MCP gives your agent context on everything you've ever done.
 
 You can take a session you started on your personal computer in Claude Code,
@@ -112,7 +111,7 @@ and `$ atuin resume` it in a remote machine inside Codex.
   </picture>
 </p>
 
-Similarly to the _history_ index, you can search through your _threads_:
+Similarly to the history index, you can search through your *threads*:
 
 ```bash
 atuin threads search 'c++'
@@ -125,13 +124,13 @@ atuin threads search 'c++'
 > disable the `ai` feature flag during compilation:
 >
 > ```bash
-> cargo install atuin --no-default-features \
+> cargo install atuin --locked --no-default-features \
 >   --features client,sync,check-update,daemon,pty-proxy
 > ```
 
 Supported harnesses are
-[<img src="assets/icons/claude-code.svg" height="16" align="absmiddle" alt=""> `Claude Code`](https://claude.com/product/claude-code),
-[<img src="assets/icons/codex.svg" height="16" align="absmiddle" alt=""> `Codex`](https://openai.com/codex/),
+[<img src="assets/icons/claude-code.svg" height="16" align="absmiddle" alt=""> Claude Code](https://claude.com/product/claude-code),
+[<img src="assets/icons/codex.svg" height="16" align="absmiddle" alt=""> Codex](https://openai.com/codex/),
 [<picture><source media="(prefers-color-scheme: dark)" srcset="assets/icons/opencode-dark.svg"><img src="assets/icons/opencode.svg" height="16" align="absmiddle" alt=""></picture> Opencode](https://opencode.ai/),
 [<picture><source media="(prefers-color-scheme: dark)" srcset="assets/icons/copilot-dark.svg"><img src="assets/icons/copilot.svg" height="16" align="absmiddle" alt=""></picture> Copilot](https://github.com/features/copilot),
 [<picture><source media="(prefers-color-scheme: dark)" srcset="assets/icons/grok-dark.svg"><img src="assets/icons/grok.svg" height="16" align="absmiddle" alt=""></picture> Grok](https://x.ai/build),
@@ -166,7 +165,7 @@ Please open a PR for any others!
 We are very grateful to all our contributors!
 
 <a href="https://github.com/atuinsh/atuin/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=atuinsh/atuin&max=300&columns=24" />
+  <img src="https://contrib.rocks/image?repo=atuinsh/atuin&max=300&columns=24" alt="A grid of the profile pictures of Atuin contributors" />
 </a>
 
-_Made with [contrib.rocks](https://contrib.rocks)._
+*Made with [contrib.rocks](https://contrib.rocks).*
