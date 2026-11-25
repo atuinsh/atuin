@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn reinstall_upgrades_legacy_bash_matcher(home: (tempfile::TempDir, MockEnv)) {
         let (dir, _env) = home;
-        let path = dir.path().join(".claude").join("settings.json");
+        let path = dir.path().join(".claude").joined("settings.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,

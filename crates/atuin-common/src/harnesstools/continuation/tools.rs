@@ -25,6 +25,9 @@ enum Canonical {
     Shell {
         command: String,
     },
+    PowerShell {
+        command: String,
+    },
     Read {
         path: String,
         offset: Option<Value>,
@@ -149,6 +152,10 @@ impl Canonical {
         let input = object(input)?;
         let path = || string(&input, &["file_path", "filePath", "target_file", "path"]);
         Some(match kind.as_str() {
+            "powershell" => {
+                let command = command(input.get("command").or_else(|| input.get("cmd")))?;
+                Self::PowerShell { command }
+            }
             "bash"
             | "shell"
             | "shell_command"
@@ -157,7 +164,6 @@ impl Canonical {
             | "run_terminal_command"
             | "execute_bash"
             | "execute_pwsh"
-            | "powershell"
             | "terminal" => {
                 let (command, workdir) = if name == "local_shell" {
                     (command(input.get("command")), string(&input, &["working_directory"]))
@@ -292,6 +298,17 @@ impl Canonical {
             }
         };
         let name = match (self, target) {
+            (Self::PowerShell { command }, ClaudeCode(_)) => {
+                put("command", Some(json!(command)));
+                "PowerShell"
+            }
+            (Self::PowerShell { command }, Kiro(_)) => {
+                put("command", Some(json!(command)));
+                "execute_pwsh"
+            }
+            // Other harnesses have no PowerShell tool, so leave the call unchanged instead of
+            // rewriting it as a Bash command.
+            (Self::PowerShell { .. }, _) => return None,
             (Self::Shell { command }, Codex(_)) => {
                 put("cmd", Some(json!(command)));
                 put("workdir", Some(json!(cwd)));
@@ -618,6 +635,9 @@ impl CallIds {
 /// Whether `name` is one of `target`'s own tools, or a name its writer reads as one of its own
 /// items (Codex's): a call kept as the tool it was, under such a name, would read as that tool.
 fn native(target: AnyHarness, name: &str) -> bool {
+    if matches!(target, AnyHarness::ClaudeCode(_)) && name.eq_ignore_ascii_case("powershell") {
+        return true;
+    }
     let names: &[&str] = match target {
         // The `hermes-cli` toolset from `toolsets.py`, and the deferred tools it reaches.
         AnyHarness::Hermes(_) => &[
@@ -853,7 +873,7 @@ fn output_for(
     match (target, canonical) {
         // Kiro's shell tool reports its output with the command's exit code, which capture
         // didn't keep: a command that failed is given 1, so the model still reads it as failed.
-        (AnyHarness::Kiro(_), _) if name == "execute_bash" => {
+        (AnyHarness::Kiro(_), _) if matches!(name, "execute_bash" | "execute_pwsh") => {
             let code = i32::from(result.error);
             format!("Output:\n{text}\n\n\nExit Code: {code}")
         }
@@ -871,7 +891,7 @@ fn output_for(
 fn hermes_output(canonical: &Canonical, text: String, error: bool) -> String {
     let failed = |key: &str| json!({ key: text }).to_string();
     let shaped = match canonical {
-        Canonical::Shell { .. } => {
+        Canonical::Shell { .. } | Canonical::PowerShell { .. } => {
             // Hermes's own, carried back into it: as it was.
             if serde_json::from_str::<Value>(&text).is_ok_and(|v| v.get("exit_code").is_some()) {
                 return text;
@@ -1249,5 +1269,42 @@ mod tests {
         assert_eq!(b.as_ref(), "call_x_fc_y_2");
         let long = ids.mint(&ToolCallId::from("x".repeat(100)));
         assert_eq!(long.as_ref().len(), MAX_NAME);
+    }
+
+    #[rstest]
+    fn powershell_calls_preserve_shell_kind_across_harnesses() {
+        let call = ToolUse {
+            id: ToolCallId::from("toolu_ps1".to_owned()),
+            name: "PowerShell".to_owned(),
+            input: json!({"command": "Get-ChildItem"}),
+        };
+        let result = ToolResult {
+            call: call.id.clone(),
+            output: json!("a.rs"),
+            error: false,
+        };
+        let here = Path::new("/work");
+
+        let to_claude =
+            carry(CLAUDE, CLAUDE, &call, &result, here, here, &mut CallIds::default());
+        assert_eq!(to_claude[0].0.name, "PowerShell");
+        assert_eq!(to_claude[0].0.input, json!({"command": "Get-ChildItem"}));
+
+        let to_kiro = carry(CLAUDE, KIRO, &call, &result, here, here, &mut CallIds::default());
+        assert_eq!(to_kiro[0].0.name, "execute_pwsh");
+        assert_eq!(to_kiro[0].0.input, json!({"command": "Get-ChildItem"}));
+        assert_eq!(to_kiro[0].1.output, json!("Output:\na.rs\n\n\nExit Code: 0"));
+
+        let to_codex = carry(CLAUDE, CODEX, &call, &result, here, here, &mut CallIds::default());
+        assert_eq!(to_codex[0].0.name, "PowerShell");
+        assert_eq!(
+            to_codex[0].0.input,
+            Value::String(json!({"command": "Get-ChildItem"}).to_string())
+        );
+
+        let to_hermes =
+            carry(CLAUDE, HERMES, &call, &result, here, here, &mut CallIds::default());
+        assert_eq!(to_hermes[0].0.name, "PowerShell");
+        assert_eq!(to_hermes[0].0.input, json!({"command": "Get-ChildItem"}));
     }
 }
