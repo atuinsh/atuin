@@ -482,6 +482,7 @@ dependencies = [
  "dirs 6.0.0",
  "easy-cast",
  "enum_dispatch",
+ "flate2",
  "flume",
  "fs-err",
  "futures",
