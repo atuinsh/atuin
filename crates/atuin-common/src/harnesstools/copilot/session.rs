@@ -651,7 +651,9 @@ impl Reading {
             }
             "session.usage_record" => {
                 let usage = &event.data["usage"];
-                if let Some(call) = usage["apiCallId"].as_str() {
+                // Copilot 1.0.115 names the call by `accounting.usageId` instead.
+                let call = usage["apiCallId"].as_str().or(usage["accounting"]["usageId"].as_str());
+                if let Some(call) = call {
                     self.usage = Some((call.to_owned(), usage_of(usage)));
                 }
                 None
@@ -1295,6 +1297,28 @@ mod tests {
         );
         let last = messages.last().unwrap();
         assert_eq!(last.stop_reason(), Some(StopReason::EndTurn));
+    }
+
+    /// Copilot 1.0.115 drops the usage record's `apiCallId` and names the call by
+    /// `accounting.usageId`.
+    #[rstest]
+    fn usage_is_matched_by_its_accounting_usage_id() {
+        let moved: String = TASK_AND_EDIT
+            .lines()
+            .map(|line| {
+                let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+                if event["type"] == "session.usage_record" {
+                    let usage = &mut event["data"]["usage"];
+                    let call = usage.as_object_mut().unwrap().remove("apiCallId").unwrap();
+                    usage["accounting"] = serde_json::json!({ "usageId": call });
+                }
+                event.to_string() + "\n"
+            })
+            .collect();
+        let messages = parse(&moved);
+        assert!(
+            messages.iter().filter(|m| m.role() == Role::Assistant).all(|m| m.usage().is_some())
+        );
     }
 
     /// A reply that reasoned is marked once, with the call's reasoning tokens, before its text,
