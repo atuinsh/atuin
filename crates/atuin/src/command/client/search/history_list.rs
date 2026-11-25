@@ -17,6 +17,7 @@ use ratatui::crossterm::style;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
+use unicode_width::UnicodeWidthChar as _;
 
 use super::engines::{AnySearchEngine, SearchEngine};
 use super::syntax;
@@ -204,8 +205,8 @@ impl DrawState<'_> {
         // Always render the indicator first (width 3)
         self.index();
 
-        // Calculate the width for expanding columns, reserving the 3-column
-        // indicator, all fixed column widths, and the 1-cell inter-column gaps.
+        // Reserve the 3-column indicator, all fixed column widths, and the 1-cell
+        // inter-column gaps before dividing remaining width across expanding columns.
         let indicator_width: u16 = 3;
         let separator_count =
             u16::try_from(self.columns.len().saturating_sub(1)).unwrap_or(u16::MAX);
@@ -334,8 +335,7 @@ impl DrawState<'_> {
             Vec::new()
         };
 
-        // Respect both the allocated column width and the remaining row budget
-        // so non-trailing command columns never overflow into subsequent ones.
+        // Stay within both the allocated column width and the remaining row width.
         let col_start = self.x;
         let col_width = width.min(self.list_area.width.saturating_sub(col_start));
         let col_end = col_start.saturating_add(col_width);
@@ -350,6 +350,12 @@ impl DrawState<'_> {
             if self.x >= col_end {
                 break;
             }
+            // Stop when a character needs more cells than remain in the column.
+            let char_width = ch.width().unwrap_or(0);
+            if char_width > usize::conv(col_end.saturating_sub(self.x)) {
+                break;
+            }
+
             // Map each output cell back to its source byte and test the existing
             // highlight set; a cell on the spliced ellipsis maps to None and is
             // never highlighted (this is why the "…" is never bolded).
@@ -366,20 +372,14 @@ impl DrawState<'_> {
             }
 
             let mut ch_buf = [0u8; 4];
-            let prev_x = self.x;
             self.draw_until(
                 ch.encode_utf8(&mut ch_buf),
                 Style::from_crossterm(char_style),
                 col_end,
             );
-            // Stop if a double-width character could not fit in the final cell.
-            if self.x == prev_x && ch != '\0' {
-                break;
-            }
         }
 
-        // Pad any unused width so following columns stay aligned and row-wide
-        // alternate highlighting spans the entire column.
+        // Pad unused width so later columns align and alternate highlighting spans the column.
         let pad_width = usize::conv(col_end.saturating_sub(self.x));
         if pad_width > 0 {
             let pad_style = Style::from_crossterm(self.theme.as_style(Meaning::Base));
@@ -486,6 +486,7 @@ mod tests {
     use atuin_client::settings::{UiColumn, UiColumnType};
     use atuin_client::theme::ThemeManager;
     use jiff::tz::TimeZone;
+    use rstest::rstest;
 
     use super::*;
     use crate::command::client::search::engines::db;
@@ -543,7 +544,7 @@ mod tests {
         history
     }
 
-    #[test]
+    #[rstest]
     fn expanding_command_first_right_aligns_trailing_column() {
         let history = vec![sample_history("ls")];
         let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
@@ -555,7 +556,7 @@ mod tests {
         assert!(row.ends_with("   5s ago"), "time column not right-aligned: {row:?}");
     }
 
-    #[test]
+    #[rstest]
     fn expanding_command_first_truncates_instead_of_overwriting_trailing_column() {
         let history =
             vec![sample_history("echo very-long-command-that-should-be-ellipsized-before-time")];
@@ -567,7 +568,7 @@ mod tests {
         assert!(row.ends_with("    5s ago"), "trailing time overwritten: {row:?}");
     }
 
-    #[test]
+    #[rstest]
     fn expanding_command_in_middle_aligns_both_sides() {
         let history = vec![sample_history("git status")];
         let columns = vec![
@@ -582,7 +583,7 @@ mod tests {
         assert!(row.ends_with("    5s ago"), "row was: {row:?}");
     }
 
-    #[test]
+    #[rstest]
     fn fixed_width_command_respects_width_before_expanding_directory() {
         let history = vec![sample_history("cargo test --workspace")];
         let columns = vec![
@@ -604,7 +605,7 @@ mod tests {
         assert!(row.ends_with("/home/user/project   "), "directory shifted/truncated: {row:?}");
     }
 
-    #[test]
+    #[rstest]
     fn alternate_highlight_spans_padded_expanding_command() {
         let history = vec![sample_history("ls")];
         let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
@@ -619,7 +620,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest]
     fn narrow_viewport_with_expanding_command_before_fixed_does_not_panic() {
         let history = vec![sample_history("echo hello world")];
         let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
@@ -629,7 +630,7 @@ mod tests {
         assert_eq!(row, " >     5s ");
     }
 
-    #[test]
+    #[rstest]
     fn two_expanding_columns_share_remaining_width() {
         let history = vec![sample_history("echo hello world")];
         let columns = vec![
@@ -647,7 +648,18 @@ mod tests {
         assert_eq!(row, " > echo h… world …user/project");
     }
 
-    #[test]
+    #[rstest]
+    fn combining_mark_does_not_truncate_command_before_trailing_column() {
+        let history = vec![sample_history("echo cafe\u{0301} more")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (_, row) = render_line(&history, &columns, 30, false);
+
+        assert_eq!(row.chars().count(), 30);
+        assert!(row.contains("more"), "arguments after combining mark dropped: {row:?}");
+        assert!(row.ends_with("   5s ago"), "time column not right-aligned: {row:?}");
+    }
+
+    #[rstest]
     fn wide_cjk_command_before_time_keeps_alignment() {
         let history = vec![sample_history("echo 你好世界你好世界你好世界")];
         let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
