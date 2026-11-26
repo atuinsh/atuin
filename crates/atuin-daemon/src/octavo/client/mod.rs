@@ -21,6 +21,10 @@ pub trait OctavoClient {
         &self,
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError>;
+    async fn make_private(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError>;
 }
 
 #[enum_dispatch(OctavoClient)]

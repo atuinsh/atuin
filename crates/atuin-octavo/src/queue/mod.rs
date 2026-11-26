@@ -18,8 +18,8 @@ use crate::pb;
 mod shares;
 
 pub use self::shares::{
-    DirShares, NotSent, OrgShare, PendingClose, PendingOpen, QueuedThread, SentClose, SentOpen,
-    ShareState,
+    DirShares, NotSent, OrgShare, PendingClose, PendingOpen, PendingRevoke, QueuedThread, Revoke,
+    RevokeError, SentClose, SentOpen, SentRevoke, ShareState, ThreadSharing,
 };
 
 const PAGE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();

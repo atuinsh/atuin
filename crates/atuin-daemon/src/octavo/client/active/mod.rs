@@ -137,6 +137,27 @@ impl OctavoClient for ActiveOctavoClient {
         let queued = self.uploader.queue.thread(hub.user_id(), &thread);
         Ok(ThreadShares::On(QueuedShares::read(&queued).await?))
     }
+
+    async fn make_private(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        let hub = match self.uploader.uploading().await {
+            Uploading::Off => return Ok(ThreadShares::Off),
+            Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
+            Uploading::As(hub) => hub,
+        };
+        // The host that captured a thread queues its shares, so this queue has none to close.
+        if self.uploader.starts.captured_elsewhere(&session).await {
+            return Err(ThreadSharesError::CapturedElsewhere);
+        }
+        let thread =
+            pb::HarnessSession::of_thread(session).ok_or(ThreadSharesError::NotShareable)?;
+        let queued = self.uploader.queue.thread(hub.user_id(), &thread);
+        queued.make_private().await?;
+        self.uploader.wake.notify_one();
+        Ok(ThreadShares::On(QueuedShares::read(&queued).await?))
+    }
 }
 
 /// Current Octavo upload state and active hub session.
@@ -290,7 +311,7 @@ impl DirectThreadUpload {
         let ids: Vec<_> = ready.iter().map(|message| message.id).collect();
         let messages = engine::converted(ready).await;
 
-        match engine::upload_thread_messages(&login, messages).await {
+        match engine::upload_thread_messages(&uploader.queue, &login, messages).await {
             Ok(Uploaded::Stored) => {
                 uploader.resume(user).await;
             }

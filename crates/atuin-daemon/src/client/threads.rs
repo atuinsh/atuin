@@ -35,6 +35,15 @@ impl ThreadsClient {
     ) -> Result<Option<ThreadShares>, tonic::Status> {
         built_with_octavo(self.client.get_shares(thread_request(thread)).await)
     }
+
+    /// Make `thread` private and get its sharing info afterwards, or [`None`] if the daemon was
+    /// built without Octavo.
+    pub async fn make_private(
+        &mut self,
+        thread: HarnessSession,
+    ) -> Result<Option<ThreadShares>, tonic::Status> {
+        built_with_octavo(self.client.make_private(thread_request(thread)).await)
+    }
 }
 
 fn thread_request(thread: HarnessSession) -> ThreadRequest {

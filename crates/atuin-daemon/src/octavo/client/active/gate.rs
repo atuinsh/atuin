@@ -8,7 +8,7 @@ use atuin_client::ai_session::Message;
 use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{HubCallError, HubLogin, UserId};
 use atuin_octavo::pb;
-use atuin_octavo::queue::{PendingOpen, QueueError, UploadQueue};
+use atuin_octavo::queue::{PendingOpen, QueueError, Revoke, RevokeError, UploadQueue};
 use atuin_octavo::shares::{Configs, LookupError};
 use tokio::time::Instant;
 
@@ -58,6 +58,59 @@ impl<'a> Closes<'a> {
             sent.settle().await?;
         }
         Ok(ClosesSent(()))
+    }
+}
+
+/// A login's private threads whose shares are queued to be deleted, which revokes their links.
+#[derive(Debug)]
+pub(super) struct Revokes<'a> {
+    queue: &'a UploadQueue,
+    login: &'a HubLogin,
+}
+
+impl<'a> Revokes<'a> {
+    pub(super) const fn of(queue: &'a UploadQueue, login: &'a HubLogin) -> Self {
+        Self { queue, login }
+    }
+
+    /// Sends them, starting none after `deadline`, and settles each whose shares Octavo deleted.
+    /// One that fails, or whose thread isn't found yet, stays queued. Says whether one is still
+    /// searching for its thread, for the next pass to go at once.
+    pub(super) async fn send(self, deadline: Instant) -> Result<bool, CloseHalt> {
+        let user = self.login.user_id();
+        let mut searching = false;
+        for revoke in self.queue.pending_revokes(self.login).await? {
+            if Instant::now() >= deadline {
+                // What the budget left unsent is still to search for.
+                return Ok(true);
+            }
+            let thread = revoke.thread().clone();
+            match revoke.send().await {
+                Ok(Revoke::Sent(sent)) => {
+                    clear_off(self.queue, user).await;
+                    sent.settle().await?;
+                }
+                Ok(Revoke::NotStored) => {
+                    clear_off(self.queue, user).await;
+                }
+                Ok(Revoke::Searching) => searching = true,
+                Err(RevokeError::Hub(HubCallError::OctavoOff(_))) => {
+                    tracing::debug!(
+                        "octavo is off for the account; leaving its link revocations queued"
+                    );
+                    mark_off(self.queue, user).await;
+                    return Err(CloseHalt::Off);
+                }
+                Err(RevokeError::Hub(error)) => tracing::warn!(
+                    ?error,
+                    harness = thread.harness,
+                    session_id = thread.session_id,
+                    "failed to revoke a private thread's share links; retrying later"
+                ),
+                Err(RevokeError::Queue(err)) => return Err(err.into()),
+            }
+        }
+        Ok(searching)
     }
 }
 

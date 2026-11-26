@@ -32,7 +32,7 @@ use jiff::Timestamp;
 use jiff::tz::{Offset, TimeZone};
 use serde::Serialize;
 
-mod octavo;
+pub(super) mod octavo;
 
 /// How a subcommand's output is rendered.
 #[derive(Args, Debug)]
@@ -40,6 +40,12 @@ pub struct Output {
     /// How output is rendered.
     #[arg(long, value_enum, default_value_t = Style::Auto)]
     style: Style,
+}
+
+impl Output {
+    pub(super) fn style(&self) -> Style {
+        self.style.resolve()
+    }
 }
 
 /// `atuin threads`.
@@ -187,7 +193,7 @@ impl From<HarnessArg> for HarnessKind {
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
-enum Style {
+pub(super) enum Style {
     /// Pretty when writing to a terminal, plain otherwise.
     Auto,
     Plain,
@@ -247,23 +253,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     // sessions and refuses reads until done, rather than answer from a partial set. Tail only
     // streams what happens from now on.
     if !matches!(cmd, Cmd::Tail { .. }) {
-        let mut reported = None;
-        client
-            .wait_for_sessions(|progress| {
-                if reported.is_none() {
-                    userio::log::info!("threads-rebuilding");
-                }
-                let (replayed, pending) = progress;
-                if reported != Some(progress) && pending > 0 {
-                    userio::log::info!(
-                        "threads-rebuild-progress",
-                        replayed = replayed,
-                        pending = pending
-                    );
-                }
-                reported = Some(progress);
-            })
-            .await?;
+        wait_for_sessions(&mut client).await?;
     }
 
     let result = match cmd {
@@ -298,6 +288,27 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
 
 /// True when `err`'s cause chain is a broken-pipe I/O error, whether raised directly by a
 /// `write!`/`writeln!` or wrapped inside a `serde_json::to_writer` failure.
+/// Wait for the daemon to finish rebuilding its AI sessions, reporting progress to the user.
+pub(super) async fn wait_for_sessions(client: &mut AiClient) -> Result<()> {
+    let mut reported = None;
+    client
+        .wait_for_sessions(|progress| {
+            if reported.is_none() {
+                userio::log::info!("threads-rebuilding");
+            }
+            let (replayed, pending) = progress;
+            if reported != Some(progress) && pending > 0 {
+                userio::log::info!(
+                    "threads-rebuild-progress",
+                    replayed = replayed,
+                    pending = pending
+                );
+            }
+            reported = Some(progress);
+        })
+        .await
+}
+
 fn is_broken_pipe(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         if let Some(io) = cause.downcast_ref::<io::Error>() {
@@ -798,7 +809,7 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
 }
 
 /// Find the session matching `selector`, or [`None`] if no captured session matches.
-async fn find(client: &mut AiClient, selector: &str) -> Result<Option<Session>> {
+pub(super) async fn find(client: &mut AiClient, selector: &str) -> Result<Option<Session>> {
     let sessions: Vec<Session> = client
         .list_sessions(&SessionFilter::default())
         .await?

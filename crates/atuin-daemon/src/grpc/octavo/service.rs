@@ -29,6 +29,14 @@ impl Threads for Service {
         let shares = self.octavo.thread_shares(thread_of(request)?).await?;
         Ok(Response::new(shares.into()))
     }
+
+    async fn make_private(
+        &self,
+        request: Request<pb::ThreadRequest>,
+    ) -> Result<Response<pb::ThreadShares>, Status> {
+        let shares = self.octavo.make_private(thread_of(request)?).await?;
+        Ok(Response::new(shares.into()))
+    }
 }
 
 fn thread_of(request: Request<pb::ThreadRequest>) -> Result<HarnessSession, Status> {
@@ -40,7 +48,11 @@ fn thread_of(request: Request<pb::ThreadRequest>) -> Result<HarnessSession, Stat
 
 impl From<ThreadSharesError> for Status {
     fn from(err: ThreadSharesError) -> Self {
-        Self::internal(err.to_string())
+        match err {
+            ThreadSharesError::NotShareable => Self::invalid_argument(err.to_string()),
+            ThreadSharesError::CapturedElsewhere => Self::failed_precondition(err.to_string()),
+            ThreadSharesError::Queue(_) => Self::internal(err.to_string()),
+        }
     }
 }
 
@@ -55,6 +67,8 @@ impl From<ThreadShares> for pb::ThreadShares {
             upload: pb::Upload::On.into(),
             orgs: queued.orgs.into_iter().map(Into::into).collect(),
             dirs: queued.dirs.into_iter().map(Into::into).collect(),
+            is_private: queued.is_private,
+            revoking_links: queued.revoking_links,
         }
     }
 }

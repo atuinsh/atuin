@@ -113,7 +113,7 @@ impl Starts {
 
     /// Whether the sidecar says that another host captured `session`. A session with no host
     /// predates host tracking and is this host's.
-    async fn captured_elsewhere(&self, session: &HarnessSession) -> bool {
+    pub(super) async fn captured_elsewhere(&self, session: &HarnessSession) -> bool {
         let Some(sidecar) = &self.sidecar else {
             return false;
         };

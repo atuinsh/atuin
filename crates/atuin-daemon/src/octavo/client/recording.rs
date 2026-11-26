@@ -44,4 +44,11 @@ impl OctavoClient for RecordingOctavoClient {
     ) -> Result<ThreadShares, ThreadSharesError> {
         Ok(ThreadShares::Off)
     }
+
+    async fn make_private(
+        &self,
+        _session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        Ok(ThreadShares::Off)
+    }
 }

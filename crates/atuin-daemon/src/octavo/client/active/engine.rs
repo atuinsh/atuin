@@ -23,7 +23,7 @@ use tokio::time::Instant;
 use tonic::Code;
 use uuid::Uuid;
 
-use super::gate::{Cleared, CloseHalt, Closes, Opening, Rows};
+use super::gate::{Cleared, CloseHalt, Closes, Opening, Revokes, Rows};
 use super::starts::{Goes, Sorted, Starts};
 use super::{clear_off, is_off, mark_off};
 use crate::daemon::DaemonHandle;
@@ -60,6 +60,10 @@ const BACKFILL_PAGE: u64 = pb::ThreadBatch::MAX_ITEMS.get() as u64;
 /// How long one pass can spend on thread messages or thread shares, each, so neither holds up the
 /// rest for long.
 pub(super) const PASS_BUDGET: Duration = Duration::from_secs(5);
+
+/// How long the engine waits before a pass that only searches on for a private thread: 2s walks a
+/// long list of threads steadily, 150 pages a minute, instead of as back-to-back calls.
+const SEARCH_PAUSE: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub struct UploadEngine {
@@ -141,6 +145,8 @@ enum NextPass {
     /// Once something wakes the engine, at a login, at the poll interval, or once background work
     /// is through a backoff.
     Waiting,
+    /// After [`SEARCH_PAUSE`], or at a wake: a private thread is still searched for.
+    Soon,
     /// At once: more backfill exists, or threads were left to look up.
     Now,
 }
@@ -152,6 +158,7 @@ impl NextPass {
         match (self, after) {
             (Self::Waiting, Self::Waiting) => Self::Waiting,
             (Self::Now, _) | (_, Self::Now) => Self::Now,
+            (Self::Soon, Self::Soon | Self::Waiting) | (Self::Waiting, Self::Soon) => Self::Soon,
         }
     }
 }
@@ -271,6 +278,11 @@ impl EngineInner {
 
             woken = match next {
                 NextPass::Now => false,
+                NextPass::Soon => tokio::select! {
+                    () = self.wake.notified() => true,
+                    () = self.logins.notified() => false,
+                    () = tokio::time::sleep(SEARCH_PAUSE) => false,
+                },
                 NextPass::Waiting => tokio::select! {
                     () = self.wake.notified() => true,
                     () = self.logins.notified() => false,
@@ -490,7 +502,7 @@ impl EngineInner {
             }
         }
 
-        let sent = upload_thread_messages(login, converted(ready).await).await?;
+        let sent = upload_thread_messages(&self.queue, login, converted(ready).await).await?;
         match sent {
             Uploaded::Stored => {
                 clear_off(&self.queue, user).await;
@@ -535,6 +547,9 @@ impl EngineInner {
         // First, so no share opens to an organization one of its thread's directories keeps out.
         let deadline = Instant::now() + PASS_BUDGET;
         let sent = Closes::of(&self.queue, login).send(deadline).await?;
+        // Whether or not a private thread's closes went: a close that keeps failing must not keep
+        // its links open, and the hub takes a close of a thread with no share left.
+        let searching = Revokes::of(&self.queue, login).send(deadline).await?;
         for open in narrowed.pending(sent, shares.held).await? {
             if shares.elsewhere.contains(open.thread()) {
                 open.give_up().await?;
@@ -543,7 +558,12 @@ impl EngineInner {
             let sent = tokio::time::timeout_at(deadline, self.send_thread_share(login, open)).await;
             sent.unwrap_or(Err(Halt::RetryLater))?;
         }
-        Ok(shares.next)
+        let revokes = if searching {
+            NextPass::Soon
+        } else {
+            NextPass::Waiting
+        };
+        Ok(shares.next.and(revokes))
     }
 
     /// The threads of `login` that are queued to be opened, split into those whose shares wait
@@ -790,7 +810,7 @@ impl EngineInner {
             UploadRetryLater { stored: false }
         })?;
 
-        upload_thread_messages(login, converted(ready).await).await
+        upload_thread_messages(&self.queue, login, converted(ready).await).await
     }
 
     /// The idx of the last record stored of `host`'s thread series, if it has one.
@@ -884,9 +904,19 @@ pub(super) enum Uploaded {
 
 /// Uploads `messages`, dropping with a warning each one Octavo refuses.
 pub(super) async fn upload_thread_messages(
+    queue: &UploadQueue,
     login: &HubLogin,
     messages: Vec<pb::CapturedThreadMessage>,
 ) -> Result<Uploaded, UploadRetryLater> {
+    // Before they go, so a search for a private thread never ends between its move and the note
+    // of it.
+    let threads: HashSet<&pb::HarnessSession> =
+        messages.iter().filter_map(|message| message.thread.as_ref()).collect();
+    if let Err(err) = queue.mark_threads_moved(login.user_id(), threads).await {
+        tracing::warn!(?err, "failed to note which threads move on octavo; retrying later");
+        return Err(UploadRetryLater { stored: false });
+    }
+
     upload(
         messages,
         "thread messages",

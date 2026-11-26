@@ -21,26 +21,14 @@ pub(super) async fn status(
     style: Style,
 ) -> Result<()> {
     let Some(session) = super::find(client, selector).await? else {
-        return print(&Status::uncaptured(settings), style);
+        return Status::uncaptured(settings).print(style);
     };
     let shares = ThreadsClient::from_settings(settings)
         .await?
         .shares(session.sharing().clone())
         .await
         .map_err(|status| eyre!("{}", status.message()))?;
-    print(&Status::of(settings, &session, shares)?, style)
-}
-
-fn print(status: &Status, style: Style) -> Result<()> {
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    if style.is_json() {
-        serde_json::to_writer(&mut out, status)?;
-        writeln!(out)?;
-        return Ok(());
-    }
-    write_status(&mut out, status)?;
-    Ok(())
+    Status::of(settings, &session, shares)?.print(style)
 }
 
 fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
@@ -82,6 +70,37 @@ fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
         Upload::On => {}
     }
 
+    if shares.private {
+        let closing: Vec<&str> = shares
+            .orgs
+            .iter()
+            .filter(|org| matches!(org.state, ShareState::Closing))
+            .map(|org| org.slug.as_str())
+            .collect();
+        match (closing.is_empty(), shares.revoking_links) {
+            (true, false) => writeln!(
+                out,
+                "Private: closed to every organization this machine shared it with, and its links \
+                 revoked."
+            )?,
+            (true, true) => writeln!(
+                out,
+                "Private once Atuin Hub revokes its links, which is still pending. Until then a \
+                 link may still open it."
+            )?,
+            (false, false) => writeln!(
+                out,
+                "Private once Atuin Hub closes it to {}, which is still pending.",
+                closing.join(", ")
+            )?,
+            (false, true) => writeln!(
+                out,
+                "Private once Atuin Hub closes it to {} and revokes its links, which is still \
+                 pending. Until then a link may still open it.",
+                closing.join(", ")
+            )?,
+        }
+    }
     if shares.orgs.is_empty() {
         writeln!(out, "Not shared with any organization.")?;
     } else {
@@ -109,7 +128,7 @@ fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
 
 /// Capture and Octavo sharing status for a thread; serialized directly for `--style json`.
 #[derive(Debug, Serialize)]
-struct Status {
+pub(in crate::commands) struct Status {
     capture: Capture,
     /// `None` if the thread has not been captured yet.
     thread: Option<Captured>,
@@ -127,7 +146,7 @@ impl Status {
     }
 
     /// Build status for a captured `session`, treating `shares = None` as Octavo disabled.
-    fn of(
+    pub(in crate::commands) fn of(
         settings: &Settings,
         session: &Session,
         shares: Option<pb::ThreadShares>,
@@ -141,6 +160,18 @@ impl Status {
             }),
             octavo: Some(shares.map_or(Ok(Shares::OFF), Shares::try_from)?),
         })
+    }
+
+    pub(in crate::commands) fn print(&self, style: Style) -> Result<()> {
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        if style.is_json() {
+            serde_json::to_writer(&mut out, self)?;
+            writeln!(out)?;
+            return Ok(());
+        }
+        write_status(&mut out, self)?;
+        Ok(())
     }
 }
 
@@ -177,6 +208,8 @@ struct Shares {
     upload: Upload,
     orgs: Vec<OrgShare>,
     dirs: Vec<DirShares>,
+    private: bool,
+    revoking_links: bool,
 }
 
 impl Shares {
@@ -184,6 +217,8 @@ impl Shares {
         upload: Upload::Off,
         orgs: Vec::new(),
         dirs: Vec::new(),
+        private: false,
+        revoking_links: false,
     };
 }
 
@@ -219,7 +254,7 @@ struct DirShares {
 
 #[derive(Debug, thiserror::Error)]
 #[error("the daemon sent a {field} this build doesn't know: {value}")]
-struct UnknownValue {
+pub(in crate::commands) struct UnknownValue {
     field: &'static str,
     value: i32,
 }
@@ -249,6 +284,8 @@ impl TryFrom<pb::ThreadShares> for Shares {
                     orgs: dir.org_slugs,
                 })
                 .collect(),
+            private: shares.is_private,
+            revoking_links: shares.revoking_links,
         })
     }
 }

@@ -147,6 +147,12 @@ pub enum Cmd {
     #[couture(category = "ai")]
     Threads(atuin_ai::commands::ThreadsCmd),
 
+    /// Manage who can open your threads on Atuin Hub
+    #[cfg(feature = "ai")]
+    #[command(subcommand)]
+    #[couture(category = "ai")]
+    Hub(atuin_ai::commands::HubCmd),
+
     /// Pick a captured coding-agent thread and resume it (short for `atuin threads resume`)
     #[cfg(feature = "ai")]
     #[couture(category = "ai")]
@@ -464,6 +470,15 @@ impl Cmd {
                 }
 
                 Box::pin(atuin_ai::commands::run(cli, settings)).await
+            }
+
+            #[cfg(feature = "ai")]
+            Self::Hub(cmd) => {
+                // Hub commands talk to the daemon, as threads commands do.
+                #[cfg(feature = "daemon")]
+                daemon::ready_client(&settings).await?;
+
+                cmd.run(settings).await
             }
 
             #[cfg(feature = "ai")]

@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use atuin_client::lua_config::OrgSlug;
 use atuin_common::db;
+use tonic::Code;
 
 use super::{PAGE_SIZE, QueueError, UploadQueue};
-use crate::hub::{HubCallError, HubLogin, UserId};
+use crate::hub::{HubCallError, HubLogin, ThreadLookup, UserId};
 use crate::pb;
 
 /// How far one of a thread's organizations got, as `thread_org_shares.state` stores it.
@@ -18,7 +19,8 @@ pub enum ShareState {
     /// Queued to be opened.
     Opening = 0,
     Open = 1,
-    /// Queued to be closed, as the thread went where the organization's members mustn't follow.
+    /// Queued to be closed, as the thread went where the organization's members mustn't follow,
+    /// or the user made it private.
     Closing = 2,
     /// Never opened again.
     Closed = 3,
@@ -84,6 +86,59 @@ impl UploadQueue {
     ) -> Result<Vec<PendingClose<'a>>, QueueError> {
         let pending = self.pending_in(login, ShareState::Closing, &HashSet::new()).await?;
         Ok(pending.into_iter().map(PendingClose).collect())
+    }
+
+    /// The first page of `login`'s private threads whose shares are queued to be deleted, the
+    /// longest queued first.
+    pub async fn pending_revokes<'a>(
+        &'a self,
+        login: &'a HubLogin,
+    ) -> Result<Vec<PendingRevoke<'a>>, QueueError> {
+        let rows: Vec<(String, String, i64, Option<String>)> = db::query_as(
+            "SELECT harness, session_id, requests, lookup_page_token FROM private_threads WHERE \
+             user_id = ?1 AND links_revoked = 0 ORDER BY queued_at, harness, session_id LIMIT ?2",
+        )
+        .bind(login.user_id().as_str())
+        .bind(PAGE_SIZE.get())
+        .fetch_all(self.db.pool())
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(harness, session_id, requests, page_token)| PendingRevoke {
+                queue: self,
+                login,
+                thread: pb::HarnessSession {
+                    harness,
+                    session_id,
+                },
+                requests,
+                page_token,
+            })
+            .collect())
+    }
+
+    /// Note that messages of `threads` are about to be uploaded, which moves each in Octavo's
+    /// list of the user's: a search for one whose shares are still to delete may be past where
+    /// it lands.
+    pub async fn mark_threads_moved<'t>(
+        &self,
+        user: &UserId,
+        threads: impl IntoIterator<Item = &'t pb::HarnessSession>,
+    ) -> Result<(), QueueError> {
+        let threads: Vec<[&str; 2]> = threads
+            .into_iter()
+            .map(|thread| [thread.harness.as_str(), thread.session_id.as_str()])
+            .collect();
+        db::query(
+            "UPDATE private_threads SET lookup_moved = 1 WHERE user_id = ?1 AND links_revoked = 0 \
+             AND EXISTS (SELECT 1 FROM json_each(?2) w WHERE w.value ->> 0 = harness AND w.value \
+             ->> 1 = session_id)",
+        )
+        .bind(user.as_str())
+        .bind(serde_json::to_string(&threads).expect("a list of string pairs serializes"))
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
     }
 
     /// Each of `user`'s threads queued to be opened to an organization.
@@ -205,6 +260,17 @@ impl UploadQueue {
     }
 }
 
+/// A thread's shares, directories and private mark, read together.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadSharing {
+    pub orgs: Vec<OrgShare>,
+    pub dirs: Vec<DirShares>,
+    /// Whether the user made the thread private.
+    pub is_private: bool,
+    /// Whether a private thread's shares are still queued to be deleted, which revokes its links.
+    pub revoking_links: bool,
+}
+
 /// One of a user's threads, as the queue knows it.
 #[derive(Debug, Clone, Copy)]
 pub struct QueuedThread<'q> {
@@ -215,14 +281,15 @@ pub struct QueuedThread<'q> {
 
 impl QueuedThread<'_> {
     /// Queues the thread to be opened to each of `orgs` it never was queued for, returning how
-    /// many that was.
+    /// many that was: none once it's private.
     pub async fn push_shares(&self, orgs: &[OrgSlug]) -> Result<u64, QueueError> {
         let mut tx = self.queue.db.pool().begin().await?;
         let mut queued = 0;
         for org in orgs {
             queued += db::query(
                 "INSERT OR IGNORE INTO thread_org_shares (user_id, harness, session_id, org_slug) \
-                 VALUES (?1, ?2, ?3, ?4)",
+                 SELECT ?1, ?2, ?3, ?4 WHERE NOT EXISTS (SELECT 1 FROM private_threads WHERE \
+                 user_id = ?1 AND harness = ?2 AND session_id = ?3)",
             )
             .bind(self.user.as_str())
             .bind(&self.thread.harness)
@@ -236,51 +303,95 @@ impl QueuedThread<'_> {
         Ok(queued)
     }
 
-    /// List all organizations this thread is shared with, ordered by slug.
-    pub async fn shares(&self) -> Result<Vec<OrgShare>, QueueError> {
-        let rows: Vec<(String, i64)> = db::query_as(
+    /// Mark this thread private, and queue its open and opening shares to close and its links to
+    /// be revoked. A repeat queues the revocation again.
+    pub async fn make_private(&self) -> Result<(), QueueError> {
+        let mut tx = self.queue.db.pool().begin().await?;
+        db::query(
+            "INSERT INTO private_threads (user_id, harness, session_id) VALUES (?1, ?2, ?3) ON \
+             CONFLICT DO UPDATE SET requests = requests + 1, links_revoked = 0, queued_at = \
+             unixepoch()",
+        )
+        .bind(self.user.as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .execute(&mut *tx)
+        .await?;
+        db::query(
+            "UPDATE thread_org_shares SET state = ?4, queued_at = unixepoch() WHERE user_id = ?1 \
+             AND harness = ?2 AND session_id = ?3 AND state IN (?5, ?6)",
+        )
+        .bind(self.user.as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .bind(ShareState::Closing as i64)
+        .bind(ShareState::Opening as i64)
+        .bind(ShareState::Open as i64)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Read this thread's shares, directories and private mark from one snapshot of the queue,
+    /// with organizations ordered by slug and directories by path.
+    pub async fn sharing(&self) -> Result<ThreadSharing, QueueError> {
+        let mut tx = self.queue.db.pool().begin().await?;
+        let orgs: Vec<(String, i64)> = db::query_as(
             "SELECT org_slug, state FROM thread_org_shares WHERE user_id = ?1 AND harness = ?2 \
              AND session_id = ?3 ORDER BY org_slug",
         )
         .bind(self.user.as_str())
         .bind(&self.thread.harness)
         .bind(&self.thread.session_id)
-        .fetch_all(self.queue.db.pool())
+        .fetch_all(&mut *tx)
         .await?;
-        // Written as a slug and a state.
-        Ok(rows
-            .into_iter()
-            .filter_map(|(slug, state)| {
-                Some(OrgShare {
-                    org: slug.parse().ok()?,
-                    state: ShareState::stored(state)?,
-                })
-            })
-            .collect())
-    }
-
-    /// List all directories this thread uploaded messages from, ordered by path.
-    pub async fn dir_shares(&self) -> Result<Vec<DirShares>, QueueError> {
-        let rows: Vec<(String, String)> = db::query_as(
+        let dirs: Vec<(String, String)> = db::query_as(
             "SELECT dir, org_slugs FROM thread_dirs WHERE user_id = ?1 AND harness = ?2 AND \
              session_id = ?3 ORDER BY dir",
         )
         .bind(self.user.as_str())
         .bind(&self.thread.harness)
         .bind(&self.thread.session_id)
-        .fetch_all(self.queue.db.pool())
+        .fetch_all(&mut *tx)
         .await?;
-        rows.into_iter()
-            .map(|(dir, slugs)| {
-                let slugs: Vec<String> =
-                    serde_json::from_str(&slugs).map_err(QueueError::Malformed)?;
-                Ok(DirShares {
-                    dir: PathBuf::from(dir),
-                    // Written as slugs.
-                    orgs: slugs.iter().filter_map(|slug| slug.parse().ok()).collect(),
+        let links_revoked: Option<i64> = db::query_scalar(
+            "SELECT links_revoked FROM private_threads WHERE user_id = ?1 AND harness = ?2 AND \
+             session_id = ?3",
+        )
+        .bind(self.user.as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(ThreadSharing {
+            // Written as a slug and a state.
+            orgs: orgs
+                .into_iter()
+                .filter_map(|(slug, state)| {
+                    Some(OrgShare {
+                        org: slug.parse().ok()?,
+                        state: ShareState::stored(state)?,
+                    })
                 })
-            })
-            .collect()
+                .collect(),
+            dirs: dirs
+                .into_iter()
+                .map(|(dir, slugs)| {
+                    let slugs: Vec<String> =
+                        serde_json::from_str(&slugs).map_err(QueueError::Malformed)?;
+                    Ok(DirShares {
+                        dir: PathBuf::from(dir),
+                        // Written as slugs.
+                        orgs: slugs.iter().filter_map(|slug| slug.parse().ok()).collect(),
+                    })
+                })
+                .collect::<Result<_, QueueError>>()?,
+            is_private: links_revoked.is_some(),
+            revoking_links: links_revoked == Some(0),
+        })
     }
 
     /// Whether it's queued to be closed to an organization.
@@ -540,6 +651,140 @@ impl SentClose<'_> {
     pub async fn settle(self) -> Result<(), QueueError> {
         let pending = &self.0.0;
         pending.queued().settle(&pending.orgs, ShareState::Closing, ShareState::Closed).await
+    }
+}
+
+/// A private thread whose shares are queued to be deleted, which revokes its links.
+#[derive(Debug)]
+pub struct PendingRevoke<'a> {
+    queue: &'a UploadQueue,
+    login: &'a HubLogin,
+    thread: pb::HarnessSession,
+    /// How often the user had asked when it was read, so [`SentRevoke::settle`] leaves a later
+    /// ask queued.
+    requests: i64,
+    /// The page of the user's threads the search for it reads next, if it began in an earlier
+    /// pass.
+    page_token: Option<String>,
+}
+
+impl<'a> PendingRevoke<'a> {
+    /// How many pages of the user's threads one pass reads in search of it.
+    const LOOKUP_PAGES: usize = 5;
+
+    #[must_use]
+    pub const fn thread(&self) -> &pb::HarnessSession {
+        &self.thread
+    }
+
+    /// Search on for the thread among the user's, for `LOOKUP_PAGES` pages, and delete its
+    /// shares once found. Where the search got to is saved after each page, so a failure loses
+    /// none of it.
+    pub async fn send(self) -> Result<Revoke<'a>, RevokeError> {
+        let mut page_token = self.page_token.clone().unwrap_or_default();
+        for _ in 0..Self::LOOKUP_PAGES {
+            let from_token = !page_token.is_empty();
+            match self.login.find_thread_in_page(&self.thread, page_token).await {
+                Ok(ThreadLookup::Found(thread)) => {
+                    self.login.delete_thread_shares(&thread).await?;
+                    return Ok(Revoke::Sent(SentRevoke(self)));
+                }
+                Ok(ThreadLookup::NotStored) => {
+                    return Ok(if self.settle_unless_moved().await? {
+                        Revoke::NotStored
+                    } else {
+                        Revoke::Searching
+                    });
+                }
+                Ok(ThreadLookup::NotFoundYet(next)) => {
+                    self.save_page_token(Some(&next)).await?;
+                    page_token = next;
+                }
+                // A page token lasts a day.
+                Err(HubCallError::Hub(status))
+                    if from_token && status.code() == Code::InvalidArgument =>
+                {
+                    self.save_page_token(None).await?;
+                    return Ok(Revoke::Searching);
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(Revoke::Searching)
+    }
+
+    /// Settle it as a thread Octavo doesn't store, which has no share, unless its messages were
+    /// uploaded during the search: the thread then moved to where the search had been, so the
+    /// search begins again. Whether it settled.
+    async fn settle_unless_moved(&self) -> Result<bool, QueueError> {
+        // One statement, so an upload can't mark it between the check and the settling.
+        let settled: Option<i64> = db::query_scalar(
+            "UPDATE private_threads SET links_revoked = 1 - lookup_moved, lookup_page_token = \
+             NULL, lookup_moved = 0 WHERE user_id = ?1 AND harness = ?2 AND session_id = ?3 AND \
+             requests = ?4 RETURNING links_revoked",
+        )
+        .bind(self.login.user_id().as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .bind(self.requests)
+        .fetch_optional(self.queue.db.pool())
+        .await?;
+        Ok(settled == Some(1))
+    }
+
+    async fn save_page_token(&self, page_token: Option<&str>) -> Result<(), QueueError> {
+        db::query(
+            "UPDATE private_threads SET lookup_page_token = ?4 WHERE user_id = ?1 AND harness = \
+             ?2 AND session_id = ?3",
+        )
+        .bind(self.login.user_id().as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .bind(page_token)
+        .execute(self.queue.db.pool())
+        .await?;
+        Ok(())
+    }
+}
+
+/// How far a pass got with a [`PendingRevoke`].
+#[derive(Debug)]
+pub enum Revoke<'a> {
+    /// Octavo deleted the thread's shares.
+    Sent(SentRevoke<'a>),
+    /// Octavo stores no such thread, so it has no share: settled.
+    NotStored,
+    /// The thread isn't found yet; a later pass searches on.
+    Searching,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RevokeError {
+    #[error(transparent)]
+    Hub(#[from] HubCallError),
+    #[error(transparent)]
+    Queue(#[from] QueueError),
+}
+
+/// A private thread with no share left on Octavo.
+#[derive(Debug)]
+pub struct SentRevoke<'a>(PendingRevoke<'a>);
+
+impl SentRevoke<'_> {
+    /// Settle it, so the deletion is not sent again.
+    pub async fn settle(self) -> Result<(), QueueError> {
+        let revoke = &self.0;
+        db::query(
+            "UPDATE private_threads SET links_revoked = 1, lookup_page_token = NULL, lookup_moved \
+             = 0 WHERE user_id = ?1 AND harness = ?2 AND session_id = ?3 AND requests = ?4",
+        )
+        .bind(revoke.login.user_id().as_str())
+        .bind(&revoke.thread.harness)
+        .bind(&revoke.thread.session_id)
+        .bind(revoke.requests)
+        .execute(revoke.queue.db.pool())
+        .await?;
+        Ok(())
     }
 }
 

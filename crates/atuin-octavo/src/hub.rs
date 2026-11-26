@@ -17,6 +17,10 @@ use url::Url;
 use crate::pb;
 use crate::pb::hub_service_client::HubServiceClient;
 
+mod threads;
+
+pub use threads::ThreadLookup;
+
 #[derive(Debug, Error)]
 pub enum ConnectError {
     #[error("the Atuin Hub endpoint {address} is not a valid URI")]
@@ -53,6 +57,8 @@ pub enum HubCallError {
     OctavoOff(#[source] Status),
     #[error("the hub refused the call")]
     Hub(#[source] Status),
+    #[error("the hub's answer has no {0}")]
+    Incomplete(&'static str),
 }
 
 impl From<Status> for HubCallError {
@@ -76,6 +82,7 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
+            Self::Incomplete(_) => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser

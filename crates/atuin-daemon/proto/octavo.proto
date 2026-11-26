@@ -49,9 +49,16 @@ message ThreadShares {
   // Empty unless `upload` is `UPLOAD_ON` and at least one message has been uploaded.
   repeated OrgShare orgs = 2;
   repeated DirShares dirs = 3;
+  // Whether the user made the thread private; no config shares it again.
+  bool is_private = 4;
+  // Whether a private thread's share links are still queued to be revoked.
+  bool revoking_links = 5;
 }
 
 service Threads {
   // Get the organizations a thread is shared with and the directories that determine them.
   rpc GetShares(ThreadRequest) returns (ThreadShares);
+  // Close the thread to every organization it's shared with, revoke its share links and keep it
+  // private.
+  rpc MakePrivate(ThreadRequest) returns (ThreadShares);
 }

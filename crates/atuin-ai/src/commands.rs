@@ -3,9 +3,11 @@ use atuin_client::settings::Settings;
 use atuin_common::logs::{FileConfig, LogConfig};
 use clap::Subcommand;
 
+pub(crate) mod hub;
 pub(crate) mod resume;
 pub(crate) mod session;
 
+pub use hub::Cmd as HubCmd;
 pub use resume::{Cmd as ResumeCmd, has_anything_to_resume};
 pub use session::{Cmd as ThreadsCmd, Recent, import_all, one_line, recent};
 

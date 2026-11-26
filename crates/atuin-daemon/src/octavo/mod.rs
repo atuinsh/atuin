@@ -7,7 +7,7 @@ use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 pub use atuin_octavo::hub::UserId;
-use atuin_octavo::queue::{DirShares, OrgShare, QueueError, QueuedThread};
+use atuin_octavo::queue::{DirShares, OrgShare, QueueError, QueuedThread, ThreadSharing};
 use atuin_octavo::shares::Configs;
 #[cfg(test)]
 pub use client::RecordingOctavoClient;
@@ -34,19 +34,37 @@ pub struct QueuedShares {
     pub orgs: Vec<OrgShare>,
     /// Directories the thread uploaded messages from and each directory's configured organizations.
     pub dirs: Vec<DirShares>,
+    pub is_private: bool,
+    /// Whether a private thread's share links are still queued to be revoked.
+    pub revoking_links: bool,
 }
 
 impl QueuedShares {
     async fn read(thread: &QueuedThread<'_>) -> Result<Self, QueueError> {
+        let ThreadSharing {
+            orgs,
+            dirs,
+            is_private,
+            revoking_links,
+        } = thread.sharing().await?;
         Ok(Self {
-            orgs: thread.shares().await?,
-            dirs: thread.dir_shares().await?,
+            orgs,
+            dirs,
+            is_private,
+            revoking_links,
         })
     }
 }
 
 #[derive(Debug, Error)]
 pub enum ThreadSharesError {
+    #[error("Atuin Hub takes no thread of this harness or session id")]
+    NotShareable,
+    #[error(
+        "this thread was captured on another machine, which holds its shares; run `atuin hub \
+         unshare` there"
+    )]
+    CapturedElsewhere,
     #[error("failed to read the Octavo upload queue")]
     Queue(#[from] QueueError),
 }
@@ -169,5 +187,14 @@ impl Octavo {
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError> {
         self.client.thread_shares(session).await
+    }
+
+    /// Make `session`'s thread private, queueing its closes and the revocation of its links, and
+    /// return its sharing state afterwards.
+    pub async fn make_private(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        self.client.make_private(session).await
     }
 }
