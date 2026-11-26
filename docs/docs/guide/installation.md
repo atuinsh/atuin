@@ -125,7 +125,7 @@ If you don't wish to use the installer, the manual installation steps are as fol
     nix profile install "github:atuinsh/atuin"
     ```
 
-    Linux builds of `main` are cached on [Cachix](https://atuin.cachix.org). Run `cachix use atuin` first to download them instead of building from source.
+    Builds of `main` for x86_64 Linux, aarch64 Linux and Apple Silicon macOS are cached on [Cachix](https://atuin.cachix.org). Run `cachix use atuin` first to download them instead of building from source.
 
 === "Pacman"
 

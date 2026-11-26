@@ -97,7 +97,9 @@ VALE_MACOS_X86_64_SHA256=5d56b292f1612758f6d9e8d735dd739aec4e475830d0ba8c1e0ef7d
 VALE_MACOS_ARM64_SHA256=d3f613ff9226935ace08895fc8557206f309cdbd3a81881d86b6ab5b8b408757
 CODESPELL_VERSION=2.4.3
 NIX_INSTALLER_VERSION=3.22.5
-NIX_INSTALLER_SHA256=9432d40ec1d0d4ebb6284848cc389bdb1bbf7aeb5c1cea11e7efc9daf0a1ec82
+NIX_INSTALLER_LINUX_X86_64_SHA256=9432d40ec1d0d4ebb6284848cc389bdb1bbf7aeb5c1cea11e7efc9daf0a1ec82
+NIX_INSTALLER_LINUX_ARM64_SHA256=71cabad624d6cace0beecc44961494c0821bc8b874d63f3c27d816778df83e5c
+NIX_INSTALLER_MACOS_ARM64_SHA256=dcb012a7978902fd8d875bec72053f34b7c733ae317b26b27777b241d43c441e
 BETAMAX_VERSION=0.3.1
 BETAMAX_SHA256=3e8cd7639242b69c2a9c35273072a94a06039b8319fc34fc0649689a741da6b1
 
@@ -136,15 +138,36 @@ install_codespell() {
   codespell --version
 }
 
-# Upstream Nix (what cachix/install-nix-action installs), root-only with no
-# daemon (`--init none`), so it doesn't depend on the image running systemd.
+# Upstream Nix (what cachix/install-nix-action installs). On Linux it is
+# root-only with no daemon (`--init none`), so it doesn't depend on the image
+# running systemd. On macOS the installer always sets up a launchd daemon.
+# The agent's user is trusted there because `cachix watch-exec` pushes through
+# a post-build hook, which the daemon ignores from untrusted users.
 install_nix() {
-  local sudo=""
+  local sudo="" asset sha256 planner
   [ "$(id -u)" -eq 0 ] || sudo=sudo
-  fetch_verified "https://github.com/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-x86_64-linux" \
-    "$NIX_INSTALLER_SHA256" /tmp/nix-installer
+  case "$(uname -s) $(uname -m)" in
+    "Linux x86_64")
+      asset=x86_64-linux sha256=$NIX_INSTALLER_LINUX_X86_64_SHA256
+      planner=(linux --init none)
+      ;;
+    "Linux aarch64")
+      asset=aarch64-linux sha256=$NIX_INSTALLER_LINUX_ARM64_SHA256
+      planner=(linux --init none)
+      ;;
+    "Darwin arm64")
+      asset=aarch64-darwin sha256=$NIX_INSTALLER_MACOS_ARM64_SHA256
+      planner=(macos --extra-conf "extra-trusted-users = $(id -un)")
+      ;;
+    *)
+      echo "Unsupported platform: $(uname -s) $(uname -m)"
+      return 1
+      ;;
+  esac
+  fetch_verified "https://github.com/DeterminateSystems/nix-installer/releases/download/v${NIX_INSTALLER_VERSION}/nix-installer-${asset}" \
+    "$sha256" /tmp/nix-installer
   chmod +x /tmp/nix-installer
-  $sudo /tmp/nix-installer install linux --no-confirm --init none --prefer-upstream-nix \
+  $sudo /tmp/nix-installer install "${planner[@]}" --no-confirm --prefer-upstream-nix \
     --extra-conf "extra-substituters = https://atuin.cachix.org" \
     --extra-conf "extra-trusted-public-keys = atuin.cachix.org-1:aNJ8IU+udXIYNtrF+LHH8yIzXqgmva4hVnuHq2REgK0="
   export PATH="/nix/var/nix/profiles/default/bin:$PATH"

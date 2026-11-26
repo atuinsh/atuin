@@ -21,6 +21,8 @@
 # Compile-bound jobs use linux-large (8 vCPU) and macOS jobs macos-large
 # (12 vCPU), both default queues in every Buildkite cluster. Windows jobs
 # use windows-large (8 vCPU), a hosted Windows queue made for this pipeline.
+# The aarch64-linux Nix builds use linux-arm64-large (8 vCPU), a hosted arm64
+# Linux queue also made for this pipeline.
 #
 # Scheduled builds (the nightly schedule, set in the pipeline settings) run
 # everything plus the nightly tests, which also keeps main's cache entries
@@ -51,6 +53,8 @@ common:
   - &save-target .buildkite/scripts/cache-save.sh --name target
   - &linux-large
     queue: linux-large
+  - &linux-arm64-large
+    queue: linux-arm64-large
   # Test Engine's client (bktec), for the steps that run tests. It
   # authenticates with the job's Buildkite OIDC token, which the suite's OIDC
   # policy accepts from this pipeline, so there's no token to keep secret.
@@ -410,7 +414,9 @@ steps:
       - 'section ":nix: Install Nix" install_nix'
       - 'section ":nix: nix flake check" nix flake check --print-build-logs'
 
-  - label: ":nix: Nix build"
+  # One build per system that atuin.cachix.org serves.
+  - &nix-build
+    label: ":nix: Nix build (x86_64-linux)"
     key: nix-build
     # main only, so the cache only ever holds main's builds. Pushes everything
     # it builds to atuin.cachix.org, including crane's dependency-only
@@ -426,7 +432,18 @@ steps:
       - 'section ":nix: nix build" nix run --inputs-from . nixpkgs#cachix -- watch-exec atuin -- nix build --print-build-logs'
       - 'section ":nix: Run the built binary" env -u CACHIX_AUTH_TOKEN ./result/bin/atuin --version'
 
-  - label: ":nix: Nix build"
+  - <<: *nix-build
+    label: ":nix: Nix build (aarch64-linux)"
+    key: nix-build-aarch64-linux
+    agents: *linux-arm64-large
+
+  - <<: *nix-build
+    label: ":nix: Nix build (aarch64-darwin)"
+    key: nix-build-aarch64-darwin
+    agents: *macos-large
+
+  - &nix-build-no-push
+    label: ":nix: Nix build (x86_64-linux)"
     key: nix-build-no-push
     if: build.pull_request.id == null && build.branch != pipeline.default_branch && build.branch !~ /^land\//
     agents: *linux-large
@@ -436,6 +453,16 @@ steps:
       - 'section ":nix: Install Nix" install_nix'
       - 'section ":nix: nix build" nix build --print-build-logs'
       - 'section ":nix: Run the built binary" ./result/bin/atuin --version'
+
+  - <<: *nix-build-no-push
+    label: ":nix: Nix build (aarch64-linux)"
+    key: nix-build-no-push-aarch64-linux
+    agents: *linux-arm64-large
+
+  - <<: *nix-build-no-push
+    label: ":nix: Nix build (aarch64-darwin)"
+    key: nix-build-no-push-aarch64-darwin
+    agents: *macos-large
 
   - label: ":nix: nixfmt"
     key: nixfmt
