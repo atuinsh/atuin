@@ -12,6 +12,9 @@ const WorkspaceSchema = v.object({ orgs: v.array(v.string()), config: v.nullable
 /** What `atuin workspace orgs <dir> --style json` prints: `config` null when no file decides. */
 export type Workspace = v.InferOutput<typeof WorkspaceSchema>
 
+// A thread as `atuin threads list --style json` prints it, of which the mod reads its start.
+const ListedSchema = v.array(v.object({ session_id: v.string(), started_at: v.nullish(v.string()) }))
+
 export type AtuinSettings = { atuinPath: string }
 
 export class Atuin {
@@ -35,6 +38,36 @@ export class Atuin {
   /** The organizations `dir`'s config shares threads with, and the file that says so. */
   async workspaceOrgs(dir: string): Promise<Outcome<Workspace>> {
     return this.#json(['workspace', 'orgs', dir], { schema: WorkspaceSchema, what: 'workspace' })
+  }
+
+  /** Closes the session's thread to every organization, now and from then on. */
+  async unshare(): Promise<Outcome<ThreadStatus>> {
+    return this.#json(['threads', 'unshare', this.#harness.session.id], {
+      schema: ThreadStatus.schema,
+      what: 'status',
+    })
+  }
+
+  /** The session's thread's share link. */
+  async link(): Promise<Outcome<string>> {
+    const printed = await this.#run(['threads', 'link', this.#harness.session.id])
+    if (!printed.isOk) return printed
+    const link = printed.value
+      .split('\n')
+      .map(line => line.trim())
+      .find(line => line !== '')
+    return link === undefined ? Outcome.failed('atuin printed no link') : Outcome.ok(link)
+  }
+
+  /** When the session's thread started, as the local capture has it, if it says. */
+  async startedAt(): Promise<Outcome<string>> {
+    // The list, as `threads show` prints every message of the thread besides.
+    const listed = await this.#json(['threads', 'list'], { schema: ListedSchema, what: 'threads' })
+    if (!listed.isOk) return listed
+    const own = listed.value.find(thread => thread.session_id === this.#harness.session.id)
+    return typeof own?.started_at === 'string'
+      ? Outcome.ok(own.started_at)
+      : Outcome.failed('atuin listed no start for this thread')
   }
 
   async #json<S extends v.GenericSchema>(

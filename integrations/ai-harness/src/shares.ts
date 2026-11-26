@@ -28,6 +28,24 @@ export const Shares = {
   /** The organizations the thread is open or opening to. */
   sharing: (shares: Shares): string[] => Shares.orgs(shares, 'open', 'opening'),
 
+  /** Who the thread is shared with, in one short line. */
+  line: (shares: Shares): string => {
+    if (shares.upload === 'off') return 'off'
+    if (shares.upload === 'logged-out') return 'logged out'
+    if (shares.private) {
+      const closing = Shares.orgs(shares, 'closing')
+      return closing.length === 0 ? 'private' : `private once closed to ${closing.join(', ')}`
+    }
+    const opening = Shares.orgs(shares, 'opening').map(org => `-> ${org}`)
+    const closed = Shares.orgs(shares, 'closing', 'closed')
+    const parts = [
+      ...Shares.orgs(shares, 'open'),
+      ...opening,
+      ...(closed.length > 0 ? [`closed to ${closed.join(', ')}`] : []),
+    ]
+    return parts.length === 0 ? 'not shared' : parts.join(', ')
+  },
+
   /** The organizations the thread is shared with that `target`'s config leaves out. */
   droppedBy: (shares: Shares, target: readonly string[]): string[] => {
     const kept = new Set(target.map(org => org.toLowerCase()))

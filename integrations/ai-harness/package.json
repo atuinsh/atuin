@@ -2,7 +2,7 @@
   "name": "atuin",
   "version": "0.1.0",
   "private": true,
-  "description": "What atuin does with a session's thread",
+  "description": "What atuin does with a session's thread, and what your team works on",
   "author": "Atuin",
   "type": "module",
   "scripts": {
@@ -31,12 +31,22 @@
     ],
     "codex": {
       "gaps": [
-        "status"
+        "status",
+        "commands",
+        "panes",
+        "toolCards"
+      ]
+    },
+    "pi": {
+      "gaps": [
+        "toolCards"
       ]
     },
     "opencode": {
       "gaps": [
-        "status"
+        "status",
+        "panes",
+        "toolCards"
       ]
     }
   }
