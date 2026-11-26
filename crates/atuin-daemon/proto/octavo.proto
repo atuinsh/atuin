@@ -1,4 +1,4 @@
-// Octavo thread sharing state from the local upload queue.
+// Octavo thread sharing state from the local upload queue, and thread links and labels.
 syntax = "proto3";
 
 package octavo;
@@ -55,10 +55,31 @@ message ThreadShares {
   bool revoking_links = 5;
 }
 
+message ShareLinkReply {
+  // The link's URL on the hub's web app.
+  string url = 1;
+}
+
+message AddLabelsRequest {
+  ai.agent.HarnessSession thread = 1;
+  // A name the user has no label of creates one.
+  repeated string names = 2;
+}
+
+message AddLabelsReply {
+  // Names of all the thread's labels.
+  repeated string names = 1;
+}
+
 service Threads {
   // Get the organizations a thread is shared with and the directories that determine them.
   rpc GetShares(ThreadRequest) returns (ThreadShares);
   // Close the thread to every organization it's shared with, revoke its share links and keep it
   // private.
   rpc MakePrivate(ThreadRequest) returns (ThreadShares);
+  // Get a link that opens the thread to anyone holding it, creating a link-only share if no share
+  // of it has one.
+  rpc ShareLink(ThreadRequest) returns (ShareLinkReply);
+  // Add labels to the thread by name, keeping those it has.
+  rpc AddLabels(AddLabelsRequest) returns (AddLabelsReply);
 }

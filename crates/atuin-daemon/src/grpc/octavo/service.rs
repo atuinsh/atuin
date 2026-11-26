@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use atuin_client::ai_session::HarnessSession;
+use atuin_octavo::hub::HubCallError;
 use atuin_octavo::queue::{DirShares, OrgShare, ShareState};
 use tonic::{Request, Response, Status};
 
 use super::pb;
 use super::pb::threads_server::Threads;
-use crate::octavo::{Octavo, ThreadShares, ThreadSharesError};
+use crate::octavo::{Octavo, ThreadActionError, ThreadShares, ThreadSharesError};
 
 #[derive(Debug, Clone)]
 pub struct Service {
@@ -37,6 +38,26 @@ impl Threads for Service {
         let shares = self.octavo.make_private(thread_of(request)?).await?;
         Ok(Response::new(shares.into()))
     }
+
+    async fn share_link(
+        &self,
+        request: Request<pb::ThreadRequest>,
+    ) -> Result<Response<pb::ShareLinkReply>, Status> {
+        let url = self.octavo.share_link(thread_of(request)?).await?;
+        Ok(Response::new(pb::ShareLinkReply { url: url.into() }))
+    }
+
+    async fn add_labels(
+        &self,
+        request: Request<pb::AddLabelsRequest>,
+    ) -> Result<Response<pb::AddLabelsReply>, Status> {
+        let pb::AddLabelsRequest { thread, names } = request.into_inner();
+        let Some(thread) = thread else {
+            return Err(Status::invalid_argument("the request names no thread"));
+        };
+        let names = self.octavo.add_labels(thread.try_into()?, &names).await?;
+        Ok(Response::new(pb::AddLabelsReply { names }))
+    }
 }
 
 fn thread_of(request: Request<pb::ThreadRequest>) -> Result<HarnessSession, Status> {
@@ -52,6 +73,28 @@ impl From<ThreadSharesError> for Status {
             ThreadSharesError::NotShareable => Self::invalid_argument(err.to_string()),
             ThreadSharesError::CapturedElsewhere => Self::failed_precondition(err.to_string()),
             ThreadSharesError::Queue(_) => Self::internal(err.to_string()),
+        }
+    }
+}
+
+impl From<ThreadActionError> for Status {
+    fn from(err: ThreadActionError) -> Self {
+        let message = err.causes();
+        match err {
+            ThreadActionError::Off
+            | ThreadActionError::LoggedOut
+            | ThreadActionError::NotStored
+            | ThreadActionError::NotAmongRecent
+            | ThreadActionError::CapturedElsewhere
+            | ThreadActionError::Private => Self::failed_precondition(message),
+            ThreadActionError::NotShareable
+            | ThreadActionError::Hub(
+                HubCallError::InvalidLabel(..) | HubCallError::TooManyLabels { .. },
+            ) => Self::invalid_argument(message),
+            ThreadActionError::Login(_)
+            | ThreadActionError::Hub(_)
+            | ThreadActionError::LinkUrl(_) => Self::unavailable(message),
+            ThreadActionError::Queue(_) => Self::internal(message),
         }
     }
 }

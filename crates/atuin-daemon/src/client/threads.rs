@@ -6,7 +6,7 @@ use tonic::Code;
 
 use super::{DaemonChannel, FromSettingsError};
 use crate::grpc::octavo::pb::threads_client::ThreadsClient as ThreadsServiceClient;
-use crate::grpc::octavo::pb::{ThreadRequest, ThreadShares};
+use crate::grpc::octavo::pb::{AddLabelsRequest, ThreadRequest, ThreadShares};
 use crate::grpc::request::ClientInterceptor;
 use crate::service::ActiveService;
 use crate::service::address::{ConnectError, DaemonAddress};
@@ -43,6 +43,24 @@ impl ThreadsClient {
         thread: HarnessSession,
     ) -> Result<Option<ThreadShares>, tonic::Status> {
         built_with_octavo(self.client.make_private(thread_request(thread)).await)
+    }
+
+    /// Get a link on the hub's web app that opens `thread` to anyone holding it.
+    pub async fn share_link(&mut self, thread: HarnessSession) -> Result<String, tonic::Status> {
+        Ok(self.client.share_link(thread_request(thread)).await?.into_inner().url)
+    }
+
+    /// Add the labels named `names` to `thread` and return the names of all its labels.
+    pub async fn add_labels(
+        &mut self,
+        thread: HarnessSession,
+        names: Vec<String>,
+    ) -> Result<Vec<String>, tonic::Status> {
+        let request = AddLabelsRequest {
+            thread: Some(thread.into()),
+            names,
+        };
+        Ok(self.client.add_labels(request).await?.into_inner().names)
     }
 }
 

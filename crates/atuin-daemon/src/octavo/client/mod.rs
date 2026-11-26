@@ -9,8 +9,9 @@ use enum_dispatch::enum_dispatch;
 pub use nop::NopOctavoClient;
 #[cfg(test)]
 pub use recording::RecordingOctavoClient;
+use url::Url;
 
-use super::{ThreadShares, ThreadSharesError, ThreadUpload, UserId};
+use super::{ThreadActionError, ThreadShares, ThreadSharesError, ThreadUpload, UserId};
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
@@ -25,6 +26,12 @@ pub trait OctavoClient {
         &self,
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError>;
+    async fn share_link(&self, session: HarnessSession) -> Result<Url, ThreadActionError>;
+    async fn add_labels(
+        &self,
+        session: HarnessSession,
+        names: &[String],
+    ) -> Result<Vec<String>, ThreadActionError>;
 }
 
 #[enum_dispatch(OctavoClient)]

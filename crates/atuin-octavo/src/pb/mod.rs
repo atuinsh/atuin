@@ -32,6 +32,16 @@ impl TryFrom<Uuid> for UuidV7 {
     }
 }
 
+impl UuidV7 {
+    /// Mint a new id for something the client asks Octavo to create.
+    #[must_use]
+    pub fn mint() -> Self {
+        Self {
+            value: atuin_common::utils::uuid_v7().into_bytes().to_vec(),
+        }
+    }
+}
+
 impl TryFrom<RecordId> for UuidV7 {
     type Error = NotUuidV7<RecordId>;
 

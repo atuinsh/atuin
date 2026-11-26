@@ -10,7 +10,9 @@ use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 use atuin_domain::record::RecordId;
-use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubLogin, HubSession, UserId};
+use atuin_octavo::hub::{
+    ConnectError, HubCallError, HubClient, HubLogin, HubSession, ThreadLookup, UserId,
+};
 use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
 use atuin_octavo::shares::Configs;
@@ -20,10 +22,13 @@ use gate::{Cleared, CloseHalt, Closes, Rows};
 use starts::Starts;
 use thiserror::Error;
 use tokio::sync::Notify;
+use url::Url;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
-use crate::octavo::{QueuedShares, ThreadShares, ThreadSharesError, ThreadUpload, threads_on};
+use crate::octavo::{
+    QueuedShares, ThreadActionError, ThreadShares, ThreadSharesError, ThreadUpload, threads_on,
+};
 
 #[derive(Debug, Error)]
 pub enum OpenActiveOctavoClientError {
@@ -128,7 +133,7 @@ impl OctavoClient for ActiveOctavoClient {
         let hub = match self.uploader.uploading().await {
             Uploading::Off => return Ok(ThreadShares::Off),
             Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
-            Uploading::As(hub) => hub,
+            Uploading::As { hub, .. } => hub,
         };
         // Octavo stores no thread of a harness or session id it refuses, so none of it is shared.
         let Some(thread) = pb::HarnessSession::of_thread(session) else {
@@ -145,7 +150,7 @@ impl OctavoClient for ActiveOctavoClient {
         let hub = match self.uploader.uploading().await {
             Uploading::Off => return Ok(ThreadShares::Off),
             Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
-            Uploading::As(hub) => hub,
+            Uploading::As { hub, .. } => hub,
         };
         // The host that captured a thread queues its shares, so this queue has none to close.
         if self.uploader.starts.captured_elsewhere(&session).await {
@@ -158,13 +163,64 @@ impl OctavoClient for ActiveOctavoClient {
         self.uploader.wake.notify_one();
         Ok(ThreadShares::On(QueuedShares::read(&queued).await?))
     }
+
+    async fn share_link(&self, session: HarnessSession) -> Result<Url, ThreadActionError> {
+        // The host that captured a thread holds its private mark, so this one can't tell whether
+        // the user unshared it.
+        if self.uploader.starts.captured_elsewhere(&session).await {
+            return Err(ThreadActionError::CapturedElsewhere);
+        }
+        let OnOctavo {
+            settings,
+            login,
+            thread,
+            names,
+        } = self.uploader.on_octavo(session).await?;
+        let queued = self.uploader.queue.thread(login.user_id(), &names);
+        if queued.sharing().await?.is_private {
+            return Err(ThreadActionError::Private);
+        }
+        let id = thread.id.ok_or(HubCallError::Incomplete("thread id"))?;
+        let link = login.thread_link(&id).await?;
+        // An unshare may have come in, and its revocation gone, while the hub was asked: the link
+        // is then one nothing would delete. Queued again, the revocation deletes it. An unshare
+        // that comes in after this read revokes the link itself. Only a daemon that dies between
+        // the hub's answer and this write leaves a private thread its link.
+        if queued.sharing().await?.is_private {
+            queued.make_private().await?;
+            self.uploader.wake.notify_one();
+            return Err(ThreadActionError::Private);
+        }
+        Ok(link.url(&settings.hub_endpoint())?)
+    }
+
+    async fn add_labels(
+        &self,
+        session: HarnessSession,
+        names: &[String],
+    ) -> Result<Vec<String>, ThreadActionError> {
+        let OnOctavo { login, thread, .. } = self.uploader.on_octavo(session).await?;
+        Ok(login.add_labels(&thread, names).await?)
+    }
 }
 
 /// Current Octavo upload state and active hub session.
 enum Uploading {
     Off,
     LoggedOut,
-    As(HubSession),
+    As {
+        settings: Arc<Settings>,
+        hub: HubSession,
+    },
+}
+
+/// A thread stored on Octavo and a login as its owner.
+struct OnOctavo {
+    settings: Arc<Settings>,
+    login: HubLogin,
+    thread: pb::Thread,
+    /// The thread by its harness's names, as the upload queue knows it.
+    names: pb::HarnessSession,
 }
 
 /// Queues thread messages for the engine, and uploads those that skip the queue.
@@ -238,9 +294,32 @@ impl DirectUploader {
         }
         let settings = self.handle.settings().await.clone();
         match self.session(&settings).await {
-            Some(hub) => Uploading::As(hub),
+            Some(hub) => Uploading::As { settings, hub },
             None => Uploading::LoggedOut,
         }
+    }
+
+    /// Find `session`'s thread on Octavo and log in as the active user.
+    async fn on_octavo(&self, session: HarnessSession) -> Result<OnOctavo, ThreadActionError> {
+        let (settings, hub) = match self.uploading().await {
+            Uploading::Off => return Err(ThreadActionError::Off),
+            Uploading::LoggedOut => return Err(ThreadActionError::LoggedOut),
+            Uploading::As { settings, hub } => (settings, hub),
+        };
+        let names =
+            pb::HarnessSession::of_thread(session).ok_or(ThreadActionError::NotShareable)?;
+        let login = self.hub.login_as(hub, &settings).map_err(ThreadActionError::Login)?;
+        let thread = match login.find_thread(&names).await? {
+            ThreadLookup::Found(thread) => *thread,
+            ThreadLookup::NotStored => return Err(ThreadActionError::NotStored),
+            ThreadLookup::NotFoundYet(_) => return Err(ThreadActionError::NotAmongRecent),
+        };
+        Ok(OnOctavo {
+            settings,
+            login,
+            thread,
+            names,
+        })
     }
 
     /// The hub session logged in now, or `None` with Octavo left alone when there's none to use.

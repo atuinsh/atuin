@@ -1,11 +1,13 @@
 mod client;
 
+use std::error::Error as StdError;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
+use atuin_octavo::hub::HubCallError;
 pub use atuin_octavo::hub::UserId;
 use atuin_octavo::queue::{DirShares, OrgShare, QueueError, QueuedThread, ThreadSharing};
 use atuin_octavo::shares::Configs;
@@ -14,6 +16,7 @@ pub use client::RecordingOctavoClient;
 use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
 use thiserror::Error;
 use tokio::sync::Notify;
+use url::Url;
 
 use crate::daemon::DaemonHandle;
 
@@ -53,6 +56,53 @@ impl QueuedShares {
             is_private,
             revoking_links,
         })
+    }
+}
+
+/// Why a thread action on Octavo failed.
+#[derive(Debug, Error)]
+pub enum ThreadActionError {
+    #[error("Atuin Hub is off; `atuin setup --only --hub` turns it on")]
+    Off,
+    #[error("not logged in to Atuin Hub; run `atuin login`")]
+    LoggedOut,
+    #[error("Atuin Hub takes no thread of this harness or session id")]
+    NotShareable,
+    #[error("Atuin Hub doesn't store this thread yet; it goes up with its next message")]
+    NotStored,
+    #[error(
+        "Atuin Hub didn't list this thread among your most recently active; it goes up, or moves \
+         up, with its next message"
+    )]
+    NotAmongRecent,
+    #[error(
+        "this thread was captured on another machine, which holds its shares; run `atuin hub \
+         share` there"
+    )]
+    CapturedElsewhere,
+    #[error("failed to log in to Atuin Hub")]
+    Login(#[source] HubCallError),
+    #[error(transparent)]
+    Hub(#[from] HubCallError),
+    #[error("Atuin Hub's address can't hold a share link")]
+    LinkUrl(#[from] url::ParseError),
+    #[error(
+        "this thread is private: `atuin hub unshare` stopped its sharing, and a link would share \
+         it again"
+    )]
+    Private,
+    #[error("failed to read the Atuin Hub upload queue")]
+    Queue(#[from] QueueError),
+}
+
+impl ThreadActionError {
+    /// Join this error and its causes into one line for the client to show.
+    pub(crate) fn causes(&self) -> String {
+        let err: &(dyn StdError + 'static) = self;
+        std::iter::successors(Some(err), |err| (*err).source())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ")
     }
 }
 
@@ -196,5 +246,19 @@ impl Octavo {
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError> {
         self.client.make_private(session).await
+    }
+
+    /// Get a link on the hub's web app that opens `session`'s thread to anyone holding it.
+    pub async fn share_link(&self, session: HarnessSession) -> Result<Url, ThreadActionError> {
+        self.client.share_link(session).await
+    }
+
+    /// Add the labels named `names` to `session`'s thread and return the names of all its labels.
+    pub async fn add_labels(
+        &self,
+        session: HarnessSession,
+        names: &[String],
+    ) -> Result<Vec<String>, ThreadActionError> {
+        self.client.add_labels(session, names).await
     }
 }

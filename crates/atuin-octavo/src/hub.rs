@@ -19,7 +19,7 @@ use crate::pb::hub_service_client::HubServiceClient;
 
 mod threads;
 
-pub use threads::ThreadLookup;
+pub use threads::{ShareLink, ThreadLookup};
 
 #[derive(Debug, Error)]
 pub enum ConnectError {
@@ -59,6 +59,13 @@ pub enum HubCallError {
     Hub(#[source] Status),
     #[error("the hub's answer has no {0}")]
     Incomplete(&'static str),
+    #[error("the hub refused the label name {0:?}")]
+    InvalidLabel(String, #[source] Status),
+    #[error("a thread takes up to {max} labels, and this would give it {count}")]
+    TooManyLabels {
+        count: usize,
+        max: usize,
+    },
 }
 
 impl From<Status> for HubCallError {
@@ -82,7 +89,7 @@ impl HubCallError {
     #[must_use]
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Incomplete(_) => true,
+            Self::Incomplete(_) | Self::InvalidLabel(..) | Self::TooManyLabels { .. } => true,
             Self::Hub(status) => status.code() == Code::InvalidArgument,
             Self::NotLoggedIn
             | Self::UnknownUser

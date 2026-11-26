@@ -789,7 +789,7 @@ async fn print_import(
 
 /// Turn a `latest`/id selector into a full session handle by matching it against the session list
 /// (the harness is only known from the listing, so an id alone cannot address a session).
-async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
+pub(super) async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession> {
     let mut stream = client
         .list_sessions(&SessionFilter::default())
         .await?

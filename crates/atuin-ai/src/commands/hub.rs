@@ -1,4 +1,6 @@
-//! `atuin hub`: who can open a thread on Atuin Hub.
+//! `atuin hub`: who can open a thread on Atuin Hub, and its labels.
+
+use std::io::{self, Write};
 
 use atuin_client::settings::Settings;
 use atuin_daemon::grpc::octavo::pb;
@@ -15,6 +17,13 @@ pub enum Cmd {
     /// Stop sharing a thread: close it to every organization, revoke its links, and keep it from
     /// being shared again.
     Unshare(UnshareCmd),
+
+    /// Share a thread by link: print a link that opens it on Atuin Hub to whoever has it, making
+    /// one if it has none.
+    Share(ShareCmd),
+
+    /// Put labels on a thread on Atuin Hub, by name, making each you have none of.
+    Label(LabelCmd),
 }
 
 impl Cmd {
@@ -23,6 +32,8 @@ impl Cmd {
         session::wait_for_sessions(&mut client).await?;
         match self {
             Self::Unshare(unshare) => unshare.run(&settings, &mut client).await,
+            Self::Share(share) => share.run(&settings, &mut client).await,
+            Self::Label(label) => label.run(&settings, &mut client).await,
         }
     }
 }
@@ -60,5 +71,50 @@ impl UnshareCmd {
                 Status::of(settings, &session, shares)?.print(self.output.style())
             }
         }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct ShareCmd {
+    #[arg(value_name = "ID|latest")]
+    thread: String,
+}
+
+impl ShareCmd {
+    async fn run(self, settings: &Settings, client: &mut AiClient) -> Result<()> {
+        let thread = session::resolve(client, &self.thread).await?;
+        let url = ThreadsClient::from_settings(settings)
+            .await?
+            .share_link(thread)
+            .await
+            .map_err(|status| eyre!("{}", status.message()))?;
+        writeln!(io::stdout().lock(), "{url}")?;
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct LabelCmd {
+    #[arg(value_name = "ID|latest")]
+    thread: String,
+
+    #[arg(value_name = "LABEL", required = true)]
+    labels: Vec<String>,
+}
+
+impl LabelCmd {
+    async fn run(self, settings: &Settings, client: &mut AiClient) -> Result<()> {
+        let thread = session::resolve(client, &self.thread).await?;
+        let names = ThreadsClient::from_settings(settings)
+            .await?
+            .add_labels(thread, self.labels)
+            .await
+            .map_err(|status| eyre!("{}", status.message()))?;
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        for name in names {
+            writeln!(out, "{name}")?;
+        }
+        Ok(())
     }
 }
