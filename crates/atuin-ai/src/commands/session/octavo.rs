@@ -53,18 +53,13 @@ fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
 
 fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
     match shares.upload {
-        Upload::Off => {
-            return writeln!(
-                out,
-                "Octavo is off, so this machine shares no thread, and can't say who this one was \
-                 shared with before. `atuin setup --only --hub` turns it on."
-            );
-        }
+        // Without Atuin Hub there is nothing to say about sharing.
+        Upload::Off => return Ok(()),
         Upload::LoggedOut => {
             return writeln!(
                 out,
-                "Logged out, so this machine shares no thread, and can't say who this one was \
-                 shared with before. Run `atuin login`."
+                "Logged out of Atuin Hub, so this machine shares no thread, and can't say who \
+                 this one was shared with before. Run `atuin login`."
             );
         }
         Upload::On => {}

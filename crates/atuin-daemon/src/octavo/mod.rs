@@ -115,7 +115,7 @@ pub enum ThreadSharesError {
          unshare` there"
     )]
     CapturedElsewhere,
-    #[error("failed to read the Octavo upload queue")]
+    #[error("failed to read the Atuin Hub upload queue")]
     Queue(#[from] QueueError),
 }
 

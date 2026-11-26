@@ -68,7 +68,7 @@ pub enum Cmd {
         output: Output,
     },
 
-    /// Show capture and Octavo sharing status for a thread.
+    /// Show whether a thread is captured, and who can open it on Atuin Hub.
     Status {
         #[arg(value_name = "ID|latest")]
         thread: String,
