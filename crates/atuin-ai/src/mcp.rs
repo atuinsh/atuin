@@ -340,6 +340,7 @@ impl ServerHandler for AtuinMcp {
                     Err(e) => Err(e),
                 }
             }
+            "atuin_submit_feedback" => self.submit_feedback(arguments, &caller).await,
             #[cfg(feature = "desktop-capture")]
             name if desktop::is_desktop_tool(name) => {
                 match self.desktop.call(name, arguments, &self.settings).await {
@@ -355,6 +356,44 @@ impl ServerHandler for AtuinMcp {
             Err(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
         };
         Ok(result.into())
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Feedback {
+    message: String,
+    tool: Option<String>,
+}
+
+/// The longest message, in characters, that the Hub takes.
+const MAX_FEEDBACK_LEN: usize = 2000;
+
+/// Returns the feedback that `arguments` hold, or what is wrong with them.
+fn feedback(arguments: JsonObject) -> Result<Feedback, String> {
+    let feedback: Feedback = parse("atuin_submit_feedback", arguments)?;
+    let len = feedback.message.chars().count();
+    if feedback.message.trim().is_empty() || len > MAX_FEEDBACK_LEN {
+        return Err(invalid_arguments(
+            "atuin_submit_feedback",
+            format!("message must be 1 to {MAX_FEEDBACK_LEN} characters, not {len}"),
+        ));
+    }
+    Ok(feedback)
+}
+
+impl AtuinMcp {
+    async fn submit_feedback(
+        &self,
+        arguments: JsonObject,
+        caller: &Caller<'_>,
+    ) -> Result<String, String> {
+        let Feedback { message, tool } = feedback(arguments)?;
+        let body = json!({ "message": message, "tool": tool, "harness": caller.client });
+        atuin_client::hub::submit_mcp_feedback(&self.settings, &body)
+            .await
+            .map(|()| "Sent to the Atuin team. Thank you.".to_string())
+            .map_err(|e| format!("Feedback could not be sent: {e}"))
     }
 }
 
@@ -534,6 +573,25 @@ fn tool_definitions() -> Vec<Tool> {
         unreachable!()
     };
 
+    let Value::Object(feedback_schema) = json!({
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "maxLength": MAX_FEEDBACK_LEN,
+                "description": "What you tried, what happened, and what you expected.",
+            },
+            "tool": {
+                "type": "string",
+                "description": "The Atuin tool the feedback is about, if one.",
+            },
+        },
+        "required": ["message"],
+        "additionalProperties": false,
+    }) else {
+        unreachable!()
+    };
+
     #[cfg_attr(
         not(feature = "desktop-capture"),
         expect(unused_mut, reason = "only the desktop capture tools are added later")
@@ -616,6 +674,23 @@ fn tool_definitions() -> Vec<Tool> {
             schema_for_type::<AtuinThreadsReadToolCall>(),
         )
         .annotate(ToolAnnotations::with_title("Read an agent thread").read_only(true)),
+        Tool::new(
+            "atuin_submit_feedback",
+            "Send feedback about these Atuin tools to the Atuin team. Call this when an Atuin \
+             tool errored or returned wrong, empty or unhelpful results, when its description or \
+             parameters confused you, when you needed something it can't do, or when you had to \
+             work around it. Notes on what worked well are welcome too. One issue per call. Be \
+             brief and factual: the tool, what you tried, what you expected. Never include \
+             secrets, command output or thread content. Returns a receipt only.",
+            feedback_schema,
+        )
+        .annotate(
+            ToolAnnotations::with_title("Send feedback on Atuin's tools")
+                .read_only(false)
+                .destructive(false)
+                .open_world(true),
+        )
+        .with_meta(always_load()),
     ];
     #[cfg(feature = "desktop-capture")]
     tools.extend(DesktopTools::definitions());
@@ -636,7 +711,7 @@ mod tests {
         ["atuin_desktop_activity", "atuin_desktop_read", "atuin_desktop_search"];
 
     #[rstest]
-    fn tool_definitions_list_all_tools_as_read_only() {
+    fn tool_definitions_list_all_tools_but_feedback_as_read_only() {
         let tools = tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         let mut expected = vec![
@@ -646,13 +721,14 @@ mod tests {
             "atuin_threads_search",
             "atuin_threads_list",
             "atuin_threads_read",
+            "atuin_submit_feedback",
         ];
         if cfg!(feature = "desktop-capture") {
             expected.extend(DESKTOP_TOOLS);
         }
         assert_eq!(names, expected);
 
-        for tool in &tools {
+        for tool in tools.iter().filter(|t| t.name != "atuin_submit_feedback") {
             assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(true));
         }
 
@@ -661,12 +737,27 @@ mod tests {
             .filter(|t| t.meta == Some(always_load()))
             .map(|t| t.name.as_ref())
             .collect();
-        assert_eq!(always_loaded, ["atuin_history"]);
+        assert_eq!(always_loaded, ["atuin_history", "atuin_submit_feedback"]);
 
         // Everything except `query` is optional — see the filter_modes
         // comment in AtuinHistoryToolCall::try_from for why.
         let required = tools[0].input_schema.get("required").unwrap();
         assert_eq!(required, &json!(["query"]));
+    }
+
+    #[rstest]
+    fn feedback_arguments_are_checked_against_the_schema() {
+        let args = |v: Value| v.as_object().unwrap().clone();
+        assert!(feedback(args(json!({"message": "é".repeat(2000), "tool": "x"}))).is_ok());
+        for bad in [
+            json!({"message": "é".repeat(2001)}),
+            json!({"message": "  "}),
+            json!({"message": "hi", "tool": 3}),
+            json!({"message": "hi", "severity": "high"}),
+            json!({}),
+        ] {
+            assert!(feedback(args(bad.clone())).is_err(), "{bad}");
+        }
     }
 
     /// A misremembered option (`from_end`, say) is an error naming the real ones, not silently
@@ -798,7 +889,8 @@ mod tests {
         let octavo = ["search_threads", "get_thread"].map(octavo_tool).to_vec();
         let names: Vec<_> =
             listed_tools(&settings, Some(&octavo)).into_iter().map(|t| t.name).collect();
-        let mut expected = vec!["atuin_history", "atuin_output", "atuin_output_search"];
+        let mut expected =
+            vec!["atuin_history", "atuin_output", "atuin_output_search", "atuin_submit_feedback"];
         if cfg!(feature = "desktop-capture") {
             expected.extend(DESKTOP_TOOLS);
         }
@@ -809,8 +901,8 @@ mod tests {
 
     #[cfg(feature = "desktop-capture")]
     #[rstest]
-    #[case::with_the_store(true, 9)]
-    #[case::without_the_store(false, 6)]
+    #[case::with_the_store(true, 10)]
+    #[case::without_the_store(false, 7)]
     fn desktop_tools_are_listed_when_the_store_exists(#[case] exists: bool, #[case] count: usize) {
         let dir = tempfile::tempdir().unwrap();
         let mut settings = Settings::utc();
