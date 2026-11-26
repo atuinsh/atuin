@@ -13,8 +13,8 @@ use crate::hub::{HubCallError, HubLogin, UserId};
 use crate::pb;
 
 /// How far one of a thread's organizations got, as `thread_org_shares.state` stores it.
-#[derive(Debug, Clone, Copy)]
-enum ShareState {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareState {
     /// Queued to be opened.
     Opening = 0,
     Open = 1,
@@ -22,6 +22,32 @@ enum ShareState {
     Closing = 2,
     /// Never opened again.
     Closed = 3,
+}
+
+impl ShareState {
+    fn stored(state: i64) -> Option<Self> {
+        match state {
+            0 => Some(Self::Opening),
+            1 => Some(Self::Open),
+            2 => Some(Self::Closing),
+            3 => Some(Self::Closed),
+            _ => None,
+        }
+    }
+}
+
+/// An organization a thread is shared with and its share state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgShare {
+    pub org: OrgSlug,
+    pub state: ShareState,
+}
+
+/// A directory a thread uploaded messages from and its last-seen configured organizations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirShares {
+    pub dir: PathBuf,
+    pub orgs: Vec<OrgSlug>,
 }
 
 impl UploadQueue {
@@ -210,6 +236,53 @@ impl QueuedThread<'_> {
         Ok(queued)
     }
 
+    /// List all organizations this thread is shared with, ordered by slug.
+    pub async fn shares(&self) -> Result<Vec<OrgShare>, QueueError> {
+        let rows: Vec<(String, i64)> = db::query_as(
+            "SELECT org_slug, state FROM thread_org_shares WHERE user_id = ?1 AND harness = ?2 \
+             AND session_id = ?3 ORDER BY org_slug",
+        )
+        .bind(self.user.as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .fetch_all(self.queue.db.pool())
+        .await?;
+        // Written as a slug and a state.
+        Ok(rows
+            .into_iter()
+            .filter_map(|(slug, state)| {
+                Some(OrgShare {
+                    org: slug.parse().ok()?,
+                    state: ShareState::stored(state)?,
+                })
+            })
+            .collect())
+    }
+
+    /// List all directories this thread uploaded messages from, ordered by path.
+    pub async fn dir_shares(&self) -> Result<Vec<DirShares>, QueueError> {
+        let rows: Vec<(String, String)> = db::query_as(
+            "SELECT dir, org_slugs FROM thread_dirs WHERE user_id = ?1 AND harness = ?2 AND \
+             session_id = ?3 ORDER BY dir",
+        )
+        .bind(self.user.as_str())
+        .bind(&self.thread.harness)
+        .bind(&self.thread.session_id)
+        .fetch_all(self.queue.db.pool())
+        .await?;
+        rows.into_iter()
+            .map(|(dir, slugs)| {
+                let slugs: Vec<String> =
+                    serde_json::from_str(&slugs).map_err(QueueError::Malformed)?;
+                Ok(DirShares {
+                    dir: PathBuf::from(dir),
+                    // Written as slugs.
+                    orgs: slugs.iter().filter_map(|slug| slug.parse().ok()).collect(),
+                })
+            })
+            .collect()
+    }
+
     /// Whether it's queued to be closed to an organization.
     pub async fn is_closing(&self) -> Result<bool, QueueError> {
         let closing: Option<i64> = db::query_scalar(
@@ -387,17 +460,13 @@ impl<'a> PendingOpen<'a> {
 
     /// Settles it unsent, so it's never sent again.
     pub async fn give_up(self) -> Result<(), QueueError> {
-        self.settle().await
+        self.0.queued().settle(&self.0.orgs, ShareState::Opening, ShareState::Closed).await
     }
 
     /// Removes it if it was queued at least `after` ago, returning how many organizations that
     /// was, so the thread's next message queues it afresh.
     pub async fn expire(self, after: Duration) -> Result<u64, QueueError> {
         self.0.queued().expire_opens(after).await
-    }
-
-    async fn settle(&self) -> Result<(), QueueError> {
-        self.0.queued().settle(&self.0.orgs, ShareState::Opening, ShareState::Open).await
     }
 }
 
@@ -417,7 +486,14 @@ impl SentOpen<'_> {
 
     /// Settles it, so the thread is never queued to be opened to them again.
     pub async fn settle(self) -> Result<(), QueueError> {
-        self.open.settle().await
+        // Octavo opened the thread to none of the skipped, so those close rather than read as open.
+        let (skipped, opened): (Vec<OrgSlug>, Vec<OrgSlug>) =
+            self.open.0.orgs.iter().cloned().partition(|org| {
+                self.skipped.iter().any(|slug| slug.eq_ignore_ascii_case(org.as_ref()))
+            });
+        let queued = self.open.0.queued();
+        queued.settle(&opened, ShareState::Opening, ShareState::Open).await?;
+        queued.settle(&skipped, ShareState::Opening, ShareState::Closed).await
     }
 }
 

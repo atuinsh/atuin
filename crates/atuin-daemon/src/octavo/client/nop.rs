@@ -1,7 +1,7 @@
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
 
 use super::OctavoClient;
-use crate::octavo::{ThreadUpload, UserId};
+use crate::octavo::{ThreadShares, ThreadSharesError, ThreadUpload, UserId};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NopOctavoClient;
@@ -17,5 +17,12 @@ impl OctavoClient for NopOctavoClient {
         _session: HarnessSession,
         _sidecar: &AiSessionDatabase,
     ) {
+    }
+
+    async fn thread_shares(
+        &self,
+        _session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        Ok(ThreadShares::Off)
     }
 }

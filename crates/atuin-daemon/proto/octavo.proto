@@ -1,0 +1,57 @@
+// Octavo thread sharing state from the local upload queue.
+syntax = "proto3";
+
+package octavo;
+
+import "ai/agent.proto";
+
+// Whether the daemon uploads threads to Octavo.
+enum Upload {
+  UPLOAD_UNSPECIFIED = 0;
+  // Octavo is disabled in settings, or the daemon was built without it.
+  UPLOAD_OFF = 1;
+  // Not logged in to Atuin Hub.
+  UPLOAD_LOGGED_OUT = 2;
+  UPLOAD_ON = 3;
+}
+
+// Lifecycle state of a thread's share with an organization.
+enum ShareState {
+  SHARE_STATE_UNSPECIFIED = 0;
+  // Queued to be opened.
+  SHARE_STATE_OPENING = 1;
+  SHARE_STATE_OPEN = 2;
+  // Queued to be closed.
+  SHARE_STATE_CLOSING = 3;
+  // Closed permanently.
+  SHARE_STATE_CLOSED = 4;
+}
+
+// An organization a thread is shared with and its share state.
+message OrgShare {
+  string org_slug = 1;
+  ShareState state = 2;
+}
+
+// A directory a thread uploaded messages from and the organizations configured for it.
+// A thread stays shared only with organizations allowed by every directory it ran in.
+message DirShares {
+  string dir = 1;
+  repeated string org_slugs = 2;
+}
+
+message ThreadRequest {
+  ai.agent.HarnessSession thread = 1;
+}
+
+message ThreadShares {
+  Upload upload = 1;
+  // Empty unless `upload` is `UPLOAD_ON` and at least one message has been uploaded.
+  repeated OrgShare orgs = 2;
+  repeated DirShares dirs = 3;
+}
+
+service Threads {
+  // Get the organizations a thread is shared with and the directories that determine them.
+  rpc GetShares(ThreadRequest) returns (ThreadShares);
+}

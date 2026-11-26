@@ -11,6 +11,7 @@ use atuin_client::settings::Settings;
 use atuin_common::dirs;
 use atuin_domain::record::RecordId;
 use atuin_octavo::hub::{ConnectError, HubCallError, HubClient, HubLogin, HubSession, UserId};
+use atuin_octavo::pb;
 use atuin_octavo::queue::{QueueError, UploadQueue};
 use atuin_octavo::shares::Configs;
 use auto_share::AutoSharer;
@@ -22,7 +23,7 @@ use tokio::sync::Notify;
 
 use super::OctavoClient;
 use crate::daemon::DaemonHandle;
-use crate::octavo::ThreadUpload;
+use crate::octavo::{QueuedShares, ThreadShares, ThreadSharesError, ThreadUpload, threads_on};
 
 #[derive(Debug, Error)]
 pub enum OpenActiveOctavoClientError {
@@ -119,6 +120,30 @@ impl OctavoClient for ActiveOctavoClient {
     fn consider_sharing(&self, user: UserId, session: HarnessSession, sidecar: &AiSessionDatabase) {
         self.auto_sharer.consider(user, session, sidecar);
     }
+
+    async fn thread_shares(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        let hub = match self.uploader.uploading().await {
+            Uploading::Off => return Ok(ThreadShares::Off),
+            Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
+            Uploading::As(hub) => hub,
+        };
+        // Octavo stores no thread of a harness or session id it refuses, so none of it is shared.
+        let Some(thread) = pb::HarnessSession::of_thread(session) else {
+            return Ok(ThreadShares::On(QueuedShares::default()));
+        };
+        let queued = self.uploader.queue.thread(hub.user_id(), &thread);
+        Ok(ThreadShares::On(QueuedShares::read(&queued).await?))
+    }
+}
+
+/// Current Octavo upload state and active hub session.
+enum Uploading {
+    Off,
+    LoggedOut,
+    As(HubSession),
 }
 
 /// Queues thread messages for the engine, and uploads those that skip the queue.
@@ -184,6 +209,17 @@ impl DirectUploader {
             );
         }
         Ok(ready)
+    }
+
+    async fn uploading(&self) -> Uploading {
+        if !threads_on(self.starts.configs()).await {
+            return Uploading::Off;
+        }
+        let settings = self.handle.settings().await.clone();
+        match self.session(&settings).await {
+            Some(hub) => Uploading::As(hub),
+            None => Uploading::LoggedOut,
+        }
     }
 
     /// The hub session logged in now, or `None` with Octavo left alone when there's none to use.

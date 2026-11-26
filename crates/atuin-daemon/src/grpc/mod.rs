@@ -38,6 +38,8 @@ macro_rules! internal_errors {
 pub mod ai;
 pub mod common;
 pub mod history;
+#[cfg(feature = "ai")]
+pub mod octavo;
 pub mod request;
 pub mod userio;
 pub mod versioning;
@@ -45,4 +47,6 @@ pub mod versioning;
 #[cfg(feature = "ai")]
 pub use ai::session::Service as AiSessionService;
 pub use history::Service as HistoryService;
+#[cfg(feature = "octavo")]
+pub use octavo::Service as OctavoService;
 pub use userio::Service as UserIoService;

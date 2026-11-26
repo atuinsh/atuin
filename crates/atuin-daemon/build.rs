@@ -35,7 +35,11 @@ fn main() -> std::io::Result<()> {
         "proto/userio.proto",
     ];
     if cfg!(feature = "ai") {
-        proto_paths.extend(["proto/ai/agent.proto", "proto/ai/session.proto"]);
+        proto_paths.extend([
+            "proto/ai/agent.proto",
+            "proto/ai/session.proto",
+            "proto/octavo.proto",
+        ]);
     }
     let proto_include_dirs = ["proto"];
 

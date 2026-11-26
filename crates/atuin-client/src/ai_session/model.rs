@@ -393,6 +393,15 @@ pub struct Session {
 }
 
 impl Session {
+    #[must_use]
+    pub fn sharing(&self) -> &HarnessSession {
+        // A subagent has no share of its own: its parent's decides who can open it.
+        match (&self.parent, self.parent_kind) {
+            (Some(parent), Some(ParentKind::Subagent)) => parent,
+            _ => &self.handle,
+        }
+    }
+
     /// This session and its `messages` (in transcript order), as its harness can write them back
     /// out to be resumed in `cwd` (see [`atuin_common::harnesstools::Harness::rehydrate`]).
     #[must_use]

@@ -32,6 +32,8 @@ use jiff::Timestamp;
 use jiff::tz::{Offset, TimeZone};
 use serde::Serialize;
 
+mod octavo;
+
 /// How a subcommand's output is rendered.
 #[derive(Args, Debug)]
 pub struct Output {
@@ -53,6 +55,15 @@ pub enum Cmd {
     Show {
         /// Id (its last 8 digits, as `list` shows them, are enough) or harness id (a unique prefix
         /// is enough), or `latest` for the most recently active thread.
+        #[arg(value_name = "ID|latest")]
+        thread: String,
+
+        #[command(flatten)]
+        output: Output,
+    },
+
+    /// Show capture and Octavo sharing status for a thread.
+    Status {
         #[arg(value_name = "ID|latest")]
         thread: String,
 
@@ -213,6 +224,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         }
         Cmd::List { ref output }
         | Cmd::Show { ref output, .. }
+        | Cmd::Status { ref output, .. }
         | Cmd::Search { ref output, .. }
         | Cmd::Tail { ref output }
         | Cmd::Import { ref output, .. } => output.style.resolve(),
@@ -224,7 +236,8 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
         Cmd::Push { .. } => Style::Plain,
     };
 
-    if !settings.threads.enabled {
+    // `status` reports capture itself.
+    if !settings.threads.enabled && !matches!(cmd, Cmd::Status { .. }) {
         userio::log::warn!("threads-capture-off");
     }
 
@@ -256,6 +269,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     let result = match cmd {
         Cmd::List { .. } => list(&mut client, style).await,
         Cmd::Show { thread, .. } => show(&mut client, &thread, style).await,
+        Cmd::Status { thread, .. } => octavo::status(&settings, &mut client, &thread, style).await,
         Cmd::Search {
             query,
             harness,
@@ -781,6 +795,22 @@ async fn resolve(client: &mut AiClient, selector: &str) -> Result<HarnessSession
         SelectError::NotFound(_) => eyre!("{e}. Run `atuin threads list`."),
         e => eyre!(e),
     })
+}
+
+/// Find the session matching `selector`, or [`None`] if no captured session matches.
+async fn find(client: &mut AiClient, selector: &str) -> Result<Option<Session>> {
+    let sessions: Vec<Session> = client
+        .list_sessions(&SessionFilter::default())
+        .await?
+        .map(|session| Ok::<_, eyre::Report>(Session::try_from(session?)?))
+        .try_collect()
+        .await?;
+    let handle = match select_session(sessions.clone(), selector) {
+        Ok(handle) => handle,
+        Err(SelectError::NoSessions | SelectError::NotFound(_)) => return Ok(None),
+        Err(err) => return Err(eyre!(err)),
+    };
+    Ok(sessions.into_iter().find(|session| session.handle == handle))
 }
 
 /// Why a selector matched no single session. Callers word the next step themselves: the CLI

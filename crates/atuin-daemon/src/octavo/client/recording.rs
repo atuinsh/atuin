@@ -4,7 +4,7 @@ use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
 use parking_lot::Mutex;
 
 use super::OctavoClient;
-use crate::octavo::{ThreadUpload, UserId};
+use crate::octavo::{ThreadShares, ThreadSharesError, ThreadUpload, UserId};
 
 /// Queues thread messages under [`Self::USER`], uploading none, and remembers the threads it was
 /// asked to consider sharing.
@@ -36,5 +36,12 @@ impl OctavoClient for RecordingOctavoClient {
         _sidecar: &AiSessionDatabase,
     ) {
         self.considered.lock().push((user, session));
+    }
+
+    async fn thread_shares(
+        &self,
+        _session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        Ok(ThreadShares::Off)
     }
 }

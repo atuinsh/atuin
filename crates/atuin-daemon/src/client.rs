@@ -43,6 +43,10 @@ use crate::service::{ActiveService, FindError};
 mod ai;
 #[cfg(feature = "ai")]
 pub use ai::AiClient;
+#[cfg(feature = "ai")]
+mod threads;
+#[cfg(feature = "ai")]
+pub use threads::ThreadsClient;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FromSettingsError {

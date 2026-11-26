@@ -17,7 +17,10 @@ use crate::pb;
 
 mod shares;
 
-pub use self::shares::{NotSent, PendingClose, PendingOpen, QueuedThread, SentClose, SentOpen};
+pub use self::shares::{
+    DirShares, NotSent, OrgShare, PendingClose, PendingOpen, QueuedThread, SentClose, SentOpen,
+    ShareState,
+};
 
 const PAGE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();
 /// As many as one `InsertThreadMessages` takes, so a page of small messages is one request.
@@ -31,6 +34,8 @@ pub enum QueueError {
     Migrate(#[from] MigrateError),
     #[error("an upload queue query failed")]
     Query(#[from] sqlx::Error),
+    #[error("the upload queue holds a malformed row")]
+    Malformed(#[source] serde_json::Error),
 }
 
 #[derive(Debug, Clone, Copy, sqlx::FromRow)]

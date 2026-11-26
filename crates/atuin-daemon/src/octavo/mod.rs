@@ -7,13 +7,49 @@ use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession
 use atuin_client::settings::Settings;
 use atuin_common::dirs;
 pub use atuin_octavo::hub::UserId;
+use atuin_octavo::queue::{DirShares, OrgShare, QueueError, QueuedThread};
 use atuin_octavo::shares::Configs;
 #[cfg(test)]
 pub use client::RecordingOctavoClient;
 use client::{AnyOctavoClient, DirectThreadUpload, NopOctavoClient, OctavoClient};
+use thiserror::Error;
 use tokio::sync::Notify;
 
 use crate::daemon::DaemonHandle;
+
+/// Octavo sharing state for a thread from the local upload queue.
+#[derive(Debug)]
+pub enum ThreadShares {
+    /// Octavo is disabled.
+    Off,
+    /// No user is logged in to Atuin Hub.
+    LoggedOut,
+    On(QueuedShares),
+}
+
+/// Queued sharing state for a thread under the active user.
+#[derive(Debug, Default)]
+pub struct QueuedShares {
+    /// Organizations the thread is shared with and their share state.
+    pub orgs: Vec<OrgShare>,
+    /// Directories the thread uploaded messages from and each directory's configured organizations.
+    pub dirs: Vec<DirShares>,
+}
+
+impl QueuedShares {
+    async fn read(thread: &QueuedThread<'_>) -> Result<Self, QueueError> {
+        Ok(Self {
+            orgs: thread.shares().await?,
+            dirs: thread.dir_shares().await?,
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ThreadSharesError {
+    #[error("failed to read the Octavo upload queue")]
+    Queue(#[from] QueueError),
+}
 
 /// Thread messages taken for Octavo before capture stores their records: they go once
 /// [`Self::start`] says the records are stored, so no upload reads the queue ahead of them.
@@ -126,5 +162,12 @@ impl Octavo {
         sidecar: &AiSessionDatabase,
     ) {
         self.client.consider_sharing(user, session, sidecar);
+    }
+
+    pub async fn thread_shares(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        self.client.thread_shares(session).await
     }
 }

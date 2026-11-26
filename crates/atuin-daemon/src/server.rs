@@ -6,6 +6,8 @@ use crate::grpc;
 #[cfg(feature = "ai")]
 use crate::grpc::ai::session::pb::ai_session_server::AiSessionServer;
 use crate::grpc::history::pb::history_server::HistoryServer;
+#[cfg(feature = "octavo")]
+use crate::grpc::octavo::pb::threads_server::ThreadsServer;
 use crate::grpc::request::RequestSpanLayer;
 use crate::grpc::userio::pb::user_io_server::UserIoServer;
 use crate::grpc::versioning::StrictVersionLayer;
@@ -27,6 +29,7 @@ pub fn run_grpc_server(
     search_service: SearchServer<SearchGrpcService>,
     #[cfg(feature = "ai")] ai_session_service: AiSessionServer<grpc::AiSessionService>,
     userio_service: UserIoServer<grpc::UserIoService>,
+    #[cfg(feature = "octavo")] octavo_service: ThreadsServer<grpc::OctavoService>,
     handle: DaemonHandle,
 ) -> Result<()> {
     use tonic::transport::Server;
@@ -56,6 +59,8 @@ pub fn run_grpc_server(
     #[cfg(feature = "ai")]
     let router = router.add_service(ai_session_service);
     let router = router.add_service(userio_service);
+    #[cfg(feature = "octavo")]
+    let router = router.add_service(octavo_service);
 
     // Spawn the server in the background
     tokio::spawn(async move {

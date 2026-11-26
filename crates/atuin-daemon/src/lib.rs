@@ -40,9 +40,9 @@ mod sync;
 
 // Re-export core daemon types for convenience
 // Re-export client helpers
-#[cfg(feature = "ai")]
-pub use client::AiClient;
 pub use client::HistoryClient;
+#[cfg(feature = "ai")]
+pub use client::{AiClient, ThreadsClient};
 // Re-export components
 pub use components::SearchComponent;
 pub use daemon::{AnyComponent, Daemon, DaemonBuilder, DaemonHandle};
@@ -240,6 +240,8 @@ pub async fn boot(
         #[cfg(feature = "ai")]
         ai_session_service,
         UserIoServer::new(userio),
+        #[cfg(feature = "octavo")]
+        grpc::octavo::pb::threads_server::ThreadsServer::new(grpc::OctavoService::new(octavo)),
         handle,
     )?;
 

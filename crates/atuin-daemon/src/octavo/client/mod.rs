@@ -10,13 +10,17 @@ pub use nop::NopOctavoClient;
 #[cfg(test)]
 pub use recording::RecordingOctavoClient;
 
-use super::{ThreadUpload, UserId};
+use super::{ThreadShares, ThreadSharesError, ThreadUpload, UserId};
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait OctavoClient {
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload;
     fn consider_sharing(&self, user: UserId, session: HarnessSession, sidecar: &AiSessionDatabase);
+    async fn thread_shares(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError>;
 }
 
 #[enum_dispatch(OctavoClient)]
