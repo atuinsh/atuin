@@ -94,8 +94,8 @@ toggles! {
     }
     // Hidden until uploading to Atuin Hub ships. 18.24.8 shipped it as `--teams`.
     AtuinHub("hub", "Sync"; hidden = true; alias = "teams") {
-        on: "Turn on Atuin Hub",
-        off: "Turn off Atuin Hub",
+        on: "Turn on Atuin Hub, and install Atuin's plugin in your agents",
+        off: "Turn off Atuin Hub, and take Atuin's plugin out of your agents",
     }
     /// Atuin Hub uploading what this machine has already, as well as what Atuin records
     /// from now on.

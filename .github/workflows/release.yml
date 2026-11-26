@@ -131,6 +131,13 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Install Node"
+        uses: "actions/setup-node@v6"
+        with:
+          "node-version": "24"
+      - name: "Install pnpm"
+        run: "npm install --global pnpm@12.6.0"
+        shell: "bash"
       - name: "Install pandoc"
         uses: "pandoc/actions/setup@v1"
         if: "runner.os == 'Windows'"

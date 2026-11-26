@@ -242,6 +242,9 @@ steps:
     key: check-macos
     agents: *macos-large
     timeout_in_minutes: 45
+    env:
+      # --all-features builds atuin's agent plugin, which takes pnpm.
+      CARGO_TOOLS: pnpm
     command:
       - *restore-macos
       - *toolchain
@@ -266,6 +269,9 @@ steps:
     key: check-windows
     agents: *windows-large
     timeout_in_minutes: 45
+    env:
+      # --all-features builds atuin's agent plugin, which takes pnpm.
+      CARGO_TOOLS: pnpm
     command: bash .buildkite/scripts/windows.sh check
 
   - label: ":crab: MSRV (1.95.0)"
@@ -274,6 +280,8 @@ steps:
     env:
       # rust-toolchain.toml pins the dev toolchain; override it explicitly.
       RUST_TOOLCHAIN: "1.95.0"
+      # --all-features builds atuin's agent plugin, which takes pnpm.
+      CARGO_TOOLS: pnpm
     command:
       - *restore
       - *toolchain
@@ -287,6 +295,8 @@ steps:
     timeout_in_minutes: 45
     env:
       RUST_COMPONENTS: clippy
+      # --all-features builds atuin's agent plugin, which takes pnpm.
+      CARGO_TOOLS: pnpm
       # --all-features enables vendored-tls, which compiles OpenSSL from
       # source; linting can use the system libssl instead.
       OPENSSL_NO_VENDOR: "1"

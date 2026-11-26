@@ -5,7 +5,8 @@
 #   RUST_TOOLCHAIN   toolchain to install (default: rust-toolchain.toml), or
 #                    "none" for steps that only run prebuilt tests
 #   RUST_COMPONENTS  extra rustup components, e.g. "clippy"
-#   CARGO_TOOLS      prebuilt tools to install: "nextest", "deny", "bktec"
+#   CARGO_TOOLS      prebuilt tools to install: "nextest", "deny", "bktec",
+#                    and "pnpm" (with Node) for a build with --all-features
 #   APT_PACKAGES     extra apt packages on Linux (libssl-dev + pkg-config always)
 #   BREW_PACKAGES    Homebrew packages on macOS
 #
@@ -26,6 +27,14 @@ CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d
 BKTEC_VERSION=3.1.0
 BKTEC_LINUX_SHA256=05d1007c40afce8a58d73128c9725d7a1da05a084d34496ef6550e6c7d9ad03f
 BKTEC_MACOS_SHA256=b4cc70f051862144bf656e565e8b6dec6af2b98f3ebfe4c24a5feb5aa317b8cf
+# The ai-harness feature builds atuin's agent plugin (integrations/ai-harness)
+# from crates/atuin/build.rs with pnpm, which runs on Node.
+NODE_VERSION=24.22.3
+NODE_LINUX_SHA256=061ec3e3062115705b56b51fa9cc330ab50d34b6969387d4e4b1a50c6809acc2
+NODE_MACOS_SHA256=ff6e17d4874b76d272212b908cc020d6e815fba5a6c7eaaa06add725840307fd
+NODE_WINDOWS_SHA256=e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f
+# The pnpm of mono's CI image (ci/containers/Dockerfile).
+PNPM_VERSION=12.6.0
 
 echo "--- :rust: Toolchain"
 export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
@@ -38,6 +47,7 @@ case "$(uname -s)" in
     apt_install libssl-dev pkg-config ${APT_PACKAGES:-}
     nextest_asset=x86_64-unknown-linux-gnu nextest_sha256=$NEXTEST_LINUX_SHA256
     bktec_asset=linux_amd64 bktec_sha256=$BKTEC_LINUX_SHA256
+    node_asset=linux-x64 node_sha256=$NODE_LINUX_SHA256
     ;;
   Darwin)
     if [ -n "${BREW_PACKAGES:-}" ]; then
@@ -46,10 +56,12 @@ case "$(uname -s)" in
     fi
     nextest_asset=universal-apple-darwin nextest_sha256=$NEXTEST_MACOS_SHA256
     bktec_asset=darwin_arm64 bktec_sha256=$BKTEC_MACOS_SHA256
+    node_asset=darwin-arm64 node_sha256=$NODE_MACOS_SHA256
     ;;
   MINGW* | MSYS*)
     # The image ships rustup and Visual Studio's build tools.
     nextest_asset=x86_64-pc-windows-msvc nextest_sha256=$NEXTEST_WINDOWS_SHA256
+    node_asset=win-x64 node_sha256=$NODE_WINDOWS_SHA256
     ;;
   *)
     echo "Unsupported OS: $(uname -s)"
@@ -97,6 +109,22 @@ for tool in ${CARGO_TOOLS:-}; do
       fetch_verified "https://github.com/buildkite/test-engine-client/releases/download/v${BKTEC_VERSION}/bktec_${BKTEC_VERSION}_${bktec_asset}" \
         "$bktec_sha256" "$CARGO_HOME/bin/bktec"
       chmod +x "$CARGO_HOME/bin/bktec"
+      ;;
+    pnpm)
+      node_dir="$HOME/node-v${NODE_VERSION}-${node_asset}"
+      node_url="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${node_asset}"
+      # npm puts what it installs globally beside node.exe on Windows, and
+      # in bin/ elsewhere.
+      if [ "$node_asset" = win-x64 ]; then
+        fetch_verified "$node_url.zip" "$node_sha256" /tmp/node.zip
+        unzip -q -o /tmp/node.zip -d "$HOME"
+        export PATH="$node_dir:$PATH"
+      else
+        fetch_verified "$node_url.tar.gz" "$node_sha256" /tmp/node.tgz
+        tar -xzf /tmp/node.tgz -C "$HOME"
+        export PATH="$node_dir/bin:$PATH"
+      fi
+      npm install --global --no-fund --no-audit "pnpm@${PNPM_VERSION}"
       ;;
     *)
       echo "Unknown CARGO_TOOLS entry: $tool"

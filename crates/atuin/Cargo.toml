@@ -81,6 +81,14 @@ vendored-tls = ["atuin-client?/vendored-tls"]
 # axoasset's rustls/aws-lc-rs reqwest backend, which is only avoided by the
 # [patch.crates-io] axoasset fork when building from this repo.
 self-update = ["dep:axoupdater"]
+# Embeds atuin's agent plugin (integrations/ai-harness), which `atuin setup
+# --hub` installs in the agents that have its hooks. It needs octavo, as only
+# turning Atuin Hub on installs it. Not a default feature: the build runs pnpm,
+# which needs Node, the network and this repo's integrations/ directory, and
+# `cargo install` and distro builds lack those (dist enables it in
+# dist-workspace.toml). Set ATUIN_AI_HARNESS_DIST to a prebuilt `dist` of the
+# plugin to embed that instead, without running pnpm.
+ai-harness = ["octavo"]
 profiling-traced = [
     "dep:tracing-opentelemetry",
     "dep:opentelemetry",

@@ -34,7 +34,9 @@ github-attestations = true
 # don't depend on the host's libssl version. No-op on macOS/Windows.
 # self-update: only installer-installed binaries can self-update, so the
 # `atuin update` machinery is compiled into release artifacts only.
-features = ["vendored-tls", "self-update"]
+# ai-harness: release artifacts embed atuin's agent plugin, which build.rs
+# builds with pnpm (build-setup.yml installs Node and pnpm).
+features = ["vendored-tls", "self-update", "ai-harness"]
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "depot-ubuntu-24.04-arm-8"

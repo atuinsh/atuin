@@ -19,12 +19,17 @@ use atuin_common::encryption::paseto_v4;
 use atuin_common::env::var_nonempty;
 use atuin_common::executable::is_executable_with_path_search;
 use atuin_common::fs::can_write;
+#[cfg(feature = "ai-harness")]
+use atuin_common::harnesstools::plugin::Plugin;
 #[cfg(feature = "ai")]
 use atuin_common::harnesstools::{
     InstallHookError,
     mcp::InstallMcp as _,
+    plugin::InstallPlugin as _,
     session::any::{ObservableExt as _, SessionsExt as _},
 };
+#[cfg(feature = "ai-harness")]
+use atuin_common::path::DisplayRichExt as _;
 #[cfg(feature = "ai")]
 use atuin_common::sync::BlockingPool;
 #[cfg(feature = "ai")]
@@ -112,7 +117,7 @@ impl Cmd {
             #[cfg(feature = "octavo")]
             if let Some(Hub::On { backfill }) = plan.hub() {
                 // Not watched: there's no screen to watch it on.
-                let _upload = turn_on_hub(store, backfill, plan.upload_threads.0, &tx).await;
+                let _upload = turn_on_hub(store, &plan, &found, scope, backfill, &tx).await;
             }
             let mut steps = Vec::new();
             while let Ok(update) = rx.try_recv() {
@@ -325,11 +330,13 @@ fn keys_after(plan: &Plan, found: &Found, scope: Scope<'_>) -> Keybindings {
     }
 }
 
-/// What of Atuin an agent has: hooks that run it, and its MCP server.
+/// What of Atuin an agent has: hooks that run it, its MCP server, and its plugin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Connection {
     hooks: bool,
     mcp: bool,
+    /// As installed for the agent's configuration here, even by a removal that didn't finish.
+    plugin: bool,
 }
 
 impl Found {
@@ -387,6 +394,11 @@ impl Found {
 
     fn hooked_agents(&self) -> Vec<AnyHarness> {
         self.connections.iter().filter(|(_, how)| how.hooks).map(|&(agent, _)| agent).collect()
+    }
+
+    #[cfg(feature = "ai")]
+    fn plugin_agents(&self) -> Vec<AnyHarness> {
+        self.connections.iter().filter(|(_, how)| how.plugin).map(|&(agent, _)| agent).collect()
     }
 
     /// Whether a run over `scope` takes the keybinding flags off the `atuin init` lines.
@@ -456,6 +468,33 @@ pub enum Hub {
     On {
         backfill: bool,
     },
+}
+
+/// What a run does about Atuin Hub, for the plugin that comes and goes with it.
+#[cfg(feature = "ai")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HubChange {
+    #[cfg(feature = "octavo")]
+    TurnedOn,
+    #[cfg(feature = "octavo")]
+    TurnedOff,
+    /// As it was, which is also how a run that couldn't turn it on leaves it.
+    Left,
+    /// This atuin was built without Atuin Hub, so it can't tell whether it is on, and must not
+    /// take it for off.
+    Unknown,
+}
+
+#[cfg(feature = "ai")]
+impl HubChange {
+    /// What a run that does nothing about Atuin Hub did about it.
+    const fn untouched() -> Self {
+        if HUB {
+            Self::Left
+        } else {
+            Self::Unknown
+        }
+    }
 }
 
 /// The lines of the list setup shows while it works, in the order shown.
@@ -533,8 +572,13 @@ async fn apply(
         send(tx, Step::Config, Status::Done(changed));
     }
     #[cfg(feature = "octavo")]
-    if plan.hub() == Some(Hub::Off) && found.hub {
-        hub::disable(tx).await;
+    if plan.hub() == Some(Hub::Off) {
+        let plugins = agent_changes(plan, found, scope).plugins.changes(HubChange::TurnedOff);
+        if found.hub {
+            send_hub(hub::disable(tx).await, &plugins, tx).await;
+        } else if !plugins.remove.is_empty() {
+            send_hub(Status::Done("Atuin Hub is off".into()), &plugins, tx).await;
+        }
     }
 
     // The config now holds the keys that the flags chose, so the flags can come off without
@@ -615,23 +659,47 @@ async fn apply(
 }
 
 /// Turn Atuin Hub on, once sign-in has said who the account is, so the hub can say whether
-/// it has it, and after the imports, so what it uploads takes them in. Returns the upload to
-/// watch, if it started one.
+/// it has it, and after the imports, so what it uploads takes them in. Once it is on, the agents
+/// with Atuin's hooks get its plugin. Returns the upload to watch, if it started one.
 #[cfg(feature = "octavo")]
 async fn turn_on_hub(
     store: &SqliteStore,
+    plan: &Plan,
+    found: &Found,
+    scope: Scope<'_>,
     backfill: bool,
-    uploads: ThreadUploads,
     tx: &Updates,
 ) -> Option<upload::Upload> {
-    match Settings::new() {
-        Ok(settings) => hub::enable(&Arc::new(settings), store, backfill, uploads, tx).await,
-        Err(e) => {
-            let failed =
-                format!("Couldn't turn on Atuin Hub ({e:#}). Run `atuin setup --hub` to try again");
-            send(tx, Step::Hub, Status::Failed(failed));
-            None
+    let hub::Enabled { status, upload } = match Settings::new() {
+        Ok(settings) => {
+            let uploads = plan.upload_threads.0;
+            hub::enable(&Arc::new(settings), store, backfill, uploads, tx).await
         }
+        Err(e) => hub::Enabled {
+            status: Status::Failed(format!(
+                "Couldn't turn on Atuin Hub ({e:#}). Run `atuin setup --hub` to try again"
+            )),
+            upload: None,
+        },
+    };
+    let plugins = agent_changes(plan, found, scope).plugins.changes(HubChange::TurnedOn);
+    send_hub(status, &plugins, tx).await;
+    upload
+}
+
+/// Send the hub step's `status`. One that is done is sent with what `plugins` then does: Atuin's
+/// plugin goes in and comes out with Atuin Hub, so a step that failed leaves it where it is.
+#[cfg(feature = "octavo")]
+async fn send_hub(status: Status, plugins: &Changes<AnyHarness>, tx: &Updates) {
+    let Status::Done(hub) = status else {
+        return send(tx, Step::Hub, status);
+    };
+    let (mut done, mut failures) = (vec![hub], Vec::new());
+    #[cfg(feature = "ai-harness")]
+    install_plugins(&plugins.add, &mut done, &mut failures).await;
+    uninstall_plugins(&plugins.remove, &mut done, &mut failures).await;
+    if let Some(status) = summary(done, failures) {
+        send(tx, Step::Hub, status);
     }
 }
 
@@ -1046,9 +1114,13 @@ fn hook_shells(changes: &Changes<Shell>, elsewhere: bool, notes: ShellNotes, tx:
 /// Hook the agents into Atuin and connect them to its MCP server, as far as `scope` reaches.
 #[cfg(feature = "ai")]
 async fn connect(plan: &Plan, found: &Found, scope: Scope<'_>, tx: &Updates) {
-    let AgentChanges { hooks, mcp } = agent_changes(plan, found, scope);
+    let AgentChanges {
+        hooks,
+        plugins,
+        mcp,
+    } = agent_changes(plan, found, scope);
     if let Some(hooks) = hooks {
-        hook_agents(&hooks, tx).await;
+        hook_agents(&hooks, &plugins, tx).await;
     }
     if let Some(mcp) = mcp {
         connect_agents(&mcp, tx).await;
@@ -1056,11 +1128,70 @@ async fn connect(plan: &Plan, found: &Found, scope: Scope<'_>, tx: &Updates) {
 }
 
 /// What setup changes of the agents' hooks, and of their MCP server: `None` for a part it leaves
-/// as it is.
+/// as it is. With them, what that means for Atuin's plugin in the agents.
 #[cfg(feature = "ai")]
 struct AgentChanges {
     hooks: Option<Changes<AnyHarness>>,
+    plugins: PluginChanges,
     mcp: Option<Changes<AnyHarness>>,
+}
+
+/// What a run means for Atuin's plugin in the agents. Turning Atuin Hub on, as `atuin setup
+/// --hub` does, is the one thing that gives an agent the plugin, and only an agent with Atuin's
+/// hooks. An agent keeps it until it loses the hooks or Atuin Hub is turned off.
+#[cfg(feature = "ai")]
+#[derive(Debug)]
+struct PluginChanges {
+    /// The agents with Atuin's hooks once the run is done.
+    hooked: Vec<AnyHarness>,
+    /// The agents with the plugin now, even from a removal that didn't finish.
+    plugged: Vec<AnyHarness>,
+    /// The agents the run gives hooks while Atuin Hub is on and stays so.
+    #[cfg(feature = "ai-harness")]
+    hooked_with_hub_on: Vec<AnyHarness>,
+}
+
+#[cfg(feature = "ai")]
+impl PluginChanges {
+    /// Whether `agent` has the plugin once the run is done, given what the run did about Atuin
+    /// Hub.
+    fn has(&self, agent: AnyHarness, hub: HubChange) -> bool {
+        let is_in = |agents: &[AnyHarness]| agents.iter().any(|a| a.name() == agent.name());
+        match hub {
+            #[cfg(feature = "octavo")]
+            HubChange::TurnedOn => is_in(&self.hooked),
+            #[cfg(feature = "octavo")]
+            HubChange::TurnedOff => false,
+            // Nothing was learned of Atuin Hub, so only losing the hooks takes the plugin out.
+            HubChange::Left | HubChange::Unknown => is_in(&self.hooked) && is_in(&self.plugged),
+        }
+    }
+
+    /// The agents to install the plugin in, and those to take it out of, given what the run did
+    /// about Atuin Hub. Turning it on installs again in an agent that has the plugin, which is
+    /// how a newer build of it gets there.
+    fn changes(&self, hub: HubChange) -> Changes<AnyHarness> {
+        let has = |agent: &&AnyHarness| self.has(**agent, hub);
+        #[cfg(feature = "octavo")]
+        let installs = hub == HubChange::TurnedOn;
+        // A build without Atuin Hub can't turn it on.
+        #[cfg(not(feature = "octavo"))]
+        let installs = false;
+        Changes {
+            add: self.hooked.iter().filter(|agent| installs && has(agent)).copied().collect(),
+            remove: self.plugged.iter().filter(|agent| !has(agent)).copied().collect(),
+        }
+    }
+
+    /// The agents that get hooks in a run that isn't `atuin setup --hub`, with Atuin Hub on:
+    /// the plugin has a build for them, and they have it only once that is run again.
+    #[cfg(feature = "ai-harness")]
+    fn waiting(&self) -> Vec<AnyHarness> {
+        let waits = |agent: &&AnyHarness| {
+            agent.with_plugin().is_some() && !self.has(**agent, HubChange::untouched())
+        };
+        self.hooked_with_hub_on.iter().filter(waits).copied().collect()
+    }
 }
 
 /// The [`AgentChanges`] `plan` makes, as far as `scope` reaches. Agents named alone get each part
@@ -1078,17 +1209,39 @@ fn agent_changes(plan: &Plan, found: &Found, scope: Scope<'_>) -> AgentChanges {
         let (on, had) = (plan.agent_history.0, found.hooked_agents());
         changes::<_, AgentHistory>(scope, on, agents, &had, named, same)
     });
+    let plugins = {
+        let had = found.hooked_agents();
+        let add = hooks.as_ref().map_or(&[][..], |hooks| &hooks.add);
+        let remove = hooks.as_ref().map_or(&[][..], |hooks| &hooks.remove);
+        let is_in = |list: &[AnyHarness], agent: &AnyHarness| list.iter().any(|a| same(a, agent));
+        let stays = |agent: &&AnyHarness| !is_in(remove, agent) && !is_in(add, agent);
+        PluginChanges {
+            hooked: add.iter().chain(had.iter().filter(stays)).copied().collect(),
+            plugged: found.plugin_agents(),
+            #[cfg(feature = "ai-harness")]
+            hooked_with_hub_on: match plan.hub() {
+                None if found.hub => add.to_vec(),
+                None | Some(Hub::On { .. } | Hub::Off) => Vec::new(),
+            },
+        }
+    };
     let mcp = (mcp || alone).then(|| {
         let (on, had) = (plan.mcp.0, found.mcp_agents());
         changes::<_, Mcp>(scope, on, agents, &had, named, same)
     });
-    AgentChanges { hooks, mcp }
+    AgentChanges {
+        hooks,
+        plugins,
+        mcp,
+    }
 }
 
 /// Install the hooks of the agents `changes` adds, and take out those of the agents it removes.
+/// Atuin's plugin comes out of the agents that `plugins` says lose it with their hooks.
 #[cfg(feature = "ai")]
-async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
-    if changes.add.is_empty() && changes.remove.is_empty() {
+async fn hook_agents(changes: &Changes<AnyHarness>, plugins: &PluginChanges, tx: &Updates) {
+    let unplug = plugins.changes(HubChange::untouched()).remove;
+    if changes.add.is_empty() && changes.remove.is_empty() && unplug.is_empty() {
         return;
     }
     send(tx, Step::AgentHooks, Status::Running("Recording what your agents run".into()));
@@ -1139,8 +1292,94 @@ async fn hook_agents(changes: &Changes<AnyHarness>, tx: &Updates) {
     if !stuck.is_empty() {
         failures.push(format!("couldn't take the hooks out of {}", stuck.join(", ")));
     }
+    uninstall_plugins(&unplug, &mut done, &mut failures).await;
+    #[cfg(feature = "ai-harness")]
+    {
+        let waiting: Vec<_> = plugins.waiting().iter().map(Harness::display_name).collect();
+        if !waiting.is_empty() {
+            let waiting = join_with_and(&waiting);
+            done.push(format!("run `atuin setup --hub` to give {waiting} Atuin's plugin"));
+        }
+    }
     if let Some(status) = summary(done, failures) {
         send(tx, Step::AgentHooks, status);
+    }
+}
+
+/// Atuin's plugin for the agents, as `build.rs` built it.
+#[cfg(feature = "ai-harness")]
+static PLUGIN: Plugin = include!(concat!(env!("OUT_DIR"), "/ai_harness.rs"));
+
+/// Install Atuin's plugin in each of `agents` it has a build for, adding what that did to `done`
+/// and what it couldn't to `failures`.
+#[cfg(feature = "ai-harness")]
+async fn install_plugins(
+    agents: &[AnyHarness],
+    done: &mut Vec<String>,
+    failures: &mut Vec<String>,
+) {
+    let (mut installed, mut failed) = (Vec::new(), Vec::new());
+    let mut codex = false;
+    for &agent in agents {
+        let Some(with_plugin) = agent.with_plugin() else {
+            continue;
+        };
+        match with_plugin.install_plugin(&PLUGIN).await {
+            Ok(_) => {
+                installed.push(agent.display_name());
+                codex |= matches!(agent, AnyHarness::Codex(_));
+            }
+            Err(e) => failed.push(format!("{} ({e})", agent.display_name())),
+        }
+    }
+    if !installed.is_empty()
+        && let Ok(dir) = Plugin::dir()
+    {
+        done.push(format!(
+            "installed Atuin's plugin in {} from {}, for their next session",
+            join_with_and(&installed),
+            dir.display_rich().tilde_me()
+        ));
+    }
+    // Codex asks before it runs a plugin's hooks or shows its status line, and only they can
+    // answer.
+    if codex {
+        done.push(
+            "in Codex, approve the plugin's hooks in /hooks, and for its status line turn on \
+             Custom status line in /experimental and pick atuin in /statusline"
+                .into(),
+        );
+    }
+    if !failed.is_empty() {
+        failures.push(format!("couldn't install Atuin's plugin in {}", failed.join(", ")));
+    }
+}
+
+/// Take Atuin's plugin out of each of `agents` that has it, adding what that did to `done` and
+/// what it couldn't to `failures`. A build that embeds no plugin still takes out one that an
+/// earlier build installed.
+#[cfg(feature = "ai")]
+async fn uninstall_plugins(
+    agents: &[AnyHarness],
+    done: &mut Vec<String>,
+    failures: &mut Vec<String>,
+) {
+    let (mut removed, mut stuck) = (Vec::new(), Vec::new());
+    for &agent in agents {
+        let Some(with_plugin) = agent.with_plugin() else {
+            continue;
+        };
+        match with_plugin.uninstall_plugin().await {
+            Ok(true) => removed.push(agent.display_name()),
+            Ok(false) => {}
+            Err(e) => stuck.push(format!("{} ({e})", agent.display_name())),
+        }
+    }
+    if !removed.is_empty() {
+        done.push(format!("took Atuin's plugin out of {}", join_with_and(&removed)));
+    }
+    if !stuck.is_empty() {
+        failures.push(format!("couldn't take Atuin's plugin out of {}", stuck.join(", ")));
     }
 }
 
@@ -1954,8 +2193,15 @@ async fn connections() -> Vec<(AnyHarness, Connection)> {
             tracing::debug!(?err, agent = agent.name(), "can't tell whether it has atuin's mcp");
             false
         });
-        if hooks || mcp {
-            connections.push((agent, Connection { hooks, mcp }));
+        let plugin = agent.with_plugin().is_some_and(|agent| {
+            agent.has_plugin().unwrap_or_else(|err| {
+                tracing::debug!(?err, "can't tell whether it has atuin's plugin");
+                false
+            })
+        });
+        if hooks || mcp || plugin {
+            let connection = Connection { hooks, mcp, plugin };
+            connections.push((agent, connection));
         }
     }
     connections
@@ -2136,7 +2382,7 @@ mod tests {
         let codex = AnyHarness::Codex(atuin_common::harnesstools::codex::Codex);
         let hooks_only = Connection {
             hooks: true,
-            mcp: false,
+            ..Connection::default()
         };
         found.connections = vec![(codex, hooks_only)];
         let asks = Asks {
@@ -2955,7 +3201,11 @@ mod tests {
         use atuin_common::harnesstools::ccode::Ccode;
         use atuin_common::harnesstools::codex::Codex;
 
-        let with = |hooks, mcp| Connection { hooks, mcp };
+        let with = |hooks, mcp| Connection {
+            hooks,
+            mcp,
+            plugin: false,
+        };
         found.connections = vec![
             (AnyHarness::ClaudeCode(Ccode), with(true, false)),
             (AnyHarness::Codex(Codex), with(false, true)),
@@ -2971,6 +3221,56 @@ mod tests {
             |(add, remove): (&[&'static str], &[&'static str])| (add.to_vec(), remove.to_vec());
         assert_eq!(names(changes.hooks), hooks.map(as_vecs));
         assert_eq!(names(changes.mcp), mcp.map(as_vecs));
+    }
+
+    /// Only turning Atuin Hub on gives an agent Atuin's plugin, and only one with Atuin's hooks.
+    /// It goes with the hooks, and with Atuin Hub. Here Claude Code has both, Codex the hooks
+    /// alone, and Pi a plugin that outlived its hooks when its removal failed. `waiting` are the
+    /// agents setup says to run `atuin setup --hub` for.
+    #[cfg(feature = "ai-harness")]
+    #[rstest]
+    #[case::hub_turned_on(false, &["--only", "--hub"], HubChange::TurnedOn, &["claude-code", "codex"], &["pi"], &[])]
+    #[case::hub_turned_on_again(true, &["--only", "--hub"], HubChange::TurnedOn, &["claude-code", "codex"], &["pi"], &[])]
+    #[case::hub_refused(false, &["--only", "--hub"], HubChange::Left, &[], &["pi"], &[])]
+    #[case::hooked_with_the_hub_on(true, &["--only", "--agent-history", "--agents", "codex"], HubChange::Left, &[], &["pi"], &["codex"])]
+    #[case::hooked_with_the_hub_off(false, &["--only", "--agent-history", "--agents", "codex"], HubChange::Left, &[], &["pi"], &[])]
+    #[case::hub_turned_off(true, &["--only", "--no-hub"], HubChange::TurnedOff, &[], &["claude-code", "pi"], &[])]
+    #[case::hooks_taken_out(true, &["--only", "--no-agent-history", "--agents", "claude-code"], HubChange::Left, &[], &["claude-code", "pi"], &[])]
+    #[case::hooked_by_a_build_without_the_hub(false, &["--only", "--agent-history", "--agents", "codex"], HubChange::Unknown, &[], &["pi"], &[])]
+    #[case::hooks_taken_out_by_a_build_without_the_hub(false, &["--only", "--no-agent-history", "--agents", "claude-code"], HubChange::Unknown, &[], &["claude-code", "pi"], &[])]
+    fn only_turning_the_hub_on_gives_an_agent_the_plugin(
+        mut found: Found,
+        #[case] hub: bool,
+        #[case] args: &[&str],
+        #[case] change: HubChange,
+        #[case] add: &[&str],
+        #[case] remove: &[&str],
+        #[case] waiting: &[&str],
+    ) {
+        use atuin_common::harnesstools::ccode::Ccode;
+        use atuin_common::harnesstools::codex::Codex;
+        use atuin_common::harnesstools::pi::Pi;
+
+        let with = |hooks, plugin| Connection {
+            hooks,
+            mcp: false,
+            plugin,
+        };
+        found.connections = vec![
+            (AnyHarness::ClaudeCode(Ccode), with(true, true)),
+            (AnyHarness::Codex(Codex), with(true, false)),
+            (AnyHarness::Pi(Pi::PI), with(false, true)),
+        ];
+        (found.hub, found.daemon, found.signed_in) = (hub, true, true);
+        let cmd = setup(args);
+        let plan = cmd.plan(&found, true).unwrap().effective();
+
+        let plugins = agent_changes(&plan, &found, cmd.scope()).plugins;
+
+        let changes = plugins.changes(change);
+        let names = |agents: &[AnyHarness]| agents.iter().map(Harness::name).collect::<Vec<_>>();
+        assert_eq!((names(&changes.add), names(&changes.remove)), (add.to_vec(), remove.to_vec()));
+        assert_eq!(names(&plugins.waiting()), waiting);
     }
 
     #[rstest]

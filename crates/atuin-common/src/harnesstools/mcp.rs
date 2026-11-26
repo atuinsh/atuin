@@ -2,7 +2,6 @@
 //! history, command output and agent sessions.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use enum_dispatch::enum_dispatch;
 use serde_json::{Value, json};
@@ -11,6 +10,7 @@ use toml_edit::{DocumentMut, Item};
 use super::Harness;
 use super::amp::{self, Amp};
 use super::ccode::Ccode;
+use super::cli::{self, CliError};
 use super::codex::{self, Codex};
 use super::copilot::{self, Copilot};
 use super::grok::{self, Grok};
@@ -23,7 +23,6 @@ use super::vibe::{self, Vibe};
 use crate::atuin_exe;
 use crate::dirs::home_dir;
 use crate::env::var_nonempty;
-use crate::executable::resolve_in_path;
 use crate::path::{AbsPathBuf, PathBufExt as _};
 
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +77,23 @@ pub enum InstallMcpError {
         key: &'static str,
         cause: HermesCliError,
     },
+}
+
+impl From<CliError> for InstallMcpError {
+    fn from(err: CliError) -> Self {
+        match err {
+            CliError::NotFound(program) => Self::NotFound(program),
+            CliError::Io { cause, .. } => Self::Io(cause),
+            CliError::Failed {
+                command,
+                said: Some(said),
+            } => Self::FailedSaying { command, said },
+            CliError::Failed {
+                command,
+                said: None,
+            } => Self::Failed(command),
+        }
+    }
 }
 
 impl From<HermesCliError> for InstallMcpError {
@@ -136,7 +152,7 @@ impl InstallMcp for Amp {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let atuin = executable().await?;
         // `amp mcp add` refuses a name that's taken.
-        remove(self.program(), &["mcp", "remove", "atuin"]).await;
+        cli::run_ignoring_failure(self.program(), &["mcp", "remove", "atuin"]).await;
         run(self.program(), &["mcp", "add", "atuin", "--", atuin, "mcp"]).await
     }
 
@@ -164,7 +180,8 @@ impl InstallMcp for Ccode {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let atuin = executable().await?;
         // `claude mcp add` refuses a name that's taken.
-        remove(self.program(), &["mcp", "remove", "--scope", "user", "atuin"]).await;
+        cli::run_ignoring_failure(self.program(), &["mcp", "remove", "--scope", "user", "atuin"])
+            .await;
         run(self.program(), &["mcp", "add", "--scope", "user", "atuin", "--", atuin, "mcp"]).await
     }
 
@@ -308,7 +325,7 @@ impl InstallMcp for Vibe {
     async fn install_mcp(&self) -> Result<(), InstallMcpError> {
         let atuin = executable().await?;
         // `vibe mcp add` keeps a server that is already there.
-        remove(self.program(), &["mcp", "remove", "atuin"]).await;
+        cli::run_ignoring_failure(self.program(), &["mcp", "remove", "atuin"]).await;
         run(self.program(), &[
             "mcp",
             "add",
@@ -499,20 +516,6 @@ async fn yaml_has_server(path: &Path) -> Result<bool, InstallMcpError> {
     Ok(docs.first().is_some_and(|doc| !doc["mcp_servers"]["atuin"].is_badvalue()))
 }
 
-/// Run `program` with `args` to remove a server, whether or not there is one to remove.
-async fn remove(program: &str, args: &[&str]) {
-    let Some(program) = resolve_in_path(Path::new(program)) else {
-        return;
-    };
-    let _ = tokio::process::Command::new(&*program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
 /// The atuin for a harness to launch. Harnesses don't necessarily have the user's `PATH`, so it's
 /// an absolute path: see [`atuin_exe::launch_path`].
 async fn executable() -> Result<&'static str, InstallMcpError> {
@@ -520,25 +523,9 @@ async fn executable() -> Result<&'static str, InstallMcpError> {
     path.to_str().ok_or_else(|| InstallMcpError::NonUtf8Executable(path.to_owned()))
 }
 
-/// Runs `program` with `args`, keeping what it prints off the terminal: a screen may be on it. The
-/// program runs from the path that [`resolve_in_path`] finds, so that what runs is what the `PATH`
-/// check found. For example, on Windows, `claude` runs as `claude.cmd`.
+/// [`cli::run`], which keeps what the program prints off the terminal.
 async fn run(program: &'static str, args: &[&str]) -> Result<(), InstallMcpError> {
-    let found = resolve_in_path(Path::new(program)).ok_or(InstallMcpError::NotFound(program))?;
-    let output =
-        tokio::process::Command::new(&*found).args(args).stdin(Stdio::null()).output().await?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let command = format!("{program} {}", args.join(" "));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(match stderr.lines().map(str::trim).find(|line| !line.is_empty()) {
-        Some(said) => InstallMcpError::FailedSaying {
-            command,
-            said: said.to_owned(),
-        },
-        None => InstallMcpError::Failed(command),
-    })
+    Ok(cli::run(program, args).await?)
 }
 
 /// Add the server to the opencode config at `path`, keeping the rest of it.

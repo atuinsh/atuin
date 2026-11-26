@@ -41,29 +41,37 @@ async fn users_file() -> Result<UsersFile> {
     Ok(read.await??)
 }
 
-/// Turn Atuin Hub off, as far as the user's own config file lets setup.
-pub(super) async fn disable(tx: &Updates) {
+/// Turn Atuin Hub off, as far as the user's own config file lets setup, and hand back how
+/// that went for the caller to send.
+pub(super) async fn disable(tx: &Updates) -> Status {
     send(tx, Step::Hub, Status::Running("Turning off Atuin Hub".into()));
     let failed =
         |err: eyre::Report| Status::Failed(format!("Couldn't turn off Atuin Hub ({err:#})"));
-    let status = match users_file().await.map(|file| file.write(ThreadUploads::Off)) {
+    match users_file().await.map(|file| file.write(ThreadUploads::Off)) {
         Ok(Ok(())) => Status::Done("Atuin Hub is off".into()),
         Ok(Err(err @ WriteError::Theirs { .. })) => Status::Failed(err.to_string()),
         Ok(Err(err @ WriteError::Write { .. })) => failed(err.into()),
         Err(err) => failed(err),
-    };
-    send(tx, Step::Hub, status);
+    }
+}
+
+/// How [`enable`] went.
+pub(super) struct Enabled {
+    /// The step's status, for the caller to send. Done only when Atuin Hub is on for it.
+    pub(super) status: Status,
+    /// The upload to watch, if it started one.
+    pub(super) upload: Option<Upload>,
 }
 
 /// Turn Atuin Hub on for `uploads`, if the account has it, and upload the threads Atuin
-/// already has if `backfill`. Returns the upload to watch, if it started one.
+/// already has if `backfill`.
 pub(super) async fn enable(
     settings: &Arc<Settings>,
     store: &SqliteStore,
     backfill: bool,
     uploads: ThreadUploads,
     tx: &Updates,
-) -> Option<Upload> {
+) -> Enabled {
     send(tx, Step::Hub, Status::Running("Turning on Atuin Hub".into()));
     let (status, upload) = match turn_on(settings, store, backfill, uploads).await {
         Ok(on) => on,
@@ -73,8 +81,7 @@ pub(super) async fn enable(
             (Status::Failed(failed), None)
         }
     };
-    send(tx, Step::Hub, status);
-    upload
+    Enabled { status, upload }
 }
 
 /// How turning it on went, and the upload it started: `Err` for a failure that trying again may

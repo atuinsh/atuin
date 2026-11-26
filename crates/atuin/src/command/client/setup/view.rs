@@ -175,7 +175,7 @@ async fn drive(
 
     #[cfg(feature = "octavo")]
     if let Some(super::Hub::On { backfill }) = plan.hub() {
-        let on = super::turn_on_hub(store, backfill, plan.upload_threads.0, &tx);
+        let on = super::turn_on_hub(store, &plan, found, Scope::All, backfill, &tx);
         match drawn(terminal, &mut running, &mut updates, &mut tick, on).await? {
             Some(Some(upload)) => {
                 watch(terminal, &mut running, &mut updates, &mut tick, &upload).await?;
