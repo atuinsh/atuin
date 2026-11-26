@@ -1,11 +1,11 @@
 import { mod } from '@atuin/modkit'
 import { useHarness, useQuery } from '@atuin/modkit/ui/hooks'
 
+import { Atuin } from './src/atuin'
 import { Chip } from './src/Chip'
-import { configOf } from './src/config'
-import { report as threadReport } from './src/held'
-import { bashTarget, narrowing, worktreeTarget } from './src/narrowing'
-import { octavoOf } from './src/status'
+import { Moves } from './src/moves'
+import { Report } from './src/status'
+import { report as threadReport } from './src/store'
 
 interface Settings {
   /**
@@ -17,16 +17,15 @@ interface Settings {
 
 export default mod(({ atuinPath = 'atuin' }: Settings) => {
   const harness = useHarness()
-  const config = configOf({ atuinPath })
-  const report = useQuery(threadReport, config)
-
-  const shares = octavoOf(report.value)
+  const atuin = new Atuin(harness, { atuinPath })
+  const report = useQuery(threadReport, atuin.settings)
+  const moves = new Moves({ harness, atuin, shares: Report.shares(report.value) })
 
   return {
     status: () => <Chip report={report.value} />,
-    beforeShell: async call => narrowing(harness, { config, shares, dir: await bashTarget(harness, call) }),
+    beforeShell: async call => moves.ofShell(call),
     beforeTool: {
-      EnterWorktree: call => narrowing(harness, { config, shares, dir: worktreeTarget(call) }),
+      EnterWorktree: async call => moves.ofWorktree(call),
     },
     afterTool: {
       EnterWorktree: () => {

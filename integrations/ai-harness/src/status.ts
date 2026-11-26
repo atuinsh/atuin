@@ -1,70 +1,72 @@
-import type { Tone as TextTone } from '@atuin/modkit'
+import type { Tone } from '@atuin/modkit'
+import * as v from 'valibot'
 
-import type { Outcome } from './cli'
-import type { ShareState, StatusReport, ThreadShares, ThreadStatus } from './types'
+import { Outcome } from './outcome'
+import { Shares } from './shares'
 
-/** How the chip's words read: what atuin does plainly, a closed share as a warning, the rest dim. */
-export type Tone = 'plain' | 'warning' | 'quiet'
+const schema = v.object({
+  capture: v.picklist(['on', 'off']),
+  thread: v.nullable(v.object({ messages: v.number() })),
+  octavo: v.nullable(Shares.schema),
+})
+
+/** What `atuin threads status <id> --style json` prints: `thread` and `octavo` null until captured. */
+export type ThreadStatus = v.InferOutput<typeof schema>
+
+export const ThreadStatus = { schema }
+
+/** The thread's status, or why the CLI could not say. */
+export type Report = Outcome<ThreadStatus> | null
 
 /** What the chip says beside its `atuin` mark. */
-export type Chip = { text: string; tone: Tone }
-
-/** The text tone that draws `tone`. */
-export const toneOf = (tone: Tone): TextTone => (tone === 'quiet' ? 'dim' : tone)
+export type Words = { text: string; tone: Tone }
 
 /** How many orgs the chip names before it counts the rest, as the footer has little room. */
 const NAMED_ORGS = 2
-
-const orgsIn = (shares: ThreadShares, states: readonly ShareState[]) =>
-  shares.orgs.filter(org => states.includes(org.state)).map(org => org.slug)
 
 const named = (orgs: readonly string[]) =>
   orgs.length <= NAMED_ORGS
     ? orgs.join(', ')
     : `${orgs.slice(0, NAMED_ORGS).join(', ')} +${orgs.length - NAMED_ORGS}`
 
-/** Who the thread is shared with on Octavo, if atuin captured it and the CLI said. */
-export const octavoOf = (report: StatusReport | null): ThreadShares | null =>
-  report?.kind === 'known' ? report.status.octavo : null
+export const Report = {
+  schema: v.nullable(Outcome.schema(schema)),
 
-/** The chip for `report`: whether atuin captures the thread, then who it shares it with. */
-export const chipOf = (report: StatusReport | null): Chip | undefined => {
-  if (report === null) return undefined
-  if (report.kind === 'unavailable') return { text: 'unavailable', tone: 'quiet' }
-  const { capture, octavo } = report.status
-  if (capture === 'off') return { text: 'capture off', tone: 'quiet' }
-  if (octavo === null) return { text: 'not captured yet', tone: 'quiet' }
-  if (octavo.upload === 'off') return { text: 'captured', tone: 'plain' }
-  if (octavo.upload === 'logged-out') return { text: 'captured, logged out', tone: 'quiet' }
-  if (octavo.isPrivate) {
-    // Private only once Octavo has closed each org: until then its members can still open it.
-    const closing = orgsIn(octavo, ['closing'])
-    return closing.length === 0
-      ? { text: 'private', tone: 'quiet' }
-      : { text: `private once closed to ${named(closing)}`, tone: 'warning' }
-  }
+  /** Who the thread is shared with on Octavo, if atuin captured it and the CLI said. */
+  shares: (report: Report): Shares | null => (report?.isOk === true ? report.value.octavo : null),
 
-  const open = orgsIn(octavo, ['open'])
-  const sharing = [...open, ...orgsIn(octavo, ['opening'])]
-  if (sharing.length > 0) {
-    // Only queued so far: Octavo hasn't opened it to anyone yet.
-    const verb = open.length === 0 ? 'sharing' : 'shared'
-    return { text: `${verb} with ${named(sharing)}`, tone: 'plain' }
-  }
-  // A close still queued hasn't reached Octavo: the org's members can open the thread until it has.
-  const closing = orgsIn(octavo, ['closing'])
-  const closed = orgsIn(octavo, ['closed'])
-  const closures = [
-    ...(closing.length > 0 ? [`closing to ${named(closing)}`] : []),
-    ...(closed.length > 0 ? [`closed to ${named(closed)}`] : []),
-  ]
-  if (closures.length > 0) return { text: closures.join('; '), tone: 'warning' }
-  return { text: 'uploaded, not shared', tone: 'quiet' }
+  /** The chip for `report`: whether atuin captures the thread, then who it shares it with. */
+  words: (report: Report): Words | undefined => {
+    if (report === null) return undefined
+    if (!report.isOk) return { text: 'unavailable', tone: 'dim' }
+    const { capture, octavo } = report.value
+    if (capture === 'off') return { text: 'capture off', tone: 'dim' }
+    if (octavo === null) return { text: 'not captured yet', tone: 'dim' }
+    if (octavo.upload === 'off') return { text: 'captured', tone: 'plain' }
+    if (octavo.upload === 'logged-out') return { text: 'captured, logged out', tone: 'dim' }
+    if (octavo.private) {
+      // Private only once Octavo has closed each org: until then its members can still open it.
+      const closing = Shares.orgs(octavo, 'closing')
+      return closing.length === 0
+        ? { text: 'private', tone: 'dim' }
+        : { text: `private once closed to ${named(closing)}`, tone: 'warning' }
+    }
+
+    const open = Shares.orgs(octavo, 'open')
+    const sharing = Shares.sharing(octavo)
+    if (sharing.length > 0) {
+      // Only queued so far: Octavo hasn't opened it to anyone yet.
+      const verb = open.length === 0 ? 'sharing' : 'shared'
+      return { text: `${verb} with ${named(sharing)}`, tone: 'plain' }
+    }
+    // A close still queued hasn't reached Octavo: the org's members can open the thread until it has.
+    const closing = Shares.orgs(octavo, 'closing')
+    const closed = Shares.orgs(octavo, 'closed')
+    const closures = [
+      ...(closing.length > 0 ? [`closing to ${named(closing)}`] : []),
+      ...(closed.length > 0 ? [`closed to ${named(closed)}`] : []),
+    ]
+    if (closures.length > 0) return { text: closures.join('; '), tone: 'warning' }
+    return { text: 'uploaded, not shared', tone: 'dim' }
+  },
 }
-
-/** The organizations the thread is open or opening to. */
-export const sharingOrgs = (shares: ThreadShares): string[] => orgsIn(shares, ['open', 'opening'])
-
-/** What a look at the thread came to, as the chip reads it. */
-export const reportOf = (outcome: Outcome<ThreadStatus>): StatusReport =>
-  outcome.isOk ? { kind: 'known', status: outcome.value } : { kind: 'unavailable', reason: outcome.reason }
