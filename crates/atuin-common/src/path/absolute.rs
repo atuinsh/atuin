@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::io;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use ref_cast::{RefCastCustom, ref_cast_custom};
@@ -119,6 +119,25 @@ impl AbsPathBuf {
     #[expect(clippy::disallowed_methods, reason = "this is the wrapper the lint references")]
     pub async fn canonicalize_async(path: impl AsRef<Path>) -> io::Result<Self> {
         tokio::fs::canonicalize(path).await.map(Self)
+    }
+
+    /// Resolve `.` and `..` components without accessing the filesystem.
+    ///
+    /// Leaves symlinks unresolved. Any `..` at the root stays at the root.
+    #[must_use]
+    pub fn normalize_lexically(self) -> Self {
+        // `Path::normalize_lexically` is unstable (rust-lang/rust#134694).
+        let mut folded = PathBuf::new();
+        for part in self.0.components() {
+            match part {
+                Component::ParentDir => {
+                    folded.pop();
+                }
+                Component::CurDir => {}
+                part => folded.push(part),
+            }
+        }
+        Self(folded)
     }
 
     #[must_use]

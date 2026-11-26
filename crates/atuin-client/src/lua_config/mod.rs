@@ -117,6 +117,22 @@ impl ConfigFile {
         dir.ancestors().filter_map(|ancestor| Self::in_dir(ancestor).transpose())
     }
 
+    /// Find the nearest config file that sets `orgs` for `dir`.
+    ///
+    /// Searches `dir`, its ancestors, and then `atuin_home`, returning [`None`] if none sets
+    /// `orgs`. Fails if any config encountered cannot be loaded. **Blocks** on disk I/O like
+    /// [`ConfigFile::in_dir`].
+    pub fn sharing(dir: &Path, atuin_home: Option<&Path>) -> Result<Option<Self>, LoadError> {
+        let users = atuin_home.into_iter().filter_map(|home| Self::in_dir(home).transpose());
+        for file in Self::projects(dir).chain(users) {
+            let file = file?;
+            if file.config.orgs.is_some() {
+                return Ok(Some(file));
+            }
+        }
+        Ok(None)
+    }
+
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
