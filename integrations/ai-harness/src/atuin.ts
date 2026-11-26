@@ -42,15 +42,15 @@ export class Atuin {
 
   /** Closes the session's thread to every organization, now and from then on. */
   async unshare(): Promise<Outcome<ThreadStatus>> {
-    return this.#json(['threads', 'unshare', this.#harness.session.id], {
+    return this.#json(['hub', 'unshare', this.#harness.session.id], {
       schema: ThreadStatus.schema,
       what: 'status',
     })
   }
 
   /** The session's thread's share link. */
-  async link(): Promise<Outcome<string>> {
-    const printed = await this.#run(['threads', 'link', this.#harness.session.id])
+  async share(): Promise<Outcome<string>> {
+    const printed = await this.#run(['hub', 'share', this.#harness.session.id])
     if (!printed.isOk) return printed
     const link = printed.value
       .split('\n')

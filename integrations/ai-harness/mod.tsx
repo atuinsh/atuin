@@ -95,7 +95,7 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
 
   /** Copies the thread's share link to the clipboard of the surface pressed on. */
   const copyLink = async ({ surface }: Press) => {
-    const link = await atuin.link()
+    const link = await atuin.share()
     if (!link.isOk) {
       setNotice(`No share link: ${link.reason}`)
       return
