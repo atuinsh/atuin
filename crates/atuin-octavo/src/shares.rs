@@ -76,16 +76,13 @@ impl Configs {
         }
     }
 
-    /// Those of the nearest project config at or above `dir` setting any, else the user's own.
-    /// A config file that can't be read or run fails, as it may be what keeps the thread to itself.
+    /// Get the orgs configured for `dir` via [`ConfigFile::sharing`].
     fn nearest(&self, dir: &Path) -> Result<Vec<OrgSlug>, LoadError> {
-        let users = self.atuin_home.iter().filter_map(|home| ConfigFile::in_dir(home).transpose());
-        for file in ConfigFile::projects(dir).chain(users) {
-            if let Some(orgs) = file?.into_config().orgs {
-                return Ok(orgs.to_vec());
-            }
-        }
-        Ok(Vec::new())
+        let file = ConfigFile::sharing(dir, self.atuin_home.as_deref())?;
+        Ok(file
+            .and_then(|file| file.into_config().orgs)
+            .map(|orgs| orgs.to_vec())
+            .unwrap_or_default())
     }
 
     /// Those [`Self::nearest`] gives every one of `dirs`.
