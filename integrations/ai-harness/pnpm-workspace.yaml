@@ -1,0 +1,20 @@
+# modkit is not on npm yet, so its packages come from one commit of its git repository. They name
+# each other with `workspace:` and their shared dependencies with `catalog:`, which only resolve
+# inside modkit's own workspace, so each is spelled out here.
+overrides:
+  '@atuin/modkit': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit
+  '@atuin/modkit-compiler': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-compiler
+  '@atuin/modkit-target': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target
+  '@atuin/modkit-target-node': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target-node
+  es-toolkit: ^1.53.2
+  scule: ^1.3.0
+  valibot: ^1.5.0
+
+# pnpm refuses a git dependency below the top level by default; modkit's packages are that.
+blockExoticSubdeps: false
+
+# pi's own dependencies and tsx's esbuild, none of which needs its install script here.
+allowBuilds:
+  esbuild: false
+  '@google/genai': false
+  protobufjs: false
