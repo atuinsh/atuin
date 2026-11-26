@@ -94,7 +94,7 @@ This repository is a flake, and can be installed using `nix profile`:
 nix profile install "github:atuinsh/atuin"
 ```
 
-Linux builds of `main` are cached on [Cachix](https://atuin.cachix.org). Run `cachix use atuin` first to download them instead of building from source.
+Builds of `main` for x86_64 Linux, aarch64 Linux and Apple Silicon macOS are cached on [Cachix](https://atuin.cachix.org). Run `cachix use atuin` first to download them instead of building from source.
 
 Atuin is available in the Arch Linux [extra repository](https://archlinux.org/packages/extra/x86_64/atuin/):
 
