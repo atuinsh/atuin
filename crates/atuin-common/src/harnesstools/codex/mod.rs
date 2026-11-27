@@ -10,6 +10,7 @@ use crate::path::PathBufExt as _;
 mod hook_trust;
 pub mod rehydrate;
 pub mod session;
+mod session_index;
 pub(crate) mod state_db;
 
 /// Codex's home: `$CODEX_HOME`, else `~/.codex`.

@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use futures::{Stream, StreamExt};
 use jiff::Timestamp;
 use serde::Deserialize;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
+use tokio_util::task::AbortOnDropHandle;
 use typed_builder::TypedBuilder;
 
+use super::session_index::{self, Name, Names};
 use crate::fs::tree_watcher::{FileStat, TreeWatcher};
 use crate::harnesstools::access::Access;
 use crate::harnesstools::codex::Codex;
@@ -114,8 +116,20 @@ impl Sessions for CodexSessions {
             let sessions_pool = pool.clone();
             let scan = pool
                 .run(move || {
+                    let names = session_index::path(&root).and_then(|path| match session_index::read(&path) {
+                        Ok(names) => Some(names),
+                        Err(err) => {
+                            tracing::warn!(%err, "could not read the Codex session index");
+                            None
+                        }
+                    });
                     let open = |path: &Path, is_file| {
-                        CodexListener::open_session(path, is_file, &sessions_pool)
+                        let mut session = CodexListener::open_session(path, is_file, &sessions_pool)?;
+                        session.imported_name = names
+                            .as_ref()
+                            .and_then(|names| names.get(thread_of(&session.id)))
+                            .cloned();
+                        Some(session)
                     };
                     let archive = archive_of(&root).filter(|archive| archive.is_dir());
                     let mut items = scan_sessions(root, open);
@@ -227,6 +241,10 @@ impl Listener for CodexListener {
                     return;
                 }
             };
+            let (names_tx, names) = watch::channel(Names::new());
+            let index = session_index::path(&root).map(|path| {
+                AbortOnDropHandle::new(tokio::spawn(session_index::follow(path, pool.clone(), names_tx)))
+            });
             for await file in files {
                 let (path, stat) = file.into_parts();
                 let Some(id) = Self::session_id(&path) else { continue };
@@ -234,6 +252,8 @@ impl Listener for CodexListener {
                     id,
                     path: path.to_path_buf(),
                     changes: Some(stat),
+                    live_names: index.as_ref().map(|_| names.clone()),
+                    imported_name: None,
                     pool: pool.clone(),
                 });
             }
@@ -247,6 +267,8 @@ pub struct CodexSession {
     path: PathBuf,
     /// Wakes [`messages`](Session::messages) on each change to the file; `None` reads it once.
     changes: Option<watch::Receiver<FileStat>>,
+    live_names: Option<watch::Receiver<Names>>,
+    imported_name: Option<Name>,
     pool: BlockingPool,
 }
 
@@ -258,6 +280,8 @@ impl CodexSession {
             id,
             path,
             changes: None,
+            live_names: None,
+            imported_name: None,
             pool,
         }
     }
@@ -293,13 +317,14 @@ impl CodexSession {
     }
 
     /// The rollout's lines from byte `start`: followed on each change while `changes` lives, or
-    /// read once to the end without it or when compressed (never written to, see
-    /// [`is_compressed`]).
+    /// read once to the end without it or when compressed. For a watched compressed rollout,
+    /// the stream stays open until the file disappears so its indexed name can still change.
     fn lines(
         path: &Path,
         start: u64,
         changes: Option<watch::Receiver<FileStat>>,
         pool: BlockingPool,
+        mut idle: impl FnMut() + Send + 'static,
     ) -> impl Stream<Item = io::Result<Line>> + Send + 'static {
         if is_compressed(path) {
             let path = path.to_owned();
@@ -314,12 +339,16 @@ impl CodexSession {
                     }
                     Err(err) => yield Err(err),
                 }
+                idle();
+                if let Some(mut changes) = changes {
+                    let _ = changes.wait_for(|_| false).await;
+                }
             }
             .left_stream();
         }
         let lines = FollowLines::new(PooledReadLines::new(PathLineReader::at(path, start), pool));
         let lines = match changes {
-            Some(changes) => lines.follow(changes).left_stream(),
+            Some(changes) => lines.follow_with_idle(changes, idle).left_stream(),
             None => lines.read_to_end().right_stream(),
         };
         lines.right_stream()
@@ -369,38 +398,106 @@ impl Session for CodexSession {
                     MessageId::from(synthetic_id(content_hash(&self.id, &previous), 0))
                 }));
             }
-            let messages =
-                Self::lines(&self.path, start, self.changes, self.pool).json::<CodexMessage>();
-            for await item in messages {
-                yield match item {
-                    Ok((line, mut message)) => {
-                        stamper.stamp(&line, &mut message).await;
-                        Ok((Checkpoint::after(&line).started_over(over), message))
+            let mut checkpoint = from.filter(|_| start > 0).unwrap_or_else(|| {
+                Checkpoint::new(0, b"").started_over(over)
+            });
+            let (drained, idle) = oneshot::channel();
+            let mut drained = Some(drained);
+            let changes = self.changes.filter(|_| !is_compressed(&self.path) || self.live_names.is_some());
+            let messages = Self::lines(&self.path, start, changes, self.pool, move || {
+                if let Some(drained) = drained.take() {
+                    let _ = drained.send(());
+                }
+            }).json::<CodexMessage>();
+            let id = self.id.clone();
+            let names = async_stream::stream! {
+                let Some(mut names) = self.live_names else { return };
+                // Read the rollout first so its historical title events precede the indexed name.
+                if idle.await.is_err() {
+                    return;
+                }
+                let mut last_name = None;
+                loop {
+                    let name = names.borrow_and_update().get(thread_of(&id)).cloned();
+                    if let Some(name) = name.filter(|name| Some(name) != last_name.as_ref()) {
+                        last_name = Some(name.clone());
+                        yield name;
                     }
-                    Err(err) => Err(MessageError::from(err)),
-                };
+                    if names.changed().await.is_err() {
+                        break;
+                    }
+                }
+            };
+            futures::pin_mut!(messages, names);
+            let mut names_done = false;
+            loop {
+                tokio::select! {
+                    biased;
+                    item = messages.next() => match item {
+                        Some(Ok((line, mut message))) => {
+                            stamper.stamp(&line, &mut message).await;
+                            checkpoint = Checkpoint::after(&line).started_over(over);
+                            yield Ok((checkpoint, message));
+                        }
+                        Some(Err(err)) => yield Err(MessageError::from(err)),
+                        None => {
+                            if let Some(name) = self.imported_name {
+                                yield Ok((checkpoint, CodexMessage::from_index(&self.id, &name, checkpoint)));
+                            }
+                            break;
+                        }
+                    },
+                    title = names.next(), if !names_done => match title {
+                        Some(name) => yield Ok((checkpoint, CodexMessage::from_index(&self.id, &name, checkpoint))),
+                        None => names_done = true,
+                    }
+                }
             }
         }
     }
 
     fn read(&self) -> impl Stream<Item = Result<CodexMessage, MessageError>> + Send + 'static {
         let mut stamper = self.stamper(0);
-        let messages = Self::lines(&self.path, 0, None, self.pool.clone()).json::<CodexMessage>();
+        let messages =
+            Self::lines(&self.path, 0, None, self.pool.clone(), || ()).json::<CodexMessage>();
+        let id = self.id.clone();
+        let name = self.imported_name.clone();
         async_stream::stream! {
+            let mut checkpoint = Checkpoint::new(0, b"");
             for await item in messages {
                 yield match item {
                     Ok((line, mut message)) => {
+                        checkpoint = Checkpoint::after(&line);
                         stamper.stamp(&line, &mut message).await;
                         Ok(message)
                     }
                     Err(err) => Err(MessageError::from(err)),
                 };
             }
+            if let Some(name) = name {
+                yield Ok(CodexMessage::from_index(&id, &name, checkpoint));
+            }
         }
     }
 
     async fn changed_after(mut self, since: std::time::SystemTime) -> Option<Self> {
-        modified_after(self.changes.as_mut(), since).await?;
+        let rollout_changed = modified_after(self.changes.as_mut(), since);
+        if let Some(names) = self.live_names.as_mut() {
+            let since = Timestamp::try_from(since).ok()?;
+            futures::pin_mut!(rollout_changed);
+            tokio::select! {
+                changed = &mut rollout_changed => { changed?; }
+                named = async { names.wait_for(|names| {
+                    names.get(thread_of(&self.id)).is_some_and(|name| name.updated_at >= since)
+                }).await.is_ok() } => {
+                    if !named {
+                        rollout_changed.await?;
+                    }
+                }
+            }
+        } else {
+            rollout_changed.await?;
+        }
         Some(self)
     }
 }
@@ -851,6 +948,7 @@ struct LineContext {
     /// For a call's output, whether a command the call ran failed (see
     /// [`Stamper::track_calls`]).
     failed: bool,
+    index_title_id: Option<MessageId>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1108,6 +1206,33 @@ fn usage_of(usage: &serde_json::Value) -> Option<Usage> {
 }
 
 impl CodexMessage {
+    fn from_index(session: &SessionId, name: &Name, checkpoint: Checkpoint) -> Self {
+        let mut message = Self {
+            kind: "event_msg".to_owned(),
+            timestamp: Some(name.updated_at.to_string()),
+            ordinal: None,
+            payload: Some(serde_json::json!({
+                "type": "thread_name_updated",
+                "thread_name": name.thread_name,
+            })),
+            context: LineContext::default(),
+        };
+        let hash = content_hash(session, &message);
+        // A full import replays titles from the start. Refresh the indexed title when the
+        // rollout advances so newly imported rows cannot replace it with an unnamed title.
+        message.context.index_title_id = Some(MessageId::from(format!(
+            "codex-title-{hash:016x}-{:016x}-{:016x}",
+            checkpoint.at, checkpoint.digest,
+        )));
+        message
+    }
+
+    /// Whether the name came from Codex's session index.
+    #[must_use]
+    pub fn is_index_title(&self) -> bool {
+        self.context.index_title_id.is_some()
+    }
+
     fn block(value: &serde_json::Value) -> Option<Content> {
         match value["type"].as_str() {
             Some("input_text" | "output_text" | "text") => {
@@ -1308,6 +1433,9 @@ impl CodexMessage {
 
 impl Message for CodexMessage {
     fn id(&self) -> Option<MessageId> {
+        if let Some(id) = &self.context.index_title_id {
+            return Some(id.clone());
+        }
         // Usage lines carry no id, but name the model call they account for; keyed on nothing,
         // two in one millisecond would share a synthetic id and one would be dropped.
         if self.kind == TOKEN_USAGE_RECORD || self.is_token_count() {
