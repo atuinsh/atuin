@@ -323,6 +323,28 @@ fn import_reads_the_latest_indexed_codex_name(project: TempDir) {
     assert_eq!(machine.said(&transcript.id), said(&turns));
 }
 
+#[rstest]
+fn reimport_keeps_the_indexed_codex_name(project: TempDir) {
+    let mut machine = Machine::with_config("", "enabled = false\n");
+    let turns = [Turn::new(), Turn::new(), Turn::new()];
+    let transcript = Transcript::create(machine.home(), Agent::Codex, project.path(), &turns[..1]);
+    let title = format!("Imported {}", word());
+    transcript.rename(&title);
+    machine.start_daemon();
+
+    for end in 1..=turns.len() {
+        if end > 1 {
+            transcript.append(project.path(), &turns[end - 1..end]);
+        }
+        for _ in 0..2 {
+            machine.run(&["threads", "import"]);
+            assert_eq!(machine.session(&transcript.id).unwrap()["title"], title);
+            assert_eq!(machine.said(&transcript.id), said(&turns[..end]));
+            assert!(finds(&machine, last_word(&title), &transcript.id));
+        }
+    }
+}
+
 /// Turning capture on in the config takes effect in the running daemon, which captures the
 /// sessions the agents work in from then on. One they wrote while it was off is history, left
 /// alone until the agent goes on with it, and then captured whole; or until `atuin threads

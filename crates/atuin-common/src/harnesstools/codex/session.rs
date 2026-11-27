@@ -420,9 +420,8 @@ impl Session for CodexSession {
                 loop {
                     let name = names.borrow_and_update().get(thread_of(&id)).cloned();
                     if let Some(name) = name.filter(|name| Some(name) != last_name.as_ref()) {
-                        let message = CodexMessage::from_index(&id, &name);
-                        last_name = Some(name);
-                        yield message;
+                        last_name = Some(name.clone());
+                        yield name;
                     }
                     if names.changed().await.is_err() {
                         break;
@@ -443,13 +442,13 @@ impl Session for CodexSession {
                         Some(Err(err)) => yield Err(MessageError::from(err)),
                         None => {
                             if let Some(name) = self.imported_name {
-                                yield Ok((checkpoint, CodexMessage::from_index(&self.id, &name)));
+                                yield Ok((checkpoint, CodexMessage::from_index(&self.id, &name, checkpoint)));
                             }
                             break;
                         }
                     },
                     title = names.next(), if !names_done => match title {
-                        Some(title) => yield Ok((checkpoint, title)),
+                        Some(name) => yield Ok((checkpoint, CodexMessage::from_index(&self.id, &name, checkpoint))),
                         None => names_done = true,
                     }
                 }
@@ -464,9 +463,11 @@ impl Session for CodexSession {
         let id = self.id.clone();
         let name = self.imported_name.clone();
         async_stream::stream! {
+            let mut checkpoint = Checkpoint::new(0, b"");
             for await item in messages {
                 yield match item {
                     Ok((line, mut message)) => {
+                        checkpoint = Checkpoint::after(&line);
                         stamper.stamp(&line, &mut message).await;
                         Ok(message)
                     }
@@ -474,7 +475,7 @@ impl Session for CodexSession {
                 };
             }
             if let Some(name) = name {
-                yield Ok(CodexMessage::from_index(&id, &name));
+                yield Ok(CodexMessage::from_index(&id, &name, checkpoint));
             }
         }
     }
@@ -1205,7 +1206,7 @@ fn usage_of(usage: &serde_json::Value) -> Option<Usage> {
 }
 
 impl CodexMessage {
-    fn from_index(session: &SessionId, name: &Name) -> Self {
+    fn from_index(session: &SessionId, name: &Name, checkpoint: Checkpoint) -> Self {
         let mut message = Self {
             kind: "event_msg".to_owned(),
             timestamp: Some(name.updated_at.to_string()),
@@ -1217,7 +1218,12 @@ impl CodexMessage {
             context: LineContext::default(),
         };
         let hash = content_hash(session, &message);
-        message.context.index_title_id = Some(MessageId::from(format!("codex-title-{hash:016x}")));
+        // A full import replays titles from the start. Refresh the indexed title when the
+        // rollout advances so newly imported rows cannot replace it with an unnamed title.
+        message.context.index_title_id = Some(MessageId::from(format!(
+            "codex-title-{hash:016x}-{:016x}-{:016x}",
+            checkpoint.at, checkpoint.digest,
+        )));
         message
     }
 
