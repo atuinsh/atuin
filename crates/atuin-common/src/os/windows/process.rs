@@ -11,6 +11,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitF
 use super::{fallible_do, get_last_error};
 
 /// RAII-safe operations on windows [`HANDLE`] types.
+#[derive(Debug)]
 pub struct Handle {
     // Unlike a raw `HANDLE`, it can cross an `.await` in a future that has to be `Send`.
     inner: OwnedHandle,
@@ -18,6 +19,10 @@ pub struct Handle {
 }
 
 impl Handle {
+    pub(super) const fn new(inner: OwnedHandle, pid: u32) -> Self {
+        Self { inner, pid }
+    }
+
     /// Open the given pid with the specified desired access mask.
     ///
     /// See [`OpenProcess`].
