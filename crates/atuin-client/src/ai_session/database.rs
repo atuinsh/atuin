@@ -28,9 +28,11 @@ use super::{
     SourceId,
 };
 
+mod cjk;
 mod heads;
 mod watermark;
 
+pub use cjk::{contains_cjk, is_cjk};
 pub use heads::{Analysis, FastForward, Head};
 pub use watermark::{Generation, Watermark};
 use write::{Interned, Writer};
@@ -42,7 +44,7 @@ const SNIPPET_TOKENS: usize = 32;
 
 /// The newest migration this build knows: [`AiSessionDatabase::open_read_only`] reads only a
 /// sidecar at exactly this version.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// How much more a title match weighs than a body match in bm25.
 const TITLE_WEIGHT: f64 = 5.0;
@@ -445,6 +447,9 @@ impl AiSessionDatabase {
             },
             err => err,
         })?;
+        if let Err(err) = db.backfill_cjk().await {
+            warn!(?err, "failed to backfill CJK FTS index");
+        }
         Ok(db)
     }
 
@@ -463,6 +468,9 @@ impl AiSessionDatabase {
         let (db, writer) = Self::memory().await?;
         let db = Self::from_sqlite(db, Some(writer));
         db.migrate().await?;
+        if let Err(err) = db.backfill_cjk().await {
+            warn!(?err, "failed to backfill CJK FTS index");
+        }
         Ok(db)
     }
 
@@ -559,6 +567,10 @@ impl AiSessionDatabase {
     pub async fn append(&self, msg: &Message) -> Result<Appended, DbError> {
         let msg = PreparedMessage::new(msg.clone())?;
         self.write_interning(move |conn, interned| Self::append_one(conn, interned, &msg)).await
+    }
+
+    pub async fn backfill_cjk(&self) -> Result<(), DbError> {
+        self.write(Self::backfill_cjk_sync).await
     }
 
     /// [`Self::append`] each of `msgs` in order, in one transaction: all of them or, on an error,
@@ -1166,29 +1178,289 @@ impl AiSessionDatabase {
 
         async_stream::try_stream! {
             let highlighter = TextHighlighter::default();
-            let expr = match &terms {
-                SearchTerms::All(terms) => match_expression(terms),
-                SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
-                    prefix_match_expression(line)
+            let raw_terms: Vec<&str> = match &terms {
+                SearchTerms::All(t) | SearchTerms::Any(t) => {
+                    t.iter().map(String::as_str).collect()
                 }
-                SearchTerms::Typed(line) => match_expression(line.split_whitespace()),
-                SearchTerms::Any(terms) => match_any_expression(terms),
+                SearchTerms::Typed(line) => line.split_whitespace().collect(),
             };
-            let Some(expr) = expr else {
-                for session in this.recent_sessions(&filter, limit).await? {
-                    let title = session.title.clone().unwrap_or_default();
-                    let preview = session.preview.clone().unwrap_or_default();
-                    yield SessionMatch {
-                        title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
-                        preview: highlighter
-                            .as_highlighted(highlighter.sanitize(&preview).into_owned()),
-                        session,
-                        message_index: 0,
-                        matched: None,
-                        score: 0.0,
-                    };
+
+            let has_cjk = raw_terms.iter().any(|t| contains_cjk(t));
+
+            let (cjk_select, score_calc, where_clause, cjk_binds) = if has_cjk {
+                let (eng_terms, cjk_terms): (Vec<&str>, Vec<&str>) =
+                    raw_terms.into_iter().partition(|t| !contains_cjk(t));
+
+                let mut cjk_long_terms = Vec::new();
+                let mut cjk_short_terms = Vec::new();
+                for term in cjk_terms {
+                    if term.chars().count() >= 3 {
+                        cjk_long_terms.push(term);
+                    } else {
+                        cjk_short_terms.push(term);
+                    }
                 }
-                return;
+
+                let is_any = matches!(terms, SearchTerms::Any(_));
+                let mut short_conds = Vec::new();
+                let mut short_binds = Vec::new();
+                for st in cjk_short_terms {
+                    short_conds.push(
+                        "(messages_cjk_fts.title LIKE ? OR messages_cjk_fts.body LIKE ?)"
+                            .to_string(),
+                    );
+                    let pat = format!("%{st}%");
+                    short_binds.push(Bind::Text(pat.clone()));
+                    short_binds.push(Bind::Text(pat));
+                }
+
+                if is_any {
+                    struct AnyArm {
+                        sql: String,
+                        binds: Vec<Bind>,
+                    }
+                    let mut arms = Vec::new();
+
+                    if let Some(expr) = match_any_expression(&eng_terms) {
+                        arms.push(AnyArm {
+                            sql: format!(
+                                "SELECT rowid, -bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
+                                 FROM messages_fts WHERE messages_fts MATCH ?"
+                            ),
+                            binds: vec![Bind::Text(expr)],
+                        });
+                    }
+
+                    if let Some(expr) = match_any_expression(&cjk_long_terms) {
+                        arms.push(AnyArm {
+                            sql: format!(
+                                "SELECT rowid, -bm25(messages_cjk_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
+                                 FROM messages_cjk_fts WHERE messages_cjk_fts MATCH ?"
+                            ),
+                            binds: vec![Bind::Text(expr)],
+                        });
+                    }
+
+                    if !short_conds.is_empty() {
+                        let short_where = short_conds.join(" OR ");
+                        arms.push(AnyArm {
+                            sql: format!(
+                                "SELECT rowid, 1.0 AS score FROM messages_cjk_fts WHERE ({short_where})"
+                            ),
+                            binds: short_binds,
+                        });
+                    }
+
+                    if arms.is_empty() {
+                        for session in this.recent_sessions(&filter, limit).await? {
+                            let title = session.title.clone().unwrap_or_default();
+                            let preview = session.preview.clone().unwrap_or_default();
+                            yield SessionMatch {
+                                title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                                preview: highlighter
+                                    .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                                session,
+                                message_index: 0,
+                                matched: None,
+                                score: 0.0,
+                            };
+                        }
+                        return;
+                    }
+
+                    let (select, binds) = if arms.len() == 1 {
+                        let arm = arms.remove(0);
+                        (arm.sql, arm.binds)
+                    } else {
+                        let subqueries = arms
+                            .iter()
+                            .map(|a| a.sql.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" UNION ALL ");
+                        let all_binds = arms.into_iter().flat_map(|a| a.binds).collect();
+                        (
+                            format!(
+                                "SELECT rowid, max(score) AS score FROM ({subqueries}) GROUP BY rowid"
+                            ),
+                            all_binds,
+                        )
+                    };
+
+                    (Some(select), String::new(), String::new(), binds)
+                } else {
+                    let cjk_match_expr = if cjk_long_terms.is_empty() {
+                        None
+                    } else {
+                        match &terms {
+                            SearchTerms::All(_) => match_expression(&cjk_long_terms),
+                            SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
+                                if let Some(last) = cjk_long_terms.last() {
+                                    if line.ends_with(last) {
+                                        let base = match_expression(&cjk_long_terms);
+                                        base.map(|b| format!("{b}*"))
+                                    } else {
+                                        match_expression(&cjk_long_terms)
+                                    }
+                                } else {
+                                    match_expression(&cjk_long_terms)
+                                }
+                            }
+                            SearchTerms::Typed(_) => match_expression(&cjk_long_terms),
+                            SearchTerms::Any(_) => unreachable!(),
+                        }
+                    };
+
+                    if eng_terms.is_empty() {
+                        if cjk_match_expr.is_none() && short_conds.is_empty() {
+                            for session in this.recent_sessions(&filter, limit).await? {
+                                let title = session.title.clone().unwrap_or_default();
+                                let preview = session.preview.clone().unwrap_or_default();
+                                yield SessionMatch {
+                                    title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                                    preview: highlighter
+                                        .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                                    session,
+                                    message_index: 0,
+                                    matched: None,
+                                    score: 0.0,
+                                };
+                            }
+                            return;
+                        }
+
+                        let (select, binds) = match (cjk_match_expr, short_conds.is_empty()) {
+                            (Some(expr), false) => {
+                                let mut b = vec![Bind::Text(expr)];
+                                b.extend(short_binds);
+                                (
+                                    format!(
+                                        "SELECT rowid, -bm25(messages_cjk_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
+                                         FROM messages_cjk_fts \
+                                         WHERE messages_cjk_fts MATCH ? AND ({})",
+                                        short_conds.join(" AND ")
+                                    ),
+                                    b,
+                                )
+                            }
+                            (Some(expr), true) => (
+                                format!(
+                                    "SELECT rowid, -bm25(messages_cjk_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
+                                     FROM messages_cjk_fts WHERE messages_cjk_fts MATCH ?"
+                                ),
+                                vec![Bind::Text(expr)],
+                            ),
+                            (None, false) => (
+                                format!(
+                                    "SELECT rowid, 1.0 AS score FROM messages_cjk_fts WHERE ({})",
+                                    short_conds.join(" AND ")
+                                ),
+                                short_binds,
+                            ),
+                            (None, true) => unreachable!(),
+                        };
+
+                        (Some(select), String::new(), String::new(), binds)
+                    } else {
+                        let eng_match_expr = match &terms {
+                            SearchTerms::All(_) => match_expression(&eng_terms),
+                            SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
+                                if let Some(last) = eng_terms.last() {
+                                    if line.ends_with(last) {
+                                        let base = match_expression(&eng_terms);
+                                        base.map(|b| format!("{b}*"))
+                                    } else {
+                                        match_expression(&eng_terms)
+                                    }
+                                } else {
+                                    match_expression(&eng_terms)
+                                }
+                            }
+                            SearchTerms::Typed(_) => match_expression(&eng_terms),
+                            SearchTerms::Any(_) => unreachable!(),
+                        };
+
+                        let Some(eng_expr) = eng_match_expr else {
+                            for session in this.recent_sessions(&filter, limit).await? {
+                                let title = session.title.clone().unwrap_or_default();
+                                let preview = session.preview.clone().unwrap_or_default();
+                                yield SessionMatch {
+                                    title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                                    preview: highlighter
+                                        .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                                    session,
+                                    message_index: 0,
+                                    matched: None,
+                                    score: 0.0,
+                                };
+                            }
+                            return;
+                        };
+
+                        let mut binds = vec![Bind::Text(eng_expr)];
+                        let mut where_parts = vec!["messages_fts MATCH ?".to_string()];
+                        let has_cjk_match = cjk_match_expr.is_some();
+
+                        if let Some(cjk_expr) = cjk_match_expr {
+                            where_parts.push("messages_cjk_fts MATCH ?".to_string());
+                            binds.push(Bind::Text(cjk_expr));
+                        }
+
+                        if !short_conds.is_empty() {
+                            where_parts.push(format!("({})", short_conds.join(" AND ")));
+                            binds.extend(short_binds);
+                        }
+
+                        let score_expr = if has_cjk_match {
+                            format!(
+                                "-bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0) - bm25(messages_cjk_fts, {TITLE_WEIGHT:?}, 1.0)"
+                            )
+                        } else {
+                            format!("-bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0)")
+                        };
+
+                        let where_clause = where_parts.join(" AND ");
+                        let select = format!(
+                            "SELECT messages_cjk_fts.rowid AS rowid, {score_expr} AS score \
+                             FROM messages_cjk_fts \
+                             JOIN messages_fts ON messages_fts.rowid = messages_cjk_fts.rowid \
+                             WHERE {where_clause}"
+                        );
+
+                        (Some(select), String::new(), String::new(), binds)
+                    }
+                }
+            } else {
+                let expr = match &terms {
+                    SearchTerms::All(terms) => match_expression(terms),
+                    SearchTerms::Typed(line) if QueryTerms::prefixes_last(line) => {
+                        prefix_match_expression(line)
+                    }
+                    SearchTerms::Typed(line) => match_expression(line.split_whitespace()),
+                    SearchTerms::Any(terms) => match_any_expression(terms),
+                };
+                let Some(expr) = expr else {
+                    for session in this.recent_sessions(&filter, limit).await? {
+                        let title = session.title.clone().unwrap_or_default();
+                        let preview = session.preview.clone().unwrap_or_default();
+                        yield SessionMatch {
+                            title: highlighter.as_highlighted(highlighter.sanitize(&title).into_owned()),
+                            preview: highlighter
+                                .as_highlighted(highlighter.sanitize(&preview).into_owned()),
+                            session,
+                            message_index: 0,
+                            matched: None,
+                            score: 0.0,
+                        };
+                    }
+                    return;
+                };
+
+                (
+                    None,
+                    format!("-bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0)"),
+                    "messages_fts MATCH ?".to_string(),
+                    vec![Bind::Text(expr)],
+                )
             };
 
             let (mut filter_clause, mut binds) = Self::filter_clause(&filter);
@@ -1211,17 +1483,29 @@ impl AiSessionDatabase {
             };
             let limit_clause = if limit == 0 { "" } else { " LIMIT ?" };
 
-            // messages_fts is contentless: it can rank (bm25) but cannot render highlight() or
-            // snippet(), so the query returns the best message's stored content and the marking
-            // happens in Rust below. `best` takes the rowid of each group's top-scoring message
-            // (SQLite fills bare columns from the max() row).
+            let ranked_cte = if let Some(cjk_select) = cjk_select {
+                format!(
+                    "cjk_matches AS MATERIALIZED ({cjk_select}), \
+                     ranked AS MATERIALIZED (\
+                     SELECT cjk_matches.rowid AS rowid, {group_harness} AS gh, {group_session} AS gs, \
+                     cjk_matches.score AS score \
+                     FROM cjk_matches JOIN messages m ON m.rowid = cjk_matches.rowid \
+                     JOIN sessions s ON s.id = m.session \
+                     WHERE 1=1{filter_clause})"
+                )
+            } else {
+                format!(
+                    "ranked AS MATERIALIZED (\
+                     SELECT messages_fts.rowid AS rowid, {group_harness} AS gh, {group_session} AS gs, \
+                     {score_calc} AS score \
+                     FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
+                     JOIN sessions s ON s.id = m.session \
+                     WHERE {where_clause}{filter_clause})"
+                )
+            };
+
             let sql = format!(
-                "WITH ranked AS MATERIALIZED (\
-                 SELECT messages_fts.rowid AS rowid, {group_harness} AS gh, {group_session} AS gs, \
-                 -bm25(messages_fts, {TITLE_WEIGHT:?}, 1.0) AS score \
-                 FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
-                 JOIN sessions s ON s.id = m.session \
-                 WHERE messages_fts MATCH ?{filter_clause}), \
+                "WITH {ranked_cte}, \
                  best AS (SELECT rowid, gh, gs, max(score) AS score FROM ranked GROUP BY gh, gs), \
                  scored AS (SELECT best.rowid AS rowid, best.gh AS gh, best.gs AS gs, \
                  best.score / (1.0 + max(0, ? - {recency}) / {DAY_MILLIS:?} / {RECENCY_DAYS:?}) \
@@ -1241,7 +1525,10 @@ impl AiSessionDatabase {
                 session_columns!(),
             );
 
-            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql)).bind(expr);
+            let mut stmt = db::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql));
+            for bind in cjk_binds {
+                stmt = bind.apply_as(stmt);
+            }
             for bind in binds {
                 stmt = bind.apply_as(stmt);
             }
@@ -1352,18 +1639,50 @@ impl AiSessionDatabase {
         let mut clipped = false;
         for (i, word) in words.iter().enumerate().skip(start).take(max_tokens) {
             if i > start {
-                if out.len() + 1 + word.len() > MAX_CHARS {
+                if i != hit && out.len() + 1 + word.len() > MAX_CHARS {
                     clipped = true;
                     break;
                 }
                 out.push(' ');
             }
-            // The first (match-bearing) word always appears, truncated if it alone overflows.
-            let room = MAX_CHARS.saturating_sub(out.len());
-            let cut = Self::truncate_chars(word, room);
-            clipped |= cut.len() < word.len();
+            // If the match-bearing word itself overflows MAX_CHARS (e.g. continuous unspaced CJK),
+            // window around the match inside the word so the match is not pushed out of view.
+            let (cut, tail_clipped) = if word.len() > MAX_CHARS {
+                let spans = fts_token_spans(word);
+                let tokens: Vec<String> = spans.iter().map(|(_, t)| t.clone()).collect();
+                let match_start = terms
+                    .matches(&tokens)
+                    .map(|(at, _)| spans[at].0.start)
+                    .min()
+                    .unwrap_or(0);
+                let window_start = match_start.saturating_sub(LEAD_CHARS);
+                let window_start = word
+                    .char_indices()
+                    .map(|(ix, _)| ix)
+                    .take_while(|&ix| ix <= window_start)
+                    .last()
+                    .unwrap_or(0);
+                if window_start > 0 {
+                    out.push('…');
+                }
+                let room = MAX_CHARS.saturating_sub(out.len());
+                let tail = &word[window_start..];
+                let cut = Self::truncate_chars(tail, room);
+                (cut, window_start + cut.len() < word.len())
+            } else {
+                let room = MAX_CHARS.saturating_sub(out.len());
+                let cut = Self::truncate_chars(word, room);
+                (cut, cut.len() < word.len())
+            };
+            clipped |= tail_clipped;
             out.push_str(cut);
             end = i + 1;
+            if out.len() >= MAX_CHARS {
+                if end < words.len() {
+                    clipped = true;
+                }
+                break;
+            }
         }
         if clipped || end < words.len() {
             out.push('…');
@@ -1835,33 +2154,40 @@ fn fts_fold(text: &str) -> String {
     text.nfd().filter(|c| !is_combining_mark(*c)).flat_map(char::to_lowercase).collect()
 }
 
-/// The folded `unicode61`-style tokens (alphanumeric runs) of `text`.
+/// The folded `unicode61`-style tokens (alphanumeric runs for Latin, individual chars for CJK) of `text`.
 fn fts_tokens(text: &str) -> impl Iterator<Item = String> + use<> {
-    fts_fold(text)
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>()
-        .into_iter()
+    fts_token_spans(text).into_iter().map(|(_, t)| t)
 }
 
 /// The byte ranges of `text`'s tokens, each with its folded form.
+/// CJK characters are emitted as individual single-character tokens so they can match
+/// substrings and highlight precisely, while non-CJK characters form alphanumeric runs.
 fn fts_token_spans(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     use unicode_normalization::char::is_combining_mark;
-    let is_token = |c: char| c.is_alphanumeric() || is_combining_mark(c);
     let mut spans = Vec::new();
     let mut start = None;
     for (i, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
-        match (start, is_token(c)) {
-            (None, true) => start = Some(i),
-            (Some(from), false) => {
-                start = None;
+        if is_cjk(c) {
+            if let Some(from) = start.take() {
                 let folded = fts_fold(&text[from..i]);
                 if !folded.is_empty() {
                     spans.push((from..i, folded));
                 }
             }
-            _ => {}
+            if i < text.len() {
+                let len = c.len_utf8();
+                let folded = fts_fold(&text[i..i + len]);
+                spans.push((i..i + len, folded));
+            }
+        } else if c.is_alphanumeric() || is_combining_mark(c) {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(from) = start.take() {
+            let folded = fts_fold(&text[from..i]);
+            if !folded.is_empty() {
+                spans.push((from..i, folded));
+            }
         }
     }
     spans
@@ -1963,10 +2289,21 @@ impl QueryTerms {
             marked[at..at + len].fill(true);
         }
 
+        let mut merged_spans: Vec<std::ops::Range<usize>> = Vec::new();
+        for ((range, _), _) in spans.iter().zip(&marked).filter(|(_, m)| **m) {
+            if let Some(last) = merged_spans.last_mut()
+                && last.end == range.start
+            {
+                last.end = range.end;
+                continue;
+            }
+            merged_spans.push(range.clone());
+        }
+
         let [open, close] = highlighter.markers();
         let mut out = String::with_capacity(text.len());
         let mut copied = 0;
-        for ((range, _), _) in spans.iter().zip(&marked).filter(|(_, m)| **m) {
+        for range in merged_spans {
             out.push_str(&text[copied..range.start]);
             out.push(open);
             out.push_str(&text[range.clone()]);
@@ -3011,6 +3348,29 @@ mod tests {
         assert_eq!(count("SELECT generation FROM projection_state"), generation + 1);
     }
 
+    /// Migration 8 creates messages_cjk_fts and keeps existing projection.
+    #[rstest]
+    fn the_cjk_fts_migration_creates_table_and_keeps_projection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        for migration in [
+            include_str!("migrations/0001_init.sql"),
+            include_str!("migrations/0002_message_blocks.sql"),
+            include_str!("migrations/0003_message_provider.sql"),
+            include_str!("migrations/0004_drop_api_request_blobs.sql"),
+            include_str!("migrations/0005_reproject_for_kiro.sql"),
+            include_str!("migrations/0006_reproject_for_hermes.sql"),
+            include_str!("migrations/0007_reproject_for_vibe.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+
+        conn.execute_batch(include_str!("migrations/0008_messages_cjk_fts.sql")).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM messages_cjk_fts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
     fn reply_in(session: &HarnessSession, index: i64, text: &str) -> Message {
         let mut msg = message_in(session, index, text);
         msg.role = Role::Assistant;
@@ -3239,6 +3599,272 @@ mod tests {
         db.append(&message_in(&sample_handle(), 0, "café エラー logs")).await.unwrap();
         assert_eq!(search(&db, "cafe").await.len(), 1, "unicode61 folds diacritics");
         assert_eq!(search(&db, "エラー").await.len(), 1, "a whole CJK token is matchable");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn cjk_substrings_are_searchable() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(
+            &session,
+            0,
+            "运行 git 命令将修改暂存进索引，发布版本号 release-v2.0 并遵守仓库约定。",
+        ))
+        .await
+        .unwrap();
+
+        // 3+ char CJK substring matching inside a continuous sentence
+        let matches = search(&db, "暂存进索引").await;
+        assert_eq!(matches.len(), 1, "3+ char CJK substring matches via trigram");
+        assert!(matches[0].preview.to_plain().text.contains("暂存进索引"));
+
+        let matches = search(&db, "仓库约定").await;
+        assert_eq!(matches.len(), 1, "another 4-char CJK substring matches");
+
+        // 1-2 char CJK substring matching
+        let matches = search(&db, "暂存").await;
+        assert_eq!(matches.len(), 1, "2-char CJK query matches via LIKE fallback");
+
+        // English / symbol matching in same row
+        assert_eq!(search(&db, "release-v2.0").await.len(), 1);
+        assert_eq!(search(&db, "git").await.len(), 1);
+
+        // Mixed English and CJK matching
+        assert_eq!(search(&db, "git 暂存进索引").await.len(), 1);
+        assert_eq!(search(&db, "git 暂存").await.len(), 1);
+
+        // Non-existent keywords
+        assert_eq!(search(&db, "不存在的关键词").await.len(), 0);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn backfill_populates_cjk_fts_from_existing_messages() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+        db.append(&message_in(
+            &session,
+            0,
+            "这是一条在启动时存量存在的会话消息。",
+        ))
+        .await
+        .unwrap();
+
+        // Clear messages_cjk_fts and reset cjk_state to simulate a pre-migration database
+        let pool = db.db.pool().clone();
+        db::query("DELETE FROM messages_cjk_fts")
+            .execute(&pool)
+            .await
+            .unwrap();
+        db::query("UPDATE cjk_state SET backfilled = 0 WHERE id = 0")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let count: i64 = db::query_scalar("SELECT count(*) FROM messages_cjk_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Run backfill
+        db.backfill_cjk().await.unwrap();
+
+        // Verify it was populated and is searchable
+        let count: i64 = db::query_scalar("SELECT count(*) FROM messages_cjk_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let backfilled: i64 = db::query_scalar("SELECT backfilled FROM cjk_state WHERE id = 0")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(backfilled, 1, "cjk_state is marked backfilled after backfill");
+
+        let matches = search(&db, "存量存在").await;
+        assert_eq!(matches.len(), 1);
+
+        // Subsequent backfills should 0ms no-op because backfilled is already 1
+        db::query("DELETE FROM messages_cjk_fts")
+            .execute(&pool)
+            .await
+            .unwrap();
+        db.backfill_cjk().await.unwrap();
+        let count: i64 = db::query_scalar("SELECT count(*) FROM messages_cjk_fts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "backfill skips when cjk_state.backfilled == 1");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn cjk_any_search_matches_either_long_or_short_term() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session1 = sample_handle();
+        let mut session2 = sample_handle();
+        session2.session = NativeSessionId::from("other-session".to_string());
+        let mut session3 = sample_handle();
+        session3.session = NativeSessionId::from("third-session".to_string());
+
+        // Pure English session without any CJK characters (only indexed in messages_fts)
+        db.append(&message_in(&session1, 0, "this session discusses web server architecture and routing"))
+            .await
+            .unwrap();
+        // Session with long CJK term (indexed in messages_cjk_fts via trigram)
+        db.append(&message_in(&session2, 0, "这里讨论界面布局和用户体验优化。"))
+            .await
+            .unwrap();
+        // Session with short CJK term (indexed in messages_cjk_fts via LIKE)
+        db.append(&message_in(&session3, 0, "整理项目的说明文档。"))
+            .await
+            .unwrap();
+
+        // SearchTerms::Any containing English term ("server"), long CJK ("用户体验"), and short CJK ("文档")
+        let terms = SearchTerms::Any(vec![
+            "server".to_string(),
+            "用户体验".to_string(),
+            "文档".to_string(),
+        ]);
+        let hits = db
+            .search(terms, &SessionFilter::default(), 0)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 3, "Any search should match pure English, long CJK, and short CJK sessions");
+
+        // SearchTerms::Any with mixed English and short CJK: pure English session must not disappear
+        let terms = SearchTerms::Any(vec!["server".to_string(), "文档".to_string()]);
+        let hits = db
+            .search(terms, &SessionFilter::default(), 0)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "Any search with English and short CJK matches both respective sessions");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn cjk_mixed_all_requires_whole_word_english() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session1 = sample_handle();
+        let mut session2 = sample_handle();
+        session2.session = NativeSessionId::from("other-session-2".to_string());
+        let mut session3 = sample_handle();
+        session3.session = NativeSessionId::from("other-session-3".to_string());
+
+        db.append(&message_in(&session1, 0, "app 成功部署至生产环境。"))
+            .await
+            .unwrap();
+        db.append(&message_in(&session2, 0, "apple 成功采摘入库。"))
+            .await
+            .unwrap();
+        db.append(&message_in(&session3, 0, "app 构建失败未能部署。"))
+            .await
+            .unwrap();
+
+        // SearchTerms::All with "app" and "成功":
+        // "app" must match whole-word in messages_fts, so "apple" does NOT match.
+        let terms = SearchTerms::All(vec!["app".to_string(), "成功".to_string()]);
+        let hits = db
+            .search(terms, &SessionFilter::default(), 0)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle, session1);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn cjk_short_terms_match_subsets_accurately() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session1 = sample_handle();
+        let mut session2 = sample_handle();
+        session2.session = NativeSessionId::from("other-session-2".to_string());
+
+        db.append(&message_in(&session1, 0, "模型回答成功率很高。"))
+            .await
+            .unwrap();
+        db.append(&message_in(&session2, 0, "模型回答失败率很高。"))
+            .await
+            .unwrap();
+
+        let hits = search(&db, "成功").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle, session1);
+
+        let hits = search(&db, "失败").await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.handle, session2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn cjk_long_paragraph_preview_snippet_centers_on_match() {
+        let db = AiSessionDatabase::in_memory().await.unwrap();
+        let session = sample_handle();
+
+        // 1500 chars of continuous Chinese without whitespace
+        let lead = "前言".repeat(150);
+        let tail = "结尾".repeat(150);
+        let body = format!("{lead}在提交前把修改暂存进索引继续开发{tail}");
+        db.append(&message_in(&session, 0, &body)).await.unwrap();
+
+        let hits = search(&db, "暂存进索引").await;
+        assert_eq!(hits.len(), 1);
+        let preview = hits[0].preview.to_plain().text.into_owned();
+        assert!(
+            preview.contains("暂存进索引"),
+            "preview must contain the match even in unspaced Chinese paragraphs: {preview:?}"
+        );
+        assert!(preview.starts_with('…'), "leading context should be clipped: {preview:?}");
+        assert!(preview.ends_with('…'), "trailing context should be clipped: {preview:?}");
+
+        // Test with leading short tokens followed by long CJK paragraph
+        let mut session2 = sample_handle();
+        session2.session = NativeSessionId::from("session-with-lead".to_string());
+        let body_with_lead = format!("intro {lead}在提交前把修改暂存进索引继续开发{tail}");
+        db.append(&message_in(&session2, 0, &body_with_lead)).await.unwrap();
+
+        let hits = search(&db, "暂存进索引").await;
+        let hit_lead = hits
+            .iter()
+            .find(|h| h.session.handle == session2)
+            .expect("session with lead word must match");
+        let preview_lead = hit_lead.preview.to_plain().text.into_owned();
+        assert!(
+            preview_lead.contains("暂存进索引"),
+            "preview must preserve match when preceded by short tokens: {preview_lead:?}"
+        );
+        assert!(
+            preview_lead.starts_with("intro …"),
+            "preview should preserve initial token followed by ellipsis: {preview_lead:?}"
+        );
+    }
+
+    #[rstest]
+    #[case(
+        "在提交代码前把修改暂存进索引，同时遵守仓库约定。",
+        "暂存进索引",
+        "在提交代码前把修改[暂存进索引]，同时遵守仓库约定。"
+    )]
+    #[case(
+        "整理提交历史并遵守仓库约定",
+        "仓库",
+        "整理提交历史并遵守[仓库]约定"
+    )]
+    fn cjk_highlights_mark_exact_substring(
+        #[case] text: &str,
+        #[case] query: &str,
+        #[case] expected: &str,
+    ) {
+        let terms = SearchTerms::Typed(query.into());
+        let highlighted = QueryTerms::parse(&terms).highlight(TextHighlighter::default(), text);
+        assert_eq!(marked(&highlighted), expected);
     }
 
     #[rstest]
