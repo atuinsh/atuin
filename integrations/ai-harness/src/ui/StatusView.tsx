@@ -11,11 +11,6 @@ const ATUIN_INK = '#263238'
 /** How many orgs the status names before it counts the rest, as the footer has little room. */
 const NAMED_ORGS = 2
 
-const named = (orgs: readonly string[]) =>
-  orgs.length <= NAMED_ORGS
-    ? orgs.join(', ')
-    : `${orgs.slice(0, NAMED_ORGS).join(', ')} +${orgs.length - NAMED_ORGS}`
-
 /** Where atuin sync takes the thread. */
 function SyncText({ sync }: { sync: Sync }): ModElement {
   switch (sync) {
@@ -57,7 +52,7 @@ function SharedWith({ orgs }: { orgs: readonly OrgShare[] }) {
 function HubText({ shares }: { shares: Shares }) {
   if (shares.upload === 'off') return null
   if (shares.upload === 'logged-out') return <Text tone="warning">Logged out</Text>
-  const closing = Shares.orgs(shares, 'closing')
+  const closing = shares.orgs.filter(org => org.state === 'closing')
   if (shares.private) {
     // Until Atuin Hub has closed each org and revoked each link, their holders can still open it.
     return closing.length > 0 || shares.revoking_links ? (
@@ -77,7 +72,13 @@ function HubText({ shares }: { shares: Shares }) {
     )
   }
   // A close still queued hasn't reached Atuin Hub: the org's members can open it until it has.
-  if (closing.length > 0) return <Text tone="warning">Closing to {named(closing)}</Text>
+  if (closing.length > 0) {
+    return (
+      <Text tone="warning">
+        Closing to <SharedWith orgs={closing} />
+      </Text>
+    )
+  }
   // No org sees it, but a share link, which `orgs` doesn't track, may still open it.
   return <Text tone="dim">Unlisted</Text>
 }
