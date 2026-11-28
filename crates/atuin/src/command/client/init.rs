@@ -1,4 +1,4 @@
-use atuin_client::settings::{Settings, Tmux};
+use atuin_client::settings::{SearchMode, Settings, Tmux};
 use atuin_common::env::var_os;
 use atuin_common::userio;
 use clap::{Parser, ValueEnum};
@@ -227,6 +227,9 @@ struct StaticInitOptions<'a> {
     /// The widgets are defined either way.
     #[cfg_attr(not(feature = "ai"), allow(dead_code))]
     pub enable_ai_resume: bool,
+    /// `atuin __internal prepare-search-index` does nothing unless search uses the daemon, so a
+    /// shell skips starting that process otherwise.
+    pub prepare_search_index: bool,
     pub tmux: &'a Tmux,
 }
 
@@ -262,6 +265,7 @@ impl Cmd {
             enable_up_arrow: keys.up_arrow,
             enable_ctrl_r: keys.ctrl_r,
             enable_ai_resume: keys.ai_resume,
+            prepare_search_index: settings.search_mode() == SearchMode::DaemonFuzzy,
             tmux: &settings.tmux,
         }
     }
@@ -315,7 +319,7 @@ impl Cmd {
 
 #[cfg(test)]
 mod tests {
-    use atuin_client::settings::Settings;
+    use atuin_client::settings::{RequestedSearchMode, Settings};
     use clap::{CommandFactory, Parser};
     use rstest::rstest;
 
@@ -404,5 +408,21 @@ mod tests {
         assert!(Cmd::try_parse_from(["init", "zsh", flag]).is_ok());
         let help = Cmd::command().render_long_help().to_string();
         assert!(!help.contains(flag.trim_start_matches("--")), "{help}");
+    }
+
+    /// Only the daemon search engine has an index to prepare.
+    #[rstest]
+    #[case::fuzzy(RequestedSearchMode::Fuzzy, false)]
+    #[case::prefix(RequestedSearchMode::Prefix, false)]
+    #[case::full_text(RequestedSearchMode::Fulltext, false)]
+    #[case::daemon(RequestedSearchMode::DaemonFuzzy, true)]
+    fn search_index_is_prepared_only_for_the_daemon(
+        #[case] mode: RequestedSearchMode,
+        #[case] prepared: bool,
+    ) {
+        let mut settings = Settings::utc();
+        settings.requested_search_mode = mode;
+        let cmd = Cmd::try_parse_from(["init", "zsh"]).unwrap();
+        assert_eq!(cmd.to_options(&settings).prepare_search_index, prepared);
     }
 }
