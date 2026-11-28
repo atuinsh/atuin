@@ -101,17 +101,22 @@ fn precmd_ignores_history_id_started_elsewhere(#[files("tests/shells/*.toml")] s
     );
 
     // Also re-export the foreign id during a running command, as `eval "$(devbox shellenv)"` does.
-    pty.send_line(&format!("export ATUIN_HISTORY_ID=\"{inflight_id}\""));
+    let reexport_command = format!("export ATUIN_HISTORY_ID=\"{inflight_id}\"");
+    pty.send_line(&reexport_command);
 
-    // Run a normal command afterwards and wait for its completed history entry. That verifies this
-    // shell's hooks still record and ensures earlier background `history end` calls have settled.
+    // Run a normal command afterwards and wait for both completed history entries. That verifies
+    // this shell's hooks finish the overwriting command and subsequent commands while earlier
+    // background `history end` calls settle.
     let follow_up_marker = marker();
     run_echo_marker(&pty, &follow_up_marker);
+    let reexport_expected = format!("{reexport_command}\t0");
     let follow_up_expected = format!("echo {follow_up_marker}\t0");
-    wait_until("follow-up command recorded with exit status", || {
+    wait_until("re-export and follow-up commands recorded with exit status", || {
         let mut list = env.atuin(&["history", "list", "--format", "{command}\t{exit}"]);
         list.env("ATUIN_SESSION", SESSION);
-        output(list).lines().any(|line| line == follow_up_expected)
+        let history = output(list);
+        history.lines().any(|line| line == reexport_expected)
+            && history.lines().any(|line| line == follow_up_expected)
     });
 
     // The foreign entry must still be open with exit `-1`.
