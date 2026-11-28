@@ -50,6 +50,7 @@ function MostActive({ activity, username }: { activity: Activity; username: stri
 /** Who the thread is shared with, in one short line. */
 function sharesLine(shares: Shares): string {
   if (shares.upload === 'off') return 'off'
+  if (shares.upload === 'turned-off') return 'private'
   if (shares.upload === 'logged-out') return 'logged out'
   if (shares.private) {
     const closing = Shares.orgs(shares, 'closing')
@@ -239,7 +240,7 @@ export function SharesView({
         )}
         {pane.notice !== null && <NoticeText notice={pane.notice} />}
       </Column>
-      <NoTeam team={team} isOctavoOff={shares?.upload === 'off'} />
+      <NoTeam team={team} isOctavoOff={shares?.upload === 'off' || shares?.upload === 'turned-off'} />
       {orgs.map((org, index) => {
         const firstKey = 1 + orgs.slice(0, index).reduce((rows, one) => rows + rowsOf(one).length, 0)
         return (

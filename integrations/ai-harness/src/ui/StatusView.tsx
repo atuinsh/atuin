@@ -51,6 +51,11 @@ function SharedWith({ orgs }: { orgs: readonly OrgShare[] }) {
 /** Who can open the thread on Atuin Hub, or nothing with the Hub off. */
 function HubText({ shares }: { shares: Shares }) {
   if (shares.upload === 'off') return null
+  // With uploads turned off, a thread nothing of went up is on this machine alone. One that went up
+  // keeps what it was shared with, so it reads as it would with uploads on.
+  if (shares.upload === 'turned-off' && shares.dirs.length === 0 && shares.orgs.length === 0) {
+    return <Text tone="dim">Private</Text>
+  }
   if (shares.upload === 'logged-out') return <Text tone="warning">Logged out</Text>
   const closing = shares.orgs.filter(org => org.state === 'closing')
   if (shares.private) {

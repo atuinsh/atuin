@@ -128,13 +128,14 @@ impl From<ThreadActionError> for Status {
 
 impl From<ThreadShares> for pb::ThreadShares {
     fn from(shares: ThreadShares) -> Self {
-        let queued = match shares {
+        let (upload, queued) = match shares {
             ThreadShares::Off => return Self::of(pb::Upload::Off),
             ThreadShares::LoggedOut => return Self::of(pb::Upload::LoggedOut),
-            ThreadShares::On(queued) => queued,
+            ThreadShares::TurnedOff(queued) => (pb::Upload::TurnedOff, queued),
+            ThreadShares::On(queued) => (pb::Upload::On, queued),
         };
         Self {
-            upload: pb::Upload::On.into(),
+            upload: upload.into(),
             orgs: queued.orgs.into_iter().map(Into::into).collect(),
             dirs: queued.dirs.into_iter().map(Into::into).collect(),
             is_private: queued.is_private,

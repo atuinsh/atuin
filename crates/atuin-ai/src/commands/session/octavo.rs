@@ -71,6 +71,11 @@ fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
     match shares.upload {
         // Without Atuin Hub there is nothing to say about sharing.
         Upload::Off => return Ok(()),
+        Upload::TurnedOff => writeln!(
+            out,
+            "Your atuin.lua turns Atuin Hub uploads off, so no new message goes up. What this \
+             thread was shared with before stays shared."
+        )?,
         Upload::LoggedOut => {
             return writeln!(
                 out,
@@ -278,6 +283,8 @@ impl Shares {
 #[serde(rename_all = "kebab-case")]
 enum Upload {
     Off,
+    /// Octavo has run on this machine, and the user's own config has since turned uploading off.
+    TurnedOff,
     LoggedOut,
     On,
 }
@@ -323,6 +330,7 @@ impl Shares {
         };
         let upload = match pb::Upload::try_from(shares.upload).map_err(|_| unknown())? {
             pb::Upload::Off => Upload::Off,
+            pb::Upload::TurnedOff => Upload::TurnedOff,
             pb::Upload::LoggedOut => Upload::LoggedOut,
             pb::Upload::On => Upload::On,
             pb::Upload::Unspecified => return Err(unknown()),

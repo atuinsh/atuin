@@ -13,6 +13,9 @@ enum Upload {
   // Not logged in to Atuin Hub.
   UPLOAD_LOGGED_OUT = 2;
   UPLOAD_ON = 3;
+  // Octavo has run on this machine, and the user's own config has since turned uploading off:
+  // no message goes up, but what a thread was shared with before stays shared.
+  UPLOAD_TURNED_OFF = 4;
 }
 
 // Lifecycle state of a thread's share with an organization.
@@ -46,7 +49,8 @@ message ThreadRequest {
 
 message ThreadShares {
   Upload upload = 1;
-  // Empty unless `upload` is `UPLOAD_ON` and at least one message has been uploaded.
+  // Empty unless `upload` is `UPLOAD_ON` or `UPLOAD_TURNED_OFF`, and at least one message has been
+  // uploaded.
   repeated OrgShare orgs = 2;
   repeated DirShares dirs = 3;
   // Whether the user made the thread private; no config shares it again.

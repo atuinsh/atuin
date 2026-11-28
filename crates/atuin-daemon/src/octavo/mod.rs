@@ -25,6 +25,9 @@ use crate::daemon::DaemonHandle;
 pub enum ThreadShares {
     /// Octavo is disabled.
     Off,
+    /// Octavo has run on this machine, and the user's own config has since turned uploading
+    /// off: no message goes up, but what the thread was shared with before stays shared.
+    TurnedOff(QueuedShares),
     /// No user is logged in to Atuin Hub.
     LoggedOut,
     On(QueuedShares),

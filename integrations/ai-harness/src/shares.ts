@@ -7,7 +7,9 @@ export type ShareState = (typeof STATES)[number]
 
 // As `atuin threads status --style json` prints it, so one schema reads the CLI and the store.
 const schema = v.object({
-  upload: v.picklist(['on', 'off', 'logged-out']),
+  // `turned-off`: Octavo has run on this machine, and the user's own config turned uploading off
+  // since. No message goes up, but what a thread was shared with before stays shared.
+  upload: v.picklist(['on', 'off', 'turned-off', 'logged-out']),
   // An atuin that can't say where an org's page is prints no `url`.
   orgs: v.array(v.object({ slug: v.string(), state: v.picklist(STATES), url: v.optional(v.string()) })),
   // Each directory the thread had a row uploaded from, with the orgs its config shared with.

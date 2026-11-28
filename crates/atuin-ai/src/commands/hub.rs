@@ -59,7 +59,7 @@ impl UnshareCmd {
             .map_err(|status| eyre!("{}", status.message()))?;
         match shares.as_ref().map(pb::ThreadShares::upload) {
             // A daemon built without Atuin Hub answers nothing.
-            None | Some(pb::Upload::Off) => Err(eyre!(
+            None | Some(pb::Upload::Off | pb::Upload::TurnedOff) => Err(eyre!(
                 "Atuin Hub is off, so `atuin hub unshare` changed nothing. `atuin setup --only \
                  --hub` turns it on."
             )),

@@ -93,6 +93,26 @@ impl ActiveOctavoClient {
     }
 }
 
+impl ActiveOctavoClient {
+    /// `session`'s shares while the user's own config turns uploading off, under the login that
+    /// queued them. Without one they can't be read, and logging out closes nothing, so the thread
+    /// may still be shared: `LoggedOut`, not none.
+    async fn turned_off_shares(
+        &self,
+        session: HarnessSession,
+    ) -> Result<ThreadShares, ThreadSharesError> {
+        let settings = self.uploader.handle.settings().await.clone();
+        let Some(hub) = self.uploader.session(&settings).await else {
+            return Ok(ThreadShares::LoggedOut);
+        };
+        let Some(thread) = pb::HarnessSession::of_thread(session) else {
+            return Ok(ThreadShares::TurnedOff(QueuedShares::default()));
+        };
+        let queued = self.uploader.queue.thread(hub.user_id(), &thread);
+        Ok(ThreadShares::TurnedOff(QueuedShares::read(&queued).await?))
+    }
+}
+
 impl OctavoClient for ActiveOctavoClient {
     async fn queue_thread_messages(&self, messages: &[Message]) -> ThreadUpload {
         let settings = self.uploader.handle.settings().await.clone();
@@ -141,7 +161,7 @@ impl OctavoClient for ActiveOctavoClient {
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError> {
         let hub = match self.uploader.uploading().await {
-            Uploading::Off => return Ok(ThreadShares::Off),
+            Uploading::Off => return self.turned_off_shares(session).await,
             Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
             Uploading::As { hub, .. } => hub,
         };
@@ -158,7 +178,8 @@ impl OctavoClient for ActiveOctavoClient {
         session: HarnessSession,
     ) -> Result<ThreadShares, ThreadSharesError> {
         let hub = match self.uploader.uploading().await {
-            Uploading::Off => return Ok(ThreadShares::Off),
+            // Closes and revocations wait while uploading is off, so nothing changes.
+            Uploading::Off => return Ok(ThreadShares::TurnedOff(QueuedShares::default())),
             Uploading::LoggedOut => return Ok(ThreadShares::LoggedOut),
             Uploading::As { hub, .. } => hub,
         };
@@ -220,7 +241,8 @@ impl OctavoClient for ActiveOctavoClient {
     async fn new_thread_shares(&self, id: &str) -> Option<ThreadShares> {
         let thread = self.new_threads.wait_for(id, ANNOUNCED_WITHIN).await?;
         Some(match self.uploader.uploading().await {
-            Uploading::Off => ThreadShares::Off,
+            // A thread that hasn't started never went up, so nothing of it is on Atuin Hub.
+            Uploading::Off => ThreadShares::TurnedOff(QueuedShares::default()),
             Uploading::LoggedOut => ThreadShares::LoggedOut,
             Uploading::As { .. } => {
                 ThreadShares::On(thread.shares(self.uploader.starts.configs()).await)
