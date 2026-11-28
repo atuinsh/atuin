@@ -93,7 +93,7 @@ locked-tripwire = "0.1"
 memchr = "2"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
-minijinja = "2"
+minijinja = "3"
 minspan = "0.1"
 mlua = { version = "0.12", features = ["luau", "serde", "error-send"] }
 native-tls = "0.2"
