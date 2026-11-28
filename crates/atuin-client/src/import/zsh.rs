@@ -25,28 +25,29 @@ impl Zsh {
 }
 
 fn default_histpath() -> Result<PathBuf> {
-    // oh-my-zsh sets HISTFILE=~/.zhistory
-    // zsh has no default value for this var, but uses ~/.zhistory.
-    // zsh-newuser-install propose as default .histfile https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
-    // we could maybe be smarter about this in the future :)
-    let home_dir = dirs::home_dir().ok_or_else(|| eyre!("could not find home directory"))?;
+    // oh-my-zsh sets HISTFILE=~/.zhistory.
+    // zsh has no default value for HISTFILE, and zsh-newuser-install proposes
+    // $ZDOTDIR/.histfile or ~/.histfile when ZDOTDIR is unset:
+    // https://github.com/zsh-users/zsh/blob/master/Functions/Newuser/zsh-newuser-install#L794
+    const CANDIDATES: [&str; 3] = [".zhistory", ".zsh_history", ".histfile"];
 
-    let mut candidates = [".zhistory", ".zsh_history", ".histfile"].iter();
-    loop {
-        match candidates.next() {
-            Some(candidate) => {
-                let histpath = home_dir.join(candidate);
-                if histpath.exists() {
-                    break Ok(histpath);
-                }
-            }
-            None => {
-                break Err(eyre!(
-                    "Could not find history file. Try setting and exporting $HISTFILE"
-                ));
+    let zdotdir = atuin_common::env::var_nonempty("ZDOTDIR").map(PathBuf::from);
+    let home_dir = atuin_common::dirs::try_home_dir().ok();
+
+    if zdotdir.is_none() && home_dir.is_none() {
+        return Err(eyre!("could not find home directory"));
+    }
+
+    for dir in zdotdir.into_iter().chain(home_dir) {
+        for candidate in CANDIDATES {
+            let histpath = dir.join(candidate);
+            if histpath.is_file() {
+                return Ok(histpath);
             }
         }
     }
+
+    Err(eyre!("Could not find history file. Try setting and exporting $HISTFILE"))
 }
 
 /// Represents a line of zsh history.
@@ -176,6 +177,7 @@ fn unmetafy(line: &[u8]) -> Option<Cow<'_, str>> {
 
 #[cfg(test)]
 mod test {
+    use atuin_common::env::MockEnv;
     use itertools::assert_equal;
     use rstest::rstest;
 
@@ -246,6 +248,7 @@ mod test {
         assert_eq!(parsed.duration, duration);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_file() {
         let bytes = r": 1613322469:0;cargo install atuin
@@ -269,6 +272,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_start_does_not_panic_on_backfill() {
         // first timestamp is near the minimum representable instant, preceded by an
@@ -287,6 +291,7 @@ cargo update
         ]);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn timestamp_near_range_end_does_not_panic_on_increment() {
         // first timestamp is the maximum representable instant (253402207200 is the
@@ -318,6 +323,7 @@ cargo update
         assert_eq!(loader.buf.last().unwrap().timestamp.as_second(), 253_402_207_200);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn test_parse_metafied() {
         let bytes =
@@ -330,5 +336,112 @@ cargo update
         zsh.load(&mut loader).await.unwrap();
 
         assert_equal(loader.buf.iter().map(|h| h.command.as_str()), ["echo 你好", "ls ~/音乐"]);
+    }
+
+    #[rstest]
+    #[case::zhistory(".zhistory")]
+    #[case::zsh_history(".zsh_history")]
+    #[case::histfile(".histfile")]
+    fn default_histpath_finds_candidates_in_zdotdir(#[case] filename: &str) {
+        let home = tempfile::tempdir().unwrap();
+        let zdotdir = tempfile::tempdir().unwrap();
+        let expected = zdotdir.path().join(filename);
+        std::fs::write(&expected, b"echo hello\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", zdotdir.path());
+
+        assert_eq!(default_histpath().unwrap(), expected);
+    }
+
+    #[rstest]
+    fn default_histpath_prefers_zdotdir_over_home() {
+        let home = tempfile::tempdir().unwrap();
+        let zdotdir = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".zhistory"), b"echo home\n").unwrap();
+        let expected = zdotdir.path().join(".zsh_history");
+        std::fs::write(&expected, b"echo zdotdir\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", zdotdir.path());
+
+        assert_eq!(default_histpath().unwrap(), expected);
+    }
+
+    #[rstest]
+    fn default_histpath_falls_back_to_home_when_zdotdir_has_no_history() {
+        let home = tempfile::tempdir().unwrap();
+        let zdotdir = tempfile::tempdir().unwrap();
+        let expected = home.path().join(".zsh_history");
+        std::fs::write(&expected, b"echo home\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", zdotdir.path());
+
+        assert_eq!(default_histpath().unwrap(), expected);
+    }
+
+    #[rstest]
+    fn default_histpath_ignores_empty_zdotdir() {
+        let home = tempfile::tempdir().unwrap();
+        let expected = home.path().join(".zhistory");
+        std::fs::write(&expected, b"echo home\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", "");
+
+        assert_eq!(default_histpath().unwrap(), expected);
+    }
+
+    #[rstest]
+    fn default_histpath_works_with_zdotdir_and_no_home() {
+        let zdotdir = tempfile::tempdir().unwrap();
+        let expected = zdotdir.path().join(".histfile");
+        std::fs::write(&expected, b"echo zdotdir\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("ZDOTDIR", zdotdir.path());
+
+        assert_eq!(default_histpath().unwrap(), expected);
+    }
+
+    #[rstest]
+    fn default_histpath_errors_when_no_directories_set() {
+        let _env = MockEnv::install();
+
+        assert!(default_histpath().is_err());
+    }
+
+    #[rstest]
+    fn default_histpath_errors_when_no_history_file_exists() {
+        let home = tempfile::tempdir().unwrap();
+        let zdotdir = tempfile::tempdir().unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", zdotdir.path());
+
+        assert!(default_histpath().is_err());
+    }
+
+    #[rstest]
+    fn histfile_takes_precedence_over_zdotdir() {
+        let home = tempfile::tempdir().unwrap();
+        let zdotdir = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        std::fs::write(zdotdir.path().join(".zsh_history"), b"echo zdotdir\n").unwrap();
+        let expected = custom.path().join("custom_history");
+        std::fs::write(&expected, b"echo custom\n").unwrap();
+
+        let env = MockEnv::install();
+        env.set("HOME", home.path());
+        env.set("ZDOTDIR", zdotdir.path());
+        env.set("HISTFILE", &expected);
+
+        assert_eq!(get_histfile_path(default_histpath).unwrap(), expected);
     }
 }
