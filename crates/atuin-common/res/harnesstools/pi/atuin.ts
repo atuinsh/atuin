@@ -9,6 +9,7 @@
  * Then restart pi or run /reload.
  */
 
+import { spawn } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const ATUIN_AUTHOR = "pi";
@@ -64,6 +65,35 @@ async function endHistory(
 	}
 }
 
+// Tells Atuin the session started in `cwd`, so who its thread will be shared
+// with on Atuin Hub can be told before its first message. `atuin hook` reads
+// the event on stdin, which `pi.exec` can't write. Resolves once Atuin has
+// heard it, so a status asked for next sees it, and never rejects.
+function sessionStarted(sessionId: string, cwd: string): Promise<void> {
+	return new Promise((resolve) => {
+		try {
+			const child = spawn(ATUIN, ["hook", ATUIN_AUTHOR], {
+				cwd,
+				stdio: ["pipe", "ignore", "ignore"],
+			});
+			const timer = setTimeout(() => child.kill("SIGKILL"), ATUIN_TIMEOUT_MS);
+			const settle = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			child.on("error", settle);
+			child.on("close", settle);
+			child.stdin?.on("error", () => {});
+			child.stdin?.end(
+				JSON.stringify({ hook_event_name: "SessionStart", session_id: sessionId, cwd }),
+			);
+		} catch {
+			// Ignore Atuin failures so the session is never blocked.
+			resolve();
+		}
+	});
+}
+
 // pi's bash tool reports failures by appending a status line to the result
 // text rather than exposing a numeric exit code, so recover it from there.
 // omp's keeps them in its details too, and brackets the status lines.
@@ -95,6 +125,10 @@ function exitCodeFromResult(result: unknown, isError: boolean): number {
 export default function atuinPiExtension(pi: ExtensionAPI) {
 	// Atuin history IDs for in-flight bash tool calls, keyed by tool call ID.
 	const pending = new Map<string, string>();
+
+	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+		await sessionStarted(ctx.sessionManager.getSessionId(), ctx.cwd);
+	});
 
 	// Observe bash executions through events instead of registering a bash
 	// tool: registering one conflicts with other extensions that provide

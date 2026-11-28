@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use super::json_hooks::HookStyle;
+use super::json_hooks::{HookStyle, SessionStarts};
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -62,6 +62,7 @@ impl Harness for Copilot {
             &config_path,
             "^Bash$",
             self.name(),
+            SessionStarts::Unheard,
             HookStyle::Exec,
             json!({"version": 1}),
         )

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
+use super::json_hooks::SessionStarts;
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -59,7 +60,7 @@ impl Harness for Grok {
     /// Install Atuin's command hooks in `$GROK_HOME/hooks/atuin.json`.
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         let config_path = home().joined("hooks").joined("atuin.json");
-        json_hooks::install(&config_path, "^Bash$", self.name()).await?;
+        json_hooks::install(&config_path, "^Bash$", self.name(), SessionStarts::Unheard).await?;
         Ok(config_path)
     }
 

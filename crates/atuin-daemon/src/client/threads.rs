@@ -1,12 +1,16 @@
 //! Client for the daemon's `octavo.Threads` gRPC service.
 
+use std::path::Path;
+
 use atuin_client::ai_session::HarnessSession;
 use atuin_client::settings::Settings;
 use tonic::Code;
 
 use super::{DaemonChannel, FromSettingsError};
 use crate::grpc::octavo::pb::threads_client::ThreadsClient as ThreadsServiceClient;
-use crate::grpc::octavo::pb::{AddLabelsRequest, ThreadRequest, ThreadShares};
+use crate::grpc::octavo::pb::{
+    AddLabelsRequest, NewThreadRequest, ThreadRequest, ThreadShares, ThreadStartedRequest,
+};
 use crate::grpc::request::ClientInterceptor;
 use crate::service::ActiveService;
 use crate::service::address::{ConnectError, DaemonAddress};
@@ -61,6 +65,40 @@ impl ThreadsClient {
             names,
         };
         Ok(self.client.add_labels(request).await?.into_inner().names)
+    }
+
+    /// Tell the daemon an agent started `thread` in `dir`, before any message of it is captured.
+    /// A `dir` that isn't UTF-8 can't be named to it.
+    pub async fn thread_started(
+        &mut self,
+        thread: HarnessSession,
+        dir: &Path,
+    ) -> Result<(), tonic::Status> {
+        let Some(dir) = dir.to_str() else {
+            return Err(tonic::Status::invalid_argument(format!("{} is not UTF-8", dir.display())));
+        };
+        let request = ThreadStartedRequest {
+            thread: Some(thread.into()),
+            dir: dir.to_owned(),
+        };
+        built_with_octavo(self.client.thread_started(request).await)?;
+        Ok(())
+    }
+
+    /// Who the thread an agent started lately as `id` will be shared with once its first message
+    /// is captured, or [`None`] when no agent started one by that id, or the daemon was built
+    /// without Octavo.
+    pub async fn new_thread_shares(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<ThreadShares>, tonic::Status> {
+        let request = NewThreadRequest {
+            session_id: id.to_owned(),
+        };
+        match built_with_octavo(self.client.get_new_thread_shares(request).await) {
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            reply => reply,
+        }
     }
 }
 

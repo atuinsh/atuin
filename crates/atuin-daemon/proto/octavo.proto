@@ -71,6 +71,19 @@ message AddLabelsReply {
   repeated string names = 1;
 }
 
+message ThreadStartedRequest {
+  ai.agent.HarnessSession thread = 1;
+  // The directory the agent started the thread in.
+  string dir = 2;
+}
+
+message ThreadStartedReply {}
+
+message NewThreadRequest {
+  // The thread's session id, as its agent names it.
+  string session_id = 1;
+}
+
 service Threads {
   // Get the organizations a thread is shared with and the directories that determine them.
   rpc GetShares(ThreadRequest) returns (ThreadShares);
@@ -82,4 +95,10 @@ service Threads {
   rpc ShareLink(ThreadRequest) returns (ShareLinkReply);
   // Add labels to the thread by name, keeping those it has.
   rpc AddLabels(AddLabelsRequest) returns (AddLabelsReply);
+  // Hear that an agent started a thread in a directory, before any message of it is captured.
+  rpc ThreadStarted(ThreadStartedRequest) returns (ThreadStartedReply);
+  // Get who a thread an agent started lately will be shared with once its first message is
+  // captured: the organizations its directory's config shares with, as opening. NOT_FOUND when
+  // no agent started one by that id lately.
+  rpc GetNewThreadShares(NewThreadRequest) returns (ThreadShares);
 }

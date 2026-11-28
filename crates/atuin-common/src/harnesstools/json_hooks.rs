@@ -9,8 +9,38 @@ use serde_json::{Map, Value, json};
 
 use super::InstallHookError;
 
-/// Hook lifecycle events atuin registers itself for.
+/// The tool events atuin records a shell command's start and end from, each under the matcher of
+/// the harness's shell tool.
 const HOOK_EVENT_TYPES: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+
+/// The event a harness runs as a session starts, before its first message, which atuin hears to
+/// tell who the session's thread will be shared with before then.
+const SESSION_START: &str = "SessionStart";
+
+/// What atuin's `SessionStart` hook matches: each way a session starts (`startup`, `resume`,
+/// `clear`, `compact`), as a regex both Claude Code and Codex take. A matcher at all, rather than
+/// none, as Codex hashes the hooks it trusts with their matcher.
+const EVERY_START: &str = ".*";
+
+/// Whether atuin hears of a harness's sessions starting, as well as of its shell commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStarts {
+    Heard,
+    /// The harness has no `SessionStart` event in this shape, or atuin hasn't checked it has.
+    Unheard,
+}
+
+/// The events atuin hooks, each with the matcher its entry runs under.
+fn hooked_events(matcher: &str, starts: SessionStarts) -> Vec<(&'static str, &str)> {
+    let tools = HOOK_EVENT_TYPES.iter().map(|event| (*event, matcher));
+    let start = (starts == SessionStarts::Heard).then_some((SESSION_START, EVERY_START));
+    tools.chain(start).collect()
+}
+
+/// Every event an atuin hook can sit in, which taking atuin's hooks out looks through.
+fn every_event() -> impl Iterator<Item = &'static str> {
+    HOOK_EVENT_TYPES.iter().copied().chain([SESSION_START])
+}
 
 /// How a hook entry tells the harness to run atuin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +62,10 @@ pub async fn install(
     config_path: &Path,
     matcher: &str,
     harness: &str,
+    starts: SessionStarts,
 ) -> Result<(), InstallHookError> {
-    install_in(config_path, matcher, harness, HookStyle::Shell, Value::Object(Map::new())).await
+    let skeleton = Value::Object(Map::new());
+    install_in(config_path, matcher, harness, starts, HookStyle::Shell, skeleton).await
 }
 
 /// [`install`], into `skeleton` when there is no config at `config_path` yet: what the harness
@@ -42,6 +74,7 @@ pub async fn install_in(
     config_path: &Path,
     matcher: &str,
     harness: &str,
+    starts: SessionStarts,
     style: HookStyle,
     skeleton: Value,
 ) -> Result<(), InstallHookError> {
@@ -65,7 +98,7 @@ pub async fn install_in(
         .as_object_mut()
         .ok_or(InstallHookError::Malformed("`hooks` is not an object"))?;
 
-    if !add_hook_entries(hooks, matcher, harness, &hook)? {
+    if !add_hook_entries(hooks, &hooked_events(matcher, starts), harness, &hook)? {
         return Err(InstallHookError::AlreadyInstalled);
     }
 
@@ -74,8 +107,8 @@ pub async fn install_in(
     Ok(())
 }
 
-/// Replace every event's atuin hooks with one `hook` entry, returning whether `hooks`
-/// changed.
+/// Replace the atuin hooks of each of `events` with one `hook` entry under the event's matcher,
+/// returning whether `hooks` changed.
 ///
 /// Atuin hooks are removed wherever they sit, so reinstalling after an upgrade or a moved binary
 /// never leaves a stale or duplicate hook behind. An entry already as it would be added stays
@@ -83,12 +116,12 @@ pub async fn install_in(
 /// it and leave them untrusted.
 fn add_hook_entries(
     hooks: &mut Map<String, Value>,
-    matcher: &str,
+    events: &[(&str, &str)],
     harness: &str,
     hook: &Value,
 ) -> Result<bool, InstallHookError> {
     let before = hooks.clone();
-    for event_type in HOOK_EVENT_TYPES {
+    for (event_type, matcher) in events {
         let entries = hooks
             .entry(*event_type)
             .or_insert_with(|| Value::Array(Vec::new()))
@@ -174,8 +207,8 @@ pub async fn has(config_path: &Path, harness: &str) -> Result<bool, InstallHookE
         let hooks = entry.get("hooks").and_then(Value::as_array);
         hooks.is_some_and(|hooks| hooks.iter().any(|hook| is_atuins(hook, harness, &ours)))
     };
-    Ok(HOOK_EVENT_TYPES.iter().any(|stage| {
-        let entries = hooks.get(*stage).and_then(Value::as_array);
+    Ok(every_event().any(|stage| {
+        let entries = hooks.get(stage).and_then(Value::as_array);
         entries.is_some_and(|entries| entries.iter().any(runs_atuin))
     }))
 }
@@ -235,8 +268,8 @@ async fn read(path: &Path) -> Result<Option<Value>, InstallHookError> {
 fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
     let before = hooks.clone();
     let ours = this_atuins(harness);
-    for stage in HOOK_EVENT_TYPES {
-        let Some(entries) = hooks.get_mut(*stage).and_then(Value::as_array_mut) else {
+    for stage in every_event() {
+        let Some(entries) = hooks.get_mut(stage).and_then(Value::as_array_mut) else {
             continue;
         };
         let had_some = !entries.is_empty();
@@ -249,7 +282,7 @@ fn remove_hook_entries(hooks: &mut Map<String, Value>, harness: &str) -> bool {
             entry.get("hooks").and_then(Value::as_array).is_none_or(|hooks| !hooks.is_empty())
         });
         if had_some && entries.is_empty() {
-            hooks.remove(*stage);
+            hooks.remove(stage);
         }
     }
     *hooks != before
@@ -274,9 +307,9 @@ fn is_atuins(hook: &Value, harness: &str, ours: &[Value]) -> bool {
     hook_invokes_atuin(hook, harness) || ours.contains(hook)
 }
 
-/// Whether `config_path` already registers `atuin hook <harness>` across every hook lifecycle
-/// stage, so an inherited hook from another harness can defer to it without losing events when
-/// the native hook has not been installed.
+/// Whether `config_path` already registers `atuin hook <harness>` across every tool event, so an
+/// inherited hook from another harness can defer to it without losing commands when the native
+/// hook has not been installed.
 #[must_use]
 pub fn has_installed(config_path: &Path, harness: &str) -> bool {
     let Ok(content) = std::fs::read_to_string(config_path) else {
@@ -373,7 +406,16 @@ mod tests {
         let mut config = skeleton.clone();
         config.as_object_mut().unwrap().extend(theirs.as_object().unwrap().clone());
         std::fs::write(&path, config.to_string()).unwrap();
-        install_in(&path, "^Bash$", "copilot", HookStyle::Exec, skeleton.clone()).await.unwrap();
+        install_in(
+            &path,
+            "^Bash$",
+            "copilot",
+            SessionStarts::Unheard,
+            HookStyle::Exec,
+            skeleton.clone(),
+        )
+        .await
+        .unwrap();
 
         assert!(uninstall_own(&path, "copilot", &skeleton).await.unwrap());
         let read = std::fs::read_to_string(&path).ok();
@@ -426,7 +468,9 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hooks.json");
-        install_in(&path, "^Bash$", "grok", style, json!({})).await.unwrap();
+        install_in(&path, "^Bash$", "grok", SessionStarts::Unheard, style, json!({}))
+            .await
+            .unwrap();
 
         assert!(has(&path, "grok").await.unwrap());
         assert!(uninstall(&path, "grok").await.unwrap());
@@ -454,8 +498,24 @@ mod tests {
         });
         let hooks_map = hooks.as_object_mut().unwrap();
 
-        assert!(add_hook_entries(hooks_map, "^Bash$", "claude-code", &hook).unwrap());
-        assert!(!add_hook_entries(hooks_map, "^Bash$", "claude-code", &hook).unwrap());
+        assert!(
+            add_hook_entries(
+                hooks_map,
+                &hooked_events("^Bash$", SessionStarts::Unheard),
+                "claude-code",
+                &hook
+            )
+            .unwrap()
+        );
+        assert!(
+            !add_hook_entries(
+                hooks_map,
+                &hooked_events("^Bash$", SessionStarts::Unheard),
+                "claude-code",
+                &hook
+            )
+            .unwrap()
+        );
 
         let installed = json!({
             "matcher": "^Bash$",
@@ -477,6 +537,29 @@ mod tests {
         );
     }
 
+    /// A harness that hears sessions start gets atuin's hook for each way one starts, beside its
+    /// tool hooks, and loses it with them.
+    #[rstest]
+    #[tokio::test]
+    async fn session_starts_are_hooked_where_heard_and_taken_out_with_the_rest() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("settings.json");
+        let hook = json!({"type": "command", "command": "/opt/atuin/bin/atuin hook claude-code"});
+        let mut hooks = Map::new();
+        let events = hooked_events("^Bash$", SessionStarts::Heard);
+        assert!(add_hook_entries(&mut hooks, &events, "claude-code", &hook).unwrap());
+
+        let start = json!({"matcher": ".*", "hooks": [hook]});
+        assert_eq!(hooks.get("SessionStart"), Some(&json!([start])));
+
+        tokio::fs::write(&path, json!({"hooks": hooks}).to_string()).await.unwrap();
+        assert!(has(&path, "claude-code").await.unwrap());
+        assert!(uninstall(&path, "claude-code").await.unwrap());
+        let left: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(left, json!({"hooks": {}}));
+    }
+
     /// Installed again, atuin's entry stays where it is, ahead of the user's added since.
     #[rstest]
     fn add_hook_entries_keeps_an_installed_entry_in_place() {
@@ -495,7 +578,13 @@ mod tests {
         });
 
         assert!(
-            add_hook_entries(hooks.as_object_mut().unwrap(), "^Bash$", "codex", &hook).unwrap()
+            add_hook_entries(
+                hooks.as_object_mut().unwrap(),
+                &hooked_events("^Bash$", SessionStarts::Unheard),
+                "codex",
+                &hook
+            )
+            .unwrap()
         );
         assert_eq!(
             hooks,
@@ -520,8 +609,24 @@ mod tests {
         let mut hooks = json!({"PreToolUse": [stale]});
         let hooks_map = hooks.as_object_mut().unwrap();
 
-        assert!(add_hook_entries(hooks_map, "^Bash$", "copilot", &hook).unwrap());
-        assert!(!add_hook_entries(hooks_map, "^Bash$", "copilot", &hook).unwrap());
+        assert!(
+            add_hook_entries(
+                hooks_map,
+                &hooked_events("^Bash$", SessionStarts::Unheard),
+                "copilot",
+                &hook
+            )
+            .unwrap()
+        );
+        assert!(
+            !add_hook_entries(
+                hooks_map,
+                &hooked_events("^Bash$", SessionStarts::Unheard),
+                "copilot",
+                &hook
+            )
+            .unwrap()
+        );
 
         assert_eq!(hooks["PreToolUse"], json!([installed]));
     }

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
@@ -63,5 +64,11 @@ impl OctavoClient for RecordingOctavoClient {
         _names: &[String],
     ) -> Result<Vec<String>, ThreadActionError> {
         Err(ThreadActionError::Off)
+    }
+
+    fn thread_started(&self, _session: HarnessSession, _dir: PathBuf) {}
+
+    async fn new_thread_shares(&self, _id: &str) -> Option<ThreadShares> {
+        None
     }
 }

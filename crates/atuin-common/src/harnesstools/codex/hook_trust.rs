@@ -18,7 +18,11 @@ use crate::harnesstools::json_hooks::invokes_atuin_hook;
 use crate::path::{AbsPathBuf, PathBufExt as _};
 
 /// The events Codex runs atuin's hooks for, as `hooks.json` and the trust key name them.
-const EVENTS: &[(&str, &str)] = &[("PreToolUse", "pre_tool_use"), ("PostToolUse", "post_tool_use")];
+const EVENTS: &[(&str, &str)] = &[
+    ("SessionStart", "session_start"),
+    ("PreToolUse", "pre_tool_use"),
+    ("PostToolUse", "post_tool_use"),
+];
 
 /// Codex's `config.toml`, read before anything is installed, so a config atuin can't record
 /// trust in leaves nothing half done.

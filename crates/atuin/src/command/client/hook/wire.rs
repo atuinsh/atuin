@@ -34,8 +34,10 @@ pub enum WireToolName {
 pub struct WireHookEvent {
     /// The lifecycle stage. An unrecognized value decodes to [`HookEventName::Other`].
     pub hook_event_name: HookEventName,
-    /// The tool that ran; we only record `Bash`.
-    pub tool_name: WireToolName,
+    /// The tool that ran; we only record `Bash`. None on an event of no tool, as a session's
+    /// start.
+    #[serde(default)]
+    pub tool_name: Option<WireToolName>,
     /// Correlates a command's start and end across two `atuin hook` invocations. Copilot and
     /// Kiro send none: their events correlate by session and command instead (see
     /// [`HookEvent`](super::event::HookEvent)).
@@ -44,6 +46,9 @@ pub struct WireHookEvent {
     /// The session the command ran in.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The session's working directory.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
     /// The command about to run. Present on `PreToolUse`; absent (and unread)
     /// on the completion events.
     #[serde(default)]
@@ -71,6 +76,8 @@ pub struct WireHookEvent {
 /// agent-specific events are skipped rather than rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum HookEventName {
+    /// A session started, or started over (Claude Code's `/clear`), before any of its messages.
+    SessionStart,
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,

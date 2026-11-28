@@ -38,6 +38,12 @@ pub enum ParseError {
 /// An agent hook event Atuin cares about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEvent {
+    /// A session started in `cwd`, before any of its messages; tell the daemon, so who its thread
+    /// will be shared with can be told before its first message is captured.
+    SessionStart {
+        session_id: String,
+        cwd: PathBuf,
+    },
     /// A Bash command is about to run; open a history entry.
     Start {
         command: NonNulStr,
@@ -80,6 +86,7 @@ impl HookEvent {
     /// [`HookEvent`], or `None` when we don't care about the given event.
     ///
     /// We **don't** care about:
+    ///   - A session's start that names no session or directory.
     ///   - Non-shell tool invocations.
     ///   - Tool invocations which are missing a `tool_use_id`, unless the session and the
     ///     command can stand in for it ([`correlation_key`]).
@@ -87,7 +94,13 @@ impl HookEvent {
     ///     `run_in_background`): their end says only that they started, so recording one would
     ///     give it the wrong exit and duration.
     fn reduce(wire: WireHookEvent, harness: &str) -> Option<Self> {
-        if matches!(wire.tool_name, WireToolName::Other) {
+        if wire.hook_event_name == HookEventName::SessionStart {
+            return Some(HookEvent::SessionStart {
+                session_id: wire.session_id.filter(|id| !id.is_empty())?,
+                cwd: wire.cwd?,
+            });
+        }
+        if !matches!(wire.tool_name, Some(WireToolName::Bash)) {
             return None;
         }
 
@@ -138,7 +151,8 @@ impl HookEvent {
                 transcript: wire.transcript_path,
                 duration: None,
             }),
-            HookEventName::Other => None,
+            // A session's start returned above.
+            HookEventName::SessionStart | HookEventName::Other => None,
         }
     }
 }
@@ -557,6 +571,30 @@ mod tests {
         }),
         None
     )]
+    // A session's start, as Claude Code sends it for each `source` (`startup`, `resume`,
+    // `clear`, `compact`).
+    #[case::session_start(
+        json!({
+            "session_id": "5f3c1d2e-8a4b-4c6d-9e7f-0a1b2c3d4e5f",
+            "transcript_path": "/home/ellie/.claude/projects/-repo/5f3c1d2e-8a4b-4c6d-9e7f-0a1b2c3d4e5f.jsonl",
+            "cwd": "/repo",
+            "hook_event_name": "SessionStart",
+            "source": "startup"
+        }),
+        Some(HookEvent::SessionStart {
+            session_id: "5f3c1d2e-8a4b-4c6d-9e7f-0a1b2c3d4e5f".to_owned(),
+            cwd: PathBuf::from("/repo"),
+        })
+    )]
+    // A start with nowhere to say has nothing to tell the daemon.
+    #[case::session_start_without_cwd_skipped(
+        json!({"session_id": "5f3c1d2e", "hook_event_name": "SessionStart", "source": "startup"}),
+        None
+    )]
+    #[case::session_start_without_session_skipped(
+        json!({"session_id": "", "hook_event_name": "SessionStart", "cwd": "/repo"}),
+        None
+    )]
     // A missing event name is ignored.
     #[case::missing_event_skipped(
         json!({
@@ -678,13 +716,16 @@ mod tests {
         }),
         None
     )]
-    #[case::kiro_session_start_skipped(
+    #[case::kiro_session_start(
         json!({
             "session_id": "sess_0550199b-937b-4dd4-94e0-6901bd990fb0",
             "hook_event_name": "SessionStart",
             "cwd": "/tmp/kiro-play"
         }),
-        None
+        Some(HookEvent::SessionStart {
+            session_id: "sess_0550199b-937b-4dd4-94e0-6901bd990fb0".to_owned(),
+            cwd: PathBuf::from("/tmp/kiro-play"),
+        })
     )]
     #[case::kiro_user_prompt_submit_skipped(
         json!({

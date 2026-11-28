@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::json_hooks::SessionStarts;
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -50,11 +51,14 @@ impl Harness for Codex {
         let home = home();
         let config_path = home.join("hooks.json");
         let config = hook_trust::config(&home).await?;
-        let installed = match json_hooks::install(&config_path, "^Bash$", self.name()).await {
-            Ok(()) => true,
-            Err(InstallHookError::AlreadyInstalled) => false,
-            Err(err) => return Err(err),
-        };
+        let installed =
+            match json_hooks::install(&config_path, "^Bash$", self.name(), SessionStarts::Heard)
+                .await
+            {
+                Ok(()) => true,
+                Err(InstallHookError::AlreadyInstalled) => false,
+                Err(err) => return Err(err),
+            };
         // Hooks installed before atuin trusted them are trusted on installing them again.
         let trusted = hook_trust::trust(&home, self.name(), config).await?;
         if !installed && !trusted {

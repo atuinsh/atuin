@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -149,11 +149,36 @@ async fn handle(agent_name: &str, settings: &Arc<Settings>) -> Result<()> {
                 let _ = history::cancel_history_entry(settings, history_id).await;
             }
         }
+        Some(HookEvent::SessionStart { session_id, cwd }) => {
+            session_started(settings, author, session_id, &cwd).await;
+        }
         None => {}
     }
 
     Ok(())
 }
+
+/// Tell the daemon that `author`'s session `id` started in `dir`. A daemon that doesn't hear of it
+/// only learns of the session at its first message, so this never fails the agent's start.
+#[cfg(feature = "daemon")]
+async fn session_started(settings: &Settings, author: &str, id: String, dir: &Path) {
+    use atuin_client::ai_session::{HarnessKind, HarnessSession, NativeSessionId};
+
+    let Ok(harness) = AnyHarness::from_name(author) else {
+        return;
+    };
+    let thread = HarnessSession {
+        harness: HarnessKind::from(&harness),
+        session: NativeSessionId::from(id),
+    };
+    if let Err(err) = super::daemon::thread_started(settings, thread, dir).await {
+        tracing::warn!(?err, "the daemon didn't hear that a session started");
+    }
+}
+
+/// Without a daemon, nothing hears of a session until its first message.
+#[cfg(not(feature = "daemon"))]
+async fn session_started(_settings: &Settings, _author: &str, _id: String, _dir: &Path) {}
 
 #[cfg(test)]
 mod tests {

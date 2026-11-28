@@ -3,6 +3,8 @@ mod nop;
 #[cfg(test)]
 mod recording;
 
+use std::path::PathBuf;
+
 pub use active::{ActiveOctavoClient, DirectThreadUpload};
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
 use enum_dispatch::enum_dispatch;
@@ -32,6 +34,8 @@ pub trait OctavoClient {
         session: HarnessSession,
         names: &[String],
     ) -> Result<Vec<String>, ThreadActionError>;
+    fn thread_started(&self, session: HarnessSession, dir: PathBuf);
+    async fn new_thread_shares(&self, id: &str) -> Option<ThreadShares>;
 }
 
 #[enum_dispatch(OctavoClient)]

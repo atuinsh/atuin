@@ -62,15 +62,18 @@ interface ToolOutput {
  * reach Atuin as a single argv entry unmangled, which rules out the Bun shell
  * the plugin API hands us.
  */
-function atuin(args: string[], cwd: string): Promise<AtuinResult> {
+function atuin(args: string[], cwd: string, input?: string): Promise<AtuinResult> {
 	return new Promise((resolve) => {
 		let child: ReturnType<typeof spawn>;
 		try {
-			child = spawn(ATUIN, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+			const stdin = input === undefined ? "ignore" : "pipe";
+			child = spawn(ATUIN, args, { cwd, stdio: [stdin, "pipe", "ignore"] });
 		} catch {
 			resolve({ code: null, stdout: "" });
 			return;
 		}
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(input);
 
 		let stdout = "";
 		let settled = false;
@@ -90,6 +93,13 @@ function atuin(args: string[], cwd: string): Promise<AtuinResult> {
 		child.on("error", () => settle({ code: null, stdout: "" }));
 		child.on("close", (code) => settle({ code, stdout }));
 	});
+}
+
+// Tells Atuin the session started in `cwd`, so who its thread will be shared
+// with on Atuin Hub can be told before its first message.
+async function sessionStarted(sessionId: string, cwd: string): Promise<void> {
+	const event = { hook_event_name: "SessionStart", session_id: sessionId, cwd };
+	await atuin(["hook", ATUIN_AUTHOR], cwd, JSON.stringify(event));
 }
 
 async function startHistory(
@@ -195,6 +205,20 @@ export const AtuinPlugin: Plugin = async ({ directory }) => {
 	}
 
 	return {
+		// A new session, which opencode 1 announces with its id and directory.
+		event: ({ event }) =>
+			swallowFailures(() => {
+				if (event.type !== "session.created") return;
+				const info = (event.properties as { info?: { id?: unknown; directory?: unknown } })
+					.info;
+				if (typeof info?.id !== "string") return;
+				const cwd =
+					typeof info.directory === "string" && info.directory !== ""
+						? info.directory
+						: directory;
+				return sessionStarted(info.id, cwd);
+			}),
+
 		// Fires before the permission prompt, so only remember the command here.
 		// Starting an entry would record commands the user went on to deny.
 		"tool.execute.before": (input, output) =>

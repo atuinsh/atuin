@@ -261,4 +261,15 @@ impl Octavo {
     ) -> Result<Vec<String>, ThreadActionError> {
         self.client.add_labels(session, names).await
     }
+
+    /// Hears that an agent started `session` in `dir`, before atuin captured a message of it.
+    pub fn thread_started(&self, session: HarnessSession, dir: PathBuf) {
+        self.client.thread_started(session, dir);
+    }
+
+    /// Who the thread an agent started as `id` will be shared with, once its first message is
+    /// captured, or `None` when no agent started one by that id lately.
+    pub async fn new_thread_shares(&self, id: &str) -> Option<ThreadShares> {
+        self.client.new_thread_shares(id).await
+    }
 }

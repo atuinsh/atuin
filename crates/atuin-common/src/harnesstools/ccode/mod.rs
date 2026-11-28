@@ -1,6 +1,7 @@
 //! Integrations and utilities for interacting with claude code.
 use std::path::PathBuf;
 
+use super::json_hooks::SessionStarts;
 use super::rehydrate::{RehydrateError, RehydrateSession, Rehydrated};
 use super::resume::{self, CwdRequirement, ResumeError, ResumePlan, ResumeTarget};
 use super::{Harness, InstallHookError, json_hooks};
@@ -51,7 +52,7 @@ impl Harness for Ccode {
     async fn install_hooks(&self) -> Result<PathBuf, InstallHookError> {
         // Claude Code reads hooks from its settings.json.
         let config_path = config_dir().joined("settings.json");
-        json_hooks::install(&config_path, "^Bash$", self.name()).await?;
+        json_hooks::install(&config_path, "^Bash$", self.name(), SessionStarts::Heard).await?;
         Ok(config_path)
     }
 

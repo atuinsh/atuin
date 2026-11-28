@@ -164,6 +164,31 @@ pub async fn start_history(settings: &Settings, history: History) -> Result<Hist
     Ok(HistoryId::try_from(id)?)
 }
 
+/// How long `atuin hook` waits on the daemon to hear that an agent started a session. The agent
+/// waits on its `SessionStart` hook before it takes the first prompt.
+#[cfg(feature = "ai")]
+const THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Tell the daemon, starting it if need be, that an agent started `thread` in `dir`, so who it
+/// will be shared with can be told before its first message is captured.
+#[cfg(feature = "ai")]
+pub async fn thread_started(
+    settings: &Settings,
+    thread: atuin_client::ai_session::HarnessSession,
+    dir: &std::path::Path,
+) -> Result<()> {
+    // Not through `try_with_restart`: the hook keeps quiet, as the agent reads what it prints.
+    let tell = async {
+        ActiveService::ready(settings).await?;
+        let mut client = atuin_daemon::ThreadsClient::from_settings(settings).await?;
+        client.thread_started(thread, dir).await?;
+        Ok(())
+    };
+    tokio::time::timeout(THREAD_STARTED_TIMEOUT, tell)
+        .await
+        .wrap_err("timed out waiting for the daemon")?
+}
+
 pub async fn end_history(
     settings: &Settings,
     id: HistoryId,

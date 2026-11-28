@@ -65,7 +65,17 @@ interface ShellCreate {
 	cwd: string;
 }
 
+// What opencode's event stream says of each event: its type, and for a new
+// session (`session.created`), its id and directory.
+interface OpencodeEvent {
+	type: string;
+	data?: unknown;
+}
+
 interface Hooks {
+	event: {
+		subscribe(): AsyncIterable<OpencodeEvent>;
+	};
 	tool: {
 		hook(name: string, fn: (call: ToolCall) => void | Promise<void>): unknown;
 	};
@@ -80,15 +90,18 @@ interface Hooks {
  * Spawned without a shell: a recorded command is arbitrary text that has to
  * reach Atuin as a single argv entry unmangled.
  */
-function atuin(args: string[], cwd: string): Promise<AtuinResult> {
+function atuin(args: string[], cwd: string, input?: string): Promise<AtuinResult> {
 	return new Promise((resolve) => {
 		let child: ReturnType<typeof spawn>;
 		try {
-			child = spawn(ATUIN, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+			const stdin = input === undefined ? "ignore" : "pipe";
+			child = spawn(ATUIN, args, { cwd, stdio: [stdin, "pipe", "ignore"] });
 		} catch {
 			resolve({ code: null, stdout: "" });
 			return;
 		}
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(input);
 
 		let stdout = "";
 		let settled = false;
@@ -108,6 +121,13 @@ function atuin(args: string[], cwd: string): Promise<AtuinResult> {
 		child.on("error", () => settle({ code: null, stdout: "" }));
 		child.on("close", (code) => settle({ code, stdout }));
 	});
+}
+
+// Tells Atuin the session started in `cwd`, so who its thread will be shared
+// with on Atuin Hub can be told before its first message.
+async function sessionStarted(sessionId: string, cwd: string): Promise<void> {
+	const event = { hook_event_name: "SessionStart", session_id: sessionId, cwd };
+	await atuin(["hook", ATUIN_AUTHOR], cwd, JSON.stringify(event));
 }
 
 async function startHistory(
@@ -162,6 +182,8 @@ function exitCodeOf(call: ToolCall): number {
 // left running in the background (`status: "running"`) has not ended, and is
 // not recorded.
 function setup(ctx: Hooks) {
+	void followSessions(ctx);
+
 	// Commands proposed, keyed by tool call ID.
 	const proposed = new Map<string, Proposal>();
 
@@ -225,6 +247,23 @@ function setup(ctx: Hooks) {
 			);
 		}),
 	);
+}
+
+// Tells Atuin of each session opencode starts, for as long as opencode runs.
+async function followSessions(ctx: Hooks) {
+	try {
+		for await (const event of ctx.event.subscribe()) {
+			if (event.type !== "session.created") continue;
+			const data = event.data as
+				| { sessionID?: unknown; location?: { directory?: unknown } }
+				| undefined;
+			const directory = data?.location?.directory;
+			if (typeof data?.sessionID !== "string" || typeof directory !== "string") continue;
+			await sessionStarted(data.sessionID, directory);
+		}
+	} catch {
+		// Ignore failures so opencode is never disturbed.
+	}
 }
 
 // opencode 2 loads a plugin's default export: its `id` and `setup`.

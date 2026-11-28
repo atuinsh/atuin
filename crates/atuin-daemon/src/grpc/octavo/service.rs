@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use atuin_client::ai_session::HarnessSession;
@@ -57,6 +58,32 @@ impl Threads for Service {
         };
         let names = self.octavo.add_labels(thread.try_into()?, &names).await?;
         Ok(Response::new(pb::AddLabelsReply { names }))
+    }
+
+    async fn thread_started(
+        &self,
+        request: Request<pb::ThreadStartedRequest>,
+    ) -> Result<Response<pb::ThreadStartedReply>, Status> {
+        let pb::ThreadStartedRequest { thread, dir } = request.into_inner();
+        let Some(thread) = thread else {
+            return Err(Status::invalid_argument("the request names no thread"));
+        };
+        if dir.is_empty() {
+            return Err(Status::invalid_argument("the request names no directory"));
+        }
+        self.octavo.thread_started(thread.try_into()?, PathBuf::from(dir));
+        Ok(Response::new(pb::ThreadStartedReply {}))
+    }
+
+    async fn get_new_thread_shares(
+        &self,
+        request: Request<pb::NewThreadRequest>,
+    ) -> Result<Response<pb::ThreadShares>, Status> {
+        let id = request.into_inner().session_id;
+        let Some(shares) = self.octavo.new_thread_shares(&id).await else {
+            return Err(Status::not_found(format!("no agent started a thread `{id}` lately")));
+        };
+        Ok(Response::new(shares.into()))
     }
 }
 

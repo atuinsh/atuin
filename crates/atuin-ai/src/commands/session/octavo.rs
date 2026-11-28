@@ -22,7 +22,7 @@ pub(super) async fn status(
     style: Style,
 ) -> Result<()> {
     let Some(session) = super::find(client, selector).await? else {
-        return Status::uncaptured(settings).await?.print(style);
+        return Status::uncaptured(settings, selector).await?.print(style);
     };
     let shares = ThreadsClient::from_settings(settings)
         .await?
@@ -39,8 +39,9 @@ fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
             "Thread capture is off. `atuin setup --only --threads --daemon` turns it on."
         )?;
     }
-    let (Some(thread), Some(shares)) = (&status.thread, &status.octavo) else {
-        return writeln!(out, "Not captured yet.");
+    let Some(thread) = &status.thread else {
+        writeln!(out, "Not captured yet.")?;
+        return status.octavo.as_ref().map_or(Ok(()), |shares| write_plain(out, shares));
     };
     let noun = if thread.messages == 1 {
         "message"
@@ -50,7 +51,7 @@ fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
     let age = super::age(thread.updated);
     writeln!(out, "Captured: {} {noun}, the newest {age}.", thread.messages)?;
     write_sync(out, status.sync)?;
-    write_plain(out, shares)
+    status.octavo.as_ref().map_or(Ok(()), |shares| write_plain(out, shares))
 }
 
 fn write_sync(out: &mut dyn Write, sync: Syncing) -> io::Result<()> {
@@ -143,17 +144,26 @@ pub(in crate::commands) struct Status {
     sync: Syncing,
     /// `None` if the thread has not been captured yet.
     thread: Option<Captured>,
-    /// `None` if the thread has not been captured yet.
+    /// Who a thread not captured yet will be shared with, if an agent started it lately, else
+    /// `None` until it is captured.
     octavo: Option<Shares>,
 }
 
 impl Status {
-    async fn uncaptured(settings: &Settings) -> Result<Self> {
+    /// Status for `id`, a thread atuin has captured nothing of yet: who it will be shared with,
+    /// if an agent started it lately.
+    async fn uncaptured(settings: &Settings, id: &str) -> Result<Self> {
+        let shares = ThreadsClient::from_settings(settings)
+            .await?
+            .new_thread_shares(id)
+            .await
+            .map_err(|status| eyre!("{}", status.message()))?;
+        let hub = settings.hub_endpoint();
         Ok(Self {
             capture: Capture::of(settings),
             sync: Syncing::of(settings).await?,
             thread: None,
-            octavo: None,
+            octavo: shares.map(|shares| Shares::of(shares, &hub)).transpose()?,
         })
     }
 

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use atuin_client::ai_session::{AiSessionDatabase, HarnessSession, Message};
 use url::Url;
 
@@ -44,5 +46,12 @@ impl OctavoClient for NopOctavoClient {
         _names: &[String],
     ) -> Result<Vec<String>, ThreadActionError> {
         Err(ThreadActionError::Off)
+    }
+
+    fn thread_started(&self, _session: HarnessSession, _dir: PathBuf) {}
+
+    /// Off for any thread, as no thread goes up.
+    async fn new_thread_shares(&self, _id: &str) -> Option<ThreadShares> {
+        Some(ThreadShares::Off)
     }
 }

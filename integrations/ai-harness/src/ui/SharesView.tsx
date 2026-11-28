@@ -212,6 +212,8 @@ export function SharesView({
   onView: (viewed: { org: string; thread: TeamThread }) => void
 }) {
   const shares = Report.shares(report)
+  // A thread not captured yet has nothing on Atuin Hub to make private or link to.
+  const isCaptured = report?.isOk === true && report.value.thread !== null
   const sharing = shares === null ? [] : Shares.sharing(shares)
   const orgs = team?.isOk === true ? team.value.orgs : []
   const username = team?.isOk === true ? team.value.username : null
@@ -223,7 +225,7 @@ export function SharesView({
           <Text bold>This thread </Text>
           {report === null ? <Text tone="dim">looking...</Text> : <StatusView report={report} />}
         </Text>
-        {shares?.upload === 'on' && (
+        {shares?.upload === 'on' && isCaptured && (
           <Row gap={2}>
             {sharing.length > 0 && (
               <Button key="private" hotkey="p" onPress={onPrivate}>

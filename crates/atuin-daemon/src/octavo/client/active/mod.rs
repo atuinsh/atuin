@@ -1,6 +1,7 @@
 mod auto_share;
 mod engine;
 mod gate;
+mod new_threads;
 mod starts;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use atuin_octavo::shares::Configs;
 use auto_share::AutoSharer;
 use engine::{UploadEngine, UploadRetryLater, Uploaded};
 use gate::{Cleared, CloseHalt, Closes, Rows};
+use new_threads::{NewThread, NewThreads};
 use starts::Starts;
 use thiserror::Error;
 use tokio::sync::Notify;
@@ -42,6 +44,7 @@ pub enum OpenActiveOctavoClientError {
 pub struct ActiveOctavoClient {
     uploader: Arc<DirectUploader>,
     auto_sharer: AutoSharer,
+    new_threads: NewThreads,
     _engine: UploadEngine,
 }
 
@@ -78,6 +81,7 @@ impl ActiveOctavoClient {
         Ok(Self {
             auto_sharer: AutoSharer::spawn(Arc::clone(&uploader)),
             uploader,
+            new_threads: NewThreads::default(),
             _engine: engine,
         })
     }
@@ -201,6 +205,21 @@ impl OctavoClient for ActiveOctavoClient {
     ) -> Result<Vec<String>, ThreadActionError> {
         let OnOctavo { login, thread, .. } = self.uploader.on_octavo(session).await?;
         Ok(login.add_labels(&thread, names).await?)
+    }
+
+    fn thread_started(&self, session: HarnessSession, dir: PathBuf) {
+        self.new_threads.add(NewThread { session, dir });
+    }
+
+    async fn new_thread_shares(&self, id: &str) -> Option<ThreadShares> {
+        let thread = self.new_threads.find(id)?;
+        Some(match self.uploader.uploading().await {
+            Uploading::Off => ThreadShares::Off,
+            Uploading::LoggedOut => ThreadShares::LoggedOut,
+            Uploading::As { .. } => {
+                ThreadShares::On(thread.shares(self.uploader.starts.configs()).await)
+            }
+        })
     }
 }
 
