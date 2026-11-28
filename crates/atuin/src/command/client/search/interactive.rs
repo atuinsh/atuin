@@ -44,6 +44,7 @@ use super::history_list::{HistoryList, ListState};
 use super::inspector::Stats as InspectorStats;
 use super::inspector::bindings::Bindings;
 use super::inspector::browser::{Browser, View as InspectorView};
+use super::syntax;
 use super::whats_new::{self, WhatsNew};
 use crate::VERSION;
 use crate::command::client::halloween::HalloweenExt as _;
@@ -1229,8 +1230,9 @@ impl State {
             let preview = self.build_preview(
                 results,
                 compactness,
-                preview_width,
+                Size::new(preview_width, preview_chunk.height.saturating_sub(border_size * 2)),
                 preview_chunk.width.into(),
+                settings.ui.syntax_highlight,
                 theme,
             );
             let prefix_width = settings
@@ -1489,48 +1491,96 @@ impl State {
         &self,
         results: &[History],
         compactness: Compactness,
-        preview_width: u16,
+        preview_size: Size,
         chunk_width: usize,
+        syntax_highlight: bool,
         theme: &Theme,
-    ) -> Paragraph<'_> {
-        let selected = self.results_state.selected();
-        let command = if results.is_empty() {
-            String::new()
-        } else {
-            let s = &results[selected].command;
-            let mut lines = Vec::new();
-            for line in s.split('\n') {
-                let line = line.escape_non_printable();
+    ) -> Paragraph<'static> {
+        let mut lines = Vec::new();
+        if preview_size.height > 0
+            && let Some(entry) = results.get(self.results_state.selected())
+        {
+            let command = entry.command.escape_non_printable_lines();
+            // Parse before wrapping so tokens can span display lines.
+            let syntax = if syntax_highlight {
+                syntax::classify(&command, entry.shell.as_deref())
+            } else {
+                Vec::new()
+            };
+            let mut offset = 0;
+            'command: for segment in command.split_inclusive('\n') {
+                let line = segment.strip_suffix('\n').unwrap_or(segment);
+                let mut push_line = |start, end| {
+                    lines.push(preview_line(
+                        &line[start..end],
+                        syntax.get(offset + start..offset + end).unwrap_or_default(),
+                        theme,
+                    ));
+                    lines.len() == usize::from(preview_size.height)
+                };
                 let mut width = 0;
                 let mut start = 0;
                 for (idx, ch) in line.char_indices() {
                     let w = ch.width().unwrap_or(0); // None for control chars which should not happen
-                    if width + w > preview_width.into() {
-                        lines.push(line[start..idx].to_owned());
+                    if width + w > preview_size.width.into() {
+                        if push_line(start, idx) {
+                            break 'command;
+                        }
                         start = idx;
                         width = w;
                     } else {
                         width += w;
                     }
                 }
-                if width != 0 {
-                    lines.push(line[start..].to_owned());
+                if width != 0 && push_line(start, line.len()) {
+                    break;
                 }
+                offset += segment.len();
             }
-            lines.join("\n")
-        };
+        }
 
+        let preview = Paragraph::new(lines);
         match compactness {
-            Compactness::Full => Paragraph::new(command).block(
+            Compactness::Full => preview.block(
                 Block::default()
                     .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
                     .border_type(BorderType::Rounded)
                     .title(format!("{:─>width$}", "", width = chunk_width - 2)),
             ),
-            _ => Paragraph::new(command)
-                .style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
+            _ => preview.style(Style::from_crossterm(theme.as_style(Meaning::Annotation))),
         }
     }
+}
+
+fn preview_line(line: &str, syntax: &[Meaning], theme: &Theme) -> Line<'static> {
+    if syntax.is_empty() {
+        return Line::raw(line.to_owned());
+    }
+
+    let styled_span = |start, end, meaning| {
+        let style = if meaning == Meaning::Base {
+            Style::default()
+        } else {
+            Style::from_crossterm(theme.as_style(meaning))
+        };
+        Span::styled(line[start..end].to_owned(), style)
+    };
+    let mut spans = Vec::new();
+    let mut meaning = syntax[0];
+    let mut start = 0;
+    let mut end = 0;
+    // Use the widget's grapheme boundaries so a style cannot separate a combining mark.
+    for grapheme in Span::raw(line).styled_graphemes(Style::default()) {
+        let next_meaning = syntax[end];
+        if next_meaning != meaning {
+            spans.push(styled_span(start, end, meaning));
+            meaning = next_meaning;
+            start = end;
+        }
+        end += grapheme.symbol.len();
+    }
+    spans.push(styled_span(start, end, meaning));
+    Line::from(spans)
 }
 
 /// The writer used for terminal output - either stdout or /dev/tty
@@ -2460,12 +2510,17 @@ mod tests {
     use atuin_client::settings::{
         ExitMode, FilterMode, KeymapMode, Preview, PreviewStrategy, SearchMode, Settings, Shells,
     };
-    use atuin_client::theme::ThemeManager;
+    use atuin_client::theme::{Meaning, ThemeManager};
     use atuin_common::path::AbsPathBuf;
     use atuin_common::shell::Shell;
     use atuin_common::userio::log::{Message, Severity};
     use jiff::Timestamp;
+    use ratatui::backend::FromCrossterm;
+    use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::{Rect, Size};
+    use ratatui::style::Color;
+    use ratatui::widgets::Widget as _;
     use rstest::{fixture, rstest};
 
     use super::{
@@ -2654,6 +2709,75 @@ mod tests {
             ),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::bash("bash", true, true)]
+    #[case::disabled("bash", false, false)]
+    #[case::unknown_shell("nu", true, false)]
+    fn preview_styles_keep_wrapping_and_text(
+        state: State,
+        #[case] shell: &str,
+        #[case] enabled: bool,
+        #[case] highlighted: bool,
+        #[values(Compactness::Full, Compactness::Compact)] compactness: Compactness,
+    ) {
+        let history = History::capture()
+            .timestamp(Timestamp::now())
+            .command("printf -- '界\txx\nmore'\ncat \"$x\u{0301}\"\necho clipped")
+            .cwd("/")
+            .shell(shell)
+            .build()
+            .into();
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
+        let width = 15;
+        let border = u16::from(matches!(compactness, Compactness::Full));
+        let preview_size = Size::new(width, 4);
+        // The extra buffer row lets us check that the preview only builds the visible lines.
+        let area = Rect::new(0, 0, width + border * 2, 5 + border * 2);
+        let mut buffer = Buffer::empty(area);
+        state
+            .build_preview(&[history], compactness, preview_size, area.width.into(), enabled, theme)
+            .render(area, &mut buffer);
+
+        let highlighted = highlighted
+            && cfg!(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "windows",
+                target_os = "illumos",
+            ));
+        let foreground =
+            |meaning| Color::from_crossterm(theme.as_style(meaning).foreground_color.unwrap());
+        let base = if border == 0 {
+            foreground(Meaning::Annotation)
+        } else {
+            Color::Reset
+        };
+
+        for (x, y, symbol, meaning) in [
+            (0, 0, "p", Meaning::SyntaxCommand),
+            (6, 0, " ", Meaning::Base),
+            (7, 0, "-", Meaning::SyntaxFlag),
+            (11, 0, "界", Meaning::SyntaxString),
+            (13, 0, "^", Meaning::SyntaxString),
+            (14, 0, "I", Meaning::SyntaxString),
+            (0, 1, "x", Meaning::SyntaxString),
+            (0, 2, "m", Meaning::SyntaxString),
+            (0, 3, "c", Meaning::SyntaxCommand),
+            (6, 3, "x\u{0301}", Meaning::SyntaxVariable),
+            (0, 4, " ", Meaning::Base),
+        ] {
+            let cell = &buffer[(border + x, border + y)];
+            assert_eq!(cell.symbol(), symbol, "cell ({x}, {y})");
+            let color = if highlighted && meaning != Meaning::Base {
+                foreground(meaning)
+            } else {
+                base
+            };
+            assert_eq!(cell.fg, color, "cell ({x}, {y})");
+        }
     }
 
     // Test when there's no results, scrolling up or down doesn't underflow
