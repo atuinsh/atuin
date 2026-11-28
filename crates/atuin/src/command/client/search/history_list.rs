@@ -17,6 +17,7 @@ use ratatui::crossterm::style;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, StatefulWidget, Widget};
+use unicode_width::UnicodeWidthChar as _;
 
 use super::engines::{AnySearchEngine, SearchEngine};
 use super::syntax;
@@ -204,11 +205,22 @@ impl DrawState<'_> {
         // Always render the indicator first (width 3)
         self.index();
 
-        // Calculate the width for the expanding column
-        // Fixed columns use their configured width + 1 (trailing space)
+        // Reserve the 3-column indicator, all fixed column widths, and the 1-cell
+        // inter-column gaps before dividing remaining width across expanding columns.
         let indicator_width: u16 = 3;
-        let fixed_width: u16 = self.columns.iter().filter(|c| !c.expand).map(|c| c.width + 1).sum();
-        let expand_width = self.list_area.width.saturating_sub(indicator_width + fixed_width);
+        let separator_count =
+            u16::try_from(self.columns.len().saturating_sub(1)).unwrap_or(u16::MAX);
+        let fixed_width: u16 = self
+            .columns
+            .iter()
+            .filter(|c| !c.expand)
+            .fold(0u16, |acc, c| acc.saturating_add(c.width));
+        let expand_count =
+            u16::try_from(self.columns.iter().filter(|c| c.expand).count()).unwrap_or(u16::MAX);
+        let remaining = self.list_area.width.saturating_sub(
+            indicator_width.saturating_add(fixed_width).saturating_add(separator_count),
+        );
+        let expand_width = remaining.checked_div(expand_count).unwrap_or(0);
 
         let style = self.theme.as_style(Meaning::Base);
         // Render each configured column
@@ -298,7 +310,7 @@ impl DrawState<'_> {
         self.draw(&display, Style::from_crossterm(style));
     }
 
-    fn command(&mut self, h: &History, _width: u16) {
+    fn command(&mut self, h: &History, width: u16) {
         let mut style = self.theme.as_style(Meaning::Base);
         let mut row_highlighted = false;
         if !self.alternate_highlight
@@ -323,10 +335,11 @@ impl DrawState<'_> {
             Vec::new()
         };
 
-        // Calculate the available width for the command text.
-        // `self.x` is already past the indicator and any preceding columns,
-        // so the remaining width is how far we can draw.
-        let avail = usize::conv(self.list_area.width.saturating_sub(self.x));
+        // Stay within both the allocated column width and the remaining row width.
+        let col_start = self.x;
+        let col_width = width.min(self.list_area.width.saturating_sub(col_start));
+        let col_end = col_start.saturating_add(col_width);
+        let avail = usize::conv(col_width);
 
         // Truncate long commands from the middle to show both start and end,
         // so users can identify commands even in narrow terminals (issue #3596).
@@ -334,9 +347,15 @@ impl DrawState<'_> {
             normalized.ellipsize(Measure::Columns(avail), Pos::Middle, Indicator::UNICODE);
         let display = ellipsized.to_string();
         for (i, ch) in display.char_indices() {
-            if self.x > self.list_area.width {
-                return;
+            if self.x >= col_end {
+                break;
             }
+            // Stop when a character needs more cells than remain in the column.
+            let char_width = ch.width().unwrap_or(0);
+            if char_width > usize::conv(col_end.saturating_sub(self.x)) {
+                break;
+            }
+
             // Map each output cell back to its source byte and test the existing
             // highlight set; a cell on the spliced ellipsis maps to None and is
             // never highlighted (this is why the "…" is never bolded).
@@ -353,7 +372,18 @@ impl DrawState<'_> {
             }
 
             let mut ch_buf = [0u8; 4];
-            self.draw(ch.encode_utf8(&mut ch_buf), Style::from_crossterm(char_style));
+            self.draw_until(
+                ch.encode_utf8(&mut ch_buf),
+                Style::from_crossterm(char_style),
+                col_end,
+            );
+        }
+
+        // Pad unused width so later columns align and alternate highlighting spans the column.
+        let pad_width = usize::conv(col_end.saturating_sub(self.x));
+        if pad_width > 0 {
+            let pad_style = Style::from_crossterm(self.theme.as_style(Meaning::Base));
+            self.draw_until(&" ".repeat(pad_width), pad_style, col_end);
         }
     }
 
@@ -421,7 +451,17 @@ impl DrawState<'_> {
         self.draw(&display, Style::from_crossterm(style));
     }
 
-    fn draw(&mut self, s: &str, mut style: Style) {
+    fn draw(&mut self, s: &str, style: Style) {
+        self.draw_until(s, style, self.list_area.width);
+    }
+
+    fn draw_until(&mut self, s: &str, mut style: Style, max_x: u16) {
+        let bound = max_x.min(self.list_area.width);
+        let w = usize::conv(bound.saturating_sub(self.x));
+        if w == 0 {
+            return;
+        }
+
         let cx = self.list_area.left() + self.x;
 
         let cy = if self.inverted {
@@ -436,7 +476,197 @@ impl DrawState<'_> {
             style = style.add_modifier(Modifier::REVERSED);
         }
 
-        let w = usize::conv(self.list_area.width - self.x);
         self.x += self.buf.set_stringn(cx, cy, s, w, style).0 - cx;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use atuin_client::database::DbSearchMode;
+    use atuin_client::settings::{UiColumn, UiColumnType};
+    use atuin_client::theme::ThemeManager;
+    use jiff::tz::TimeZone;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::command::client::search::engines::db;
+
+    fn render_line(
+        history: &[History],
+        columns: &[UiColumn],
+        width: u16,
+        alternate_highlight: bool,
+    ) -> (Buffer, String) {
+        let now_ts = "2026-11-25T00:00:10Z".parse::<Timestamp>().unwrap();
+        let now = move || now_ts;
+        let mut themes = ThemeManager::builtin_only();
+        let theme = themes.load_theme("default");
+        let engine = AnySearchEngine::Db(db::Search(DbSearchMode::Prefix));
+        let highlighter = HistoryHighlighter {
+            engine: &engine,
+            search_input: "",
+        };
+
+        let tz = TimeZone::UTC;
+        let widget = HistoryList::new(
+            history,
+            true,
+            alternate_highlight,
+            &now,
+            &tz,
+            " > ",
+            theme,
+            highlighter,
+            false,
+            false,
+            columns,
+        );
+
+        let area = Rect::new(0, 0, width, u16::try_from(history.len()).unwrap_or(1));
+        let mut buf = Buffer::empty(area);
+        let mut state = ListState::default();
+        widget.render(area, &mut buf, &mut state);
+
+        let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+        (buf, row)
+    }
+
+    fn sample_history(command: &str) -> History {
+        let ts = "2026-11-25T00:00:05Z".parse::<Timestamp>().unwrap();
+        let mut history: History = History::capture()
+            .timestamp(ts)
+            .command(command)
+            .cwd("/home/user/project")
+            .build()
+            .into();
+        history.duration = 12_000_000;
+        history.exit = 0;
+        history
+    }
+
+    #[rstest]
+    fn expanding_command_first_right_aligns_trailing_column() {
+        let history = vec![sample_history("ls")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (_, row) = render_line(&history, &columns, 30, false);
+
+        // indicator (3) + expanded command (17) + gap (1) + time (9) = 30
+        assert_eq!(row.chars().count(), 30);
+        assert!(row.starts_with(" > ls"), "row was: {row:?}");
+        assert!(row.ends_with("   5s ago"), "time column not right-aligned: {row:?}");
+    }
+
+    #[rstest]
+    fn expanding_command_first_truncates_instead_of_overwriting_trailing_column() {
+        let history =
+            vec![sample_history("echo very-long-command-that-should-be-ellipsized-before-time")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (_, row) = render_line(&history, &columns, 40, false);
+
+        assert_eq!(row.chars().count(), 40);
+        assert!(row.contains('…'), "expected truncated command ellipsis in {row:?}");
+        assert!(row.ends_with("    5s ago"), "trailing time overwritten: {row:?}");
+    }
+
+    #[rstest]
+    fn expanding_command_in_middle_aligns_both_sides() {
+        let history = vec![sample_history("git status")];
+        let columns = vec![
+            UiColumn::new(UiColumnType::Duration),
+            UiColumn::new(UiColumnType::Command),
+            UiColumn::new(UiColumnType::Time),
+        ];
+        let (_, row) = render_line(&history, &columns, 40, false);
+
+        assert_eq!(row.chars().count(), 40);
+        assert!(row.starts_with(" >  12ms git status"), "row was: {row:?}");
+        assert!(row.ends_with("    5s ago"), "row was: {row:?}");
+    }
+
+    #[rstest]
+    fn fixed_width_command_respects_width_before_expanding_directory() {
+        let history = vec![sample_history("cargo test --workspace")];
+        let columns = vec![
+            UiColumn {
+                column_type: UiColumnType::Command,
+                width: 10,
+                expand: false,
+            },
+            UiColumn {
+                column_type: UiColumnType::Directory,
+                width: 20,
+                expand: true,
+            },
+        ];
+        let (_, row) = render_line(&history, &columns, 35, false);
+
+        // indicator (3) + command (10) + gap (1) + directory (21) = 35
+        assert!(row.starts_with(" > cargo…pace "), "row was: {row:?}");
+        assert!(row.ends_with("/home/user/project   "), "directory shifted/truncated: {row:?}");
+    }
+
+    #[rstest]
+    fn alternate_highlight_spans_padded_expanding_command() {
+        let history = vec![sample_history("ls")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (buf, row) = render_line(&history, &columns, 30, true);
+
+        assert!(row.ends_with("   5s ago"), "row was: {row:?}");
+        for x in 3..30 {
+            assert!(
+                buf[(x, 0)].modifier.contains(Modifier::REVERSED),
+                "expected REVERSED modifier at col {x} in {row:?}"
+            );
+        }
+    }
+
+    #[rstest]
+    fn narrow_viewport_with_expanding_command_before_fixed_does_not_panic() {
+        let history = vec![sample_history("echo hello world")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (_, row) = render_line(&history, &columns, 10, false);
+
+        assert_eq!(row.chars().count(), 10);
+        assert_eq!(row, " >     5s ");
+    }
+
+    #[rstest]
+    fn two_expanding_columns_share_remaining_width() {
+        let history = vec![sample_history("echo hello world")];
+        let columns = vec![
+            UiColumn::new(UiColumnType::Command),
+            UiColumn {
+                column_type: UiColumnType::Directory,
+                width: 20,
+                expand: true,
+            },
+        ];
+        let (_, row) = render_line(&history, &columns, 30, false);
+
+        // indicator (3) + gap (1) => 26 remaining, 13 each.
+        assert_eq!(row.chars().count(), 30);
+        assert_eq!(row, " > echo h… world …user/project");
+    }
+
+    #[rstest]
+    fn combining_mark_does_not_truncate_command_before_trailing_column() {
+        let history = vec![sample_history("echo cafe\u{0301} more")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (_, row) = render_line(&history, &columns, 30, false);
+
+        assert_eq!(row.chars().count(), 30);
+        assert!(row.contains("more"), "arguments after combining mark dropped: {row:?}");
+        assert!(row.ends_with("   5s ago"), "time column not right-aligned: {row:?}");
+    }
+
+    #[rstest]
+    fn wide_cjk_command_before_time_keeps_alignment() {
+        let history = vec![sample_history("echo 你好世界你好世界你好世界")];
+        let columns = vec![UiColumn::new(UiColumnType::Command), UiColumn::new(UiColumnType::Time)];
+        let (buf, _) = render_line(&history, &columns, 30, false);
+
+        // Trailing 9 cells (cols 21..30) must hold "   5s ago" right at the edge.
+        let tail: String = (21..30).map(|x| buf[(x, 0)].symbol()).collect();
+        assert_eq!(tail, "   5s ago");
     }
 }
