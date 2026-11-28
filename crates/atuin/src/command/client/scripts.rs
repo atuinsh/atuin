@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
-use atuin_client::database::Sqlite;
+use atuin_client::database::{Context, DbSearchMode, OptFilters, Sqlite};
+use atuin_client::history::{History, all_user_author_filter};
 use atuin_client::record::sqlite_store::SqliteStore;
-use atuin_client::settings::Settings;
+use atuin_client::settings::{FilterMode, Settings};
 use atuin_common::encryption::paseto_v4;
 use atuin_common::userio;
 use atuin_scripts::execution::{
@@ -223,6 +224,26 @@ impl Cmd {
         Ok(code)
     }
 
+    /// The `count` most recent commands run by the user (newest first), skipping commands
+    /// recorded by agents. The author filter has to be part of the query: filtering after the
+    /// `LIMIT` would let agent commands push the user's own commands out of the window.
+    async fn last_commands(
+        history_db: &Sqlite,
+        filter: FilterMode,
+        context: &Context,
+        count: usize,
+    ) -> Result<Vec<History>> {
+        let options = OptFilters {
+            limit: Some(i64::try_from(count)?),
+            include_duplicates: true,
+            authors: all_user_author_filter(),
+            ..Default::default()
+        };
+        let history =
+            history_db.search(DbSearchMode::FullText, filter, context, "", options).await?;
+        Ok(history)
+    }
+
     async fn handle_new_script(
         settings: &Settings,
         new_script: NewScript,
@@ -237,10 +258,9 @@ impl Cmd {
             let context = atuin_client::database::current_context(settings).await?;
 
             // Get the last N+1 commands, filtering by the default mode
-            let filters = [settings.default_filter_mode(context.vcs_root.is_some())];
+            let filter = settings.default_filter_mode(context.vcs_root.is_some());
 
-            let mut history =
-                history_db.list(filters, &context, Some(count), false, false, None).await?;
+            let mut history = Self::last_commands(history_db, filter, &context, count).await?;
 
             // Reverse to get chronological order
             history.reverse();
@@ -593,9 +613,15 @@ impl Cmd {
 #[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
+    use std::time::Duration;
 
+    use atuin_client::database::{Context, Sqlite};
+    use atuin_client::history::{AuthorKind, History};
+    use atuin_client::settings::FilterMode;
     use atuin_common::env::MockEnv;
+    use atuin_domain::record::CmdOrigin;
     use rstest::rstest;
+    use time::OffsetDateTime;
 
     use super::Cmd;
 
@@ -612,5 +638,46 @@ mod tests {
 
         assert_eq!(error.to_string(), format!("failed to open editor `{}`", editor.display()));
         assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::NotFound);
+    }
+
+    async fn save(db: &Sqlite, command: &str, ts: i64, agent: bool) {
+        let mut h: History = History::capture()
+            .timestamp(OffsetDateTime::from_unix_timestamp(ts).unwrap())
+            .command(command)
+            .cwd("/tmp")
+            .build()
+            .into();
+        h.exit = 0;
+        h.duration = 1;
+        h.session = "s".to_string();
+        if agent {
+            h.author = "claude".to_string();
+            h.author_kind = Some(AuthorKind::Agent);
+        }
+        db.save(&h).await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn last_commands_skips_agent_commands_before_limiting() {
+        let db = Sqlite::in_memory(Duration::from_secs(5)).await.unwrap();
+        save(&db, "user one", 1_700_000_001, false).await;
+        save(&db, "user two", 1_700_000_002, false).await;
+        save(&db, "agent one", 1_700_000_003, true).await;
+        save(&db, "agent two", 1_700_000_004, true).await;
+        save(&db, "atuin scripts new --last 2", 1_700_000_005, false).await;
+        let context = Context {
+            session: "s".to_string(),
+            cwd: "/tmp".to_string(),
+            cmd_origin: CmdOrigin::probe_current(),
+            host_id: String::new(),
+            vcs_root: None,
+        };
+
+        // `--last 2` asks for 2 + 1 (the `scripts new` invocation itself).
+        let found = Cmd::last_commands(&db, FilterMode::Global, &context, 3).await.unwrap();
+        let commands: Vec<&str> = found.iter().map(|h| h.command.as_str()).collect();
+
+        assert_eq!(commands, ["atuin scripts new --last 2", "user two", "user one"]);
     }
 }
