@@ -6,13 +6,14 @@ use atuin_common::env;
 use super::StaticInitOptions;
 use crate::shell::BASH;
 
+/// Writes the `[tmux]` settings as shell variables.
+///
+/// They are **not** exported, since a tmux server started from this shell would hand them to
+/// every pane, over the config each pane's shell reads.
 fn write_tmux_config<W: Write>(writer: &mut W, tmux: &Tmux) -> io::Result<()> {
-    if tmux.enabled {
-        writeln!(writer, "export ATUIN_TMUX_POPUP_WIDTH='{}'", tmux.width)?;
-        writeln!(writer, "export ATUIN_TMUX_POPUP_HEIGHT='{}'", tmux.height)
-    } else {
-        writeln!(writer, "export ATUIN_TMUX_POPUP=false")
-    }
+    writeln!(writer, "__atuin_tmux_popup={}", tmux.enabled)?;
+    writeln!(writer, "__atuin_tmux_popup_width='{}'", tmux.width)?;
+    writeln!(writer, "__atuin_tmux_popup_height='{}'", tmux.height)
 }
 
 fn write_static_init<W: Write>(writer: &mut W, options: &StaticInitOptions<'_>) -> io::Result<()> {

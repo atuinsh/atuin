@@ -42,10 +42,15 @@ impl Shell {
         if let Some(settings) = settings {
             env.write_config(settings);
         }
+        Some(Self::spawn(setup, env, BTreeMap::new()))
+    }
+
+    /// `setup` started in `env`, which the caller has already configured, with `vars` set.
+    pub fn spawn(setup: Setup, env: FreshEnv, vars: BTreeMap<String, String>) -> Self {
         // Finish migrations before background shell hooks can open the databases.
         env.run(&["store", "status"]);
-        let (pty, config) = setup.spawn(&env, BTreeMap::new(), "");
-        Some(Self { pty, env, config })
+        let (pty, config) = setup.spawn(&env, vars, "");
+        Self { pty, env, config }
     }
 }
 
