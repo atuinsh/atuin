@@ -32,6 +32,11 @@ if [[ -z "${ATUIN_SESSION:-}" || "${ATUIN_SHLVL:-}" != "$SHLVL" ]]; then
     export ATUIN_SHLVL=$SHLVL
 fi
 ATUIN_HISTORY_ID=""
+# Keep the history id started by this shell in an unexported variable so precmd and output markers
+# only act on entries this shell owns. For example, a nested shell can re-export an inherited
+# ATUIN_HISTORY_ID after init.
+unset -v __atuin_history_id
+__atuin_history_id=""
 
 if [[ -z ${__atuin_pty_proxy_owns_tty-} ]] && [[ -n ${ATUIN_PTY_PROXY_ACTIVE-} ]]; then
     # The pty-proxy preamble also sets this variable, but make sure it's set here,
@@ -57,25 +62,25 @@ __atuin_mark_output_start() {
         printf '\033]133;B\a'
     fi
 
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+    [[ -n "${__atuin_history_id:-}" ]] || return 0
 
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
         # Current pty-proxy is an older version that expects OSC 133; new
         # pty-proxy sets ATUIN_PTY_PROXY_ACTIVE to 2.
         printf '\033]133;C\a'
     else
-        printf '\033]18188735;C;%s\a' "$ATUIN_HISTORY_ID"
+        printf '\033]18188735;C;%s\a' "$__atuin_history_id"
     fi
 }
 
 __atuin_mark_output_end() {
     [[ ${__atuin_pty_proxy_owns_tty-} = 1 ]] || return 0
-    [[ -n "${ATUIN_HISTORY_ID:-}" ]] || return 0
+    [[ -n "${__atuin_history_id:-}" ]] || return 0
 
     if [[ ${ATUIN_PTY_PROXY_ACTIVE-} = 1 ]]; then
-        printf '\033]133;D;%s;history_id=%s\a' "$1" "$ATUIN_HISTORY_ID"
+        printf '\033]133;D;%s;history_id=%s\a' "$1" "$__atuin_history_id"
     else
-        printf '\033]18188735;D;%s\a' "$ATUIN_HISTORY_ID"
+        printf '\033]18188735;D;%s\a' "$__atuin_history_id"
     fi
 }
 
@@ -83,6 +88,7 @@ _atuin_preexec() {
     local id
     id=$(ATUIN_SHELL=zsh atuin history start --hook -- "$1" 2>/dev/null)
     export ATUIN_HISTORY_ID="$id"
+    __atuin_history_id="$id"
     __atuin_mark_output_start
     __atuin_preexec_time=${EPOCHREALTIME-}
 }
@@ -90,7 +96,9 @@ _atuin_preexec() {
 _atuin_precmd() {
     local EXIT="$?" __atuin_precmd_time=${EPOCHREALTIME-}
 
-    [[ -z "${ATUIN_HISTORY_ID:-}" ]] && return 0
+    # Only end an id this shell's own preexec started. An inherited or re-exported
+    # ATUIN_HISTORY_ID still names the parent shell's in-flight entry.
+    [[ -z "${__atuin_history_id:-}" ]] && return 0
 
     local duration=""
     if [[ -n $__atuin_preexec_time && -n $__atuin_precmd_time ]]; then
@@ -99,8 +107,9 @@ _atuin_precmd() {
     fi
 
     __atuin_mark_output_end "$EXIT"
-    (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $ATUIN_HISTORY_ID >/dev/null 2>&1 &)
+    (atuin history end --hook --exit $EXIT ${duration:+--duration=$duration} -- $__atuin_history_id >/dev/null 2>&1 &)
     export ATUIN_HISTORY_ID=""
+    __atuin_history_id=""
 }
 
 # Allow comment lines at the interactive prompt, matching the default

@@ -98,6 +98,18 @@ impl Setup {
         })
     }
 
+    /// The shell name from the setup file.
+    pub fn shell(&self) -> &str {
+        &self.config.shell
+    }
+
+    /// Append a snippet to the shell's rc script so it runs after `atuin init`.
+    pub fn append_script(&mut self, snippet: &str) {
+        self.config.script.push('\n');
+        self.config.script.push_str(snippet);
+        self.config.script.push('\n');
+    }
+
     /// The shell started in `env`, with `vars` set (over the files it needs, where they name the
     /// same) and `init_args` passed to `atuin init`, at its prompt.
     pub fn spawn(
