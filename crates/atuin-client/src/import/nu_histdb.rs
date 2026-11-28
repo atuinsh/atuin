@@ -46,7 +46,11 @@ impl From<HistDbEntry> for History {
             .command(String::from_utf8_lossy(&histdb_item.command_line).into_owned())
             .cwd(String::from_utf8_lossy(&histdb_item.cwd).into_owned())
             .exit(histdb_item.exit_status)
-            .duration(histdb_item.duration_ms)
+            .duration(if histdb_item.duration_ms < 0 {
+                histdb_item.duration_ms
+            } else {
+                histdb_item.duration_ms.saturating_mul(1_000_000)
+            })
             .session(format!("{:x}", histdb_item.session_id))
             .cmd_origin(CmdOrigin::new(
                 &CmdHost::from(String::from_utf8_lossy(&histdb_item.hostname).into_owned()),
@@ -144,6 +148,20 @@ mod test {
             exit_status: 0,
             more_info: Vec::new(),
         }
+    }
+
+    #[rstest]
+    #[case::zero(0, 0)]
+    #[case::milliseconds(100, 100_000_000)]
+    #[case::seconds(2000, 2_000_000_000)]
+    #[case::unknown(-1, -1)]
+    #[case::overflow(i64::MAX, i64::MAX)]
+    fn imported_duration_is_nanoseconds(#[case] milliseconds: i64, #[case] nanoseconds: i64) {
+        let mut row = entry(0, b"sleep 2".to_vec());
+        row.duration_ms = milliseconds;
+        let history: History = row.into();
+
+        assert_eq!(history.duration, nanoseconds);
     }
 
     /// A corrupt row must degrade to something representable rather than
