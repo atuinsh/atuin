@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::ai_session::HarnessSession;
 use atuin_client::lua_config::Thread;
@@ -15,6 +16,7 @@ use atuin_octavo::pb;
 use atuin_octavo::queue::{DirShares, OrgShare, ShareState};
 use atuin_octavo::shares::Configs;
 use parking_lot::Mutex;
+use tokio::sync::Notify;
 
 use crate::octavo::QueuedShares;
 
@@ -73,15 +75,36 @@ impl NewThread {
 #[derive(Clone, Debug, Default)]
 pub(super) struct NewThreads {
     threads: Arc<Mutex<VecDeque<NewThread>>>,
+    /// Wakes those waiting on a thread's start ([`Self::wait_for`]) when one is added.
+    added: Arc<Notify>,
 }
 
 impl NewThreads {
     /// Keep `thread`, in place of an earlier start of the same session.
     pub(super) fn add(&self, thread: NewThread) {
-        let mut threads = self.threads.lock();
-        threads.retain(|kept| kept.session != thread.session);
-        threads.push_front(thread);
-        threads.truncate(KEPT);
+        {
+            let mut threads = self.threads.lock();
+            threads.retain(|kept| kept.session != thread.session);
+            threads.push_front(thread);
+            threads.truncate(KEPT);
+        }
+        self.added.notify_waiters();
+    }
+
+    /// [`Self::find`], waiting up to `wait` for an agent to announce the thread, as an agent runs
+    /// atuin's `SessionStart` hook beside what asks about it, and the hook may land second.
+    pub(super) async fn wait_for(&self, id: &str, wait: Duration) -> Option<NewThread> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            // Listen before looking, so a thread added between the two still wakes this.
+            let added = self.added.notified();
+            tokio::pin!(added);
+            added.as_mut().enable();
+            if let Some(thread) = self.find(id) {
+                return Some(thread);
+            }
+            tokio::time::timeout_at(deadline, added).await.ok()?;
+        }
     }
 
     /// The newest thread whose session id, as its agent names it, is `id`.
@@ -135,6 +158,32 @@ mod tests {
         }
         assert_eq!(threads.find("0"), None);
         assert!(threads.find(&KEPT.to_string()).is_some());
+    }
+
+    /// A thread announced while it's waited for is found then, not at the end of the wait.
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_ends_as_the_thread_is_announced() {
+        let threads = NewThreads::default();
+        let announcing = threads.clone();
+        let announced = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            announcing.add(thread(HarnessKind::ClaudeCode, "a", "/repo"));
+            tokio::time::Instant::now()
+        });
+        let found = threads.wait_for("a", Duration::from_secs(5)).await;
+        assert_eq!(found.map(|thread| thread.dir), Some(PathBuf::from("/repo")));
+        assert_eq!(tokio::time::Instant::now(), announced.await.unwrap());
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_gives_up_on_a_thread_never_announced() {
+        let threads = NewThreads::default();
+        let start = tokio::time::Instant::now();
+        threads.add(thread(HarnessKind::ClaudeCode, "other", "/repo"));
+        assert_eq!(threads.wait_for("a", Duration::from_secs(2)).await, None);
+        assert_eq!(start.elapsed(), Duration::from_secs(2));
     }
 
     /// Two agents' sessions of the same id are told apart by which started last.

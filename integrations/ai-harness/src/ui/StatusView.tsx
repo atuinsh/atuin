@@ -69,7 +69,13 @@ function HubText({ shares }: { shares: Shares }) {
   const sharing = shares.orgs.filter(org => org.state === 'open' || org.state === 'opening')
   if (Shares.orgs(shares, 'open').length > 0) return <SharedWith orgs={sharing} />
   // Only queued so far: Atuin Hub hasn't opened it to anyone yet.
-  if (sharing.length > 0) return <Text>Sharing with {named(sharing.map(org => org.slug))}</Text>
+  if (sharing.length > 0) {
+    return (
+      <Text>
+        Sharing with <SharedWith orgs={sharing} />
+      </Text>
+    )
+  }
   // A close still queued hasn't reached Atuin Hub: the org's members can open it until it has.
   if (closing.length > 0) return <Text tone="warning">Closing to {named(closing)}</Text>
   // No org sees it, but a share link, which `orgs` doesn't track, may still open it.

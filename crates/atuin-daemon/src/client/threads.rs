@@ -87,7 +87,7 @@ impl ThreadsClient {
 
     /// Who the thread an agent started lately as `id` will be shared with once its first message
     /// is captured, or [`None`] when no agent started one by that id, or the daemon was built
-    /// without Octavo.
+    /// without Octavo. The daemon waits a moment for a start it hasn't heard of yet.
     pub async fn new_thread_shares(
         &mut self,
         id: &str,

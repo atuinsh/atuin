@@ -6,6 +6,7 @@ mod starts;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use atuin_client::ai_session::{AiSessionDatabase, AiSessionStore, HarnessSession, Message};
 use atuin_client::settings::Settings;
@@ -31,6 +32,11 @@ use crate::daemon::DaemonHandle;
 use crate::octavo::{
     QueuedShares, ThreadActionError, ThreadShares, ThreadSharesError, ThreadUpload, threads_on,
 };
+
+/// How long a question about a thread the daemon hasn't heard of waits for an agent to announce
+/// its start. The agent runs atuin's `SessionStart` hook beside the chip's first status read, so the
+/// hook, which lands in well under its 2s limit, may come second.
+const ANNOUNCED_WITHIN: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Error)]
 pub enum OpenActiveOctavoClientError {
@@ -212,7 +218,7 @@ impl OctavoClient for ActiveOctavoClient {
     }
 
     async fn new_thread_shares(&self, id: &str) -> Option<ThreadShares> {
-        let thread = self.new_threads.find(id)?;
+        let thread = self.new_threads.wait_for(id, ANNOUNCED_WITHIN).await?;
         Some(match self.uploader.uploading().await {
             Uploading::Off => ThreadShares::Off,
             Uploading::LoggedOut => ThreadShares::LoggedOut,

@@ -98,7 +98,8 @@ service Threads {
   // Hear that an agent started a thread in a directory, before any message of it is captured.
   rpc ThreadStarted(ThreadStartedRequest) returns (ThreadStartedReply);
   // Get who a thread an agent started lately will be shared with once its first message is
-  // captured: the organizations its directory's config shares with, as opening. NOT_FOUND when
-  // no agent started one by that id lately.
+  // captured: the organizations its directory's config shares with, as opening. Waits a moment
+  // for the agent to announce a thread not heard of yet, as the agent may ask before it does.
+  // NOT_FOUND when no agent started one by that id lately.
   rpc GetNewThreadShares(NewThreadRequest) returns (ThreadShares);
 }
