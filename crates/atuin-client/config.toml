@@ -46,6 +46,7 @@
 
 ## which filter mode to use for interactive search
 ## possible values: "global", "host", "session", "session-preload", "directory", "workspace"
+## host matches the current install ID or one of its known hostnames
 ## consider using search.filters to customize the enablement and order of filter modes
 # filter_mode = "global"
 

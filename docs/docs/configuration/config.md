@@ -229,6 +229,9 @@ The filter mode that interactive search starts in. Accepted values are `global`,
 `host`, `session`, `directory`, `workspace`, and `session-preload` — see
 [Filter mode](../guide/advanced-usage.md#filter-mode) for what each one searches.
 
+The `host` mode matches the current install ID or a known hostname. `ATUIN_HOST_NAME`
+sets the current name, and older names linked to the same ID can still match.
+
 Whichever mode you start in, you can still cycle through the rest with ctrl-r.
 
 ```toml

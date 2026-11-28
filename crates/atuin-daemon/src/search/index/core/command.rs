@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
+use atuin_client::database::normalized_hostname;
 use atuin_client::history::{History, HistoryId};
 use atuin_common::path::DisplayRichExt;
+use atuin_domain::record::HostId;
 use easy_cast::Conv;
 use lasso::{Rodeo, Spur};
 use tracing::instrument;
@@ -24,6 +26,7 @@ pub struct CommandData {
     directories: HashSet<Spur>,
     /// All hostnames where this command has been run (interned keys).
     hosts: HashSet<Spur>,
+    host_ids: HashSet<HostId>,
     /// All sessions where this command has been run (as 16-byte UUIDs).
     sessions: HashSet<Uuid>,
 }
@@ -38,7 +41,7 @@ impl CommandData {
 
         let dir_key =
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
-        let host_key = interner.get_or_intern(history.cmd_origin.as_str());
+        let host_key = interner.get_or_intern(normalized_hostname(history.cmd_origin.as_str()));
 
         Some(Self {
             most_recent_id: history.id,
@@ -46,6 +49,7 @@ impl CommandData {
             count: 1,
             directories: HashSet::from([dir_key]),
             hosts: HashSet::from([host_key]),
+            host_ids: history.host_id.into_iter().collect(),
             sessions: HashSet::from([session]),
         })
     }
@@ -66,7 +70,8 @@ impl CommandData {
         let dir_key =
             interner.get_or_intern(history.cwd.display_rich().trailing_slash(true).to_string());
         self.directories.insert(dir_key);
-        self.hosts.insert(interner.get_or_intern(history.cmd_origin.as_str()));
+        self.hosts.insert(interner.get_or_intern(normalized_hostname(history.cmd_origin.as_str())));
+        self.host_ids.extend(history.host_id);
         self.sessions.insert(session);
 
         // Update the most recent run if this run is newer. Timestamps are whole seconds. Runs in the
@@ -146,6 +151,11 @@ impl CommandData {
     /// O(n) where n = number of unique directories for this command.
     pub fn has_invocation_in_workspace(&self, prefix: &str, interner: &Rodeo) -> bool {
         self.directories.iter().any(|&spur| interner.resolve(&spur).starts_with(prefix))
+    }
+
+    /// Check if any invocation has the given install ID.
+    pub fn has_invocation_on_host_id(&self, id: &HostId) -> bool {
+        self.host_ids.contains(id)
     }
 
     /// Check if any invocation matches an interned hostname.

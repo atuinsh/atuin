@@ -1,4 +1,5 @@
 use atuin_client::history::ShellSession;
+use atuin_domain::record::HostId;
 use lasso::{Rodeo, Spur};
 use uuid::Uuid;
 
@@ -14,7 +15,10 @@ pub enum IndexFilterMode {
     /// Filter to commands run in a workspace (directory prefix).
     Workspace(String),
     /// Filter to commands run on a specific host.
-    Host(String),
+    Host {
+        id: Option<HostId>,
+        names: Vec<String>,
+    },
     /// Filter to commands run in a specific session.
     Session(String),
     /// Filter to commands run in a specific session, plus all commands run before the start of the
@@ -27,7 +31,10 @@ pub(super) enum CompiledFilter<'a> {
     All,
     Directory(Spur),
     Workspace(&'a str),
-    Host(Spur),
+    Host {
+        id: Option<HostId>,
+        names: Vec<Spur>,
+    },
     Session(Uuid),
     /// The session's own commands, plus those run before it started.
     SessionPreload(SessionPreload),
@@ -43,7 +50,10 @@ impl CompiledFilter<'_> {
             Self::Nothing => false,
             Self::Directory(dir) => data.has_invocation_in_dir(*dir),
             Self::Workspace(prefix) => data.has_invocation_in_workspace(prefix, interner),
-            Self::Host(hostname) => data.has_invocation_on_host(*hostname),
+            Self::Host { id, names } => {
+                id.as_ref().is_some_and(|id| data.has_invocation_on_host_id(id))
+                    || names.iter().any(|name| data.has_invocation_on_host(*name))
+            }
             Self::Session(session) => data.has_invocation_in_session(session),
             Self::SessionPreload(preload) => {
                 preload.ran_before_session(index)
@@ -65,9 +75,10 @@ impl IndexFilterMode {
                 interner.get(dir).map_or(CompiledFilter::Nothing, CompiledFilter::Directory)
             }
             Self::Workspace(prefix) => CompiledFilter::Workspace(prefix),
-            Self::Host(hostname) => {
-                interner.get(hostname).map_or(CompiledFilter::Nothing, CompiledFilter::Host)
-            }
+            Self::Host { id, names } => CompiledFilter::Host {
+                id: *id,
+                names: names.iter().filter_map(|name| interner.get(name)).collect(),
+            },
             Self::Session(session) => {
                 Uuid::parse_str(session).map_or(CompiledFilter::Nothing, CompiledFilter::Session)
             }

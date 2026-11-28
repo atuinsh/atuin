@@ -7,11 +7,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use atuin_client::database::Sqlite;
 use atuin_client::history::HistoryId;
+use atuin_client::history::store::HistoryStore;
 use atuin_client::settings::Settings;
 use atuin_common::filter::OrFilter;
 use atuin_common::path::DisplayRichExt;
 use atuin_common::shell::Shell;
+use atuin_domain::record::HostId;
 use eyre::Result;
 use futures::StreamExt;
 use tokio_stream::Stream;
@@ -78,6 +81,7 @@ impl SearchComponent {
         Self::with_settings(SearchIndexSettings {
             frecency_multipliers,
             shells,
+            host_id_generation: 0,
         })
     }
 
@@ -103,6 +107,12 @@ impl SearchComponent {
     #[must_use]
     pub const fn index(&self) -> &Arc<SharedSearchIndex> {
         &self.index
+    }
+
+    async fn backfill_host_ids(handle: &DaemonHandle) -> Result<()> {
+        let id = handle.settings().await.host_id().await?;
+        let store = HistoryStore::new(handle.store().clone(), id, handle.encryption_key().clone());
+        store.backfill_host_ids(handle.history_db()).await
     }
 
     #[instrument(skip_all, level = Level::TRACE)]
@@ -182,6 +192,9 @@ impl Component for SearchComponent {
             let _ = Self::populate_index(&handle_for_loader, &index).await.inspect_err(|err| {
                 error!(?err, "failed to rebuild the index.");
             });
+            if let Err(err) = Self::backfill_host_ids(&handle_for_loader).await {
+                warn!(?err, "failed to backfill history host IDs");
+            }
         }));
 
         // Spawn background task to periodically refresh frecency
@@ -260,13 +273,20 @@ impl SearchGrpcService {
     async fn maybe_rebuild_index(
         &self,
         shells: &OrFilter<Vec<String>>,
+        host_id_generation: i64,
     ) -> Result<RebuiltIndex<'_>, ()> {
         self.index
             .rebuild(self.handle.history_db(), |settings| {
-                (settings.installed.shells != *shells).then(|| SearchIndexSettings {
-                    shells: shells.clone(),
-                    ..settings.latest.clone()
-                })
+                (settings.installed.shells != *shells
+                    || settings.installed.host_id_generation < host_id_generation)
+                    .then(|| SearchIndexSettings {
+                        shells: shells.clone(),
+                        host_id_generation: settings
+                            .latest
+                            .host_id_generation
+                            .max(host_id_generation),
+                        ..settings.latest.clone()
+                    })
             })
             .await
             .map_err(|e| error!("Failed to rebuild search index: {e}"))
@@ -285,11 +305,21 @@ impl SearchGrpcService {
             ids.map(|id| id.into_bytes().to_vec()).collect()
         }
 
+        // CLI backfill commits its generation with the IDs, so searches can see the change
+        // even if the writer exits without contacting the daemon.
+        let generation = if matches!(filter, IndexFilterMode::Host { id: Some(_), .. }) {
+            self.handle.history_db().host_id_generation().await.map_err(|err| {
+                error!(?err, "failed to read host ID generation");
+            })?
+        } else {
+            0
+        };
+
         // Search the index that the rebuild check returned. That index is guaranteed to have this
         // request's shell filter. Each index is dropped before the next await, because it may hold
         // the index's read lock.
         let pending = {
-            let index = self.maybe_rebuild_index(shells).await?;
+            let index = self.maybe_rebuild_index(shells, generation).await?;
             match index.search(query, filter, RESULTS_LIMIT) {
                 Ok(results) => return Ok(ids(results)),
                 Err(pending) => pending,
@@ -299,7 +329,7 @@ impl SearchGrpcService {
         // The search needs data from the database. Load that data without holding the index's
         // lock.
         let loaded = pending.load(self.handle.history_db()).await;
-        let index = self.maybe_rebuild_index(shells).await?;
+        let index = self.maybe_rebuild_index(shells, generation).await?;
         Ok(ids(index.finish_search(loaded)))
     }
 }
@@ -347,7 +377,21 @@ impl SearchSvc for SearchGrpcService {
                 );
 
                 // Convert proto FilterMode + context to IndexFilterMode
-                let index_filter = convert_filter_mode(filter_mode, proto_context.as_ref());
+                let index_filter = match convert_filter_mode(
+                    this.handle.history_db(),
+                    filter_mode,
+                    proto_context.as_ref(),
+                )
+                .await
+                {
+                    Ok(filter) => filter,
+                    Err(err) => {
+                        error!(?err, "failed to prepare search filter");
+                        let _ =
+                            tx.send(Err(Status::internal("failed to prepare search filter"))).await;
+                        break;
+                    }
+                };
 
                 // An empty list in `SearchRequest::shells` means "all".
                 let shells = OrFilter::from_list(search_req.shells).unwrap_or_default();
@@ -387,7 +431,7 @@ impl SearchSvc for SearchGrpcService {
         let this = self.clone();
         // The rebuild runs in its own task. That way a client disconnect can't cancel it.
         tokio::spawn(
-            async move { this.maybe_rebuild_index(&shells).await.map(drop) }
+            async move { this.maybe_rebuild_index(&shells, 0).await.map(drop) }
                 .instrument(tracing::Span::current()),
         )
         .await
@@ -474,11 +518,12 @@ impl SearchSvc for SearchGrpcService {
 }
 
 /// Convert proto FilterMode and context to IndexFilterMode.
-fn convert_filter_mode(
+async fn convert_filter_mode(
+    db: &Sqlite,
     mode: FilterMode,
     context: Option<&crate::search::SearchContext>,
-) -> IndexFilterMode {
-    match (mode, context) {
+) -> Result<IndexFilterMode> {
+    Ok(match (mode, context) {
         (FilterMode::Global, _) => IndexFilterMode::Global,
         (FilterMode::Directory, Some(ctx)) => {
             IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
@@ -491,12 +536,16 @@ fn convert_filter_mode(
                 IndexFilterMode::Directory(ctx.cwd.display_rich().trailing_slash(true).to_string())
             }
         }
-        (FilterMode::Host, Some(ctx)) => IndexFilterMode::Host(ctx.hostname.clone()),
+        (FilterMode::Host, Some(ctx)) => {
+            let id = uuid::Uuid::parse_str(&ctx.host_id).ok().map(HostId);
+            let names = db.host_names(id, &ctx.hostname).await?;
+            IndexFilterMode::Host { id, names }
+        }
         (FilterMode::Session, Some(ctx)) => IndexFilterMode::Session(ctx.session_id.clone()),
         (FilterMode::SessionPreload, Some(ctx)) => {
             IndexFilterMode::SessionPreload(ctx.session_id.clone())
         }
         // If no context provided, fall back to global
         _ => IndexFilterMode::Global,
-    }
+    })
 }
