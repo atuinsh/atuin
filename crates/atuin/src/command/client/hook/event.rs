@@ -315,6 +315,37 @@ mod tests {
         }),
         Some(HookEvent::End { tool_use_id: "toolu_abc123".into(), exit: Some(3), transcript: None, duration: None })
     )]
+    // Windows Claude Code runs shell commands through its `PowerShell` tool.
+    #[case::claude_code_powershell_pre_tool_use(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Get-ChildItem"},
+            "tool_use_id": "toolu_ps1"
+        }),
+        Some(HookEvent::Start {
+            command: non_nul("Get-ChildItem"),
+            intent: None,
+            tool_use_id: "toolu_ps1".to_owned(),
+            cwd: None,
+            at: None,
+        })
+    )]
+    #[case::claude_code_powershell_post_tool_use(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "Get-ChildItem"},
+            "tool_response": {"exitCode": 0},
+            "tool_use_id": "toolu_ps1"
+        }),
+        Some(HookEvent::End {
+            tool_use_id: "toolu_ps1".to_owned(),
+            exit: Some(0),
+            transcript: None,
+            duration: None,
+        })
+    )]
     #[case::post_tool_use_without_exit_code_says_none(
         json!({
             "hook_event_name": "PostToolUse",
@@ -1100,7 +1131,11 @@ mod tests {
                 "must not be a shell tool",
                 |s| !matches!(
                     s.as_str(),
-                    "Bash" | "run_terminal_command" | "execute_bash" | "execute_pwsh"
+                    "Bash"
+                        | "PowerShell"
+                        | "run_terminal_command"
+                        | "execute_bash"
+                        | "execute_pwsh"
                 ),
             ),
             event in proptest::sample::select(vec![

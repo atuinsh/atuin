@@ -92,6 +92,7 @@ impl Access {
                 | "run_command"
                 | "execute_bash"
                 | "execute_pwsh"
+                | "powershell"
                 | "terminal"
         ) {
             let command = match input.get("command").or_else(|| input.get("cmd")) {

@@ -19,10 +19,15 @@ use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 pub enum WireToolName {
-    /// The tool the agent requested is a shell command: `Bash` in Claude Code, Codex and
-    /// Copilot; `run_terminal_command` in Grok Build; `execute_bash` in Kiro (`execute_pwsh` on
-    /// Windows).
-    #[serde(alias = "run_terminal_command", alias = "execute_bash", alias = "execute_pwsh")]
+    /// The tool the agent requested is a shell command: `Bash` or `PowerShell` in Claude Code;
+    /// `Bash` in Codex and Copilot; `run_terminal_command` in Grok Build; `execute_bash` in Kiro
+    /// (`execute_pwsh` on Windows).
+    #[serde(
+        alias = "PowerShell",
+        alias = "run_terminal_command",
+        alias = "execute_bash",
+        alias = "execute_pwsh"
+    )]
     Bash,
     /// Unrecognized wire tool name.
     #[serde(other)]
