@@ -1592,15 +1592,17 @@ impl Settings {
         None
     }
 
+    /// The filter mode that a search starts in. It is only [`FilterMode::Workspace`] when
+    /// `has_workspace` is true, which [`crate::database::Context::has_workspace`] decides.
     #[must_use]
-    pub fn default_filter_mode(&self, has_vcs_root: bool) -> FilterMode {
+    pub fn default_filter_mode(&self, has_workspace: bool) -> FilterMode {
         self.filter_mode
             .filter(|x| self.search.filters.contains(x))
             .or_else(|| {
                 self.search
                     .filters
                     .iter()
-                    .find(|x| match (x, has_vcs_root, self.workspaces) {
+                    .find(|x| match (x, has_workspace, self.workspaces) {
                         (FilterMode::Workspace, true, true) => true,
                         (FilterMode::Workspace, _, _) => false,
                         (_, _, _) => true,
@@ -2323,12 +2325,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::in_vcs_repo(true, true, FilterMode::Workspace)]
-    #[case::not_in_vcs_repo(true, false, FilterMode::Host)]
+    #[case::has_workspace(true, true, FilterMode::Workspace)]
+    #[case::no_workspace(true, false, FilterMode::Host)]
     #[case::workspaces_disabled(false, true, FilterMode::Host)]
     fn workspace_filter_selection(
         #[case] workspaces: bool,
-        #[case] has_vcs_root: bool,
+        #[case] has_workspace: bool,
         #[case] expected: FilterMode,
     ) {
         let mut settings = super::Settings::default();
@@ -2341,7 +2343,7 @@ mod tests {
         ];
         settings.workspaces = workspaces;
 
-        assert_eq!(settings.default_filter_mode(has_vcs_root), expected);
+        assert_eq!(settings.default_filter_mode(has_workspace), expected);
     }
 
     /// The example config writes out the headers of tables whose keys are all commented out, so

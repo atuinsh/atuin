@@ -135,6 +135,7 @@ impl HistoryClient {
             intent: h.intent.unwrap_or_default(),
             shell: h.shell.unwrap_or_default(),
             author_kind: AuthorKind::from(h.author_kind) as i32,
+            workspace: h.workspace,
         };
 
         Ok(self.client.start_history(req).await?.into_inner())
@@ -429,6 +430,7 @@ impl From<Context> for RpcSearchContext {
             hostname: context.cmd_origin.into_string(),
             host_id: context.host_id,
             vcs_root: context.vcs_root.map(|path| path.to_string_lossy().to_string()),
+            workspace: context.workspace,
         }
     }
 }
@@ -445,10 +447,14 @@ mod search_tests {
     };
 
     #[rstest]
-    #[case::no_repository(None)]
-    #[case::repository(Some("/work/repo"))]
-    #[case::unicode_repository(Some("/work/répo"))]
-    fn search_request_preserves_vcs_context(#[case] root: Option<&str>) {
+    #[case::no_repository(None, None)]
+    #[case::repository(Some("/work/repo"), Some("/work/repo/.git"))]
+    #[case::unicode_repository(Some("/work/répo"), Some("/work/répo/.git"))]
+    #[case::unresolved_workspace(Some("/work/repo"), None)]
+    fn search_request_preserves_vcs_context(
+        #[case] root: Option<&str>,
+        #[case] workspace: Option<&str>,
+    ) {
         let request = SearchRequest::from(SearchParams {
             query: "cargo build".to_string(),
             query_id: 42,
@@ -459,6 +465,7 @@ mod search_tests {
                 cmd_origin: CmdOrigin::try_from("host:user").unwrap(),
                 host_id: "host-id".to_string(),
                 vcs_root: root.map(PathBuf::from),
+                workspace: workspace.map(String::from),
             }),
             shells: OrFilter::default(),
         });
@@ -473,6 +480,7 @@ mod search_tests {
         assert_eq!(context.hostname, "host:user");
         assert_eq!(context.host_id, "host-id");
         assert_eq!(context.vcs_root.as_deref(), root);
+        assert_eq!(context.workspace.as_deref(), workspace);
     }
 }
 

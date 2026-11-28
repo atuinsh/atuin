@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::LazyLock;
 
 use atuin_common::filter::OrFilter;
@@ -5,7 +6,7 @@ use atuin_common::rmp::decode::{self, Bytes, DecodeError};
 use atuin_common::rmp::encode::{self, ByteBuf, EncodeError};
 use atuin_common::secrets::contains_secret;
 use atuin_common::time::TimestampExt;
-use atuin_common::utils::{normalize_optional_string, uuid_v7};
+use atuin_common::utils::{normalize_optional_string, uuid_v7, vcs_workspace_id};
 use atuin_domain::record::{CmdOrigin, DecryptedData, UNKNOWN_USER};
 use easy_cast::Conv;
 use eyre::Result;
@@ -139,6 +140,11 @@ pub fn probe_author() -> Option<String> {
     normalize_optional_string(atuin_common::env::var(HISTORY_AUTHOR_ENV).ok())
 }
 
+/// The [workspace](History::workspace) of `cwd`.
+pub(crate) fn workspace_of(cwd: &Path) -> Option<String> {
+    vcs_workspace_id(cwd).map(|workspace| workspace.to_string_lossy().into_owned())
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
 #[display("{}", self.name())]
 #[repr(u16)]
@@ -200,13 +206,19 @@ impl Version {
 /// This is deliberately not [`Version::min_fields`]: fields appended to the latest version grow
 /// this count, while `min_fields` stays at the 12 fields V2 launched with so that entries written
 /// before the new fields existed still decode.
-const LATEST_SERIALIZED_FIELDS: u32 = 13;
+const LATEST_SERIALIZED_FIELDS: u32 = 14;
 
 /// A V2 record contains `author_kind` iff it has at least this many fields.
 ///
 /// Frozen forever at the position `author_kind` was appended at; do not grow it alongside
 /// [`LATEST_SERIALIZED_FIELDS`].
 const V2_AUTHOR_KIND_FIELD_NUMBER: u32 = 13;
+
+/// A V2 record contains `workspace` iff it has at least this many fields.
+///
+/// Frozen forever at the position `workspace` was appended at; do not grow it alongside
+/// [`LATEST_SERIALIZED_FIELDS`].
+const V2_WORKSPACE_FIELD_NUMBER: u32 = 14;
 
 // Because of how our encoding/decoding protocol worked, unlike all other UUID types in Atuin, which
 // use hyphenated encoding, this one displays as the simple (hyphen-less) representation. This
@@ -386,6 +398,11 @@ pub struct History {
     ///
     /// When this is `None`, [`History::is_agent`] guesses from the author name.
     pub author_kind: Option<AuthorKind>,
+    /// The repository that the command ran in, which all checkouts of the repository share.
+    ///
+    /// See [`vcs_workspace_id`]. This is `None` outside a repository, and for entries that were
+    /// imported or recorded before it existed.
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,6 +471,7 @@ impl History {
         deleted_at: Option<Timestamp>,
         shell: Option<String>,
         author_kind: Option<AuthorKind>,
+        workspace: Option<String>,
     ) -> Self {
         let session = session
             .or_else(|| atuin_common::env::var("ATUIN_SESSION").ok())
@@ -480,6 +498,7 @@ impl History {
             deleted_at,
             shell,
             author_kind,
+            workspace,
         }
     }
 
@@ -549,6 +568,7 @@ impl History {
             self.author_kind.map(AuthorKind::as_u8),
             |output, kind| encode::write_uint8(output, kind).map(|_marker| ()),
         )?;
+        encode::write_optional(&mut output, self.workspace.as_deref(), encode::write_str)?;
         Ok(DecryptedData(output.into_vec()))
     }
 
@@ -619,6 +639,12 @@ impl History {
             None
         };
 
+        let workspace = if version >= Version::Two && nfields >= V2_WORKSPACE_FIELD_NUMBER {
+            decode::read_optional(&mut bytes, decode::read_string)?
+        } else {
+            None
+        };
+
         if version < Version::Two && !bytes.remaining_slice().is_empty() {
             return Err(HistoryDeserializeError::TrailingBytes);
         }
@@ -637,6 +663,7 @@ impl History {
             deleted_at: deleted_at.map(Timestamp::from_unix_nanos_u64),
             shell,
             author_kind,
+            workspace,
         })
     }
 
@@ -1008,6 +1035,7 @@ mod tests {
         deleted_at: None,
         shell: None,
         author_kind: None,
+        workspace: None,
     })]
     #[case::deleted(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
@@ -1023,6 +1051,7 @@ mod tests {
         deleted_at: Some("2023-11-19T20:18:00+00:00".parse::<Timestamp>().unwrap()),
         shell: Some("bash".into()),
         author_kind: Some(AuthorKind::User),
+        workspace: None,
     })]
     #[case::with_author_and_intent(History {
         id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
@@ -1038,6 +1067,23 @@ mod tests {
         deleted_at: None,
         shell: Some("fish".into()),
         author_kind: Some(AuthorKind::Agent),
+        workspace: None,
+    })]
+    #[case::with_workspace(History {
+        id: "66d16cbee7cd47538e5c5b8b44e9006e".parse().unwrap(),
+        timestamp: "2023-05-28T18:35:40.633872+00:00".parse::<Timestamp>().unwrap(),
+        duration: 49_206_000,
+        exit: 0,
+        command: "git status".to_owned(),
+        cwd: "/Users/conrad.ludgate/Documents/code/atuin.feature".to_owned(),
+        session: "b97d9a306f274473a203d2eba41f9457".to_owned(),
+        cmd_origin: CmdOrigin::try_from("fvfg936c0kpf:conrad.ludgate").unwrap(),
+        author: "conrad.ludgate".to_owned(),
+        intent: None,
+        deleted_at: None,
+        shell: Some("zsh".into()),
+        author_kind: None,
+        workspace: Some("/Users/conrad.ludgate/Documents/code/atuin/.git".to_owned()),
     })]
     fn serialize_deserialize_roundtrip(#[case] history: History) {
         let serialized = history.serialize().expect("failed to serialize history");
@@ -1089,6 +1135,7 @@ mod tests {
             deleted_at: Some(jiff::Timestamp::from_second(1_784_080_673).unwrap()),
             shell: Some("zsh".into()),
             author_kind: None,
+            workspace: None,
         }
     }
 
@@ -1107,9 +1154,9 @@ mod tests {
         }
     }
 
-    /// A V2 record from before `author_kind` was appended: same version, one field short. New
-    /// fields are only read when the encoded array is long enough to hold them, so this must still
-    /// decode rather than error or misread the missing field.
+    /// A V2 record from before `author_kind` was appended: same version, two fields short because
+    /// it also lacks `workspace`. New fields are only read when the encoded array is long enough to
+    /// hold them, so this must still decode rather than error or misread the missing fields.
     #[rstest]
     fn deserialize_v2_written_without_author_kind() {
         let history = History {
@@ -1118,14 +1165,51 @@ mod tests {
         };
         let mut bytes = history.serialize().unwrap().0;
 
-        assert_eq!(bytes[3], 0x90 | 13, "v2 should encode 13 fields");
+        assert_eq!(bytes[3], 0x90 | 14, "v2 should encode 14 fields");
         bytes[3] = 0x90 | 12;
-        bytes.pop();
+        // `author_kind` is a positive fixint and the missing `workspace` is nil: a byte each.
+        bytes.truncate(bytes.len() - 2);
 
         assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), History {
             author_kind: None,
             ..history
         });
+    }
+
+    /// A V2 record from before `workspace` was appended: same version, one field short. It must
+    /// decode with no workspace and keep every field it does have.
+    #[rstest]
+    fn deserialize_v2_written_without_workspace() {
+        let history = History {
+            author_kind: Some(AuthorKind::Agent),
+            ..expected_v2()
+        };
+        let mut bytes = history.serialize().unwrap().0;
+
+        assert_eq!(bytes[3], 0x90 | 14, "v2 should encode 14 fields");
+        bytes[3] = 0x90 | 13;
+        // The missing `workspace` is nil, which is one byte.
+        assert_eq!(bytes.pop(), Some(0xc0));
+
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), history);
+    }
+
+    /// A V2 record from a newer client can carry fields that this version doesn't know. They must
+    /// be skipped, just as an older client skips `workspace`.
+    #[rstest]
+    fn deserialize_v2_ignores_fields_appended_later() {
+        let history = History {
+            author_kind: Some(AuthorKind::User),
+            workspace: Some("/work/repo/.git".to_owned()),
+            ..expected_v2()
+        };
+        let mut bytes = history.serialize().unwrap().0;
+
+        assert_eq!(bytes[3], 0x90 | 14, "v2 should encode 14 fields");
+        bytes[3] = 0x90 | 15;
+        atuin_common::rmp::encode::write_str(&mut bytes, "a field from the future").unwrap();
+
+        assert_eq!(History::deserialize(&bytes, Version::Two.name()).unwrap(), history);
     }
 
     #[rstest]

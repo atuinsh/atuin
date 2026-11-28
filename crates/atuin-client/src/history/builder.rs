@@ -1,8 +1,10 @@
+use std::path::Path;
+
 use atuin_common::utils::normalize_optional_string;
 use atuin_domain::record::CmdOrigin;
 use typed_builder::TypedBuilder;
 
-use super::{AuthorKind, History, HistoryId, is_known_agent};
+use super::{AuthorKind, History, HistoryId, is_known_agent, workspace_of};
 
 /// Builder for a history entry that is imported from shell history.
 ///
@@ -54,6 +56,7 @@ impl From<HistoryImported> for History {
             None,
             imported.shell,
             imported.author_kind,
+            None,
         )
     }
 }
@@ -63,6 +66,8 @@ impl From<HistoryImported> for History {
 /// This builder is used only at the `start` step of the hook,
 /// so it doesn't have any fields which are known only after
 /// the command is finished, such as `exit` or `duration`.
+///
+/// The entry's [workspace](History::workspace) is resolved from `cwd` when the entry is built.
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct HistoryCaptured {
@@ -100,6 +105,8 @@ impl From<HistoryCaptured> for History {
                 .then_some(AuthorKind::Agent)
         });
 
+        let workspace = workspace_of(Path::new(&captured.cwd));
+
         Self::new(
             captured.timestamp,
             captured.command,
@@ -113,6 +120,7 @@ impl From<HistoryCaptured> for History {
             None,
             captured.shell,
             author_kind,
+            workspace,
         )
     }
 }
@@ -135,6 +143,7 @@ pub struct HistoryFromDb {
     deleted_at: Option<jiff::Timestamp>,
     shell: Option<String>,
     author_kind: Option<AuthorKind>,
+    workspace: Option<String>,
 }
 
 impl From<HistoryFromDb> for History {
@@ -155,6 +164,7 @@ impl From<HistoryFromDb> for History {
             deleted_at: from_db.deleted_at,
             shell: from_db.shell,
             author_kind: from_db.author_kind,
+            workspace: from_db.workspace,
         }
     }
 }
@@ -183,6 +193,9 @@ pub struct HistoryDaemonCapture {
     shell: Option<String>,
     #[builder(default)]
     author_kind: Option<AuthorKind>,
+    /// The workspace that the client recorded when it captured the command.
+    #[builder(default)]
+    workspace: Option<String>,
 }
 
 impl From<HistoryDaemonCapture> for History {
@@ -200,6 +213,7 @@ impl From<HistoryDaemonCapture> for History {
             None,
             captured.shell,
             captured.author_kind,
+            captured.workspace,
         )
     }
 }

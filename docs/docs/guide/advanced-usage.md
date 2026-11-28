@@ -20,9 +20,14 @@ modes by pressing **ctrl-r** inside the TUI.
 
 Atuin skips `workspace` mode when you aren't inside a repository or when
 [`workspaces = false`](../configuration/config.md#workspaces).
-A plain Git worktree searches history under the main repository root.
-A Jujutsu workspace searches history under its own root, even when colocated
-with a Git worktree.
+Every checkout of a repository shares its workspace history. This includes Git
+linked worktrees and the worktrees of a bare repository. It also includes every
+Jujutsu workspace of a repository, and worktrees that have since been deleted.
+
+Commands that an older version of Atuin recorded have no repository attached, so
+they still match by directory. Such a command matches when it ran under the
+repository root. For a Git worktree, the repository root is the main worktree's
+root. For a Jujutsu workspace, the repository root is the workspace's own root.
 
 To change which mode searches start in, set
 [`filter_mode`](../configuration/config.md#filter_mode). To remove modes from the

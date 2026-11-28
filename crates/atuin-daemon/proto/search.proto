@@ -18,6 +18,11 @@ message SearchContext {
   string hostname = 3;
   string host_id = 4;
   optional string vcs_root = 5;
+  // The repository that the search runs in, which all of its checkouts share. It is the
+  // repository that cwd is in, or the repository that a command recorded when the search runs in
+  // that command's context. The workspace filter matches commands recorded with it. Commands
+  // recorded without one match under vcs_root, or under cwd when there is no vcs_root.
+  optional string workspace = 6;
 }
 
 message SearchRequest {

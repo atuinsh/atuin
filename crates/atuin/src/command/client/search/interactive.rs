@@ -2001,7 +2001,7 @@ pub async fn history(
     let default_filter_mode = settings
         .filter_mode_shell_up_key_binding
         .filter(|_| settings.shell_up_key_binding)
-        .unwrap_or_else(|| settings.default_filter_mode(initial_context.vcs_root.is_some()));
+        .unwrap_or_else(|| settings.default_filter_mode(initial_context.has_workspace()));
 
     let mut app = State {
         history_count: None,
@@ -2522,6 +2522,7 @@ mod tests {
                     cmd_origin: atuin_domain::record::CmdOrigin::default(),
                     host_id: String::new(),
                     vcs_root: None,
+                    workspace: None,
                 },
                 custom_context: None,
                 shells: Shells::all(),
@@ -2532,6 +2533,31 @@ mod tests {
         };
         state.results_state.select(selected);
         state
+    }
+
+    /// After a switch to the context of a command from a removed worktree, the context has a
+    /// workspace but no repository root, and the workspace filter is still available.
+    #[rstest]
+    #[case::root_and_workspace(Some("/work/repo"), Some("/work/repo/.git"), FilterMode::Workspace)]
+    #[case::root_only(Some("/work/repo"), None, FilterMode::Workspace)]
+    #[case::workspace_only(None, Some("/work/repo/.git"), FilterMode::Workspace)]
+    #[case::neither(None, None, FilterMode::Directory)]
+    fn filter_rotation_offers_the_workspace_filter_when_the_context_has_one(
+        #[with(KeymapMode::Emacs, 100, 0, FilterMode::Session)] mut state: State,
+        #[case] vcs_root: Option<&str>,
+        #[case] workspace: Option<&str>,
+        #[case] expected: FilterMode,
+    ) {
+        let mut settings = Settings::utc();
+        settings.workspaces = true;
+        settings.search.filters =
+            vec![FilterMode::Session, FilterMode::Workspace, FilterMode::Directory];
+        state.search.context.vcs_root = vcs_root.map(Into::into);
+        state.search.context.workspace = workspace.map(String::from);
+
+        state.search.rotate_filter_mode(&settings, 1);
+
+        assert_eq!(state.search.filter_mode, expected);
     }
 
     #[rstest]

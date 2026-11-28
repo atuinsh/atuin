@@ -11,8 +11,16 @@ pub enum IndexFilterMode {
     Global,
     /// Filter to commands run in a specific directory.
     Directory(String),
-    /// Filter to commands run in a workspace (directory prefix).
-    Workspace(String),
+    /// Filter to commands run in a workspace.
+    ///
+    /// With an `id`, this matches the commands that recorded that
+    /// [workspace](atuin_client::history::History::workspace), and the commands that recorded no
+    /// workspace and ran under the directory `prefix`. Without an `id`, it matches every command
+    /// that ran under `prefix`.
+    Workspace {
+        prefix: String,
+        id: Option<String>,
+    },
     /// Filter to commands run on a specific host.
     Host(String),
     /// Filter to commands run in a specific session.
@@ -26,7 +34,13 @@ pub enum IndexFilterMode {
 pub(super) enum CompiledFilter<'a> {
     All,
     Directory(Spur),
+    /// A directory prefix.
     Workspace(&'a str),
+    /// A workspace, if the index has seen it, and the directory prefix for runs without one.
+    WorkspaceId {
+        id: Option<Spur>,
+        prefix: &'a str,
+    },
     Host(Spur),
     Session(Uuid),
     /// The session's own commands, plus those run before it started.
@@ -43,6 +57,9 @@ impl CompiledFilter<'_> {
             Self::Nothing => false,
             Self::Directory(dir) => data.has_invocation_in_dir(*dir),
             Self::Workspace(prefix) => data.has_invocation_in_workspace(prefix, interner),
+            Self::WorkspaceId { id, prefix } => {
+                data.has_invocation_in_workspace_id(*id, prefix, interner)
+            }
             Self::Host(hostname) => data.has_invocation_on_host(*hostname),
             Self::Session(session) => data.has_invocation_in_session(session),
             Self::SessionPreload(preload) => {
@@ -64,7 +81,14 @@ impl IndexFilterMode {
             Self::Directory(dir) => {
                 interner.get(dir).map_or(CompiledFilter::Nothing, CompiledFilter::Directory)
             }
-            Self::Workspace(prefix) => CompiledFilter::Workspace(prefix),
+            Self::Workspace { prefix, id: None } => CompiledFilter::Workspace(prefix),
+            Self::Workspace {
+                prefix,
+                id: Some(id),
+            } => CompiledFilter::WorkspaceId {
+                id: interner.get(id),
+                prefix,
+            },
             Self::Host(hostname) => {
                 interner.get(hostname).map_or(CompiledFilter::Nothing, CompiledFilter::Host)
             }

@@ -122,6 +122,7 @@ impl TryFrom<StartHistoryRequest> for History {
             .intent(req.intent)
             .shell(req.shell)
             .author_kind(author_kind.into())
+            .workspace(req.workspace)
             .build()
             .into())
     }
@@ -909,6 +910,7 @@ mod tests {
             .deleted_at(None)
             .shell(None)
             .author_kind(Some(ClientAuthorKind::Agent))
+            .workspace(None)
             .build()
             .into();
 
@@ -936,6 +938,7 @@ mod tests {
             intent: "intent".into(),
             shell: "bash".into(),
             author_kind: 0,
+            workspace: None,
         }
     }
 

@@ -27,7 +27,7 @@ use super::ordering;
 use super::settings::{Dialect, FilterMode, SearchMode, Settings};
 use crate::history::{
     AuthorKind, AuthorPattern, CommandRuns, HistoryId, HistoryStats, KNOWN_AGENTS, ShellSession,
-    all_user_author_filter,
+    all_user_author_filter, workspace_of,
 };
 
 #[derive(Clone)]
@@ -37,6 +37,8 @@ pub struct Context {
     pub cmd_origin: CmdOrigin,
     pub host_id: String,
     pub vcs_root: Option<PathBuf>,
+    /// The [workspace](History::workspace) that [`FilterMode::Workspace`] matches.
+    pub workspace: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -81,12 +83,14 @@ pub async fn query_context(settings: &Settings) -> eyre::Result<Context> {
     let cwd = utils::get_current_dir();
     let host_id = settings.host_id().await?;
     let vcs_root = utils::in_vcs_repo(&cwd);
+    let workspace = workspace_of(&cwd);
 
     Ok(Context {
         session,
         cmd_origin,
         cwd: cwd.to_string_lossy().into(),
         vcs_root,
+        workspace,
         host_id: host_id.0.as_simple().to_string(),
     })
 }
@@ -104,15 +108,30 @@ pub async fn current_context(settings: &Settings) -> eyre::Result<Context> {
 }
 
 impl Context {
+    /// The context that `entry` ran in.
+    ///
+    /// The context uses the workspace that `entry` recorded, so a command from a removed worktree
+    /// still searches its repository. An entry that recorded no workspace takes the workspace of
+    /// its `cwd`.
     #[must_use]
     pub fn from_history(entry: &History) -> Self {
+        let cwd = Path::new(&entry.cwd);
         Self {
             session: entry.session.clone(),
             cwd: entry.cwd.clone(),
             cmd_origin: entry.cmd_origin.clone(),
             host_id: String::new(),
-            vcs_root: utils::in_vcs_repo(entry.cwd.as_ref()),
+            vcs_root: utils::in_vcs_repo(cwd),
+            workspace: entry.workspace.clone().or_else(|| workspace_of(cwd)),
         }
+    }
+
+    /// Whether [`FilterMode::Workspace`] applies in this context. It applies inside a repository,
+    /// and also when the context has a [workspace](Self::workspace) but its `cwd` is no longer in a
+    /// repository.
+    #[must_use]
+    pub const fn has_workspace(&self) -> bool {
+        self.vcs_root.is_some() || self.workspace.is_some()
     }
 
     /// The [`FilterMode::Workspace`] prefix: repo root when there is one, cwd otherwise.
@@ -202,9 +221,33 @@ fn apply_shell_filter(sql: &mut SqlBuilder, shells: OrFilter<&[String]>) {
     sql.and_where(cond.expect("nonempty list of shells must result in at least one condition"));
 }
 
-/// SQL predicate and bound values for [`FilterMode::Workspace`]: `cwd` is `root` or below it.
+/// The SQL predicate that [`workspace_sql_filter`] binds: `cwd` is `?1`, or matches the `like`
+/// pattern `?2`.
+macro_rules! cwd_under_root_sql {
+    () => {
+        "(cwd = ?1 or cwd like ?2 escape '\\')"
+    };
+}
+
+/// SQL predicate and bound values for [`FilterMode::Workspace`] in `context`.
+///
+/// When `context` has a [workspace](Context::workspace), a row matches if it recorded that
+/// workspace. A row that recorded no workspace matches if its `cwd` is under
+/// [`Context::workspace_root`]. Outside a workspace, only the `cwd` match applies.
+fn context_workspace_sql_filter(context: &Context) -> (&'static str, Vec<String>) {
+    const SQL_FILTER: &str =
+        concat!("(workspace = ?3 or (workspace is null and ", cwd_under_root_sql!(), "))");
+
+    let (cwd_filter, [exact, prefix]) = workspace_sql_filter(&context.workspace_root());
+    match &context.workspace {
+        Some(workspace) => (SQL_FILTER, vec![exact, prefix, workspace.clone()]),
+        None => (cwd_filter, vec![exact, prefix]),
+    }
+}
+
+/// SQL predicate and bound values that match a `cwd` of `root` or below it.
 fn workspace_sql_filter(root: &str) -> (&'static str, [String; 2]) {
-    const WORKSPACE_SQL_FILTER: &str = "(cwd = ?1 or cwd like ?2 escape '\\')";
+    const WORKSPACE_SQL_FILTER: &str = cwd_under_root_sql!();
 
     // Bare `cwd LIKE 'root%'` also matches a sibling with that same prefix.
     // The trailing separator ensures that won't happen.
@@ -293,7 +336,8 @@ impl SearchMode {
 }
 
 pub const HISTORY_COLUMNS: &str = "id, timestamp, duration, exit, command, cwd, session, \
-                                   hostname, deleted_at, author, intent, shell, author_kind";
+                                   hostname, deleted_at, author, intent, shell, author_kind, \
+                                   workspace";
 
 /// The live entries that a delete removed.
 ///
@@ -390,6 +434,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
         let author_kind: Option<i64> = row.try_get("author_kind").ok().flatten();
         let author_kind =
             author_kind.and_then(|kind| u8::try_from(kind).ok()).and_then(AuthorKind::from_repr);
+        let workspace: Option<String> = row.try_get("workspace").ok().flatten();
 
         Ok(Self::from_db()
             .id(row.try_get("id")?)
@@ -405,6 +450,7 @@ impl<'r> ::sqlx::FromRow<'r, SqliteRow> for History {
             .deleted_at(deleted_at.map(Timestamp::from_unix_nanos_i64))
             .shell(shell)
             .author_kind(author_kind)
+            .workspace(workspace)
             .build()
             .into())
     }
@@ -500,8 +546,8 @@ impl Sqlite {
         db::query(
             "insert or ignore into history(
                 id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                deleted_at, shell, author_kind
-            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                deleted_at, shell, author_kind, workspace
+            ) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )
         .bind(h.id)
         .bind(i64::conv(h.timestamp.as_nanosecond()))
@@ -516,6 +562,7 @@ impl Sqlite {
         .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.shell.as_deref())
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+        .bind(h.workspace.as_deref())
         .execute(&mut **tx)
         .await?;
 
@@ -541,7 +588,7 @@ impl Sqlite {
 
         debug!("saving history to sqlite");
 
-        const HISTORY_INSERT_COLUMNS: usize = 13;
+        const HISTORY_INSERT_COLUMNS: usize = 14;
         let rows_per_insert =
             (self.sqlite.info().await.variable_number_limit() / HISTORY_INSERT_COLUMNS).max(1);
 
@@ -551,7 +598,7 @@ impl Sqlite {
             let mut builder = sqlx::QueryBuilder::new(
                 "insert or ignore into history(
                     id, timestamp, duration, exit, command, cwd, session, hostname, author, intent,
-                    deleted_at, shell, author_kind
+                    deleted_at, shell, author_kind, workspace
                 ) ",
             );
 
@@ -568,7 +615,8 @@ impl Sqlite {
                     .push_bind(h.intent.as_deref())
                     .push_bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
                     .push_bind(h.shell.as_deref())
-                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())));
+                    .push_bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+                    .push_bind(h.workspace.as_deref());
             });
 
             builder.build().execute(&mut *tx).await?;
@@ -600,7 +648,8 @@ impl Sqlite {
         db::query(
             "update history
                 set timestamp = ?2, duration = ?3, exit = ?4, command = ?5, cwd = ?6, session = \
-             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12
+             ?7, hostname = ?8, author = ?9, intent = ?10, deleted_at = ?11, author_kind = ?12, \
+             workspace = ?13
                 where id = ?1",
         )
         .bind(h.id)
@@ -615,6 +664,7 @@ impl Sqlite {
         .bind(h.intent.as_deref())
         .bind(h.deleted_at.map(|t| i64::conv(t.as_nanosecond())))
         .bind(h.author_kind.map(|kind| i64::from(kind.as_u8())))
+        .bind(h.workspace.as_deref())
         .execute(self.sqlite.pool())
         .await?;
 
@@ -657,7 +707,7 @@ impl Sqlite {
                 }
                 FilterMode::Directory => query.and_where_eq("cwd", quote(&context.cwd)),
                 FilterMode::Workspace => {
-                    let (filter, values) = workspace_sql_filter(&context.workspace_root());
+                    let (filter, values) = context_workspace_sql_filter(context);
                     workspace_values = Some(values);
                     query.and_where(filter)
                 }
@@ -776,7 +826,7 @@ impl Sqlite {
             }
             FilterMode::Directory => sql.and_where_eq("cwd", quote(&context.cwd)),
             FilterMode::Workspace => {
-                let (filter, values) = workspace_sql_filter(&context.workspace_root());
+                let (filter, values) = context_workspace_sql_filter(context);
                 workspace_values = Some(values);
                 sql.and_where(filter)
             }
@@ -1065,6 +1115,7 @@ impl Sqlite {
                 "null as author",
                 "null as intent",
                 "null as author_kind",
+                "null as workspace",
                 "group_concat(cwd, ':') as cwd",
                 "group_concat(session) as session",
                 "group_concat(hostname, ',') as hostname",
@@ -1548,6 +1599,7 @@ mod test {
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
             vcs_root: None,
+            workspace: None,
         }
     }
 
@@ -1750,7 +1802,7 @@ mod test {
         cmd: &str,
         timestamp: Option<Timestamp>,
     ) -> Result<()> {
-        let mut captured: History = History::capture()
+        let mut captured: History = History::import()
             .timestamp(timestamp.unwrap_or_else(Timestamp::now))
             .command(cmd)
             .cwd("/home/ellie")
@@ -1769,7 +1821,7 @@ mod test {
     }
 
     async fn save_history_item(db: &Sqlite, cmd: &str) -> History {
-        let mut captured: History = History::capture()
+        let mut captured: History = History::import()
             .timestamp(Timestamp::now())
             .command(cmd)
             .cwd("/home/ellie")
@@ -1805,11 +1857,12 @@ mod test {
             cwd: "/home/ellie".to_string(),
             host_id: "test-host".to_string(),
             vcs_root: None,
+            workspace: None,
         };
 
         // One item at a fixed instant, one at `now` (far outside the window below).
         let at = Timestamp::from_second(1_708_330_400).unwrap();
-        let mut past: History = History::capture()
+        let mut past: History = History::import()
             .timestamp(at)
             .command("ls /home/ellie")
             .cwd("/home/ellie")
@@ -2508,6 +2561,7 @@ mod test {
                     cwd: "".to_string(),
                     host_id: "".to_string(),
                     vcs_root: None,
+                    workspace: None,
                 },
                 None,
                 false,
@@ -2606,6 +2660,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
 
         let shells = OrFilter::from_list(shells.map(str::to_owned).to_vec()).unwrap_or_default();
@@ -2717,6 +2772,7 @@ mod test {
             cwd: root.clone(),
             host_id: "test-host".to_string(),
             vcs_root: has_vcs_root.then(|| PathBuf::from(&root)),
+            workspace: None,
         };
 
         let sorted_cwds = |found: Vec<History>| {
@@ -2782,9 +2838,9 @@ mod test {
         });
     }
 
-    /// A secondary jj workspace searches its own tree, so the main workspace's commands stay
-    /// out. A git worktree still shares the main repo's scope, see
-    /// `atuin_common::utils::in_vcs_repo`.
+    /// A secondary jj workspace searches its own tree for the commands that were recorded without
+    /// a workspace, so the main workspace's commands stay out. A git worktree still shares the
+    /// main repo's scope, see `atuin_common::utils::in_vcs_repo`.
     #[cfg(not(windows))]
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
@@ -2844,6 +2900,192 @@ mod test {
         assert_eq!(found[0].cwd, workspace_cwd.to_string_lossy().into_owned());
     }
 
+    /// The workspace filter finds the commands that were recorded in the same repository from any
+    /// of its checkouts, including a worktree that has since been deleted. Commands recorded
+    /// without a workspace match when they ran under the repository root. A command that recorded
+    /// another workspace stays out, even when it ran under the root. For example, a submodule is a
+    /// repository of its own. A repository that is colocated with jj shares one workspace between
+    /// its jj checkout and its git worktrees.
+    #[cfg(not(windows))]
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_filter_matches_the_recorded_workspace(
+        #[values("main", "feat", "gone")] searched_from: &str,
+        #[values(false, true)] colocated_jj: bool,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root =
+            atuin_common::path::AbsPathBuf::canonicalize(tmp.path()).unwrap().into_path_buf();
+        let main = root.join("main");
+        let git_dir = main.join(".git");
+        for worktree in ["feat", "other", "gone"] {
+            let worktree_git_dir = git_dir.join("worktrees").joined(worktree);
+            std::fs::create_dir_all(&worktree_git_dir).unwrap();
+            std::fs::write(worktree_git_dir.join("commondir"), "../..").unwrap();
+            std::fs::create_dir_all(root.join(worktree).joined("src")).unwrap();
+            std::fs::write(
+                root.join(worktree).joined(".git"),
+                format!("gitdir: {}", worktree_git_dir.display()),
+            )
+            .unwrap();
+        }
+        if colocated_jj {
+            let store = main.join(".jj").joined("repo").joined("store");
+            std::fs::create_dir_all(&store).unwrap();
+            std::fs::write(store.join("git_target"), "../../../.git").unwrap();
+        }
+        std::fs::create_dir_all(git_dir.join("modules").joined("sub")).unwrap();
+        std::fs::create_dir_all(main.join("sub").joined("src")).unwrap();
+        std::fs::write(main.join("sub").joined(".git"), "gitdir: ../.git/modules/sub").unwrap();
+        std::fs::create_dir_all(main.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere").joined("src")).unwrap();
+
+        let cwd = |dir: &str| root.join(dir).joined("src").to_string_lossy().into_owned();
+        let captured = |name: &str, cwd: String| -> History {
+            History::capture()
+                .timestamp(Timestamp::now())
+                .command(format!("echo {name}"))
+                .cwd(cwd)
+                .build()
+                .into()
+        };
+        let imported = |name: &str, cwd: String| -> History {
+            History::import()
+                .timestamp(Timestamp::now())
+                .command(format!("echo {name}"))
+                .cwd(cwd)
+                .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+                .build()
+                .into()
+        };
+        let main_history = captured("main", cwd("main"));
+        let feat_history = captured("feat", cwd("feat"));
+        let gone_history = captured("gone", cwd("gone"));
+        let submodule_history = captured("submodule", cwd("main/sub"));
+        let elsewhere_history = captured("elsewhere", cwd("elsewhere"));
+        let legacy_main_history = imported("legacy-main", cwd("main"));
+        std::fs::remove_dir_all(root.join("gone")).unwrap();
+
+        let main_workspace = Some(git_dir.to_string_lossy().into_owned());
+        assert_eq!(main_history.workspace, main_workspace);
+        assert_eq!(feat_history.workspace, main_workspace);
+        assert_eq!(gone_history.workspace, main_workspace);
+        assert_eq!(
+            submodule_history.workspace,
+            Some(git_dir.join("modules").joined("sub").to_string_lossy().into_owned())
+        );
+        assert_eq!(elsewhere_history.workspace, None);
+        assert_eq!(legacy_main_history.workspace, None);
+
+        let rows = [
+            main_history.clone(),
+            feat_history.clone(),
+            captured("other", cwd("other")),
+            gone_history.clone(),
+            submodule_history,
+            elsewhere_history.clone(),
+            legacy_main_history,
+            imported("legacy-feat", cwd("feat")),
+        ];
+        let db = Sqlite::new("sqlite::memory:", test_local_timeout()).await.unwrap();
+        for row in &rows {
+            db.save(row).await.unwrap();
+        }
+
+        let found_by = async |context: &Context| -> [Vec<String>; 2] {
+            let names = |found: Vec<History>| -> Vec<String> {
+                let mut names: Vec<String> = found
+                    .into_iter()
+                    .map(|h| h.command.trim_start_matches("echo ").to_owned())
+                    .collect();
+                names.sort();
+                names
+            };
+            let listed =
+                db.list([FilterMode::Workspace], context, None, false, false, None).await.unwrap();
+            let searched = db
+                .search(
+                    DbSearchMode::FullText,
+                    FilterMode::Workspace,
+                    context,
+                    "echo",
+                    OptFilters::default(),
+                )
+                .await
+                .unwrap();
+            [names(listed), names(searched)]
+        };
+
+        let mut expected =
+            ["feat", "gone", "legacy-main", "main", "other"].map(str::to_owned).to_vec();
+        let searched_from = match searched_from {
+            "main" => &main_history,
+            "feat" => &feat_history,
+            _ => {
+                // The removed worktree has no repository root any more, so the commands that were
+                // recorded without a workspace only match under its own cwd.
+                expected.retain(|name| name != "legacy-main");
+                &gone_history
+            }
+        };
+        let context = Context::from_history(searched_from);
+        assert_eq!(context.workspace, main_workspace);
+        assert!(context.has_workspace());
+        assert_eq!(found_by(&context).await, [expected.clone(), expected]);
+
+        let context = Context::from_history(&elsewhere_history);
+        assert_eq!(context.workspace, None);
+        let expected = vec!["elsewhere".to_owned()];
+        assert_eq!(found_by(&context).await, [expected.clone(), expected]);
+    }
+
+    /// A context from a command takes the workspace that the command recorded, and only resolves
+    /// the workspace of the command's `cwd` when the command recorded none.
+    #[rstest]
+    #[case::recorded(Some("/elsewhere/.git"))]
+    #[case::not_recorded(None)]
+    fn a_context_from_history_prefers_the_recorded_workspace(#[case] recorded: Option<&str>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root =
+            atuin_common::path::AbsPathBuf::canonicalize(tmp.path()).unwrap().into_path_buf();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let mut history: History = History::import()
+            .timestamp(Timestamp::now())
+            .command("echo")
+            .cwd(root.join("src").to_string_lossy().into_owned())
+            .cmd_origin(CmdOrigin::try_from("mac:ellie".to_owned()).unwrap())
+            .build()
+            .into();
+        history.workspace = recorded.map(str::to_owned);
+
+        let context = Context::from_history(&history);
+
+        let expected = recorded
+            .map_or_else(|| root.join(".git").to_string_lossy().into_owned(), str::to_owned);
+        assert_eq!(context.workspace, Some(expected));
+        assert_eq!(context.vcs_root, Some(root));
+    }
+
+    /// A context has a workspace when it has a repository root or a recorded workspace.
+    #[rstest]
+    #[case::root_and_workspace(Some("/work/repo"), Some("/work/repo/.git"), true)]
+    #[case::root_only(Some("/work/repo"), None, true)]
+    #[case::workspace_only(None, Some("/work/repo/.git"), true)]
+    #[case::neither(None, None, false)]
+    fn a_context_has_a_workspace_with_a_root_or_a_workspace(
+        #[case] vcs_root: Option<&str>,
+        #[case] workspace: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let context = Context {
+            vcs_root: vcs_root.map(PathBuf::from),
+            workspace: workspace.map(str::to_owned),
+            ..new_context()
+        };
+
+        assert_eq!(context.has_workspace(), expected);
+    }
+
     /// An author_kind value this version doesn't recognise (written by a newer one) must fall
     /// through to the name heuristic in SQL, exactly like [`AuthorKind::from_repr`] returning `None`
     /// does in [`History::is_agent`] — otherwise the two classifiers disagree on the same row.
@@ -2877,6 +3119,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
 
         for (pattern, expected) in [(AuthorPattern::AllAgent, 1), (AuthorPattern::AllUser, 0)] {
@@ -2922,6 +3165,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
         for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
             let authors = OrFilter::from_list(vec![pattern]).unwrap();
@@ -2961,6 +3205,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
         for (pattern, expected) in [(AuthorPattern::AllUser, 1), (AuthorPattern::AllAgent, 0)] {
             let authors = OrFilter::from_list(vec![pattern]).unwrap();
@@ -3012,6 +3257,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
 
         let authors =
@@ -3070,6 +3316,7 @@ mod test {
             cwd: "/tmp".into(),
             host_id: "host".into(),
             vcs_root: None,
+            workspace: None,
         };
 
         let authors =
