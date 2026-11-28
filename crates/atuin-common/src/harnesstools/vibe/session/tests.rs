@@ -173,6 +173,29 @@ async fn reads_a_session_vibe_wrote() {
     assert!(matches!(&last_text.content()[0], Content::Text(t) if t.starts_with("All five steps")));
 }
 
+/// A chunk Vibe holds only gzip-compressed (`<digest>.json.gz`, store format 1.11) reads as the
+/// plain one did.
+#[rstest]
+#[tokio::test]
+async fn a_compressed_chunk_is_read(root: tempfile::TempDir) {
+    let dir = write_store(
+        root.path(),
+        "s1",
+        &[user("u1", "list it"), reply("r1", "done")],
+        &[],
+        &runtime("/w"),
+        &json!({}),
+    );
+    let plain = dir.join("chunks").joined("c1.json");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut gz, &std::fs::read(&plain).unwrap()).unwrap();
+    std::fs::write(dir.join("chunks").joined("c1.json.gz"), gz.finish().unwrap()).unwrap();
+    std::fs::remove_file(plain).unwrap();
+
+    let session = VibeSession::open(root.path(), dir, pool()).unwrap();
+    assert_eq!(ids(&read_all(&session).await), ["u1", "r1"]);
+}
+
 /// A tool call written as it starts holds the read back until it settles: the rows before it
 /// are read at once, the call and its result once the journal replaces it with its outcome.
 #[rstest]

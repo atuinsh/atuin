@@ -64,6 +64,7 @@ enumset = "1"
 eyre = "0.6"
 fjall = { version = "3" }
 fixedbitset = "0.5"
+flate2 = "1"
 flume = { version = "0.12", default-features = false, features = ["async"] }
 frizbee = "0.13"
 fs-err = "3"

@@ -263,6 +263,21 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> std::io::Result<T> 
     serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 }
 
+/// The entries of the pooled chunk `digest`, held gzip-compressed (`<digest>.json.gz`, which Vibe
+/// reads from store format 1.11) or plain (`<digest>.json`). Vibe looks for the compressed one first.
+fn read_chunk(chunks: &Path, digest: &str) -> std::io::Result<Vec<Value>> {
+    match std::fs::File::open(chunks.join(format!("{digest}.json.gz"))) {
+        Ok(file) => {
+            serde_json::from_reader(flate2::read::GzDecoder::new(std::io::BufReader::new(file)))
+                .map_err(std::io::Error::other)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            read_json(&chunks.join(format!("{digest}.json")))
+        }
+        Err(err) => Err(err),
+    }
+}
+
 impl Sessions for VibeSessions {
     type Listener = VibeListener;
 
@@ -801,8 +816,7 @@ fn read_base(dir: &Path, generation: Generation, identity: &Identity) -> std::io
         if !is_plain_name(chunk) {
             return Err(std::io::Error::other("a manifest names a chunk outside the store"));
         }
-        let part: Vec<Value> = read_json(&dir.join("chunks").joined(format!("{chunk}.json")))?;
-        entries.extend(part);
+        entries.extend(read_chunk(&dir.join("chunks"), chunk)?);
     }
     let projection: Value = read_json(&generation.dir.join("projection-state.json"))?;
     let runtime: Value = read_json(&generation.dir.join("runtime-state.json"))?;
