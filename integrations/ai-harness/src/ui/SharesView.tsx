@@ -1,12 +1,15 @@
 import { Button, Column, Row, Text, type ModElement, type Press } from '@atuin/modkit'
 
 import type { Activity } from '../activity'
+import { LocalThread } from '../local-thread'
 import type { Outcome } from '../outcome'
 import { Shares } from '../shares'
 import type { Notice, SharesPane } from '../shares-pane'
 import { Report } from '../status'
+import { EARLIER_THREADS } from '../store'
 import { Team, type OrgTeam } from '../team'
 import type { TeamThread } from '../team-thread'
+import type { Source } from '../viewed'
 import { ATUIN_GREEN, StatusView } from './StatusView'
 
 const BARS = '▁▂▃▄▅▆▇█'
@@ -129,6 +132,118 @@ function Stats({ activity, username }: { activity: Activity; username: string | 
 }
 
 // Digits run across the whole pane, so no two orgs' threads share one; past 9 a row has none.
+/** How long after its last activity a thread of this machine's counts as worked on now. */
+const WORKING_WITHIN_MS = 24 * 60 * 60 * 1000
+
+/** How many days the stats of this machine's threads count, as an org's do. */
+const LOCAL_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The local day `ms` falls on, as `2026-11-27`. */
+const dayOf = (ms: number): string => new Date(ms).toLocaleDateString('en-CA')
+
+/**
+ * This machine's threads active this week: how many, the messages in them, including those from
+ * before the week, threads started a day, and the agents.
+ */
+function LocalStats({ threads, nowMs }: { threads: readonly LocalThread[]; nowMs: number }) {
+  const days = Array.from({ length: LOCAL_DAYS }, (_, index) => dayOf(nowMs - (LOCAL_DAYS - 1 - index) * DAY_MS))
+  const started = threads.flatMap(thread => (thread.started_at === null ? [] : [dayOf(Date.parse(thread.started_at))]))
+  const messages = threads.reduce((sum, thread) => sum + thread.message_count, 0)
+  const agents = LocalThread.agents(threads)
+    .slice(0, ACTIVE_MEMBERS)
+    .map(agent => `${LocalThread.agentName(agent.harness)} ${agent.threads}`)
+  return (
+    <Column>
+      <Text>
+        {compact(threads.length)} threads · {compact(messages)} messages in them
+      </Text>
+      <Text>
+        <Text color={ATUIN_GREEN}>{sparkline(days.map(day => started.filter(one => one === day).length))}</Text>
+        <Text tone="dim"> threads started a day</Text>
+      </Text>
+      {agents.length > 0 && <Text tone="dim">Most used: {agents.join(' · ')}</Text>}
+    </Column>
+  )
+}
+
+/** A thread of this machine's, its key opening it in the thread pane. */
+function LocalRow({
+  thread,
+  hotkey,
+  nowMs,
+  onView,
+}: {
+  thread: LocalThread
+  hotkey: number
+  nowMs: number
+  onView: (source: Source) => void
+}) {
+  return (
+    <Button {...hotkeyOf(hotkey)} onPress={() => onView({ kind: 'local', thread })}>
+      <Text tone="dim">{age({ iso: thread.updated_at, nowMs }).padStart(3)}</Text>{' '}
+      {LocalThread.agentName(thread.harness)} <Text tone="dim">·</Text> {thread.title}
+    </Button>
+  )
+}
+
+/** Where there's no team to show: what the user's own agents did this week, and work on now. */
+function LocalAgents({
+  threads,
+  rows,
+  firstKey,
+  nowMs,
+  onView,
+}: {
+  threads: readonly LocalThread[]
+  rows: readonly LocalThread[]
+  firstKey: number
+  nowMs: number
+  onView: (source: Source) => void
+}) {
+  return (
+    <Column gap={1}>
+      <Column>
+        <Text>
+          <Text bold>Your agents</Text>
+          <Text tone="dim"> · last {LOCAL_DAYS} days</Text>
+        </Text>
+        <LocalStats threads={threads} nowMs={nowMs} />
+      </Column>
+      <Column>
+        <Text bold>Working now</Text>
+        {rows.length === 0 && <Text tone="dim">No other thread in the last day.</Text>}
+        {rows.map((thread, row) => (
+          <LocalRow key={thread.atuin_id} thread={thread} hotkey={firstKey + row} nowMs={nowMs} onView={onView} />
+        ))}
+      </Column>
+    </Column>
+  )
+}
+
+/** This project's earlier threads, from any agent, to read, pull in, or resume. */
+function EarlierThreads({
+  rows,
+  firstKey,
+  nowMs,
+  onView,
+}: {
+  rows: readonly LocalThread[]
+  firstKey: number
+  nowMs: number
+  onView: (source: Source) => void
+}) {
+  if (rows.length === 0) return null
+  return (
+    <Column>
+      <Text bold>Earlier threads here</Text>
+      {rows.map((thread, row) => (
+        <LocalRow key={thread.atuin_id} thread={thread} hotkey={firstKey + row} nowMs={nowMs} onView={onView} />
+      ))}
+    </Column>
+  )
+}
+
 const LAST_KEY = 9
 const hotkeyOf = (key: number) => (key <= LAST_KEY ? { hotkey: String(key) } : {})
 
@@ -194,10 +309,16 @@ function Org({
   )
 }
 
-/** The `/atuin` pane: the thread's sharing, then what each of the user's organizations does. */
+/**
+ * The `/atuin` pane: the thread's sharing, then what each of the user's organizations does, or
+ * with none, what their own agents do, then this project's earlier threads.
+ */
 export function SharesView({
   report,
   team,
+  recent,
+  earlier,
+  sessionId,
   pane,
   nowMs,
   onPrivate,
@@ -206,11 +327,14 @@ export function SharesView({
 }: {
   report: Report
   team: Team
+  recent: Outcome<readonly LocalThread[]> | null
+  earlier: Outcome<readonly LocalThread[]> | null
+  sessionId: string
   pane: SharesPane
   nowMs: number
   onPrivate: () => Promise<void>
   onCopyLink: (press: Press) => Promise<void>
-  onView: (viewed: { org: string; thread: TeamThread }) => void
+  onView: (source: Source) => void
 }) {
   const shares = Report.shares(report)
   // A thread not captured yet has nothing on Atuin Hub to make private or link to.
@@ -218,6 +342,20 @@ export function SharesView({
   const sharing = shares === null ? [] : Shares.sharing(shares)
   const orgs = team?.isOk === true ? team.value.orgs : []
   const username = team?.isOk === true ? team.value.username : null
+  // Asked for only once the team is known, so a team that comes later doesn't move the rows.
+  const isTeamless = team !== null && orgs.length === 0
+  const others = (threads: typeof recent) =>
+    threads?.isOk === true ? threads.value.filter(thread => thread.session_id !== sessionId) : []
+  const working = isTeamless
+    ? others(recent)
+        .filter(thread => nowMs - Date.parse(thread.updated_at) < WORKING_WITHIN_MS)
+        .slice(0, Team.WORKING_ROWS)
+    : []
+  const listed = new Set(working.map(thread => thread.atuin_id))
+  const earlierRows = others(earlier)
+    .filter(thread => !listed.has(thread.atuin_id))
+    .slice(0, EARLIER_THREADS)
+  const rowsAbove = isTeamless ? working.length : orgs.reduce((rows, one) => rows + rowsOf(one).length, 0)
 
   return (
     <Column gap={1}>
@@ -240,7 +378,6 @@ export function SharesView({
         )}
         {pane.notice !== null && <NoticeText notice={pane.notice} />}
       </Column>
-      <NoTeam team={team} isOctavoOff={shares?.upload === 'off' || shares?.upload === 'turned-off'} />
       {orgs.map((org, index) => {
         const firstKey = 1 + orgs.slice(0, index).reduce((rows, one) => rows + rowsOf(one).length, 0)
         return (
@@ -250,10 +387,18 @@ export function SharesView({
             firstKey={firstKey}
             username={username}
             nowMs={nowMs}
-            onView={thread => onView({ org: org.org, thread })}
+            onView={thread => onView({ kind: 'team', org: org.org, thread })}
           />
         )
       })}
+      {isTeamless && recent !== null && !recent.isOk && (
+        <Text tone="warning">Could not list this machine's threads: {recent.reason}</Text>
+      )}
+      {isTeamless && recent?.isOk === true && (
+        <LocalAgents threads={others(recent)} rows={working} firstKey={1} nowMs={nowMs} onView={onView} />
+      )}
+      <EarlierThreads rows={earlierRows} firstKey={1 + rowsAbove} nowMs={nowMs} onView={onView} />
+      <NoTeam team={team} isOctavoOff={shares?.upload === 'off' || shares?.upload === 'turned-off'} />
     </Column>
   )
 }

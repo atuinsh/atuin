@@ -11,6 +11,7 @@ import { Pane, mod, type Press, type ShellResult } from '@atuin/modkit'
 import { useHarness, useQuery, useState } from '@atuin/modkit/ui/hooks'
 
 import { Atuin } from './src/atuin'
+import { LocalThread } from './src/local-thread'
 import { Moves } from './src/moves'
 import { Octavo } from './src/octavo'
 import { Outcome } from './src/outcome'
@@ -20,7 +21,9 @@ import type { Notice } from './src/shares-pane'
 import { Report } from './src/status'
 import {
   conversation,
+  earlierThreads,
   paneOpen,
+  recentThreads,
   report as threadReport,
   searchedErrors,
   seenCards,
@@ -28,14 +31,13 @@ import {
   team as orgTeam,
   viewedThread,
 } from './src/store'
-import type { TeamThread } from './src/team-thread'
 import { Chip } from './src/ui/Chip'
 import { SeenView } from './src/ui/SeenView'
 import { SharesView } from './src/ui/SharesView'
 import { ThreadView } from './src/ui/ThreadView'
-import type { Viewed } from './src/viewed'
+import { Viewed, type Source } from './src/viewed'
 
-// Pulls under way in this process, by session and share: one doesn't outlive the process.
+// Pulls under way in this process, by session and thread: one doesn't outlive the process.
 const pulling = new Set<string>()
 
 /** The most a thread pane's title holds. */
@@ -70,9 +72,16 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
   const [viewed, setViewed] = useState(viewedThread)
   const [seen, setSeen] = useState(seenCards)
   const [searched, setSearched] = useState(searchedErrors)
-  const read = useQuery(conversation, viewed === null ? null : { settings: octavo.settings, thread: viewed.thread })
-  const pullKey = `${harness.session.id}:${viewed?.thread.share_id ?? ''}`
+  const read = useQuery(
+    conversation,
+    viewed === null ? null : { octavo: octavo.settings, atuin: atuin.settings, source: viewed.source },
+  )
+  const pullKey = `${harness.session.id}:${viewed === null ? '' : Viewed.key(viewed)}`
   const team = useQuery(orgTeam, isOpen ? octavo.settings : null)
+  // The thread pane offers to continue a thread in the agents of this machine's recent threads.
+  const recent = useQuery(recentThreads, isOpen || viewed !== null ? atuin.settings : null)
+  const earlier = useQuery(earlierThreads, isOpen ? atuin.settings : null)
+  const agents = recent.value?.isOk === true ? LocalThread.agents(recent.value.value).map(agent => agent.harness) : []
 
   const setNotice = (notice: Notice) => {
     setPane(view => ({ ...view, notice, isConfirmingPrivate: false }))
@@ -100,24 +109,52 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
     setNotice({ action: 'link', outcome: Outcome.ok({ link: link.value, isCopied: copied.isCopied }) })
   }
 
-  const view = (shared: { org: string; thread: TeamThread }) => {
-    setViewed({ ...shared, pull: 'idle' })
+  const view = (source: Source) => {
+    setViewed(Viewed.of(source))
+  }
+
+  /** Updates the thread in view with `change`, if it's still the thread `key` names. */
+  const updateViewed = (key: string, change: (now: Viewed) => Viewed) => {
+    setViewed(now => (now !== null && Viewed.key(now) === key ? change(now) : now))
   }
 
   /** Summarises the thread in view into the session, once at a time. */
   const pull = async () => {
     if (viewed === null || pulling.has(pullKey)) return
-    const { thread } = viewed
-    const mark = (state: Viewed['pull']) => {
-      setViewed(now => (now?.thread.share_id === thread.share_id ? { ...now, pull: state } : now))
-    }
+    const key = Viewed.key(viewed)
+    const { source } = viewed
+    const [readThread, readMore] =
+      source.kind === 'team'
+        ? [
+            () => octavo.conversation(source.thread.share_id),
+            `Read more of it with the ${octavo.settings.mcpServer} MCP server's get_thread tool, passing share_id ${source.thread.share_id}.`,
+          ]
+        : [
+            () => atuin.conversation(source.thread.atuin_id),
+            `Read more of it with \`atuin threads show ${source.thread.atuin_id}\`.`,
+          ]
     pulling.add(pullKey)
-    mark('pulling')
-    const pulled = await new Pull({ harness, octavo, summaryModel })
-      .of(viewed)
+    updateViewed(key, now => ({ ...now, pull: 'pulling' }))
+    const pulled = await new Pull({ harness, summaryModel })
+      .of({ source, read: readThread, readMore })
       .finally(() => pulling.delete(pullKey))
-    mark(pulled.isOk ? 'pulled' : 'failed')
+    updateViewed(key, now => ({ ...now, pull: pulled.isOk ? 'pulled' : 'failed' }))
     if (!pulled.isOk) harness.notify(`Could not pull it in: ${pulled.reason}`)
+  }
+
+  /** Copies the command that resumes this machine's thread in view in `agent`, where pressed. */
+  const resume = async (agent: string, { surface }: Press) => {
+    if (viewed?.source.kind !== 'local') return
+    const key = Viewed.key(viewed)
+    const { thread } = viewed.source
+    const command = await atuin.resumeCommand({
+      id: thread.atuin_id,
+      ...(agent !== thread.harness && { agent }),
+    })
+    const outcome = command.isOk
+      ? Outcome.ok({ command: command.value, isCopied: (await harness.copy(command.value, { surface })).isCopied })
+      : command
+    updateViewed(key, now => ({ ...now, resume: { agent, outcome } }))
   }
 
   /** Looks a failed command's error up once, to card the threads that hit it too. */
@@ -172,6 +209,9 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
             <SharesView
               report={report.value}
               team={team.value}
+              recent={recent.value}
+              earlier={earlier.value}
+              sessionId={harness.session.id}
               pane={pane}
               nowMs={harness.now()}
               onPrivate={makePrivate}
@@ -184,12 +224,19 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
         viewed !== null && (
           <Pane
             id="atuin-thread"
-            title={`${viewed.thread.owner}: ${viewed.thread.title}`.slice(0, TITLE_CHARS)}
+            title={`${Viewed.owner(viewed)}: ${viewed.source.thread.title}`.slice(0, TITLE_CHARS)}
             onClose={() => {
               setViewed(null)
             }}
           >
-            <ThreadView view={viewed} conversation={read.value} isPulling={pulling.has(pullKey)} onPull={pull} />
+            <ThreadView
+              view={viewed}
+              conversation={read.value}
+              isPulling={pulling.has(pullKey)}
+              agents={agents}
+              onPull={pull}
+              onResume={resume}
+            />
           </Pane>
         ),
     ],

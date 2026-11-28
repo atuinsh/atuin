@@ -31,6 +31,9 @@ message SessionFilter {
   // Only sessions with a message from one of these roles (any, when empty); in
   // a search, only such messages match.
   repeated MessageRole roles = 10;
+  // With host_id, also sessions with no recorded host, captured before hosts
+  // were tracked: set it when host_id is this host.
+  bool or_unrecorded = 11;
 }
 
 // Who a message is from: tool output is TOOL whatever its envelope role, and

@@ -7,6 +7,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use atuin_client::ai_session::{
@@ -17,6 +19,7 @@ use atuin_client::settings::Settings;
 use atuin_common::harnesstools::session::model::reasoning_label;
 use atuin_common::harnesstools::session::pushed::PushedMessage;
 use atuin_common::harnesstools::session::{Content, ParentKind, Role, StopReason, Usage};
+use atuin_common::path::AbsPathBuf;
 use atuin_common::string::highlighted::HighlightedString;
 use atuin_common::time::{DurationExt as _, TimestampExt as _};
 use atuin_common::userio;
@@ -53,6 +56,27 @@ impl Output {
 pub enum Cmd {
     /// List captured threads, newest first.
     List {
+        /// Only threads whose working directory is at or under this one.
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+
+        /// Only threads active at or after this time, as RFC 3339 (`2026-11-27T18:00:00Z`).
+        #[arg(long, value_name = "TIME")]
+        since: Option<Timestamp>,
+
+        /// At most this many threads, the most recently active.
+        #[arg(long, value_name = "N")]
+        limit: Option<NonZeroUsize>,
+
+        /// Leave out the threads of subagents.
+        #[arg(long)]
+        exclude_subagents: bool,
+
+        /// Only threads captured on this machine, with those from before atuin recorded where
+        /// each was, which can only be this machine's.
+        #[arg(long)]
+        this_host: bool,
+
         #[command(flatten)]
         output: Output,
     },
@@ -228,7 +252,7 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
                  --threads --daemon`"
             ));
         }
-        Cmd::List { ref output }
+        Cmd::List { ref output, .. }
         | Cmd::Show { ref output, .. }
         | Cmd::Status { ref output, .. }
         | Cmd::Search { ref output, .. }
@@ -257,7 +281,36 @@ pub async fn run(cmd: Cmd, settings: Settings) -> Result<()> {
     }
 
     let result = match cmd {
-        Cmd::List { .. } => list(&mut client, style).await,
+        Cmd::List {
+            workspace,
+            since,
+            limit,
+            exclude_subagents,
+            this_host,
+            ..
+        } => {
+            let host = if this_host {
+                Some(settings.host_id().await?)
+            } else {
+                None
+            };
+            let filter = SessionFilter {
+                // The daemon compares it with the absolute directories threads ran in, as the
+                // shell names them: `..` folded, symlinks kept.
+                workspace: workspace
+                    .map(|dir| {
+                        AbsPathBuf::from_current_dir(dir)
+                            .map(|dir| dir.normalize_lexically().into_path_buf())
+                    })
+                    .transpose()?,
+                host,
+                or_unrecorded: this_host,
+                updated_since: since,
+                exclude_subagents,
+                ..SessionFilter::default()
+            };
+            list(&mut client, &filter, limit, style).await
+        }
         Cmd::Show { thread, .. } => show(&mut client, &thread, style).await,
         Cmd::Status { thread, .. } => octavo::status(&settings, &mut client, &thread, style).await,
         Cmd::Search {
@@ -323,9 +376,24 @@ fn is_broken_pipe(err: &eyre::Report) -> bool {
 
 // --- subcommands --------------------------------------------------------------------------------
 
-async fn list(client: &mut AiClient, style: Style) -> Result<()> {
-    let sessions =
-        crate::tools::session::list_sessions(client, None, None).await.map_err(|e| eyre!(e))?;
+/// Print the threads `filter` passes, newest first, at most `limit` of them.
+async fn list(
+    client: &mut AiClient,
+    filter: &SessionFilter,
+    limit: Option<NonZeroUsize>,
+    style: Style,
+) -> Result<()> {
+    let sessions: Vec<Session> = client
+        .list_sessions(filter)
+        .await
+        .map_err(|e| eyre!("{e}"))?
+        .take(limit.map_or(usize::MAX, NonZeroUsize::get))
+        .map(|session| {
+            let session = session.map_err(|e| eyre!("{}", e.message()))?;
+            Session::try_from(session).map_err(|e| eyre!("{e}"))
+        })
+        .try_collect()
+        .await?;
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
