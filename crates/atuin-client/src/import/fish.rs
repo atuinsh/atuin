@@ -45,6 +45,33 @@ fn default_histpath() -> Result<PathBuf> {
     }
 }
 
+/// Undo fish's history escaping, where `\\` is a backslash and `\n` is a newline.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+
+    // Read each escape in one pass, because fish stores a command's literal `\n` as `\\n`.
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            // fish writes no other escapes; keep anything else as it is
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+
+    out
+}
+
 #[async_trait]
 impl Importer for Fish {
     const NAME: &'static str = "fish";
@@ -84,14 +111,7 @@ impl Importer for Fish {
                 // first, we must deal with the prev cmd
                 process_cmd(&mut cmd, time).await?;
 
-                // using raw strings to avoid needing escaping.
-                // replaces double backslashes with single backslashes
-                let c = c.replace(r"\\", r"\");
-                // replaces escaped newlines
-                let c = c.replace(r"\n", "\n");
-                // TODO: any other escape characters?
-
-                cmd = Some(c);
+                cmd = Some(unescape(c));
             } else if let Some(t) = s.strip_prefix("  when: ") {
                 // ignore the line if it is not an int, or is outside the range we can
                 // represent - keeping the previous entry's timestamp preserves ordering,
@@ -111,10 +131,13 @@ impl Importer for Fish {
 #[cfg(test)]
 mod test {
 
+    use rstest::rstest;
+
     use super::Fish;
     use crate::import::Importer;
     use crate::import::tests::TestLoader;
 
+    #[rstest]
     #[tokio::test]
     async fn parse_out_of_range_timestamp() {
         // A corrupt `when:` must degrade that one entry, not abort the import.
@@ -142,6 +165,7 @@ mod test {
         assert_eq!(loader.buf[2].timestamp.as_second(), 1_639_162_851);
     }
 
+    #[rstest]
     #[tokio::test]
     async fn parse_complex() {
         // complicated input with varying contents and escaped strings.
@@ -203,5 +227,26 @@ ERROR
         fishtory!(1_639_162_939, "cat ~/.local/share/fish/fish_history");
         fishtory!(1_639_163_063, r#"echo "\"" \\ "\\""#);
         fishtory!(1_639_163_066, "cat ~/.local/share/fish/fish_history");
+    }
+
+    /// fish stores a backslash as `\\` and a newline as `\n`. A literal `\n` in a command is
+    /// stored as `\\n` and must not become a newline. Any other backslash is kept.
+    #[rstest]
+    #[case::printf(r"printf 'a\\nb'", r"printf 'a\nb'")]
+    #[case::windows_path(r"cd C:\\new", r"cd C:\new")]
+    #[case::two_backslashes(r"echo \\\\n", r"echo \\n")]
+    #[case::escaped_newline(r"echo a\nb", "echo a\nb")]
+    #[case::unknown_escape(r"echo \t", r"echo \t")]
+    #[case::trailing_backslash(r"echo \", r"echo \")]
+    #[tokio::test]
+    async fn parse_escapes(#[case] stored: &str, #[case] command: &str) {
+        let bytes = format!("- cmd: {stored}\n  when: 1639162832\n").into_bytes();
+
+        let fish = Fish { bytes };
+        let mut loader = TestLoader::default();
+        fish.load(&mut loader).await.unwrap();
+
+        assert_eq!(loader.buf.len(), 1);
+        assert_eq!(loader.buf[0].command, command);
     }
 }
