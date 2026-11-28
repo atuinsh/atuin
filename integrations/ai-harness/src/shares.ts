@@ -8,16 +8,22 @@ export type ShareState = (typeof STATES)[number]
 // As `atuin threads status --style json` prints it, so one schema reads the CLI and the store.
 const schema = v.object({
   upload: v.picklist(['on', 'off', 'logged-out']),
-  orgs: v.array(v.object({ slug: v.string(), state: v.picklist(STATES) })),
+  // An atuin that can't say where an org's page is prints no `url`.
+  orgs: v.array(v.object({ slug: v.string(), state: v.picklist(STATES), url: v.optional(v.string()) })),
   // Each directory the thread had a row uploaded from, with the orgs its config shared with.
   dirs: v.array(v.object({ dir: v.string(), orgs: v.array(v.string()) })),
   // Whether the user made the thread private, which no config shares again. An atuin that
   // can't make one private prints none.
   private: v.optional(v.boolean(), false),
+  // Whether a private thread's share links are still queued to be revoked.
+  revoking_links: v.optional(v.boolean(), false),
 })
 
 /** Who a captured thread is shared with on Octavo. */
 export type Shares = v.InferOutput<typeof schema>
+
+/** One of the organizations a thread is shared with, and how far it got. */
+export type OrgShare = Shares['orgs'][number]
 
 export const Shares = {
   schema,
@@ -27,24 +33,6 @@ export const Shares = {
 
   /** The organizations the thread is open or opening to. */
   sharing: (shares: Shares): string[] => Shares.orgs(shares, 'open', 'opening'),
-
-  /** Who the thread is shared with, in one short line. */
-  line: (shares: Shares): string => {
-    if (shares.upload === 'off') return 'off'
-    if (shares.upload === 'logged-out') return 'logged out'
-    if (shares.private) {
-      const closing = Shares.orgs(shares, 'closing')
-      return closing.length === 0 ? 'private' : `private once closed to ${closing.join(', ')}`
-    }
-    const opening = Shares.orgs(shares, 'opening').map(org => `-> ${org}`)
-    const closed = Shares.orgs(shares, 'closing', 'closed')
-    const parts = [
-      ...Shares.orgs(shares, 'open'),
-      ...opening,
-      ...(closed.length > 0 ? [`closed to ${closed.join(', ')}`] : []),
-    ]
-    return parts.length === 0 ? 'not shared' : parts.join(', ')
-  },
 
   /** The organizations the thread is shared with that `target`'s config leaves out. */
   droppedBy: (shares: Shares, target: readonly string[]): string[] => {

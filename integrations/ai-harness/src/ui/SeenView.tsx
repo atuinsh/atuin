@@ -1,6 +1,6 @@
 import { Button, Column, Text } from '@atuin/modkit'
 
-import type { SeenCard } from './seen'
+import type { SeenCard } from '../seen'
 
 /** How much of a hit's snippet the card shows. */
 const SNIPPET_CHARS = 160

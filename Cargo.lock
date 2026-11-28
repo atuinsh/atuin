@@ -388,6 +388,7 @@ dependencies = [
  "tracing",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "url",
  "uuid",
  "xxhash-rust",
 ]

@@ -1,7 +1,5 @@
 import * as v from 'valibot'
 
-import type { TeamThread } from './team-thread'
-
 /** How much of a conversation the summary reads; past it the middle is left out. */
 const TRANSCRIPT_CHARS = 40_000
 
@@ -28,15 +26,10 @@ const isPartial = (conversation: Conversation): boolean => (conversation.next_cu
 
 export const Conversation = {
   schema,
+  texts,
 
-  /** The thread pane's text: who and where, then each message that carries text. */
-  markdown: (conversation: Conversation, thread: TeamThread): string =>
-    [
-      `**${thread.owner}** in \`${thread.cwd}\`${thread.git_branch === null ? '' : ` on \`${thread.git_branch}\``}`,
-      ...texts(conversation).map(message => `**${message.role}**: ${message.text}`),
-      ...(isPartial(conversation) ? ['*Later messages are left out.*'] : []),
-      ...(conversation.last_reply === null ? [] : [`**last reply**: ${conversation.last_reply}`]),
-    ].join('\n\n'),
+  /** Whether more of the conversation follows the page read. */
+  isPartial,
 
   /** The conversation as one text for the summary, its middle cut when it is too long. */
   transcript: (conversation: Conversation): string => {

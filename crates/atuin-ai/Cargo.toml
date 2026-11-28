@@ -46,6 +46,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true }
 xxhash-rust = { workspace = true }
 

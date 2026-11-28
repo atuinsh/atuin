@@ -68,7 +68,7 @@ impl UnshareCmd {
                  login`."
             )),
             Some(pb::Upload::On | pb::Upload::Unspecified) => {
-                Status::of(settings, &session, shares)?.print(self.output.style())
+                Status::of(settings, &session, shares).await?.print(self.output.style())
             }
         }
     }

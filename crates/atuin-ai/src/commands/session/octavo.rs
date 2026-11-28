@@ -1,4 +1,4 @@
-//! Thread capture and Octavo sharing status for `atuin threads status`.
+//! Thread capture, sync and Octavo sharing status for `atuin threads status`.
 
 use std::io::{self, Write};
 
@@ -10,10 +10,11 @@ use eyre::{Result, eyre};
 use jiff::Timestamp;
 use serde::Serialize;
 use strum_macros::IntoStaticStr;
+use url::Url;
 
 use super::Style;
 
-/// Print capture and Octavo sharing status for the thread matching `selector`.
+/// Print capture, sync and Octavo sharing status for the thread matching `selector`.
 pub(super) async fn status(
     settings: &Settings,
     client: &mut AiClient,
@@ -21,14 +22,14 @@ pub(super) async fn status(
     style: Style,
 ) -> Result<()> {
     let Some(session) = super::find(client, selector).await? else {
-        return Status::uncaptured(settings).print(style);
+        return Status::uncaptured(settings).await?.print(style);
     };
     let shares = ThreadsClient::from_settings(settings)
         .await?
         .shares(session.sharing().clone())
         .await
         .map_err(|status| eyre!("{}", status.message()))?;
-    Status::of(settings, &session, shares)?.print(style)
+    Status::of(settings, &session, shares).await?.print(style)
 }
 
 fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
@@ -48,7 +49,21 @@ fn write_status(out: &mut dyn Write, status: &Status) -> io::Result<()> {
     };
     let age = super::age(thread.updated);
     writeln!(out, "Captured: {} {noun}, the newest {age}.", thread.messages)?;
+    write_sync(out, status.sync)?;
     write_plain(out, shares)
+}
+
+fn write_sync(out: &mut dyn Write, sync: Syncing) -> io::Result<()> {
+    match sync {
+        Syncing::Off => writeln!(
+            out,
+            "Sync is off, so it reaches your other machines only when `atuin sync` runs."
+        ),
+        Syncing::LoggedOut => {
+            writeln!(out, "Logged out, so it stays on this machine. Run `atuin login` to sync it.")
+        }
+        Syncing::On => writeln!(out, "Syncs to your other machines."),
+    }
 }
 
 fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
@@ -121,10 +136,11 @@ fn write_plain(out: &mut dyn Write, shares: &Shares) -> io::Result<()> {
     Ok(())
 }
 
-/// Capture and Octavo sharing status for a thread; serialized directly for `--style json`.
+/// Capture, sync and Octavo sharing status for a thread; serialized directly for `--style json`.
 #[derive(Debug, Serialize)]
 pub(in crate::commands) struct Status {
     capture: Capture,
+    sync: Syncing,
     /// `None` if the thread has not been captured yet.
     thread: Option<Captured>,
     /// `None` if the thread has not been captured yet.
@@ -132,28 +148,34 @@ pub(in crate::commands) struct Status {
 }
 
 impl Status {
-    fn uncaptured(settings: &Settings) -> Self {
-        Self {
+    async fn uncaptured(settings: &Settings) -> Result<Self> {
+        Ok(Self {
             capture: Capture::of(settings),
+            sync: Syncing::of(settings).await?,
             thread: None,
             octavo: None,
-        }
+        })
     }
 
     /// Build status for a captured `session`, treating `shares = None` as Octavo disabled.
-    pub(in crate::commands) fn of(
+    pub(in crate::commands) async fn of(
         settings: &Settings,
         session: &Session,
         shares: Option<pb::ThreadShares>,
-    ) -> Result<Self, UnknownValue> {
+    ) -> Result<Self> {
         Ok(Self {
             capture: Capture::of(settings),
+            sync: Syncing::of(settings).await?,
             thread: Some(Captured {
                 messages: session.message_count,
                 updated_at: super::rfc3339(session.updated_at),
                 updated: session.updated_at,
             }),
-            octavo: Some(shares.map_or(Ok(Shares::OFF), Shares::try_from)?),
+            octavo: Some(
+                shares.map_or(Ok(Shares::OFF), |shares| {
+                    Shares::of(shares, &settings.hub_endpoint())
+                })?,
+            ),
         })
     }
 
@@ -185,6 +207,31 @@ impl Capture {
         } else {
             Self::Off
         }
+    }
+}
+
+/// Whether atuin sync takes this machine's threads to the user's other machines.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Syncing {
+    /// Logged in, but `auto_sync` or `daemon.sync_frequency` turns the daemon's sync off.
+    Off,
+    LoggedOut,
+    On,
+}
+
+impl Syncing {
+    /// As the daemon's sync worker decides whether to sync.
+    async fn of(settings: &Settings) -> Result<Self> {
+        if !settings.logged_in().await? {
+            return Ok(Self::LoggedOut);
+        }
+        let is_periodic = settings.auto_sync && settings.daemon.sync_frequency.is_some();
+        Ok(if is_periodic {
+            Self::On
+        } else {
+            Self::Off
+        })
     }
 }
 
@@ -239,6 +286,9 @@ enum ShareState {
 struct OrgShare {
     slug: String,
     state: ShareState,
+    /// The organization's dashboard on Atuin Hub, if the Hub's address can hold one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<Url>,
 }
 
 #[derive(Debug, Serialize)]
@@ -254,10 +304,9 @@ pub(in crate::commands) struct UnknownValue {
     value: i32,
 }
 
-impl TryFrom<pb::ThreadShares> for Shares {
-    type Error = UnknownValue;
-
-    fn try_from(shares: pb::ThreadShares) -> Result<Self, Self::Error> {
+impl Shares {
+    /// The daemon's `shares`, each organization's page on the Atuin Hub at `hub`.
+    fn of(shares: pb::ThreadShares, hub: &Url) -> Result<Self, UnknownValue> {
         let unknown = || UnknownValue {
             field: "upload state",
             value: shares.upload,
@@ -270,7 +319,11 @@ impl TryFrom<pb::ThreadShares> for Shares {
         };
         Ok(Self {
             upload,
-            orgs: shares.orgs.into_iter().map(OrgShare::try_from).collect::<Result<_, _>>()?,
+            orgs: shares
+                .orgs
+                .into_iter()
+                .map(|share| OrgShare::of(share, hub))
+                .collect::<Result<_, _>>()?,
             dirs: shares
                 .dirs
                 .into_iter()
@@ -285,10 +338,8 @@ impl TryFrom<pb::ThreadShares> for Shares {
     }
 }
 
-impl TryFrom<pb::OrgShare> for OrgShare {
-    type Error = UnknownValue;
-
-    fn try_from(share: pb::OrgShare) -> Result<Self, Self::Error> {
+impl OrgShare {
+    fn of(share: pb::OrgShare, hub: &Url) -> Result<Self, UnknownValue> {
         let unknown = || UnknownValue {
             field: "share state",
             value: share.state,
@@ -300,9 +351,12 @@ impl TryFrom<pb::OrgShare> for OrgShare {
             pb::ShareState::Closed => ShareState::Closed,
             pb::ShareState::Unspecified => return Err(unknown()),
         };
+        // Only a link is lost to an address that can't hold the page, so the status still shows.
+        let url = hub.join(&share.org_slug).ok();
         Ok(Self {
             slug: share.org_slug,
             state,
+            url,
         })
     }
 }

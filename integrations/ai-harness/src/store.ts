@@ -4,6 +4,7 @@ import * as v from 'valibot'
 import { Atuin, type AtuinSettings } from './atuin'
 import { Conversation } from './conversation'
 import { Octavo, type OctavoSettings } from './octavo'
+import { Outcome } from './outcome'
 import { SeenCard } from './seen'
 import { SharesPane } from './shares-pane'
 import { Report } from './status'
@@ -36,12 +37,10 @@ export const team = query({
 // A query rather than state, so a read cut short by a restart is asked for again.
 export const conversation = query({
   id: 'conversation',
-  schema: v.nullable(v.string()),
+  schema: v.nullable(Outcome.schema(Conversation.schema)),
   initial: null,
-  fetch: async (harness, { settings, thread }: { settings: OctavoSettings; thread: TeamThread }) => {
-    const read = await new Octavo(harness, settings).conversation(thread.share_id)
-    return read.isOk ? Conversation.markdown(read.value, thread) : `Could not read it: ${read.reason}`
-  },
+  fetch: async (harness, { settings, thread }: { settings: OctavoSettings; thread: TeamThread }) =>
+    new Octavo(harness, settings).conversation(thread.share_id),
 })
 
 export const paneOpen = state({ id: 'paneOpen', schema: v.boolean(), initial: false })

@@ -1,15 +1,16 @@
-import { Button, Column, Row, Text, type Press } from '@atuin/modkit'
+import { Button, Column, Row, Text, type ModElement, type Press } from '@atuin/modkit'
 
-import { Activity } from './activity'
-import { ATUIN_GREEN } from './Chip'
-import type { Outcome } from './outcome'
-import { Shares } from './shares'
-import type { SharesPane } from './shares-pane'
-import { Report } from './status'
-import { Team, type OrgTeam } from './team'
-import type { TeamThread } from './team-thread'
+import type { Activity } from '../activity'
+import type { Outcome } from '../outcome'
+import { Shares } from '../shares'
+import type { Notice, SharesPane } from '../shares-pane'
+import { Report } from '../status'
+import { Team, type OrgTeam } from '../team'
+import type { TeamThread } from '../team-thread'
+import { ATUIN_GREEN, StatusView } from './StatusView'
 
 const BARS = '▁▂▃▄▅▆▇█'
+const ACTIVE_MEMBERS = 4
 
 /** `values` as a row of bars, the tallest for the largest: `▁▄█`. */
 const sparkline = (values: readonly number[]): string => {
@@ -35,16 +36,77 @@ const age = ({ iso, nowMs }: { iso: string; nowMs: number }): string => {
   return `${Math.floor(minutes / (24 * 60))}d`
 }
 
-/** Why the pane has no team to show, as one line. */
-const noTeam = ({ team, isOctavoOff }: { team: Team; isOctavoOff: boolean }): string | undefined => {
-  if (team === null) return 'Looking up your team...'
-  if (!team.isOk) {
-    return isOctavoOff
-      ? 'Octavo shows your team here. `atuin setup --only --hub` turns it on.'
-      : `Your team shows here once the Octavo MCP server answers: ${team.reason}`
+/** The members with threads, the most first, the user as `you`: `ellie 69 · you 50`. */
+function MostActive({ activity, username }: { activity: Activity; username: string | null }) {
+  const members = activity.members
+    .filter(member => member.threads > 0)
+    .toSorted((a, b) => b.threads - a.threads)
+    .slice(0, ACTIVE_MEMBERS)
+  if (members.length === 0) return null
+  const named = members.map(member => `${member.username === username ? 'you' : member.username} ${member.threads}`)
+  return <Text tone="dim">Most active: {named.join(' · ')}</Text>
+}
+
+/** Who the thread is shared with, in one short line. */
+function sharesLine(shares: Shares): string {
+  if (shares.upload === 'off') return 'off'
+  if (shares.upload === 'logged-out') return 'logged out'
+  if (shares.private) {
+    const closing = Shares.orgs(shares, 'closing')
+    const pending = [
+      ...(closing.length > 0 ? [`closed to ${closing.join(', ')}`] : []),
+      ...(shares.revoking_links ? ['its links are revoked'] : []),
+    ]
+    return pending.length === 0 ? 'private' : `private once ${pending.join(' and ')}`
   }
-  if (team.value.orgs.length === 0) return 'Join an organization on the hub to see your team here.'
-  return undefined
+  const opening = Shares.orgs(shares, 'opening').map(org => `-> ${org}`)
+  const closed = Shares.orgs(shares, 'closing', 'closed')
+  const parts = [
+    ...Shares.orgs(shares, 'open'),
+    ...opening,
+    ...(closed.length > 0 ? [`closed to ${closed.join(', ')}`] : []),
+  ]
+  return parts.length === 0 ? 'not shared' : parts.join(', ')
+}
+
+/** What the last action pressed in the pane did, as one line. */
+function NoticeText({ notice }: { notice: Notice }): ModElement {
+  switch (notice.action) {
+    case 'private': {
+      const { outcome } = notice
+      if (!outcome.isOk) return <Text tone="dim">Could not make it private: {outcome.reason}</Text>
+      return outcome.value === null ? (
+        <Text tone="dim">This thread is not captured.</Text>
+      ) : (
+        <Text tone="dim">This thread is {sharesLine(outcome.value)}.</Text>
+      )
+    }
+    case 'link': {
+      const { outcome } = notice
+      if (!outcome.isOk) return <Text tone="dim">No share link: {outcome.reason}</Text>
+      return (
+        <Text tone="dim">
+          {outcome.value.isCopied ? 'Copied' : 'Share link:'} {outcome.value.link}
+        </Text>
+      )
+    }
+  }
+}
+
+/** Why the pane has no team to show, or nothing when it has one. */
+function NoTeam({ team, isOctavoOff }: { team: Team; isOctavoOff: boolean }) {
+  if (team === null) return <Text tone="dim">Looking up your team...</Text>
+  if (!team.isOk) {
+    return isOctavoOff ? (
+      <Text tone="dim">Octavo shows your team here. `atuin setup --only --hub` turns it on.</Text>
+    ) : (
+      <Text tone="dim">Your team shows here once the Octavo MCP server answers: {team.reason}</Text>
+    )
+  }
+  if (team.value.orgs.length === 0) {
+    return <Text tone="dim">Join an organization on the hub to see your team here.</Text>
+  }
+  return null
 }
 
 function Stats({ activity, username }: { activity: Activity; username: string | null }) {
@@ -60,9 +122,7 @@ function Stats({ activity, username }: { activity: Activity; username: string | 
         <Text color={ATUIN_GREEN}>{sparkline(activity.days.map(day => day.threads))}</Text>
         <Text tone="dim"> threads a day</Text>
       </Text>
-      {activity.members.some(member => member.threads > 0) && (
-        <Text tone="dim">Most active: {Activity.members(activity, username)}</Text>
-      )}
+      <MostActive activity={activity} username={username} />
     </Column>
   )
 }
@@ -151,23 +211,17 @@ export function SharesView({
   onCopyLink: (press: Press) => Promise<void>
   onView: (viewed: { org: string; thread: TeamThread }) => void
 }) {
-  const words = Report.words(report)
   const shares = Report.shares(report)
   const sharing = shares === null ? [] : Shares.sharing(shares)
   const orgs = team?.isOk === true ? team.value.orgs : []
   const username = team?.isOk === true ? team.value.username : null
-  const missing = noTeam({ team, isOctavoOff: shares?.upload === 'off' })
 
   return (
     <Column gap={1}>
       <Column>
         <Text>
           <Text bold>This thread </Text>
-          {words === undefined ? (
-            <Text tone="dim">looking...</Text>
-          ) : (
-            <Text tone={words.tone}>{words.text}</Text>
-          )}
+          {report === null ? <Text tone="dim">looking...</Text> : <StatusView report={report} />}
         </Text>
         {shares?.upload === 'on' && (
           <Row gap={2}>
@@ -181,9 +235,9 @@ export function SharesView({
             </Button>
           </Row>
         )}
-        {pane.notice !== null && <Text tone="dim">{pane.notice}</Text>}
+        {pane.notice !== null && <NoticeText notice={pane.notice} />}
       </Column>
-      {missing !== undefined && <Text tone="dim">{missing}</Text>}
+      <NoTeam team={team} isOctavoOff={shares?.upload === 'off'} />
       {orgs.map((org, index) => {
         const firstKey = 1 + orgs.slice(0, index).reduce((rows, one) => rows + rowsOf(one).length, 0)
         return (

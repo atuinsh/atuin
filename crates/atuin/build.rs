@@ -49,8 +49,15 @@ const DIST_VAR: &str = "ATUIN_AI_HARNESS_DIST";
 const HARNESSES: [&str; 4] = ["claude-code", "codex", "opencode", "pi"];
 
 /// What a build of the plugin is made from, under `integrations/ai-harness`.
-const INPUTS: [&str; 6] =
-    ["mod.tsx", "src", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json"];
+const INPUTS: [&str; 7] = [
+    "mod.tsx",
+    "src",
+    "art",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+];
 
 /// Copy each harness's build of the plugin into `OUT_DIR`, and write `ai_harness.rs` there: a
 /// `Plugin` of every file, for `atuin setup` to `include!`.

@@ -10,15 +10,15 @@
     "dev": "tsx node_modules/@atuin/modkit-cli/src/main.ts dev"
   },
   "dependencies": {
-    "@atuin/modkit": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit",
+    "@atuin/modkit": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit",
     "valibot": "^1.5.0"
   },
   "devDependencies": {
-    "@atuin/modkit-claude-code": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-claude-code",
-    "@atuin/modkit-cli": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-cli",
-    "@atuin/modkit-codex": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-codex",
-    "@atuin/modkit-opencode": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-opencode",
-    "@atuin/modkit-pi": "github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-pi",
+    "@atuin/modkit-claude-code": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-claude-code",
+    "@atuin/modkit-cli": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-cli",
+    "@atuin/modkit-codex": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-codex",
+    "@atuin/modkit-opencode": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-opencode",
+    "@atuin/modkit-pi": "github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-pi",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2"
   },

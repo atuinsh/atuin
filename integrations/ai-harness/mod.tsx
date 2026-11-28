@@ -1,7 +1,7 @@
 /**
  * What atuin does with a session's thread, and what your team works on.
  *
- * - The footer's chip says whether atuin captures the thread, and who it's shared with on Octavo.
+ * - The footer's chip says whether atuin syncs the thread, and who can open it on Atuin Hub.
  * - `/atuin` toggles a pane of the thread's sharing and each organization's week, from which a
  *   teammate's thread opens in a pane of its own.
  * - A move into a directory whose config shares with fewer organizations asks first.
@@ -11,14 +11,12 @@ import { Pane, mod, type Press, type ShellResult } from '@atuin/modkit'
 import { useHarness, useQuery, useState } from '@atuin/modkit/ui/hooks'
 
 import { Atuin } from './src/atuin'
-import { Chip } from './src/Chip'
 import { Moves } from './src/moves'
 import { Octavo } from './src/octavo'
+import { Outcome } from './src/outcome'
 import { Pull } from './src/pull'
 import { SeenCard, SeenLookup } from './src/seen'
-import { SeenView } from './src/SeenView'
-import { Shares } from './src/shares'
-import { SharesView } from './src/SharesView'
+import type { Notice } from './src/shares-pane'
 import { Report } from './src/status'
 import {
   conversation,
@@ -31,7 +29,10 @@ import {
   viewedThread,
 } from './src/store'
 import type { TeamThread } from './src/team-thread'
-import { ThreadView } from './src/ThreadView'
+import { Chip } from './src/ui/Chip'
+import { SeenView } from './src/ui/SeenView'
+import { SharesView } from './src/ui/SharesView'
+import { ThreadView } from './src/ui/ThreadView'
 import type { Viewed } from './src/viewed'
 
 // Pulls under way in this process, by session and share: one doesn't outlive the process.
@@ -73,7 +74,7 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
   const pullKey = `${harness.session.id}:${viewed?.thread.share_id ?? ''}`
   const team = useQuery(orgTeam, isOpen ? octavo.settings : null)
 
-  const setNotice = (notice: string) => {
+  const setNotice = (notice: Notice) => {
     setPane(view => ({ ...view, notice, isConfirmingPrivate: false }))
   }
 
@@ -84,24 +85,19 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
       return
     }
     const outcome = await atuin.unshare()
-    if (!outcome.isOk) {
-      setNotice(`Could not make it private: ${outcome.reason}`)
-      return
-    }
-    void report.refresh()
-    const after = outcome.value.octavo
-    setNotice(after === null ? 'This thread is not captured.' : `This thread is ${Shares.line(after)} now.`)
+    if (outcome.isOk) void report.refresh()
+    setNotice({ action: 'private', outcome: outcome.isOk ? Outcome.ok(outcome.value.octavo) : outcome })
   }
 
   /** Copies the thread's share link to the clipboard of the surface pressed on. */
   const copyLink = async ({ surface }: Press) => {
     const link = await atuin.share()
     if (!link.isOk) {
-      setNotice(`No share link: ${link.reason}`)
+      setNotice({ action: 'link', outcome: link })
       return
     }
     const copied = await harness.copy(link.value, { surface })
-    setNotice(copied.isCopied ? `Copied ${link.value}` : `Share link: ${link.value}`)
+    setNotice({ action: 'link', outcome: Outcome.ok({ link: link.value, isCopied: copied.isCopied }) })
   }
 
   const view = (shared: { org: string; thread: TeamThread }) => {
@@ -193,7 +189,7 @@ export default mod(({ atuinPath = 'atuin', mcpServer = 'atuin', summaryModel = '
               setViewed(null)
             }}
           >
-            <ThreadView view={viewed} markdown={read.value} isPulling={pulling.has(pullKey)} onPull={pull} />
+            <ThreadView view={viewed} conversation={read.value} isPulling={pulling.has(pullKey)} onPull={pull} />
           </Pane>
         ),
     ],

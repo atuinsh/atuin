@@ -2,10 +2,10 @@
 # each other with `workspace:` and their shared dependencies with `catalog:`, which only resolve
 # inside modkit's own workspace, so each is spelled out here.
 overrides:
-  '@atuin/modkit': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit
-  '@atuin/modkit-compiler': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-compiler
-  '@atuin/modkit-target': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target
-  '@atuin/modkit-target-node': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target-node
+  '@atuin/modkit': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit
+  '@atuin/modkit-compiler': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-compiler
+  '@atuin/modkit-target': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-target
+  '@atuin/modkit-target-node': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-target-node
   es-toolkit: ^1.53.2
   scule: ^1.3.0
   valibot: ^1.5.0

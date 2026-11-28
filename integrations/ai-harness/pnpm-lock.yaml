@@ -5,10 +5,10 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@atuin/modkit': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit
-  '@atuin/modkit-compiler': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-compiler
-  '@atuin/modkit-target': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target
-  '@atuin/modkit-target-node': github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-target-node
+  '@atuin/modkit': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit
+  '@atuin/modkit-compiler': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-compiler
+  '@atuin/modkit-target': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-target
+  '@atuin/modkit-target-node': github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-target-node
   es-toolkit: ^1.53.2
   scule: ^1.3.0
   valibot: ^1.5.0
@@ -18,27 +18,27 @@ importers:
   .:
     dependencies:
       '@atuin/modkit':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2)
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2)
       valibot:
         specifier: ^1.5.0
         version: 1.5.0(typescript@7.0.2)
     devDependencies:
       '@atuin/modkit-claude-code':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-claude-code
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-claude-code(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-claude-code
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-claude-code(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))
       '@atuin/modkit-cli':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-cli
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-cli(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-cli
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-cli(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))
       '@atuin/modkit-codex':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-codex
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-codex(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-codex
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-codex(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
       '@atuin/modkit-opencode':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-opencode
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-opencode(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@opencode/plugin@2.4.1(@opentelemetry/semantic-conventions@1.45.0)(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(redis@6.4.0(@opentelemetry/api@1.9.0))(solid-js@1.9.20)(vite@8.3.8(@types/node@26.6.7)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(solid-js@1.9.20)(typescript@7.0.2)
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-opencode
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-opencode(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@opencode/plugin@2.4.1(@opentelemetry/semantic-conventions@1.45.0)(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(redis@6.4.0(@opentelemetry/api@1.9.0))(solid-js@1.9.20)(vite@8.3.8(@types/node@26.6.7)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(solid-js@1.9.20)(typescript@7.0.2)
       '@atuin/modkit-pi':
-        specifier: github:atuinsh/modkit#2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103&path:/modkit-pi
-        version: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-pi(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@earendil-works/pi-coding-agent@1.6.0(@aws-sdk/credential-provider-node@3.972.99)(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(ws@8.23.0))(@earendil-works/pi-tui@1.6.0)(typescript@7.0.2)
+        specifier: github:atuinsh/modkit#896988b26430f752c28fc0a3f1098653a96e5b15&path:/modkit-pi
+        version: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-pi(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@earendil-works/pi-coding-agent@1.6.0(@aws-sdk/credential-provider-node@3.972.99)(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(ws@8.23.0))(@earendil-works/pi-tui@1.6.0)(typescript@7.0.2)
       tsx:
         specifier: ^4.20.0
         version: 4.23.15
@@ -61,31 +61,31 @@ packages:
       zod:
         optional: true
 
-  '@atuin/modkit-claude-code@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-claude-code':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-claude-code, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-claude-code@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-claude-code':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-claude-code, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit-target': workspace:^
 
-  '@atuin/modkit-cli@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-cli':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-cli, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-cli@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-cli':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-cli, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     hasBin: true
     peerDependencies:
       '@atuin/modkit-target': workspace:^
 
-  '@atuin/modkit-codex@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-codex':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-codex, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-codex@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-codex':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-codex, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit-target': workspace:^
 
-  '@atuin/modkit-compiler@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-compiler':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-compiler, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-compiler@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-compiler':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-compiler, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
 
-  '@atuin/modkit-opencode@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-opencode':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-opencode, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-opencode@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-opencode':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-opencode, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit-target': workspace:^
@@ -94,28 +94,28 @@ packages:
       '@opentui/solid': ^0.8.4
       solid-js: ^1.9.17
 
-  '@atuin/modkit-pi@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-pi':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-pi, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-pi@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-pi':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-pi, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit-target': workspace:^
       '@earendil-works/pi-coding-agent': ^1.6.0
       '@earendil-works/pi-tui': ^1.6.0
 
-  '@atuin/modkit-target-node@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target-node':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-target-node, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-target-node@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target-node':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-target-node, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit-target': workspace:^
 
-  '@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit-target, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit-target, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
     peerDependencies:
       '@atuin/modkit': workspace:^
 
-  '@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit':
-    resolution: {gitHosted: true, integrity: sha512-AVukaIxfLMo7sEKoWvtBZyigC60oOM7TtFcHtwHIduHIC+3ZKyN/LuVWgzcDm8BSF+Vol8ItgqVDdGP8fVrbPg==, path: /modkit, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103}
+  '@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit':
+    resolution: {gitHosted: true, integrity: sha512-ZKOPqtgmn2YiVoXlqRLb+nMf4qw5JX3j0Trm45vNnSDwGa/PI+vMOdJMRq86TMMeLkodHTa1/ifMjuEeL2NLig==, path: /modkit, tarball: https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15}
     version: 0.0.0
 
   '@aws-crypto/crc32@5.2.0':
@@ -1672,6 +1672,9 @@ packages:
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
 
+  fast-png@8.0.0:
+    resolution: {integrity: sha512-gCysNasJ8KEMgfdYIKd/wTDo6ENK1PWT0RJO7O+0pgmuHPw2O6tA1WvdxFRJoLf9V8yFYpG0FA1YgI8X97OhJA==}
+
   fast-sha256@1.3.0:
     resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
@@ -1687,6 +1690,9 @@ packages:
   fetch-blob@3.2.0:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   find-babel-config@2.1.2:
     resolution: {integrity: sha512-ZfZp1rQyp4gyuxqt1ZqjFGVeVBvmpURMqdIWXbPRfB97Bf6BzdK/xSIbylEINzQ0kB5tlDQfn9HkNXXWsqTqLg==}
@@ -1835,6 +1841,9 @@ packages:
     resolution: {integrity: sha512-IBTdIkzZNOpqm7q3dRqJvMaldXjDHWkEDfrwGEQTs5eaQMWV+djAhR+wahyNNMAa+qpbDUhBMVt4ZKNwpPm7xQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
+  iobuffer@6.0.1:
+    resolution: {integrity: sha512-SZWYkWNfjIXIBYSDpXDYIgshqtbOPsi4lviawAEceR1Kqk+sHDlcQjWrzNQsii80AyBY0q5c8HCTNjqo74ul+Q==}
+
   ip-address@10.7.6:
     resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
     engines: {node: '>= 12'}
@@ -1860,6 +1869,10 @@ packages:
     resolution: {integrity: sha512-KIYLCCJghfHZxqjYBE7rEy0OBuTd5xCHS7tHVgvCLkx7StIoaxwNW3hCALgEUjFfeRk+MG/Qxmp/vtETEF3tRA==}
     engines: {node: '>=14.16'}
     hasBin: true
+
+  is-path-inside@4.0.0:
+    resolution: {integrity: sha512-lJJV/5dYS+RcL8uQdBDW9c9uWFLLBNRyFhnAKXw5tVqLlKZ4RMGZKv+YQ/IA3OhD+RpbJa1LLFM1FQPGyIXvOA==}
+    engines: {node: '>=12'}
 
   is-wsl@3.1.1:
     resolution: {integrity: sha512-e6rvdUCiQCAuumZslxRJWR/Doq4VpPR82kqclvcS0efgt430SlGIk05vdCN58+VrzgtIcfNODjozVielycD4Sw==}
@@ -2276,6 +2289,10 @@ packages:
     resolution: {integrity: sha512-C+y9x90UElAddDZmV4qOx9W53B61PO7cIqWz2dQsWlwswuq4mr8NEwytdGKboYbQlGZ3awrkTeNvcZiZNHnQ8A==}
     engines: {node: '>=20'}
 
+  pretty-bytes@7.2.0:
+    resolution: {integrity: sha512-T2kroepGB5DRVbkN/nOpW03+VRWqdtJhZNuCW3wYk3chdPjgi4GcTBOaxWfHq1MIM0ypidxsSWbQaAiRpxnXmg==}
+    engines: {node: '>=20'}
+
   proc-log@6.1.0:
     resolution: {integrity: sha512-iG+GYldRf2BQ0UDUAd6JQ/RwzaQy6mXmsk/IzlYyal4A4SNFw54MeH4/tLkF4I5WoWG9SQwuqWzS99jaFQHBuQ==}
     engines: {node: ^20.17.0 || >=22.9.0}
@@ -2663,47 +2680,46 @@ snapshots:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.3.0
 
-  '@atuin/modkit-claude-code@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-claude-code(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)':
+  '@atuin/modkit-claude-code@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-claude-code(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))':
     dependencies:
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
-      es-toolkit: 1.53.2
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
       knitwork: 1.3.0
       rolldown: 1.3.3
       scule: 1.3.0
-      valibot: 1.5.0(typescript@7.0.2)
-    transitivePeerDependencies:
-      - typescript
 
-  '@atuin/modkit-cli@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-cli(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))':
+  '@atuin/modkit-cli@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-cli(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))':
     dependencies:
-      '@atuin/modkit-compiler': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-compiler
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-compiler': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-compiler
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
       chokidar: 6.0.0
       citty: 0.2.2
       es-toolkit: 1.53.2
 
-  '@atuin/modkit-codex@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-codex(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)':
+  '@atuin/modkit-codex@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-codex(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)':
     dependencies:
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
-      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
       es-toolkit: 1.53.2
       knitwork: 1.3.0
       valibot: 1.5.0(typescript@7.0.2)
     transitivePeerDependencies:
       - typescript
 
-  '@atuin/modkit-compiler@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-compiler':
+  '@atuin/modkit-compiler@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-compiler':
     dependencies:
       '@sindresorhus/slugify': 4.0.1
       canonicalize: 5.1.0
+      fast-png: 8.0.0
+      is-path-inside: 4.0.0
+      pretty-bytes: 7.2.0
       scule: 1.3.0
       typescript: 7.0.2
       valibot: 1.5.0(typescript@7.0.2)
 
-  '@atuin/modkit-opencode@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-opencode(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@opencode/plugin@2.4.1(@opentelemetry/semantic-conventions@1.45.0)(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(redis@6.4.0(@opentelemetry/api@1.9.0))(solid-js@1.9.20)(vite@8.3.8(@types/node@26.6.7)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(solid-js@1.9.20)(typescript@7.0.2)':
+  '@atuin/modkit-opencode@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-opencode(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@opencode/plugin@2.4.1(@opentelemetry/semantic-conventions@1.45.0)(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(redis@6.4.0(@opentelemetry/api@1.9.0))(solid-js@1.9.20)(vite@8.3.8(@types/node@26.6.7)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)))(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(solid-js@1.9.20)(typescript@7.0.2)':
     dependencies:
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
-      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
       '@opencode/plugin': 2.4.1(@opentelemetry/semantic-conventions@1.45.0)(@opentui/core@0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10))(@opentui/solid@0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10))(redis@6.4.0(@opentelemetry/api@1.9.0))(solid-js@1.9.20)(vite@8.3.8(@types/node@26.6.7)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
       '@opentui/core': 0.8.4(typescript@7.0.2)(web-tree-sitter@0.25.10)
       '@opentui/solid': 0.8.4(solid-js@1.9.20)(typescript@7.0.2)(web-tree-sitter@0.25.10)
@@ -2714,10 +2730,10 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@atuin/modkit-pi@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-pi(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@earendil-works/pi-coding-agent@1.6.0(@aws-sdk/credential-provider-node@3.972.99)(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(ws@8.23.0))(@earendil-works/pi-tui@1.6.0)(typescript@7.0.2)':
+  '@atuin/modkit-pi@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-pi(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(@earendil-works/pi-coding-agent@1.6.0(@aws-sdk/credential-provider-node@3.972.99)(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(ws@8.23.0))(@earendil-works/pi-tui@1.6.0)(typescript@7.0.2)':
     dependencies:
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
-      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target-node': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)
       '@earendil-works/pi-coding-agent': 1.6.0(@aws-sdk/credential-provider-node@3.972.99)(@smithy/signature-v4@5.7.5)(google-auth-library@10.9.1)(ws@8.23.0)
       '@earendil-works/pi-tui': 1.6.0
       es-toolkit: 1.53.2
@@ -2726,25 +2742,26 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@atuin/modkit-target-node@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)':
+  '@atuin/modkit-target-node@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target-node(@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2))(typescript@7.0.2)':
     dependencies:
-      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
+      '@atuin/modkit-target': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)
       es-toolkit: 1.53.2
       rolldown: 1.3.3
       valibot: 1.5.0(typescript@7.0.2)
     transitivePeerDependencies:
       - typescript
 
-  '@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2))(typescript@7.0.2)':
+  '@atuin/modkit-target@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-target(@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2))(typescript@7.0.2)':
     dependencies:
-      '@atuin/modkit': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2)
-      '@atuin/modkit-compiler': https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit-compiler
+      '@atuin/modkit': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2)
+      '@atuin/modkit-compiler': https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit-compiler
       import-meta-resolve: 4.2.0
+      knitwork: 1.3.0
       valibot: 1.5.0(typescript@7.0.2)
     transitivePeerDependencies:
       - typescript
 
-  '@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/2bf4db3d3a365a6c6723cf416bd1b9d8e7d0d103#path:/modkit(typescript@7.0.2)':
+  '@atuin/modkit@https://codeload.github.com/atuinsh/modkit/tar.gz/896988b26430f752c28fc0a3f1098653a96e5b15#path:/modkit(typescript@7.0.2)':
     dependencies:
       canonicalize: 5.1.0
       es-toolkit: 1.53.2
@@ -4415,6 +4432,11 @@ snapshots:
 
   extend@3.0.2: {}
 
+  fast-png@8.0.0:
+    dependencies:
+      fflate: 0.8.3
+      iobuffer: 6.0.1
+
   fast-sha256@1.3.0: {}
 
   fdir@6.5.0(picomatch@4.0.7):
@@ -4425,6 +4447,8 @@ snapshots:
     dependencies:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
+
+  fflate@0.8.3: {}
 
   find-babel-config@2.1.2:
     dependencies:
@@ -4612,6 +4636,8 @@ snapshots:
 
   ini@6.0.0: {}
 
+  iobuffer@6.0.1: {}
+
   ip-address@10.7.6: {}
 
   is-core-module@2.18.0:
@@ -4627,6 +4653,8 @@ snapshots:
   is-inside-container@1.0.0:
     dependencies:
       is-docker: 3.0.0
+
+  is-path-inside@4.0.0: {}
 
   is-wsl@3.1.1:
     dependencies:
@@ -5019,6 +5047,8 @@ snapshots:
     optional: true
 
   powershell-utils@0.2.1: {}
+
+  pretty-bytes@7.2.0: {}
 
   proc-log@6.1.0: {}
 
