@@ -9,13 +9,14 @@ mod pty;
 #[path = "common/shell.rs"]
 mod shell;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use atuin_common::path::AbsPathBuf;
 use common::{FreshEnv, SESSION, marker, output, wait_until};
 use pty::PtyShell;
 use rstest::rstest;
-use shell::{PROMPT, Shell};
+use shell::{PROMPT, Setup, Shell};
 
 fn run_echo_marker(pty: &PtyShell, marker: &str) {
     pty.send_line(&format!("echo {marker}"));
@@ -61,6 +62,81 @@ fn shell_hooks_record_history(#[files("tests/shells/*.toml")] setup: PathBuf) {
             env.atuin(&["history", "list", "--format", "{exit}\t{directory}\t{command}"]);
         command.env("ATUIN_SESSION", SESSION);
         output(command).lines().any(|l| l == expected)
+    });
+}
+
+/// A nested shell can inherit an in-flight `ATUIN_HISTORY_ID` that this shell never started.
+/// For example, devbox re-exports the parent environment's snapshot after the shell rc runs.
+/// The precmd hook must leave that entry open and avoid failing duration arithmetic on bash 5,
+/// while commands this shell actually runs continue to record normally.
+#[rstest]
+fn precmd_ignores_history_id_started_elsewhere(#[files("tests/shells/*.toml")] setup: PathBuf) {
+    let Some(mut setup) = Setup::find(&setup) else {
+        return;
+    };
+    // Fish tracks history with `fish_postexec`, which only runs after a command in this shell.
+    if !matches!(setup.shell(), "bash" | "zsh") {
+        return;
+    }
+
+    let env = FreshEnv::new();
+    // Finish migrations before background shell hooks can open the databases.
+    env.run(&["store", "status"]);
+
+    // The parent shell's in-flight entry is started externally and left open.
+    let inflight_command = format!("inflight-{}", marker());
+    let mut start = env.atuin(&["history", "start", "--hook", "--", &inflight_command]);
+    start.env("ATUIN_SESSION", SESSION);
+    let inflight_id = output(start).trim().to_owned();
+
+    // Re-export the parent's id after `atuin init`, before the first prompt fires precmd with no
+    // prior preexec in this shell.
+    setup.append_script(&format!("export ATUIN_HISTORY_ID=\"{inflight_id}\""));
+    let (pty, _config) = setup.spawn(&env, BTreeMap::new(), "");
+
+    let screen = pty.screen();
+    assert!(
+        !screen.contains("operand expected") && !screen.contains("syntax error"),
+        "precmd failed on the foreign history id:\n{screen}"
+    );
+
+    // Also re-export the foreign id during a running command, as `eval "$(devbox shellenv)"` does.
+    let reexport_command = format!("export ATUIN_HISTORY_ID=\"{inflight_id}\"");
+    pty.send_line(&reexport_command);
+
+    // Run a normal command afterwards and wait for both completed history entries. That verifies
+    // this shell's hooks finish the overwriting command and subsequent commands while earlier
+    // background `history end` calls settle.
+    let follow_up_marker = marker();
+    run_echo_marker(&pty, &follow_up_marker);
+    let reexport_expected = format!("{reexport_command}\t0");
+    let follow_up_expected = format!("echo {follow_up_marker}\t0");
+    wait_until("re-export and follow-up commands recorded with exit status", || {
+        let mut list = env.atuin(&["history", "list", "--format", "{command}\t{exit}"]);
+        list.env("ATUIN_SESSION", SESSION);
+        let history = output(list);
+        history.lines().any(|line| line == reexport_expected)
+            && history.lines().any(|line| line == follow_up_expected)
+    });
+
+    // The foreign entry must still be open with exit `-1`.
+    let mut list = env.atuin(&["history", "list", "--format", "{command}\t{exit}"]);
+    list.env("ATUIN_SESSION", SESSION);
+    let history = output(list);
+    assert!(
+        history.lines().any(|line| line == format!("{inflight_command}\t-1")),
+        "the shell ended a history id its preexec never started:\n{history}"
+    );
+
+    // Ending the entry externally still stamps our exit code, which proves the shell left it open.
+    let mut end =
+        env.atuin(&["history", "end", "--exit", "42", "--duration=123000", "--", &inflight_id]);
+    end.env("ATUIN_SESSION", SESSION);
+    output(end);
+    wait_until("the in-flight entry ends with our exit code", || {
+        let mut list = env.atuin(&["history", "list", "--format", "{command}\t{exit}"]);
+        list.env("ATUIN_SESSION", SESSION);
+        output(list).lines().any(|line| line == format!("{inflight_command}\t42"))
     });
 }
 
