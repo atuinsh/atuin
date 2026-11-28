@@ -10,7 +10,7 @@ use atuin_client::settings::output::CommandFilter;
 use atuin_common::harnesstools::access::Access;
 use atuin_common::harnesstools::session::ToolUse;
 use atuin_common::secrets::files::SensitiveFiles;
-use atuin_common::secrets::{self, REDACT_BUDGET, Redactor};
+use atuin_common::secrets::{self, Redactor, redact_budget_for};
 use regex::RegexSet;
 
 use super::tools;
@@ -138,16 +138,16 @@ impl CapturePolicy {
         }
     }
 
-    /// `text` redacted, or `None` when that takes too long (see [`REDACT_BUDGET`]): then it is
+    /// `text` redacted, or `None` when that takes too long (see [`redact_budget_for`]): then it is
     /// better not kept.
     pub(super) fn redact<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
-        self.redactor.redact_within(text, REDACT_BUDGET)
+        self.redactor.redact_within(text, redact_budget_for(text.len()))
     }
 
     /// [`Self::redact`] with the user's own patterns alone, which, unlike the built-in ones, can
     /// match across lines, any length.
     pub(super) fn redact_users<'a>(&self, text: &'a str) -> Option<Cow<'a, str>> {
-        self.users.redact_within(text, REDACT_BUDGET)
+        self.users.redact_within(text, redact_budget_for(text.len()))
     }
 }
 
