@@ -31,7 +31,11 @@ if (!(Get-Module PSReadLine -ErrorAction Ignore)) {
 
 New-Module -Name Atuin -ScriptBlock {
     if (-not $env:ATUIN_SESSION -or $env:ATUIN_PID -ne $PID) {
-        $env:ATUIN_SESSION = atuin uuid
+        $env:ATUIN_SESSION = if ([guid].GetMethod('CreateVersion7', [type[]]@())) {
+            [guid]::CreateVersion7().ToString('N')
+        } else {
+            atuin uuid
+        }
         $env:ATUIN_PID = $PID
     }
 
