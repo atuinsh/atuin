@@ -184,6 +184,12 @@ pub struct TuiStdout {
     no_mouse: bool,
 }
 
+#[cfg(not(target_os = "windows"))]
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+}
+
 impl TuiStdout {
     pub fn new(inline_mode: bool, no_mouse: bool) -> io::Result<Self> {
         restore_on_panic();
@@ -197,15 +203,9 @@ impl TuiStdout {
             execute!(writer, event::EnableMouseCapture)?;
         }
         execute!(writer, event::EnableBracketedPaste)?;
+        // REPORT_ALL_KEYS_AS_ESCAPE_CODES drops layout text because crossterm cannot request associated text.
         #[cfg(not(target_os = "windows"))]
-        execute!(
-            writer,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            ),
-        )?;
+        execute!(writer, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
         Ok(Self {
             writer,
             inline_mode,
@@ -230,5 +230,20 @@ impl Write for TuiStdout {
 
     fn flush(&mut self) -> io::Result<()> {
         self.writer.flush()
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use rstest::rstest;
+
+    #[rstest]
+    fn keyboard_enhancement_flags_omit_report_all_keys() {
+        use super::{KeyboardEnhancementFlags, keyboard_enhancement_flags};
+
+        let flags = keyboard_enhancement_flags();
+        assert!(flags.contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
+        assert!(!flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
     }
 }
